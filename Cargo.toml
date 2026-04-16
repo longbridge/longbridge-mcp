@@ -34,6 +34,7 @@ tower-http = { version = "0.6", features = ["cors"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
 prometheus = "0.13"
 thiserror = "2"
+serde-transcode = "1.1"
 rand = "0.9"
 sha2 = "0.10"
 base64 = "0.22"

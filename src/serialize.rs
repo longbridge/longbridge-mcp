@@ -18,7 +18,17 @@ pub fn to_tool_json(value: &impl Serialize) -> Result<String, serde_json::Error>
     let mut buf = Vec::new();
     let mut ser = serde_json::Serializer::new(&mut buf);
     value.serialize(TransformSerializer { inner: &mut ser })?;
-    // serde_json always produces valid UTF-8
+    Ok(String::from_utf8(buf).expect("serde_json produces valid UTF-8"))
+}
+
+/// Stream-transcode raw JSON bytes with field transformations.
+/// No intermediate `serde_json::Value` allocation — reads tokens from input
+/// and writes transformed tokens directly to output.
+pub fn transform_json(input: &[u8]) -> Result<String, serde_json::Error> {
+    let mut buf = Vec::new();
+    let mut ser = serde_json::Serializer::new(&mut buf);
+    let mut de = serde_json::Deserializer::from_slice(input);
+    serde_transcode::transcode(&mut de, TransformSerializer { inner: &mut ser })?;
     Ok(String::from_utf8(buf).expect("serde_json produces valid UTF-8"))
 }
 
