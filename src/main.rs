@@ -28,7 +28,7 @@ struct FileConfig {
 }
 
 #[derive(Debug, Parser)]
-#[command(name = "longbridge-mcp", about = "Longbridge MCP Server")]
+#[command(name = "Longbridge", about = "Longbridge MCP Server")]
 struct Cli {
     /// HTTP server bind address
     #[arg(long)]
