@@ -16,7 +16,7 @@ A [Model Context Protocol](https://modelcontextprotocol.io/) (MCP) server that e
 ### Docker (recommended)
 
 ```bash
-docker run -p 8000:8000 ghcr.io/longbridge/mcp --bind 0.0.0.0:8000
+docker run -p 8000:8000 ghcr.io/longbridge/longbridge-mcp --bind 0.0.0.0:8000
 ```
 
 With HTTPS:
@@ -24,7 +24,7 @@ With HTTPS:
 ```bash
 docker run -p 8443:8443 \
   -v /path/to/certs:/certs:ro \
-  ghcr.io/longbridge/mcp \
+  ghcr.io/longbridge/longbridge-mcp \
   --bind 0.0.0.0:8443 \
   --tls-cert /certs/cert.pem \
   --tls-key /certs/key.pem
