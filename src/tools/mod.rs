@@ -79,6 +79,16 @@ fn extract_user_id(ctx: &RequestContext<RoleServer>) -> Result<String, McpError>
     Ok(identity.user_id.clone())
 }
 
+fn extract_language(ctx: &RequestContext<RoleServer>) -> Option<String> {
+    let parts = ctx.extensions.get::<axum::http::request::Parts>()?;
+    parts
+        .headers
+        .get("accept-language")?
+        .to_str()
+        .ok()
+        .map(|s| s.to_string())
+}
+
 #[derive(Debug, Deserialize, JsonSchema)]
 struct SymbolsParam {
     /// Security symbols, e.g. ["700.HK", "AAPL.US"]
@@ -1352,7 +1362,11 @@ impl Longbridge {
     ) -> Result<CallToolResult, McpError> {
         let user_id = extract_user_id(&ctx)?;
         let reg = &self.registry;
-        measured_tool_call("news_detail", || content::news_detail(reg, &user_id, p)).await
+        let language = extract_language(&ctx);
+        measured_tool_call("news_detail", || {
+            content::news_detail(reg, &user_id, p, language)
+        })
+        .await
     }
 
     /// Get discussion topics for a symbol.
@@ -1376,7 +1390,11 @@ impl Longbridge {
     ) -> Result<CallToolResult, McpError> {
         let user_id = extract_user_id(&ctx)?;
         let reg = &self.registry;
-        measured_tool_call("topic_detail", || content::topic_detail(reg, &user_id, p)).await
+        let language = extract_language(&ctx);
+        measured_tool_call("topic_detail", || {
+            content::topic_detail(reg, &user_id, p, language)
+        })
+        .await
     }
 
     /// Get topic replies.
@@ -1388,7 +1406,11 @@ impl Longbridge {
     ) -> Result<CallToolResult, McpError> {
         let user_id = extract_user_id(&ctx)?;
         let reg = &self.registry;
-        measured_tool_call("topic_replies", || content::topic_replies(reg, &user_id, p)).await
+        let language = extract_language(&ctx);
+        measured_tool_call("topic_replies", || {
+            content::topic_replies(reg, &user_id, p, language)
+        })
+        .await
     }
 
     /// Create a discussion topic.
@@ -1427,7 +1449,11 @@ impl Longbridge {
     ) -> Result<CallToolResult, McpError> {
         let user_id = extract_user_id(&ctx)?;
         let reg = &self.registry;
-        measured_tool_call("filing_detail", || content::filing_detail(reg, &user_id, p)).await
+        let language = extract_language(&ctx);
+        measured_tool_call("filing_detail", || {
+            content::filing_detail(reg, &user_id, p, language)
+        })
+        .await
     }
 
     /// List account statements.

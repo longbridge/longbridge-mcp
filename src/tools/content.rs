@@ -7,6 +7,13 @@ use crate::error::Error;
 use crate::registry::UserRegistry;
 use crate::tools::tool_json;
 
+fn content_base_url(language: &Option<String>) -> &'static str {
+    match language {
+        Some(lang) if lang.contains("zh") => "https://longbridge.com/zh-CN",
+        _ => "https://longbridge.com",
+    }
+}
+
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct SymbolParam {
     /// Security symbol, e.g. "700.HK"
@@ -63,8 +70,9 @@ pub async fn news_detail(
     _registry: &UserRegistry,
     _user_id: &str,
     p: NewsDetailParam,
+    language: Option<String>,
 ) -> Result<CallToolResult, McpError> {
-    let url = format!("https://longbridge.com/news/{}", p.news_id);
+    let url = format!("{}/news/{}", content_base_url(&language), p.news_id);
     let resp = reqwest::get(&url)
         .await
         .map_err(|e| McpError::internal_error(e.to_string(), None))?;
@@ -91,8 +99,9 @@ pub async fn topic_detail(
     _registry: &UserRegistry,
     _user_id: &str,
     p: TopicIdParam,
+    language: Option<String>,
 ) -> Result<CallToolResult, McpError> {
-    let url = format!("https://longbridge.com/topics/{}", p.topic_id);
+    let url = format!("{}/topics/{}", content_base_url(&language), p.topic_id);
     let resp = reqwest::get(&url)
         .await
         .map_err(|e| McpError::internal_error(e.to_string(), None))?;
@@ -109,8 +118,13 @@ pub async fn topic_replies(
     _registry: &UserRegistry,
     _user_id: &str,
     p: TopicIdParam,
+    language: Option<String>,
 ) -> Result<CallToolResult, McpError> {
-    let url = format!("https://longbridge.com/topics/{}/replies", p.topic_id);
+    let url = format!(
+        "{}/topics/{}/replies",
+        content_base_url(&language),
+        p.topic_id
+    );
     let resp = reqwest::get(&url)
         .await
         .map_err(|e| McpError::internal_error(e.to_string(), None))?;
@@ -156,8 +170,9 @@ pub async fn filing_detail(
     _registry: &UserRegistry,
     _user_id: &str,
     p: FilingDetailParam,
+    language: Option<String>,
 ) -> Result<CallToolResult, McpError> {
-    let url = format!("https://longbridge.com/filings/{}", p.filing_id);
+    let url = format!("{}/filings/{}", content_base_url(&language), p.filing_id);
     let resp = reqwest::get(&url)
         .await
         .map_err(|e| McpError::internal_error(e.to_string(), None))?;

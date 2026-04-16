@@ -134,45 +134,105 @@ impl UserRegistry {
         Ok(())
     }
 
+    async fn recover_session(&self, user_id: &str) -> Result<(), Error> {
+        let conn = Connection::open(&self.db_path)?;
+        let client_id: String = conn
+            .query_row(
+                "SELECT client_id FROM users WHERE user_id = ?1",
+                [user_id],
+                |row| row.get(0),
+            )
+            .map_err(|_| Error::SessionNotFound(user_id.to_string()))?;
+
+        let (config, http_client) = crate::auth::longbridge::create_session(&client_id).await?;
+
+        self.sessions.write().await.insert(
+            user_id.to_string(),
+            UserSession {
+                config,
+                quote_context: None,
+                trade_context: None,
+                content_context: None,
+                http_client: Some(http_client),
+                last_accessed: Instant::now(),
+            },
+        );
+
+        tracing::info!(user_id, client_id, "recovered session from token file");
+        Ok(())
+    }
+
     pub async fn get_quote_context(&self, user_id: &str) -> Result<QuoteContext, Error> {
+        {
+            let mut sessions = self.sessions.write().await;
+            if let Some(session) = sessions.get_mut(user_id) {
+                session.last_accessed = Instant::now();
+                if let Some(ref ctx) = session.quote_context {
+                    return Ok(ctx.clone());
+                }
+                let (ctx, _) = QuoteContext::new(session.config.clone());
+                session.quote_context = Some(ctx.clone());
+                return Ok(ctx);
+            }
+        }
+
+        self.recover_session(user_id).await?;
+
         let mut sessions = self.sessions.write().await;
         let session = sessions
             .get_mut(user_id)
             .ok_or_else(|| Error::SessionNotFound(user_id.to_string()))?;
         session.last_accessed = Instant::now();
-
-        if let Some(ref ctx) = session.quote_context {
-            return Ok(ctx.clone());
-        }
-
         let (ctx, _) = QuoteContext::new(session.config.clone());
         session.quote_context = Some(ctx.clone());
         Ok(ctx)
     }
 
     pub async fn get_trade_context(&self, user_id: &str) -> Result<TradeContext, Error> {
+        {
+            let mut sessions = self.sessions.write().await;
+            if let Some(session) = sessions.get_mut(user_id) {
+                session.last_accessed = Instant::now();
+                if let Some(ref ctx) = session.trade_context {
+                    return Ok(ctx.clone());
+                }
+                let (ctx, _) = TradeContext::new(session.config.clone());
+                session.trade_context = Some(ctx.clone());
+                return Ok(ctx);
+            }
+        }
+
+        self.recover_session(user_id).await?;
+
         let mut sessions = self.sessions.write().await;
         let session = sessions
             .get_mut(user_id)
             .ok_or_else(|| Error::SessionNotFound(user_id.to_string()))?;
         session.last_accessed = Instant::now();
-
-        if let Some(ref ctx) = session.trade_context {
-            return Ok(ctx.clone());
-        }
-
         let (ctx, _) = TradeContext::new(session.config.clone());
         session.trade_context = Some(ctx.clone());
         Ok(ctx)
     }
 
     pub async fn get_http_client(&self, user_id: &str) -> Result<HttpClient, Error> {
+        {
+            let mut sessions = self.sessions.write().await;
+            if let Some(session) = sessions.get_mut(user_id) {
+                session.last_accessed = Instant::now();
+                return session
+                    .http_client
+                    .clone()
+                    .ok_or_else(|| Error::Other("http client not initialized".to_string()));
+            }
+        }
+
+        self.recover_session(user_id).await?;
+
         let mut sessions = self.sessions.write().await;
         let session = sessions
             .get_mut(user_id)
             .ok_or_else(|| Error::SessionNotFound(user_id.to_string()))?;
         session.last_accessed = Instant::now();
-
         session
             .http_client
             .clone()
@@ -180,16 +240,26 @@ impl UserRegistry {
     }
 
     pub async fn get_content_context(&self, user_id: &str) -> Result<ContentContext, Error> {
+        {
+            let mut sessions = self.sessions.write().await;
+            if let Some(session) = sessions.get_mut(user_id) {
+                session.last_accessed = Instant::now();
+                if let Some(ref ctx) = session.content_context {
+                    return Ok(ctx.clone());
+                }
+                let ctx = ContentContext::new(session.config.clone());
+                session.content_context = Some(ctx.clone());
+                return Ok(ctx);
+            }
+        }
+
+        self.recover_session(user_id).await?;
+
         let mut sessions = self.sessions.write().await;
         let session = sessions
             .get_mut(user_id)
             .ok_or_else(|| Error::SessionNotFound(user_id.to_string()))?;
         session.last_accessed = Instant::now();
-
-        if let Some(ref ctx) = session.content_context {
-            return Ok(ctx.clone());
-        }
-
         let ctx = ContentContext::new(session.config.clone());
         session.content_context = Some(ctx.clone());
         Ok(ctx)
