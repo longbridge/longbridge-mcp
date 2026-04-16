@@ -147,6 +147,13 @@ async fn main() -> anyhow::Result<()> {
     let app =
         auth::create_router(app_state.clone()).layer(tower_http::cors::CorsLayer::permissive());
 
+    let tools = crate::tools::list_tools();
+    tracing::info!(
+        count = tools.len(),
+        url = format!("{}/mcp/tools.json", config.base_url),
+        "tools available"
+    );
+
     if let (Some(cert), Some(key)) = (&config.tls_cert, &config.tls_key) {
         let tls_config = axum_server::tls_rustls::RustlsConfig::from_pem_file(cert, key).await?;
         let handle = axum_server::Handle::new();

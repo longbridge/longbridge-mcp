@@ -7,7 +7,12 @@ use axum::Router;
 use rmcp::transport::streamable_http_server::StreamableHttpService;
 use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
 
-use crate::tools::Longbridge;
+use crate::tools::{self, Longbridge};
+
+async fn tools_json() -> axum::Json<serde_json::Value> {
+    let tools = tools::list_tools();
+    axum::Json(serde_json::json!({ "tools": tools }))
+}
 
 pub struct AppState {
     pub base_url: String,
@@ -25,6 +30,9 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         "/metrics",
         axum::routing::get(crate::metrics::metrics_handler),
     );
+
+    let tools_route: Router =
+        Router::new().route("/mcp/tools.json", axum::routing::get(tools_json));
 
     let mcp_service = StreamableHttpService::new(
         move || Ok(Longbridge),
@@ -46,5 +54,6 @@ pub fn create_router(state: Arc<AppState>) -> Router {
     Router::new()
         .merge(metadata_routes)
         .merge(metrics_route)
+        .merge(tools_route)
         .nest_service("/mcp", mcp_with_auth)
 }
