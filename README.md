@@ -51,9 +51,22 @@ Create a config file at `~/.longbridge/mcp/config.json` (optional):
 | TLS certificate | `tls_cert` | `--tls-cert` | *(none)* | PEM certificate file for HTTPS |
 | TLS private key | `tls_key` | `--tls-key` | *(none)* | PEM private key file for HTTPS |
 
-CLI arguments override config file values. The config file is read from `~/.longbridge/mcp/config.json`.
+CLI arguments override config file values. The config file is read from `~/.longbridge/mcp/config.json` (override with `LONGBRIDGE_MCP_CONFIG_DIR`).
 
 When `tls_cert` and `tls_key` are both set, the server runs HTTPS. Otherwise it falls back to HTTP. The `base_url` defaults to `https://localhost:{port}` with TLS or `http://localhost:{port}` without.
+
+### Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `LONGBRIDGE_MCP_CONFIG_DIR` | `~/.longbridge/mcp` | Config file directory |
+| `LONGBRIDGE_HTTP_URL` | `https://openapi.longbridge.com` | Longbridge API base URL (also used for OAuth metadata) |
+| `LONGBRIDGE_QUOTE_WS_URL` | `wss://openapi-quote.longbridge.com/v2` | Quote WebSocket endpoint |
+| `LONGBRIDGE_TRADE_WS_URL` | `wss://openapi-trade.longbridge.com/v2` | Trade WebSocket endpoint |
+| `LONGBRIDGE_LANGUAGE` | `en` | Response language (`en`, `zh-CN`, `zh-HK`) |
+| `LONGBRIDGE_ENABLE_OVERNIGHT` | *(off)* | Enable overnight trading support |
+| `LONGBRIDGE_LOG_PATH` | *(none)* | SDK internal log path |
+| `RUST_LOG` | `info,longbridge_mcp=debug` | Log level filter |
 
 ## Authentication
 
