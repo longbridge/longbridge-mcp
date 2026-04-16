@@ -4,7 +4,6 @@ use rmcp::schemars::JsonSchema;
 use rmcp::serde::Deserialize;
 
 use crate::counter::symbol_to_counter_id;
-use crate::tools::create_http_client;
 use crate::tools::http_client::http_get_tool;
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -22,10 +21,10 @@ pub struct FinancialReportParam {
 }
 
 pub async fn financial_report(
-    token: &str,
+    mctx: &crate::tools::McpContext,
     p: FinancialReportParam,
 ) -> Result<CallToolResult, McpError> {
-    let client = create_http_client(token);
+    let client = mctx.create_http_client();
     let cid = symbol_to_counter_id(&p.symbol);
     let mut params: Vec<(&str, &str)> = vec![("counter_id", cid.as_str())];
     let report_type = p.report_type.unwrap_or_default();
@@ -35,8 +34,11 @@ pub async fn financial_report(
     http_get_tool(&client, "/v1/quote/financial-reports", &params).await
 }
 
-pub async fn institution_rating(token: &str, p: SymbolParam) -> Result<CallToolResult, McpError> {
-    let client = create_http_client(token);
+pub async fn institution_rating(
+    mctx: &crate::tools::McpContext,
+    p: SymbolParam,
+) -> Result<CallToolResult, McpError> {
+    let client = mctx.create_http_client();
     let cid = symbol_to_counter_id(&p.symbol);
     let params = [("counter_id", cid.as_str())];
     let ratings = http_get_tool(&client, "/v1/quote/institution-rating-latest", &params).await;
@@ -65,10 +67,10 @@ pub async fn institution_rating(token: &str, p: SymbolParam) -> Result<CallToolR
 }
 
 pub async fn institution_rating_detail(
-    token: &str,
+    mctx: &crate::tools::McpContext,
     p: SymbolParam,
 ) -> Result<CallToolResult, McpError> {
-    let client = create_http_client(token);
+    let client = mctx.create_http_client();
     let cid = symbol_to_counter_id(&p.symbol);
     http_get_tool(
         &client,
@@ -78,8 +80,11 @@ pub async fn institution_rating_detail(
     .await
 }
 
-pub async fn dividend(token: &str, p: SymbolParam) -> Result<CallToolResult, McpError> {
-    let client = create_http_client(token);
+pub async fn dividend(
+    mctx: &crate::tools::McpContext,
+    p: SymbolParam,
+) -> Result<CallToolResult, McpError> {
+    let client = mctx.create_http_client();
     let cid = symbol_to_counter_id(&p.symbol);
     http_get_tool(
         &client,
@@ -89,8 +94,11 @@ pub async fn dividend(token: &str, p: SymbolParam) -> Result<CallToolResult, Mcp
     .await
 }
 
-pub async fn dividend_detail(token: &str, p: SymbolParam) -> Result<CallToolResult, McpError> {
-    let client = create_http_client(token);
+pub async fn dividend_detail(
+    mctx: &crate::tools::McpContext,
+    p: SymbolParam,
+) -> Result<CallToolResult, McpError> {
+    let client = mctx.create_http_client();
     let cid = symbol_to_counter_id(&p.symbol);
     http_get_tool(
         &client,
@@ -100,8 +108,11 @@ pub async fn dividend_detail(token: &str, p: SymbolParam) -> Result<CallToolResu
     .await
 }
 
-pub async fn forecast_eps(token: &str, p: SymbolParam) -> Result<CallToolResult, McpError> {
-    let client = create_http_client(token);
+pub async fn forecast_eps(
+    mctx: &crate::tools::McpContext,
+    p: SymbolParam,
+) -> Result<CallToolResult, McpError> {
+    let client = mctx.create_http_client();
     let cid = symbol_to_counter_id(&p.symbol);
     http_get_tool(
         &client,
@@ -111,8 +122,11 @@ pub async fn forecast_eps(token: &str, p: SymbolParam) -> Result<CallToolResult,
     .await
 }
 
-pub async fn consensus(token: &str, p: SymbolParam) -> Result<CallToolResult, McpError> {
-    let client = create_http_client(token);
+pub async fn consensus(
+    mctx: &crate::tools::McpContext,
+    p: SymbolParam,
+) -> Result<CallToolResult, McpError> {
+    let client = mctx.create_http_client();
     let cid = symbol_to_counter_id(&p.symbol);
     http_get_tool(
         &client,
@@ -122,8 +136,11 @@ pub async fn consensus(token: &str, p: SymbolParam) -> Result<CallToolResult, Mc
     .await
 }
 
-pub async fn valuation(token: &str, p: SymbolParam) -> Result<CallToolResult, McpError> {
-    let client = create_http_client(token);
+pub async fn valuation(
+    mctx: &crate::tools::McpContext,
+    p: SymbolParam,
+) -> Result<CallToolResult, McpError> {
+    let client = mctx.create_http_client();
     let cid = symbol_to_counter_id(&p.symbol);
     http_get_tool(
         &client,
@@ -133,8 +150,11 @@ pub async fn valuation(token: &str, p: SymbolParam) -> Result<CallToolResult, Mc
     .await
 }
 
-pub async fn valuation_history(token: &str, p: SymbolParam) -> Result<CallToolResult, McpError> {
-    let client = create_http_client(token);
+pub async fn valuation_history(
+    mctx: &crate::tools::McpContext,
+    p: SymbolParam,
+) -> Result<CallToolResult, McpError> {
+    let client = mctx.create_http_client();
     let cid = symbol_to_counter_id(&p.symbol);
     http_get_tool(
         &client,
@@ -144,8 +164,11 @@ pub async fn valuation_history(token: &str, p: SymbolParam) -> Result<CallToolRe
     .await
 }
 
-pub async fn industry_valuation(token: &str, p: SymbolParam) -> Result<CallToolResult, McpError> {
-    let client = create_http_client(token);
+pub async fn industry_valuation(
+    mctx: &crate::tools::McpContext,
+    p: SymbolParam,
+) -> Result<CallToolResult, McpError> {
+    let client = mctx.create_http_client();
     let cid = symbol_to_counter_id(&p.symbol);
     http_get_tool(
         &client,
@@ -156,10 +179,10 @@ pub async fn industry_valuation(token: &str, p: SymbolParam) -> Result<CallToolR
 }
 
 pub async fn industry_valuation_dist(
-    token: &str,
+    mctx: &crate::tools::McpContext,
     p: SymbolParam,
 ) -> Result<CallToolResult, McpError> {
-    let client = create_http_client(token);
+    let client = mctx.create_http_client();
     let cid = symbol_to_counter_id(&p.symbol);
     http_get_tool(
         &client,
@@ -169,8 +192,11 @@ pub async fn industry_valuation_dist(
     .await
 }
 
-pub async fn company(token: &str, p: SymbolParam) -> Result<CallToolResult, McpError> {
-    let client = create_http_client(token);
+pub async fn company(
+    mctx: &crate::tools::McpContext,
+    p: SymbolParam,
+) -> Result<CallToolResult, McpError> {
+    let client = mctx.create_http_client();
     let cid = symbol_to_counter_id(&p.symbol);
     http_get_tool(
         &client,
@@ -180,8 +206,11 @@ pub async fn company(token: &str, p: SymbolParam) -> Result<CallToolResult, McpE
     .await
 }
 
-pub async fn executive(token: &str, p: SymbolParam) -> Result<CallToolResult, McpError> {
-    let client = create_http_client(token);
+pub async fn executive(
+    mctx: &crate::tools::McpContext,
+    p: SymbolParam,
+) -> Result<CallToolResult, McpError> {
+    let client = mctx.create_http_client();
     let cid = symbol_to_counter_id(&p.symbol);
     http_get_tool(
         &client,
@@ -191,8 +220,11 @@ pub async fn executive(token: &str, p: SymbolParam) -> Result<CallToolResult, Mc
     .await
 }
 
-pub async fn shareholder(token: &str, p: SymbolParam) -> Result<CallToolResult, McpError> {
-    let client = create_http_client(token);
+pub async fn shareholder(
+    mctx: &crate::tools::McpContext,
+    p: SymbolParam,
+) -> Result<CallToolResult, McpError> {
+    let client = mctx.create_http_client();
     let cid = symbol_to_counter_id(&p.symbol);
     http_get_tool(
         &client,
@@ -202,8 +234,11 @@ pub async fn shareholder(token: &str, p: SymbolParam) -> Result<CallToolResult, 
     .await
 }
 
-pub async fn fund_holder(token: &str, p: SymbolParam) -> Result<CallToolResult, McpError> {
-    let client = create_http_client(token);
+pub async fn fund_holder(
+    mctx: &crate::tools::McpContext,
+    p: SymbolParam,
+) -> Result<CallToolResult, McpError> {
+    let client = mctx.create_http_client();
     let cid = symbol_to_counter_id(&p.symbol);
     http_get_tool(
         &client,
@@ -213,8 +248,11 @@ pub async fn fund_holder(token: &str, p: SymbolParam) -> Result<CallToolResult, 
     .await
 }
 
-pub async fn corp_action(token: &str, p: SymbolParam) -> Result<CallToolResult, McpError> {
-    let client = create_http_client(token);
+pub async fn corp_action(
+    mctx: &crate::tools::McpContext,
+    p: SymbolParam,
+) -> Result<CallToolResult, McpError> {
+    let client = mctx.create_http_client();
     let cid = symbol_to_counter_id(&p.symbol);
     http_get_tool(
         &client,
@@ -228,8 +266,11 @@ pub async fn corp_action(token: &str, p: SymbolParam) -> Result<CallToolResult, 
     .await
 }
 
-pub async fn invest_relation(token: &str, p: SymbolParam) -> Result<CallToolResult, McpError> {
-    let client = create_http_client(token);
+pub async fn invest_relation(
+    mctx: &crate::tools::McpContext,
+    p: SymbolParam,
+) -> Result<CallToolResult, McpError> {
+    let client = mctx.create_http_client();
     let cid = symbol_to_counter_id(&p.symbol);
     http_get_tool(
         &client,
@@ -239,8 +280,11 @@ pub async fn invest_relation(token: &str, p: SymbolParam) -> Result<CallToolResu
     .await
 }
 
-pub async fn operating(token: &str, p: SymbolParam) -> Result<CallToolResult, McpError> {
-    let client = create_http_client(token);
+pub async fn operating(
+    mctx: &crate::tools::McpContext,
+    p: SymbolParam,
+) -> Result<CallToolResult, McpError> {
+    let client = mctx.create_http_client();
     let cid = symbol_to_counter_id(&p.symbol);
     http_get_tool(
         &client,

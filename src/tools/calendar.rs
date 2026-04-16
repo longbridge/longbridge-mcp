@@ -3,7 +3,6 @@ use rmcp::model::CallToolResult;
 use rmcp::schemars::JsonSchema;
 use rmcp::serde::Deserialize;
 
-use crate::tools::create_http_client;
 use crate::tools::http_client::http_get_tool;
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -19,10 +18,10 @@ pub struct FinanceCalendarParam {
 }
 
 pub async fn finance_calendar(
-    token: &str,
+    mctx: &crate::tools::McpContext,
     p: FinanceCalendarParam,
 ) -> Result<CallToolResult, McpError> {
-    let client = create_http_client(token);
+    let client = mctx.create_http_client();
     let mut params: Vec<(&str, &str)> = vec![
         ("date", p.start.as_str()),
         ("date_end", p.end.as_str()),

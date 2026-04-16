@@ -5,7 +5,7 @@ use rmcp::schemars::JsonSchema;
 use rmcp::serde::Deserialize;
 
 use crate::error::Error;
-use crate::tools::{create_config, tool_json};
+use crate::tools::tool_json;
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct SymbolParam {
@@ -37,20 +37,29 @@ pub struct TopicCreateReplyParam {
     pub body: String,
 }
 
-pub async fn news(token: &str, p: SymbolParam) -> Result<CallToolResult, McpError> {
-    let ctx = ContentContext::new(create_config(token));
+pub async fn news(
+    mctx: &crate::tools::McpContext,
+    p: SymbolParam,
+) -> Result<CallToolResult, McpError> {
+    let ctx = ContentContext::new(mctx.create_config());
     let result = ctx.news(p.symbol).await.map_err(Error::longbridge)?;
     tool_json(&result)
 }
 
-pub async fn topic(token: &str, p: SymbolParam) -> Result<CallToolResult, McpError> {
-    let ctx = ContentContext::new(create_config(token));
+pub async fn topic(
+    mctx: &crate::tools::McpContext,
+    p: SymbolParam,
+) -> Result<CallToolResult, McpError> {
+    let ctx = ContentContext::new(mctx.create_config());
     let result = ctx.topics(p.symbol).await.map_err(Error::longbridge)?;
     tool_json(&result)
 }
 
-pub async fn topic_detail(token: &str, p: TopicIdParam) -> Result<CallToolResult, McpError> {
-    let ctx = ContentContext::new(create_config(token));
+pub async fn topic_detail(
+    mctx: &crate::tools::McpContext,
+    p: TopicIdParam,
+) -> Result<CallToolResult, McpError> {
+    let ctx = ContentContext::new(mctx.create_config());
     let result = ctx
         .topic_detail(p.topic_id)
         .await
@@ -58,8 +67,11 @@ pub async fn topic_detail(token: &str, p: TopicIdParam) -> Result<CallToolResult
     tool_json(&result)
 }
 
-pub async fn topic_replies(token: &str, p: TopicIdParam) -> Result<CallToolResult, McpError> {
-    let ctx = ContentContext::new(create_config(token));
+pub async fn topic_replies(
+    mctx: &crate::tools::McpContext,
+    p: TopicIdParam,
+) -> Result<CallToolResult, McpError> {
+    let ctx = ContentContext::new(mctx.create_config());
     let result = ctx
         .list_topic_replies(p.topic_id, Default::default())
         .await
@@ -67,8 +79,11 @@ pub async fn topic_replies(token: &str, p: TopicIdParam) -> Result<CallToolResul
     tool_json(&result)
 }
 
-pub async fn topic_create(token: &str, p: TopicCreateParam) -> Result<CallToolResult, McpError> {
-    let ctx = ContentContext::new(create_config(token));
+pub async fn topic_create(
+    mctx: &crate::tools::McpContext,
+    p: TopicCreateParam,
+) -> Result<CallToolResult, McpError> {
+    let ctx = ContentContext::new(mctx.create_config());
     let opts = longbridge::content::CreateTopicOptions {
         title: p.title,
         body: p.body,
@@ -81,10 +96,10 @@ pub async fn topic_create(token: &str, p: TopicCreateParam) -> Result<CallToolRe
 }
 
 pub async fn topic_create_reply(
-    token: &str,
+    mctx: &crate::tools::McpContext,
     p: TopicCreateReplyParam,
 ) -> Result<CallToolResult, McpError> {
-    let ctx = ContentContext::new(create_config(token));
+    let ctx = ContentContext::new(mctx.create_config());
     let opts = longbridge::content::CreateReplyOptions {
         body: p.body,
         reply_to_id: None,
