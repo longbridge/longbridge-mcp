@@ -80,7 +80,8 @@ fn extract_language(ctx: &RequestContext<RoleServer>) -> Option<String> {
 pub fn create_config(token: &str) -> Arc<longbridge::Config> {
     Arc::new(
         longbridge::Config::from_oauth(longbridge::oauth::OAuth::from_token(token))
-            .dont_print_quote_packages(),
+            .dont_print_quote_packages()
+            .enable_overnight(),
     )
 }
 
