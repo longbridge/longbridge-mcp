@@ -63,10 +63,7 @@ When `tls_cert` and `tls_key` are both set, the server runs HTTPS. Otherwise it 
 | `LONGBRIDGE_HTTP_URL` | `https://openapi.longbridge.com` | Longbridge API base URL (also used for OAuth metadata) |
 | `LONGBRIDGE_QUOTE_WS_URL` | `wss://openapi-quote.longbridge.com/v2` | Quote WebSocket endpoint |
 | `LONGBRIDGE_TRADE_WS_URL` | `wss://openapi-trade.longbridge.com/v2` | Trade WebSocket endpoint |
-| `LONGBRIDGE_LANGUAGE` | `en` | Response language (`en`, `zh-CN`, `zh-HK`) |
-| `LONGBRIDGE_ENABLE_OVERNIGHT` | *(off)* | Enable overnight trading support |
 | `LONGBRIDGE_LOG_PATH` | *(none)* | SDK internal log path |
-| `RUST_LOG` | `info,longbridge_mcp=debug` | Log level filter |
 
 ## Authentication
 
