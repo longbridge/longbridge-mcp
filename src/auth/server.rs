@@ -73,6 +73,7 @@ struct AuthorizationServerMetadata {
     issuer: String,
     authorization_endpoint: String,
     token_endpoint: String,
+    registration_endpoint: String,
     response_types_supported: Vec<String>,
     grant_types_supported: Vec<String>,
     code_challenge_methods_supported: Vec<String>,
@@ -87,6 +88,7 @@ async fn authorization_server_metadata(
         issuer: base_url.clone(),
         authorization_endpoint: format!("{base_url}/oauth/authorize"),
         token_endpoint: format!("{base_url}/oauth/token"),
+        registration_endpoint: format!("{base_url}/oauth/register"),
         response_types_supported: vec!["code".to_string()],
         grant_types_supported: vec![
             "authorization_code".to_string(),
@@ -402,6 +404,54 @@ pub async fn delete_user(
     }
 }
 
+/// RFC 7591 Dynamic Client Registration request.
+#[derive(Debug, Deserialize)]
+struct ClientRegistrationRequest {
+    #[serde(default)]
+    redirect_uris: Vec<String>,
+    #[serde(default)]
+    client_name: Option<String>,
+    #[serde(default)]
+    token_endpoint_auth_method: Option<String>,
+    #[serde(default)]
+    grant_types: Option<Vec<String>>,
+    #[serde(default)]
+    response_types: Option<Vec<String>>,
+}
+
+/// RFC 7591 Dynamic Client Registration response.
+#[derive(Serialize)]
+struct ClientRegistrationResponse {
+    client_id: String,
+    client_name: Option<String>,
+    redirect_uris: Vec<String>,
+    token_endpoint_auth_method: String,
+    grant_types: Vec<String>,
+    response_types: Vec<String>,
+}
+
+/// MCP Client registers itself with our OAuth server (RFC 7591).
+async fn register_client(
+    Json(req): Json<ClientRegistrationRequest>,
+) -> Json<ClientRegistrationResponse> {
+    let client_id = Uuid::new_v4().to_string();
+    tracing::info!(client_id, client_name = ?req.client_name, "registered MCP client");
+    Json(ClientRegistrationResponse {
+        client_id,
+        client_name: req.client_name,
+        redirect_uris: req.redirect_uris,
+        token_endpoint_auth_method: req
+            .token_endpoint_auth_method
+            .unwrap_or_else(|| "none".to_string()),
+        grant_types: req
+            .grant_types
+            .unwrap_or_else(|| vec!["authorization_code".to_string()]),
+        response_types: req
+            .response_types
+            .unwrap_or_else(|| vec!["code".to_string()]),
+    })
+}
+
 pub fn routes(state: Arc<AppState>) -> Router {
     Router::new()
         .route(
@@ -412,6 +462,7 @@ pub fn routes(state: Arc<AppState>) -> Router {
             "/.well-known/oauth-authorization-server",
             axum::routing::get(authorization_server_metadata),
         )
+        .route("/oauth/register", axum::routing::post(register_client))
         .route("/oauth/authorize", axum::routing::get(authorize))
         .route("/oauth/callback", axum::routing::get(callback))
         .route("/oauth/token", axum::routing::post(token_endpoint))
