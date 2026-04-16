@@ -8,7 +8,7 @@ use rmcp::serde::Deserialize;
 
 use crate::error::Error;
 use crate::tools::parse;
-use crate::tools::{create_config, tool_json, tool_result};
+use crate::tools::{tool_json, tool_result};
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct SymbolsParam {
@@ -151,8 +151,11 @@ pub struct SecurityListParam {
     pub category: Option<String>,
 }
 
-pub async fn static_info(token: &str, p: SymbolsParam) -> Result<CallToolResult, McpError> {
-    let (ctx, _) = QuoteContext::new(create_config(token));
+pub async fn static_info(
+    mctx: &crate::tools::McpContext,
+    p: SymbolsParam,
+) -> Result<CallToolResult, McpError> {
+    let (ctx, _) = QuoteContext::new(mctx.create_config());
     let result = ctx
         .static_info(p.symbols)
         .await
@@ -160,14 +163,20 @@ pub async fn static_info(token: &str, p: SymbolsParam) -> Result<CallToolResult,
     tool_json(&result)
 }
 
-pub async fn quote(token: &str, p: SymbolsParam) -> Result<CallToolResult, McpError> {
-    let (ctx, _) = QuoteContext::new(create_config(token));
+pub async fn quote(
+    mctx: &crate::tools::McpContext,
+    p: SymbolsParam,
+) -> Result<CallToolResult, McpError> {
+    let (ctx, _) = QuoteContext::new(mctx.create_config());
     let result = ctx.quote(p.symbols).await.map_err(Error::longbridge)?;
     tool_json(&result)
 }
 
-pub async fn option_quote(token: &str, p: SymbolsParam) -> Result<CallToolResult, McpError> {
-    let (ctx, _) = QuoteContext::new(create_config(token));
+pub async fn option_quote(
+    mctx: &crate::tools::McpContext,
+    p: SymbolsParam,
+) -> Result<CallToolResult, McpError> {
+    let (ctx, _) = QuoteContext::new(mctx.create_config());
     let result = ctx
         .option_quote(p.symbols)
         .await
@@ -175,8 +184,11 @@ pub async fn option_quote(token: &str, p: SymbolsParam) -> Result<CallToolResult
     tool_json(&result)
 }
 
-pub async fn warrant_quote(token: &str, p: SymbolsParam) -> Result<CallToolResult, McpError> {
-    let (ctx, _) = QuoteContext::new(create_config(token));
+pub async fn warrant_quote(
+    mctx: &crate::tools::McpContext,
+    p: SymbolsParam,
+) -> Result<CallToolResult, McpError> {
+    let (ctx, _) = QuoteContext::new(mctx.create_config());
     let result = ctx
         .warrant_quote(p.symbols)
         .await
@@ -184,26 +196,35 @@ pub async fn warrant_quote(token: &str, p: SymbolsParam) -> Result<CallToolResul
     tool_json(&result)
 }
 
-pub async fn depth(token: &str, p: SymbolParam) -> Result<CallToolResult, McpError> {
-    let (ctx, _) = QuoteContext::new(create_config(token));
+pub async fn depth(
+    mctx: &crate::tools::McpContext,
+    p: SymbolParam,
+) -> Result<CallToolResult, McpError> {
+    let (ctx, _) = QuoteContext::new(mctx.create_config());
     let result = ctx.depth(p.symbol).await.map_err(Error::longbridge)?;
     tool_json(&result)
 }
 
-pub async fn brokers(token: &str, p: SymbolParam) -> Result<CallToolResult, McpError> {
-    let (ctx, _) = QuoteContext::new(create_config(token));
+pub async fn brokers(
+    mctx: &crate::tools::McpContext,
+    p: SymbolParam,
+) -> Result<CallToolResult, McpError> {
+    let (ctx, _) = QuoteContext::new(mctx.create_config());
     let result = ctx.brokers(p.symbol).await.map_err(Error::longbridge)?;
     tool_json(&result)
 }
 
-pub async fn participants(token: &str) -> Result<CallToolResult, McpError> {
-    let (ctx, _) = QuoteContext::new(create_config(token));
+pub async fn participants(mctx: &crate::tools::McpContext) -> Result<CallToolResult, McpError> {
+    let (ctx, _) = QuoteContext::new(mctx.create_config());
     let result = ctx.participants().await.map_err(Error::longbridge)?;
     tool_json(&result)
 }
 
-pub async fn trades(token: &str, p: SymbolCountParam) -> Result<CallToolResult, McpError> {
-    let (ctx, _) = QuoteContext::new(create_config(token));
+pub async fn trades(
+    mctx: &crate::tools::McpContext,
+    p: SymbolCountParam,
+) -> Result<CallToolResult, McpError> {
+    let (ctx, _) = QuoteContext::new(mctx.create_config());
     let result = ctx
         .trades(p.symbol, p.count)
         .await
@@ -211,8 +232,11 @@ pub async fn trades(token: &str, p: SymbolCountParam) -> Result<CallToolResult, 
     tool_json(&result)
 }
 
-pub async fn intraday(token: &str, p: SymbolParam) -> Result<CallToolResult, McpError> {
-    let (ctx, _) = QuoteContext::new(create_config(token));
+pub async fn intraday(
+    mctx: &crate::tools::McpContext,
+    p: SymbolParam,
+) -> Result<CallToolResult, McpError> {
+    let (ctx, _) = QuoteContext::new(mctx.create_config());
     let result = ctx
         .intraday(p.symbol, longbridge::quote::TradeSessions::Intraday)
         .await
@@ -220,7 +244,10 @@ pub async fn intraday(token: &str, p: SymbolParam) -> Result<CallToolResult, Mcp
     tool_json(&result)
 }
 
-pub async fn candlesticks(token: &str, p: CandlesticksParam) -> Result<CallToolResult, McpError> {
+pub async fn candlesticks(
+    mctx: &crate::tools::McpContext,
+    p: CandlesticksParam,
+) -> Result<CallToolResult, McpError> {
     let period = parse::parse_period(&p.period)?;
     let sessions = parse::parse_trade_sessions(&p.trade_sessions)?;
     let adjust = if p.forward_adjust {
@@ -228,7 +255,7 @@ pub async fn candlesticks(token: &str, p: CandlesticksParam) -> Result<CallToolR
     } else {
         longbridge::quote::AdjustType::NoAdjust
     };
-    let (ctx, _) = QuoteContext::new(create_config(token));
+    let (ctx, _) = QuoteContext::new(mctx.create_config());
     let result = ctx
         .candlesticks(p.symbol, period, p.count, adjust, sessions)
         .await
@@ -237,7 +264,7 @@ pub async fn candlesticks(token: &str, p: CandlesticksParam) -> Result<CallToolR
 }
 
 pub async fn history_candlesticks_by_offset(
-    token: &str,
+    mctx: &crate::tools::McpContext,
     p: HistoryCandlesticksByOffsetParam,
 ) -> Result<CallToolResult, McpError> {
     let period = parse::parse_period(&p.period)?;
@@ -247,7 +274,7 @@ pub async fn history_candlesticks_by_offset(
         Some(ref s) => Some(parse::parse_primitive_datetime(s)?),
         None => None,
     };
-    let (ctx, _) = QuoteContext::new(create_config(token));
+    let (ctx, _) = QuoteContext::new(mctx.create_config());
     let result = ctx
         .history_candlesticks_by_offset(
             p.symbol, period, adjust, p.forward, time, p.count, sessions,
@@ -258,7 +285,7 @@ pub async fn history_candlesticks_by_offset(
 }
 
 pub async fn history_candlesticks_by_date(
-    token: &str,
+    mctx: &crate::tools::McpContext,
     p: HistoryCandlesticksByDateParam,
 ) -> Result<CallToolResult, McpError> {
     let period = parse::parse_period(&p.period)?;
@@ -272,7 +299,7 @@ pub async fn history_candlesticks_by_date(
         Some(ref s) => Some(parse::parse_date(s)?),
         None => None,
     };
-    let (ctx, _) = QuoteContext::new(create_config(token));
+    let (ctx, _) = QuoteContext::new(mctx.create_config());
     let result = ctx
         .history_candlesticks_by_date(p.symbol, period, adjust, start, end, sessions)
         .await
@@ -281,13 +308,13 @@ pub async fn history_candlesticks_by_date(
 }
 
 pub async fn trading_days(
-    token: &str,
+    mctx: &crate::tools::McpContext,
     p: MarketDateRangeParam,
 ) -> Result<CallToolResult, McpError> {
     let market = parse::parse_market(&p.market)?;
     let start = parse::parse_date(&p.start)?;
     let end = parse::parse_date(&p.end)?;
-    let (ctx, _) = QuoteContext::new(create_config(token));
+    let (ctx, _) = QuoteContext::new(mctx.create_config());
     let result = ctx
         .trading_days(market, start, end)
         .await
@@ -296,10 +323,10 @@ pub async fn trading_days(
 }
 
 pub async fn option_chain_expiry_date_list(
-    token: &str,
+    mctx: &crate::tools::McpContext,
     p: SymbolParam,
 ) -> Result<CallToolResult, McpError> {
-    let (ctx, _) = QuoteContext::new(create_config(token));
+    let (ctx, _) = QuoteContext::new(mctx.create_config());
     let dates = ctx
         .option_chain_expiry_date_list(p.symbol)
         .await
@@ -315,11 +342,11 @@ pub async fn option_chain_expiry_date_list(
 }
 
 pub async fn option_chain_info_by_date(
-    token: &str,
+    mctx: &crate::tools::McpContext,
     p: SymbolDateParam,
 ) -> Result<CallToolResult, McpError> {
     let date = parse::parse_date(&p.date)?;
-    let (ctx, _) = QuoteContext::new(create_config(token));
+    let (ctx, _) = QuoteContext::new(mctx.create_config());
     let result = ctx
         .option_chain_info_by_date(p.symbol, date)
         .await
@@ -327,8 +354,11 @@ pub async fn option_chain_info_by_date(
     tool_json(&result)
 }
 
-pub async fn capital_flow(token: &str, p: SymbolParam) -> Result<CallToolResult, McpError> {
-    let (ctx, _) = QuoteContext::new(create_config(token));
+pub async fn capital_flow(
+    mctx: &crate::tools::McpContext,
+    p: SymbolParam,
+) -> Result<CallToolResult, McpError> {
+    let (ctx, _) = QuoteContext::new(mctx.create_config());
     let result = ctx
         .capital_flow(p.symbol)
         .await
@@ -336,8 +366,11 @@ pub async fn capital_flow(token: &str, p: SymbolParam) -> Result<CallToolResult,
     tool_json(&result)
 }
 
-pub async fn capital_distribution(token: &str, p: SymbolParam) -> Result<CallToolResult, McpError> {
-    let (ctx, _) = QuoteContext::new(create_config(token));
+pub async fn capital_distribution(
+    mctx: &crate::tools::McpContext,
+    p: SymbolParam,
+) -> Result<CallToolResult, McpError> {
+    let (ctx, _) = QuoteContext::new(mctx.create_config());
     let result = ctx
         .capital_distribution(p.symbol)
         .await
@@ -345,15 +378,18 @@ pub async fn capital_distribution(token: &str, p: SymbolParam) -> Result<CallToo
     tool_json(&result)
 }
 
-pub async fn trading_session(token: &str) -> Result<CallToolResult, McpError> {
-    let (ctx, _) = QuoteContext::new(create_config(token));
+pub async fn trading_session(mctx: &crate::tools::McpContext) -> Result<CallToolResult, McpError> {
+    let (ctx, _) = QuoteContext::new(mctx.create_config());
     let result = ctx.trading_session().await.map_err(Error::longbridge)?;
     tool_json(&result)
 }
 
-pub async fn market_temperature(token: &str, p: MarketParam) -> Result<CallToolResult, McpError> {
+pub async fn market_temperature(
+    mctx: &crate::tools::McpContext,
+    p: MarketParam,
+) -> Result<CallToolResult, McpError> {
     let market = parse::parse_market(&p.market)?;
-    let (ctx, _) = QuoteContext::new(create_config(token));
+    let (ctx, _) = QuoteContext::new(mctx.create_config());
     let result = ctx
         .market_temperature(market)
         .await
@@ -362,13 +398,13 @@ pub async fn market_temperature(token: &str, p: MarketParam) -> Result<CallToolR
 }
 
 pub async fn history_market_temperature(
-    token: &str,
+    mctx: &crate::tools::McpContext,
     p: MarketDateRangeParam,
 ) -> Result<CallToolResult, McpError> {
     let market = parse::parse_market(&p.market)?;
     let start = parse::parse_date(&p.start)?;
     let end = parse::parse_date(&p.end)?;
-    let (ctx, _) = QuoteContext::new(create_config(token));
+    let (ctx, _) = QuoteContext::new(mctx.create_config());
     let result = ctx
         .history_market_temperature(market, start, end)
         .await
@@ -376,28 +412,34 @@ pub async fn history_market_temperature(
     tool_json(&result)
 }
 
-pub async fn watchlist(token: &str) -> Result<CallToolResult, McpError> {
-    let (ctx, _) = QuoteContext::new(create_config(token));
+pub async fn watchlist(mctx: &crate::tools::McpContext) -> Result<CallToolResult, McpError> {
+    let (ctx, _) = QuoteContext::new(mctx.create_config());
     let result = ctx.watchlist().await.map_err(Error::longbridge)?;
     tool_json(&result)
 }
 
-pub async fn filings(token: &str, p: SymbolParam) -> Result<CallToolResult, McpError> {
-    let (ctx, _) = QuoteContext::new(create_config(token));
+pub async fn filings(
+    mctx: &crate::tools::McpContext,
+    p: SymbolParam,
+) -> Result<CallToolResult, McpError> {
+    let (ctx, _) = QuoteContext::new(mctx.create_config());
     let result = ctx.filings(p.symbol).await.map_err(Error::longbridge)?;
     tool_json(&result)
 }
 
-pub async fn warrant_issuers(token: &str) -> Result<CallToolResult, McpError> {
-    let (ctx, _) = QuoteContext::new(create_config(token));
+pub async fn warrant_issuers(mctx: &crate::tools::McpContext) -> Result<CallToolResult, McpError> {
+    let (ctx, _) = QuoteContext::new(mctx.create_config());
     let result = ctx.warrant_issuers().await.map_err(Error::longbridge)?;
     tool_json(&result)
 }
 
-pub async fn warrant_list(token: &str, p: WarrantListParam) -> Result<CallToolResult, McpError> {
+pub async fn warrant_list(
+    mctx: &crate::tools::McpContext,
+    p: WarrantListParam,
+) -> Result<CallToolResult, McpError> {
     let sort_by = parse::parse_warrant_sort_by(&p.sort_by)?;
     let sort_order = parse::parse_sort_order_type(&p.sort_order)?;
-    let (ctx, _) = QuoteContext::new(create_config(token));
+    let (ctx, _) = QuoteContext::new(mctx.create_config());
     let result = ctx
         .warrant_list(p.symbol, sort_by, sort_order, None, None, None, None, None)
         .await
@@ -405,13 +447,16 @@ pub async fn warrant_list(token: &str, p: WarrantListParam) -> Result<CallToolRe
     tool_json(&result)
 }
 
-pub async fn calc_indexes(token: &str, p: CalcIndexesParam) -> Result<CallToolResult, McpError> {
+pub async fn calc_indexes(
+    mctx: &crate::tools::McpContext,
+    p: CalcIndexesParam,
+) -> Result<CallToolResult, McpError> {
     let indexes: Vec<longbridge::quote::CalcIndex> = p
         .indexes
         .iter()
         .map(|s| parse::parse_calc_index(s))
         .collect::<Result<_, _>>()?;
-    let (ctx, _) = QuoteContext::new(create_config(token));
+    let (ctx, _) = QuoteContext::new(mctx.create_config());
     let result = ctx
         .calc_indexes(p.symbols, indexes)
         .await
@@ -420,14 +465,14 @@ pub async fn calc_indexes(token: &str, p: CalcIndexesParam) -> Result<CallToolRe
 }
 
 pub async fn create_watchlist_group(
-    token: &str,
+    mctx: &crate::tools::McpContext,
     p: CreateWatchlistGroupParam,
 ) -> Result<CallToolResult, McpError> {
     let mut req = RequestCreateWatchlistGroup::new(p.name);
     if let Some(securities) = p.securities {
         req = req.securities(securities);
     }
-    let (ctx, _) = QuoteContext::new(create_config(token));
+    let (ctx, _) = QuoteContext::new(mctx.create_config());
     let id = ctx
         .create_watchlist_group(req)
         .await
@@ -436,10 +481,10 @@ pub async fn create_watchlist_group(
 }
 
 pub async fn delete_watchlist_group(
-    token: &str,
+    mctx: &crate::tools::McpContext,
     p: DeleteWatchlistGroupParam,
 ) -> Result<CallToolResult, McpError> {
-    let (ctx, _) = QuoteContext::new(create_config(token));
+    let (ctx, _) = QuoteContext::new(mctx.create_config());
     ctx.delete_watchlist_group(p.id, p.purge)
         .await
         .map_err(Error::longbridge)?;
@@ -447,7 +492,7 @@ pub async fn delete_watchlist_group(
 }
 
 pub async fn update_watchlist_group(
-    token: &str,
+    mctx: &crate::tools::McpContext,
     p: UpdateWatchlistGroupParam,
 ) -> Result<CallToolResult, McpError> {
     let mut req = RequestUpdateWatchlistGroup::new(p.id);
@@ -463,20 +508,23 @@ pub async fn update_watchlist_group(
         };
         req = req.mode(mode);
     }
-    let (ctx, _) = QuoteContext::new(create_config(token));
+    let (ctx, _) = QuoteContext::new(mctx.create_config());
     ctx.update_watchlist_group(req)
         .await
         .map_err(Error::longbridge)?;
     Ok(tool_result("watchlist group updated".to_string()))
 }
 
-pub async fn security_list(token: &str, p: SecurityListParam) -> Result<CallToolResult, McpError> {
+pub async fn security_list(
+    mctx: &crate::tools::McpContext,
+    p: SecurityListParam,
+) -> Result<CallToolResult, McpError> {
     let market = parse::parse_market(&p.market)?;
     let category = match p.category {
         Some(ref s) => Some(parse::parse_security_list_category(s)?),
         None => None,
     };
-    let (ctx, _) = QuoteContext::new(create_config(token));
+    let (ctx, _) = QuoteContext::new(mctx.create_config());
     let result = ctx
         .security_list(market, category)
         .await

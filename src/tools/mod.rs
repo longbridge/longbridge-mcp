@@ -54,7 +54,41 @@ where
     Ok(tool_result(json))
 }
 
-fn extract_access_token(ctx: &RequestContext<RoleServer>) -> Result<String, McpError> {
+/// Per-request context extracted from HTTP headers.
+pub struct McpContext {
+    pub token: String,
+    pub language: Option<String>,
+}
+
+impl McpContext {
+    pub fn create_config(&self) -> Arc<longbridge::Config> {
+        let mut config =
+            longbridge::Config::from_oauth(longbridge::oauth::OAuth::from_token(&self.token))
+                .dont_print_quote_packages()
+                .enable_overnight();
+        if let Some(ref lang) = self.language {
+            let lb_lang = if lang.contains("zh-CN") || lang.contains("zh-Hans") {
+                longbridge::Language::ZH_CN
+            } else if lang.contains("zh") {
+                longbridge::Language::ZH_HK
+            } else {
+                longbridge::Language::EN
+            };
+            config = config.language(lb_lang);
+        }
+        Arc::new(config)
+    }
+
+    pub fn create_http_client(&self) -> longbridge::httpclient::HttpClient {
+        longbridge::httpclient::HttpClient::new(
+            longbridge::httpclient::HttpClientConfig::from_oauth(
+                longbridge::oauth::OAuth::from_token(&self.token),
+            ),
+        )
+    }
+}
+
+fn extract_context(ctx: &RequestContext<RoleServer>) -> Result<McpContext, McpError> {
     let parts = ctx
         .extensions
         .get::<axum::http::request::Parts>()
@@ -63,37 +97,20 @@ fn extract_access_token(ctx: &RequestContext<RoleServer>) -> Result<String, McpE
         .extensions
         .get::<BearerToken>()
         .ok_or_else(|| McpError::internal_error("not authenticated", None))?;
-    Ok(token.0.clone())
-}
-
-#[allow(dead_code)]
-fn extract_language(ctx: &RequestContext<RoleServer>) -> Option<String> {
-    let parts = ctx.extensions.get::<axum::http::request::Parts>()?;
-    parts
+    let language = parts
         .headers
-        .get("accept-language")?
-        .to_str()
-        .ok()
-        .map(|s| s.to_string())
-}
-
-pub fn create_config(token: &str) -> Arc<longbridge::Config> {
-    Arc::new(
-        longbridge::Config::from_oauth(longbridge::oauth::OAuth::from_token(token))
-            .dont_print_quote_packages()
-            .enable_overnight(),
-    )
+        .get("accept-language")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
+    Ok(McpContext {
+        token: token.0.clone(),
+        language,
+    })
 }
 
 /// Returns all registered MCP tools sorted by name.
 pub fn list_tools() -> Vec<rmcp::model::Tool> {
     Longbridge::tool_router().list_all()
-}
-
-pub fn create_http_client(token: &str) -> longbridge::httpclient::HttpClient {
-    longbridge::httpclient::HttpClient::new(longbridge::httpclient::HttpClientConfig::from_oauth(
-        longbridge::oauth::OAuth::from_token(token),
-    ))
 }
 
 use crate::tools::quote::{
@@ -124,8 +141,8 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<SymbolsParam>,
     ) -> Result<CallToolResult, McpError> {
-        let token = extract_access_token(&ctx)?;
-        measured_tool_call("static_info", || quote::static_info(&token, p)).await
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("static_info", || quote::static_info(&mctx, p)).await
     }
 
     /// Get the latest price quotes.
@@ -135,8 +152,8 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<SymbolsParam>,
     ) -> Result<CallToolResult, McpError> {
-        let token = extract_access_token(&ctx)?;
-        measured_tool_call("quote", || quote::quote(&token, p)).await
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("quote", || quote::quote(&mctx, p)).await
     }
 
     /// Get option quotes.
@@ -146,8 +163,8 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<SymbolsParam>,
     ) -> Result<CallToolResult, McpError> {
-        let token = extract_access_token(&ctx)?;
-        measured_tool_call("option_quote", || quote::option_quote(&token, p)).await
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("option_quote", || quote::option_quote(&mctx, p)).await
     }
 
     /// Get warrant quotes.
@@ -157,8 +174,8 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<SymbolsParam>,
     ) -> Result<CallToolResult, McpError> {
-        let token = extract_access_token(&ctx)?;
-        measured_tool_call("warrant_quote", || quote::warrant_quote(&token, p)).await
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("warrant_quote", || quote::warrant_quote(&mctx, p)).await
     }
 
     /// Get the order book depth.
@@ -168,8 +185,8 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<SymbolParam>,
     ) -> Result<CallToolResult, McpError> {
-        let token = extract_access_token(&ctx)?;
-        measured_tool_call("depth", || quote::depth(&token, p)).await
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("depth", || quote::depth(&mctx, p)).await
     }
 
     /// Get broker queue data.
@@ -179,8 +196,8 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<SymbolParam>,
     ) -> Result<CallToolResult, McpError> {
-        let token = extract_access_token(&ctx)?;
-        measured_tool_call("brokers", || quote::brokers(&token, p)).await
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("brokers", || quote::brokers(&mctx, p)).await
     }
 
     /// Get market participant broker information.
@@ -189,8 +206,8 @@ impl Longbridge {
         &self,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
-        let token = extract_access_token(&ctx)?;
-        measured_tool_call("participants", || quote::participants(&token)).await
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("participants", || quote::participants(&mctx)).await
     }
 
     /// Get recent trades.
@@ -200,8 +217,8 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<SymbolCountParam>,
     ) -> Result<CallToolResult, McpError> {
-        let token = extract_access_token(&ctx)?;
-        measured_tool_call("trades", || quote::trades(&token, p)).await
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("trades", || quote::trades(&mctx, p)).await
     }
 
     /// Get intraday line data.
@@ -211,8 +228,8 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<SymbolParam>,
     ) -> Result<CallToolResult, McpError> {
-        let token = extract_access_token(&ctx)?;
-        measured_tool_call("intraday", || quote::intraday(&token, p)).await
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("intraday", || quote::intraday(&mctx, p)).await
     }
 
     /// Get candlestick (K-line) data.
@@ -224,8 +241,8 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<CandlesticksParam>,
     ) -> Result<CallToolResult, McpError> {
-        let token = extract_access_token(&ctx)?;
-        measured_tool_call("candlesticks", || quote::candlesticks(&token, p)).await
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("candlesticks", || quote::candlesticks(&mctx, p)).await
     }
 
     /// Get historical candlesticks by offset.
@@ -237,9 +254,9 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<HistoryCandlesticksByOffsetParam>,
     ) -> Result<CallToolResult, McpError> {
-        let token = extract_access_token(&ctx)?;
+        let mctx = extract_context(&ctx)?;
         measured_tool_call("history_candlesticks_by_offset", || {
-            quote::history_candlesticks_by_offset(&token, p)
+            quote::history_candlesticks_by_offset(&mctx, p)
         })
         .await
     }
@@ -253,9 +270,9 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<HistoryCandlesticksByDateParam>,
     ) -> Result<CallToolResult, McpError> {
-        let token = extract_access_token(&ctx)?;
+        let mctx = extract_context(&ctx)?;
         measured_tool_call("history_candlesticks_by_date", || {
-            quote::history_candlesticks_by_date(&token, p)
+            quote::history_candlesticks_by_date(&mctx, p)
         })
         .await
     }
@@ -267,8 +284,8 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<MarketDateRangeParam>,
     ) -> Result<CallToolResult, McpError> {
-        let token = extract_access_token(&ctx)?;
-        measured_tool_call("trading_days", || quote::trading_days(&token, p)).await
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("trading_days", || quote::trading_days(&mctx, p)).await
     }
 
     /// Get option chain expiry date list.
@@ -278,9 +295,9 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<SymbolParam>,
     ) -> Result<CallToolResult, McpError> {
-        let token = extract_access_token(&ctx)?;
+        let mctx = extract_context(&ctx)?;
         measured_tool_call("option_chain_expiry_date_list", || {
-            quote::option_chain_expiry_date_list(&token, p)
+            quote::option_chain_expiry_date_list(&mctx, p)
         })
         .await
     }
@@ -292,9 +309,9 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<SymbolDateParam>,
     ) -> Result<CallToolResult, McpError> {
-        let token = extract_access_token(&ctx)?;
+        let mctx = extract_context(&ctx)?;
         measured_tool_call("option_chain_info_by_date", || {
-            quote::option_chain_info_by_date(&token, p)
+            quote::option_chain_info_by_date(&mctx, p)
         })
         .await
     }
@@ -306,8 +323,8 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<SymbolParam>,
     ) -> Result<CallToolResult, McpError> {
-        let token = extract_access_token(&ctx)?;
-        measured_tool_call("capital_flow", || quote::capital_flow(&token, p)).await
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("capital_flow", || quote::capital_flow(&mctx, p)).await
     }
 
     /// Get capital distribution.
@@ -317,9 +334,9 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<SymbolParam>,
     ) -> Result<CallToolResult, McpError> {
-        let token = extract_access_token(&ctx)?;
+        let mctx = extract_context(&ctx)?;
         measured_tool_call("capital_distribution", || {
-            quote::capital_distribution(&token, p)
+            quote::capital_distribution(&mctx, p)
         })
         .await
     }
@@ -330,8 +347,8 @@ impl Longbridge {
         &self,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
-        let token = extract_access_token(&ctx)?;
-        measured_tool_call("trading_session", || quote::trading_session(&token)).await
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("trading_session", || quote::trading_session(&mctx)).await
     }
 
     /// Get market temperature.
@@ -341,11 +358,8 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<MarketParam>,
     ) -> Result<CallToolResult, McpError> {
-        let token = extract_access_token(&ctx)?;
-        measured_tool_call("market_temperature", || {
-            quote::market_temperature(&token, p)
-        })
-        .await
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("market_temperature", || quote::market_temperature(&mctx, p)).await
     }
 
     /// Get historical market temperature.
@@ -355,9 +369,9 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<MarketDateRangeParam>,
     ) -> Result<CallToolResult, McpError> {
-        let token = extract_access_token(&ctx)?;
+        let mctx = extract_context(&ctx)?;
         measured_tool_call("history_market_temperature", || {
-            quote::history_market_temperature(&token, p)
+            quote::history_market_temperature(&mctx, p)
         })
         .await
     }
@@ -365,8 +379,8 @@ impl Longbridge {
     /// Get watchlist groups.
     #[tool(description = "Get all watchlist groups and their securities")]
     async fn watchlist(&self, ctx: RequestContext<RoleServer>) -> Result<CallToolResult, McpError> {
-        let token = extract_access_token(&ctx)?;
-        measured_tool_call("watchlist", || quote::watchlist(&token)).await
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("watchlist", || quote::watchlist(&mctx)).await
     }
 
     /// Get filings for a symbol.
@@ -376,8 +390,8 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<SymbolParam>,
     ) -> Result<CallToolResult, McpError> {
-        let token = extract_access_token(&ctx)?;
-        measured_tool_call("filings", || quote::filings(&token, p)).await
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("filings", || quote::filings(&mctx, p)).await
     }
 
     /// Get warrant issuers.
@@ -386,8 +400,8 @@ impl Longbridge {
         &self,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
-        let token = extract_access_token(&ctx)?;
-        measured_tool_call("warrant_issuers", || quote::warrant_issuers(&token)).await
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("warrant_issuers", || quote::warrant_issuers(&mctx)).await
     }
 
     /// Get warrant list for a symbol.
@@ -397,8 +411,8 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<WarrantListParam>,
     ) -> Result<CallToolResult, McpError> {
-        let token = extract_access_token(&ctx)?;
-        measured_tool_call("warrant_list", || quote::warrant_list(&token, p)).await
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("warrant_list", || quote::warrant_list(&mctx, p)).await
     }
 
     /// Calculate indexes for symbols.
@@ -408,8 +422,8 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<CalcIndexesParam>,
     ) -> Result<CallToolResult, McpError> {
-        let token = extract_access_token(&ctx)?;
-        measured_tool_call("calc_indexes", || quote::calc_indexes(&token, p)).await
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("calc_indexes", || quote::calc_indexes(&mctx, p)).await
     }
 
     /// Create a watchlist group.
@@ -419,9 +433,9 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<CreateWatchlistGroupParam>,
     ) -> Result<CallToolResult, McpError> {
-        let token = extract_access_token(&ctx)?;
+        let mctx = extract_context(&ctx)?;
         measured_tool_call("create_watchlist_group", || {
-            quote::create_watchlist_group(&token, p)
+            quote::create_watchlist_group(&mctx, p)
         })
         .await
     }
@@ -433,9 +447,9 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<DeleteWatchlistGroupParam>,
     ) -> Result<CallToolResult, McpError> {
-        let token = extract_access_token(&ctx)?;
+        let mctx = extract_context(&ctx)?;
         measured_tool_call("delete_watchlist_group", || {
-            quote::delete_watchlist_group(&token, p)
+            quote::delete_watchlist_group(&mctx, p)
         })
         .await
     }
@@ -447,9 +461,9 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<UpdateWatchlistGroupParam>,
     ) -> Result<CallToolResult, McpError> {
-        let token = extract_access_token(&ctx)?;
+        let mctx = extract_context(&ctx)?;
         measured_tool_call("update_watchlist_group", || {
-            quote::update_watchlist_group(&token, p)
+            quote::update_watchlist_group(&mctx, p)
         })
         .await
     }
@@ -461,8 +475,8 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<SecurityListParam>,
     ) -> Result<CallToolResult, McpError> {
-        let token = extract_access_token(&ctx)?;
-        measured_tool_call("security_list", || quote::security_list(&token, p)).await
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("security_list", || quote::security_list(&mctx, p)).await
     }
 
     /// Get account balance.
@@ -471,8 +485,8 @@ impl Longbridge {
         &self,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
-        let token = extract_access_token(&ctx)?;
-        measured_tool_call("account_balance", || trade::account_balance(&token)).await
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("account_balance", || trade::account_balance(&mctx)).await
     }
 
     /// Get stock positions.
@@ -481,8 +495,8 @@ impl Longbridge {
         &self,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
-        let token = extract_access_token(&ctx)?;
-        measured_tool_call("stock_positions", || trade::stock_positions(&token)).await
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("stock_positions", || trade::stock_positions(&mctx)).await
     }
 
     /// Get fund positions.
@@ -491,8 +505,8 @@ impl Longbridge {
         &self,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
-        let token = extract_access_token(&ctx)?;
-        measured_tool_call("fund_positions", || trade::fund_positions(&token)).await
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("fund_positions", || trade::fund_positions(&mctx)).await
     }
 
     /// Get margin ratio.
@@ -502,8 +516,8 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<SymbolParam>,
     ) -> Result<CallToolResult, McpError> {
-        let token = extract_access_token(&ctx)?;
-        measured_tool_call("margin_ratio", || trade::margin_ratio(&token, p)).await
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("margin_ratio", || trade::margin_ratio(&mctx, p)).await
     }
 
     /// Get today's orders.
@@ -512,8 +526,8 @@ impl Longbridge {
         &self,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
-        let token = extract_access_token(&ctx)?;
-        measured_tool_call("today_orders", || trade::today_orders(&token)).await
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("today_orders", || trade::today_orders(&mctx)).await
     }
 
     /// Get order detail.
@@ -523,8 +537,8 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<OrderIdParam>,
     ) -> Result<CallToolResult, McpError> {
-        let token = extract_access_token(&ctx)?;
-        measured_tool_call("order_detail", || trade::order_detail(&token, p)).await
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("order_detail", || trade::order_detail(&mctx, p)).await
     }
 
     /// Cancel an order.
@@ -534,8 +548,8 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<OrderIdParam>,
     ) -> Result<CallToolResult, McpError> {
-        let token = extract_access_token(&ctx)?;
-        measured_tool_call("cancel_order", || trade::cancel_order(&token, p)).await
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("cancel_order", || trade::cancel_order(&mctx, p)).await
     }
 
     /// Get today's trade executions.
@@ -544,8 +558,8 @@ impl Longbridge {
         &self,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
-        let token = extract_access_token(&ctx)?;
-        measured_tool_call("today_executions", || trade::today_executions(&token)).await
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("today_executions", || trade::today_executions(&mctx)).await
     }
 
     /// Get historical orders (not including today).
@@ -555,8 +569,8 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<HistoryOrdersParam>,
     ) -> Result<CallToolResult, McpError> {
-        let token = extract_access_token(&ctx)?;
-        measured_tool_call("history_orders", || trade::history_orders(&token, p)).await
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("history_orders", || trade::history_orders(&mctx, p)).await
     }
 
     /// Get historical executions.
@@ -566,11 +580,8 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<HistoryOrdersParam>,
     ) -> Result<CallToolResult, McpError> {
-        let token = extract_access_token(&ctx)?;
-        measured_tool_call("history_executions", || {
-            trade::history_executions(&token, p)
-        })
-        .await
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("history_executions", || trade::history_executions(&mctx, p)).await
     }
 
     /// Get cash flow records.
@@ -580,8 +591,8 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<CashFlowParam>,
     ) -> Result<CallToolResult, McpError> {
-        let token = extract_access_token(&ctx)?;
-        measured_tool_call("cash_flow", || trade::cash_flow(&token, p)).await
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("cash_flow", || trade::cash_flow(&mctx, p)).await
     }
 
     /// Submit an order.
@@ -593,8 +604,8 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<SubmitOrderParam>,
     ) -> Result<CallToolResult, McpError> {
-        let token = extract_access_token(&ctx)?;
-        measured_tool_call("submit_order", || trade::submit_order(&token, p)).await
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("submit_order", || trade::submit_order(&mctx, p)).await
     }
 
     /// Replace (modify) an order.
@@ -604,8 +615,8 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<ReplaceOrderParam>,
     ) -> Result<CallToolResult, McpError> {
-        let token = extract_access_token(&ctx)?;
-        measured_tool_call("replace_order", || trade::replace_order(&token, p)).await
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("replace_order", || trade::replace_order(&mctx, p)).await
     }
 
     /// Estimate max purchase quantity.
@@ -615,9 +626,9 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<EstimateMaxQtyParam>,
     ) -> Result<CallToolResult, McpError> {
-        let token = extract_access_token(&ctx)?;
+        let mctx = extract_context(&ctx)?;
         measured_tool_call("estimate_max_purchase_quantity", || {
-            trade::estimate_max_purchase_quantity(&token, p)
+            trade::estimate_max_purchase_quantity(&mctx, p)
         })
         .await
     }
@@ -629,9 +640,9 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<fundamental::FinancialReportParam>,
     ) -> Result<CallToolResult, McpError> {
-        let token = extract_access_token(&ctx)?;
+        let mctx = extract_context(&ctx)?;
         measured_tool_call("financial_report", || {
-            fundamental::financial_report(&token, p)
+            fundamental::financial_report(&mctx, p)
         })
         .await
     }
@@ -643,9 +654,9 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<fundamental::SymbolParam>,
     ) -> Result<CallToolResult, McpError> {
-        let token = extract_access_token(&ctx)?;
+        let mctx = extract_context(&ctx)?;
         measured_tool_call("institution_rating", || {
-            fundamental::institution_rating(&token, p)
+            fundamental::institution_rating(&mctx, p)
         })
         .await
     }
@@ -657,9 +668,9 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<fundamental::SymbolParam>,
     ) -> Result<CallToolResult, McpError> {
-        let token = extract_access_token(&ctx)?;
+        let mctx = extract_context(&ctx)?;
         measured_tool_call("institution_rating_detail", || {
-            fundamental::institution_rating_detail(&token, p)
+            fundamental::institution_rating_detail(&mctx, p)
         })
         .await
     }
@@ -671,8 +682,8 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<fundamental::SymbolParam>,
     ) -> Result<CallToolResult, McpError> {
-        let token = extract_access_token(&ctx)?;
-        measured_tool_call("dividend", || fundamental::dividend(&token, p)).await
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("dividend", || fundamental::dividend(&mctx, p)).await
     }
 
     /// Get dividend distribution details.
@@ -682,11 +693,8 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<fundamental::SymbolParam>,
     ) -> Result<CallToolResult, McpError> {
-        let token = extract_access_token(&ctx)?;
-        measured_tool_call("dividend_detail", || {
-            fundamental::dividend_detail(&token, p)
-        })
-        .await
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("dividend_detail", || fundamental::dividend_detail(&mctx, p)).await
     }
 
     /// Get EPS forecast data.
@@ -696,8 +704,8 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<fundamental::SymbolParam>,
     ) -> Result<CallToolResult, McpError> {
-        let token = extract_access_token(&ctx)?;
-        measured_tool_call("forecast_eps", || fundamental::forecast_eps(&token, p)).await
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("forecast_eps", || fundamental::forecast_eps(&mctx, p)).await
     }
 
     /// Get financial consensus estimates.
@@ -707,8 +715,8 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<fundamental::SymbolParam>,
     ) -> Result<CallToolResult, McpError> {
-        let token = extract_access_token(&ctx)?;
-        measured_tool_call("consensus", || fundamental::consensus(&token, p)).await
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("consensus", || fundamental::consensus(&mctx, p)).await
     }
 
     /// Get valuation overview (PE, PB, PS, dividend yield).
@@ -718,8 +726,8 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<fundamental::SymbolParam>,
     ) -> Result<CallToolResult, McpError> {
-        let token = extract_access_token(&ctx)?;
-        measured_tool_call("valuation", || fundamental::valuation(&token, p)).await
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("valuation", || fundamental::valuation(&mctx, p)).await
     }
 
     /// Get detailed valuation history.
@@ -729,9 +737,9 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<fundamental::SymbolParam>,
     ) -> Result<CallToolResult, McpError> {
-        let token = extract_access_token(&ctx)?;
+        let mctx = extract_context(&ctx)?;
         measured_tool_call("valuation_history", || {
-            fundamental::valuation_history(&token, p)
+            fundamental::valuation_history(&mctx, p)
         })
         .await
     }
@@ -743,9 +751,9 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<fundamental::SymbolParam>,
     ) -> Result<CallToolResult, McpError> {
-        let token = extract_access_token(&ctx)?;
+        let mctx = extract_context(&ctx)?;
         measured_tool_call("industry_valuation", || {
-            fundamental::industry_valuation(&token, p)
+            fundamental::industry_valuation(&mctx, p)
         })
         .await
     }
@@ -757,9 +765,9 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<fundamental::SymbolParam>,
     ) -> Result<CallToolResult, McpError> {
-        let token = extract_access_token(&ctx)?;
+        let mctx = extract_context(&ctx)?;
         measured_tool_call("industry_valuation_dist", || {
-            fundamental::industry_valuation_dist(&token, p)
+            fundamental::industry_valuation_dist(&mctx, p)
         })
         .await
     }
@@ -771,8 +779,8 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<fundamental::SymbolParam>,
     ) -> Result<CallToolResult, McpError> {
-        let token = extract_access_token(&ctx)?;
-        measured_tool_call("company", || fundamental::company(&token, p)).await
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("company", || fundamental::company(&mctx, p)).await
     }
 
     /// Get company executives.
@@ -782,8 +790,8 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<fundamental::SymbolParam>,
     ) -> Result<CallToolResult, McpError> {
-        let token = extract_access_token(&ctx)?;
-        measured_tool_call("executive", || fundamental::executive(&token, p)).await
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("executive", || fundamental::executive(&mctx, p)).await
     }
 
     /// Get shareholders.
@@ -793,8 +801,8 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<fundamental::SymbolParam>,
     ) -> Result<CallToolResult, McpError> {
-        let token = extract_access_token(&ctx)?;
-        measured_tool_call("shareholder", || fundamental::shareholder(&token, p)).await
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("shareholder", || fundamental::shareholder(&mctx, p)).await
     }
 
     /// Get fund holders.
@@ -804,8 +812,8 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<fundamental::SymbolParam>,
     ) -> Result<CallToolResult, McpError> {
-        let token = extract_access_token(&ctx)?;
-        measured_tool_call("fund_holder", || fundamental::fund_holder(&token, p)).await
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("fund_holder", || fundamental::fund_holder(&mctx, p)).await
     }
 
     /// Get corporate actions.
@@ -815,8 +823,8 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<fundamental::SymbolParam>,
     ) -> Result<CallToolResult, McpError> {
-        let token = extract_access_token(&ctx)?;
-        measured_tool_call("corp_action", || fundamental::corp_action(&token, p)).await
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("corp_action", || fundamental::corp_action(&mctx, p)).await
     }
 
     /// Get investor relations events.
@@ -826,11 +834,8 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<fundamental::SymbolParam>,
     ) -> Result<CallToolResult, McpError> {
-        let token = extract_access_token(&ctx)?;
-        measured_tool_call("invest_relation", || {
-            fundamental::invest_relation(&token, p)
-        })
-        .await
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("invest_relation", || fundamental::invest_relation(&mctx, p)).await
     }
 
     /// Get operating metrics.
@@ -840,8 +845,8 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<fundamental::SymbolParam>,
     ) -> Result<CallToolResult, McpError> {
-        let token = extract_access_token(&ctx)?;
-        measured_tool_call("operating", || fundamental::operating(&token, p)).await
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("operating", || fundamental::operating(&mctx, p)).await
     }
 
     /// Get market trading status.
@@ -850,8 +855,8 @@ impl Longbridge {
         &self,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
-        let token = extract_access_token(&ctx)?;
-        measured_tool_call("market_status", || market::market_status(&token)).await
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("market_status", || market::market_status(&mctx)).await
     }
 
     /// Get broker holding data.
@@ -861,8 +866,8 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<market::SymbolParam>,
     ) -> Result<CallToolResult, McpError> {
-        let token = extract_access_token(&ctx)?;
-        measured_tool_call("broker_holding", || market::broker_holding(&token, p)).await
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("broker_holding", || market::broker_holding(&mctx, p)).await
     }
 
     /// Get broker holding detail.
@@ -872,9 +877,9 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<market::SymbolParam>,
     ) -> Result<CallToolResult, McpError> {
-        let token = extract_access_token(&ctx)?;
+        let mctx = extract_context(&ctx)?;
         measured_tool_call("broker_holding_detail", || {
-            market::broker_holding_detail(&token, p)
+            market::broker_holding_detail(&mctx, p)
         })
         .await
     }
@@ -886,9 +891,9 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<market::BrokerHoldingDailyParam>,
     ) -> Result<CallToolResult, McpError> {
-        let token = extract_access_token(&ctx)?;
+        let mctx = extract_context(&ctx)?;
         measured_tool_call("broker_holding_daily", || {
-            market::broker_holding_daily(&token, p)
+            market::broker_holding_daily(&mctx, p)
         })
         .await
     }
@@ -900,8 +905,8 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<market::SymbolParam>,
     ) -> Result<CallToolResult, McpError> {
-        let token = extract_access_token(&ctx)?;
-        measured_tool_call("ah_premium", || market::ah_premium(&token, p)).await
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("ah_premium", || market::ah_premium(&mctx, p)).await
     }
 
     /// Get AH premium intraday data.
@@ -911,9 +916,9 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<market::SymbolParam>,
     ) -> Result<CallToolResult, McpError> {
-        let token = extract_access_token(&ctx)?;
+        let mctx = extract_context(&ctx)?;
         measured_tool_call("ah_premium_intraday", || {
-            market::ah_premium_intraday(&token, p)
+            market::ah_premium_intraday(&mctx, p)
         })
         .await
     }
@@ -925,8 +930,8 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<market::SymbolParam>,
     ) -> Result<CallToolResult, McpError> {
-        let token = extract_access_token(&ctx)?;
-        measured_tool_call("trade_stats", || market::trade_stats(&token, p)).await
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("trade_stats", || market::trade_stats(&mctx, p)).await
     }
 
     /// Get market anomalies.
@@ -936,8 +941,8 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<market::MarketParam>,
     ) -> Result<CallToolResult, McpError> {
-        let token = extract_access_token(&ctx)?;
-        measured_tool_call("anomaly", || market::anomaly(&token, p)).await
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("anomaly", || market::anomaly(&mctx, p)).await
     }
 
     /// Get index constituents.
@@ -947,8 +952,8 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<market::IndexSymbolParam>,
     ) -> Result<CallToolResult, McpError> {
-        let token = extract_access_token(&ctx)?;
-        measured_tool_call("constituent", || market::constituent(&token, p)).await
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("constituent", || market::constituent(&mctx, p)).await
     }
 
     /// Get finance calendar events.
@@ -960,8 +965,8 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<calendar::FinanceCalendarParam>,
     ) -> Result<CallToolResult, McpError> {
-        let token = extract_access_token(&ctx)?;
-        measured_tool_call("finance_calendar", || calendar::finance_calendar(&token, p)).await
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("finance_calendar", || calendar::finance_calendar(&mctx, p)).await
     }
 
     /// Get exchange rates.
@@ -970,8 +975,8 @@ impl Longbridge {
         &self,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
-        let token = extract_access_token(&ctx)?;
-        measured_tool_call("exchange_rate", || portfolio::exchange_rate(&token)).await
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("exchange_rate", || portfolio::exchange_rate(&mctx)).await
     }
 
     /// Get profit analysis summary.
@@ -980,8 +985,8 @@ impl Longbridge {
         &self,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
-        let token = extract_access_token(&ctx)?;
-        measured_tool_call("profit_analysis", || portfolio::profit_analysis(&token)).await
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("profit_analysis", || portfolio::profit_analysis(&mctx)).await
     }
 
     /// Get profit analysis detail for a symbol.
@@ -991,9 +996,9 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<portfolio::ProfitAnalysisDetailParam>,
     ) -> Result<CallToolResult, McpError> {
-        let token = extract_access_token(&ctx)?;
+        let mctx = extract_context(&ctx)?;
         measured_tool_call("profit_analysis_detail", || {
-            portfolio::profit_analysis_detail(&token, p)
+            portfolio::profit_analysis_detail(&mctx, p)
         })
         .await
     }
@@ -1004,8 +1009,8 @@ impl Longbridge {
         &self,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
-        let token = extract_access_token(&ctx)?;
-        measured_tool_call("alert_list", || alert::alert_list(&token)).await
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("alert_list", || alert::alert_list(&mctx)).await
     }
 
     /// Add a price alert.
@@ -1017,8 +1022,8 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<alert::AlertAddParam>,
     ) -> Result<CallToolResult, McpError> {
-        let token = extract_access_token(&ctx)?;
-        measured_tool_call("alert_add", || alert::alert_add(&token, p)).await
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("alert_add", || alert::alert_add(&mctx, p)).await
     }
 
     /// Delete a price alert.
@@ -1028,8 +1033,8 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<alert::AlertIdParam>,
     ) -> Result<CallToolResult, McpError> {
-        let token = extract_access_token(&ctx)?;
-        measured_tool_call("alert_delete", || alert::alert_delete(&token, p)).await
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("alert_delete", || alert::alert_delete(&mctx, p)).await
     }
 
     /// Enable a price alert.
@@ -1039,8 +1044,8 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<alert::AlertIdParam>,
     ) -> Result<CallToolResult, McpError> {
-        let token = extract_access_token(&ctx)?;
-        measured_tool_call("alert_enable", || alert::alert_enable(&token, p)).await
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("alert_enable", || alert::alert_enable(&mctx, p)).await
     }
 
     /// Disable a price alert.
@@ -1050,8 +1055,8 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<alert::AlertIdParam>,
     ) -> Result<CallToolResult, McpError> {
-        let token = extract_access_token(&ctx)?;
-        measured_tool_call("alert_disable", || alert::alert_disable(&token, p)).await
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("alert_disable", || alert::alert_disable(&mctx, p)).await
     }
 
     /// Get news for a symbol.
@@ -1061,8 +1066,8 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<content::SymbolParam>,
     ) -> Result<CallToolResult, McpError> {
-        let token = extract_access_token(&ctx)?;
-        measured_tool_call("news", || content::news(&token, p)).await
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("news", || content::news(&mctx, p)).await
     }
 
     /// Get discussion topics for a symbol.
@@ -1072,8 +1077,8 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<content::SymbolParam>,
     ) -> Result<CallToolResult, McpError> {
-        let token = extract_access_token(&ctx)?;
-        measured_tool_call("topic", || content::topic(&token, p)).await
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("topic", || content::topic(&mctx, p)).await
     }
 
     /// Get topic detail.
@@ -1083,8 +1088,8 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<content::TopicIdParam>,
     ) -> Result<CallToolResult, McpError> {
-        let token = extract_access_token(&ctx)?;
-        measured_tool_call("topic_detail", || content::topic_detail(&token, p)).await
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("topic_detail", || content::topic_detail(&mctx, p)).await
     }
 
     /// Get topic replies.
@@ -1094,8 +1099,8 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<content::TopicIdParam>,
     ) -> Result<CallToolResult, McpError> {
-        let token = extract_access_token(&ctx)?;
-        measured_tool_call("topic_replies", || content::topic_replies(&token, p)).await
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("topic_replies", || content::topic_replies(&mctx, p)).await
     }
 
     /// Create a discussion topic.
@@ -1105,8 +1110,8 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<content::TopicCreateParam>,
     ) -> Result<CallToolResult, McpError> {
-        let token = extract_access_token(&ctx)?;
-        measured_tool_call("topic_create", || content::topic_create(&token, p)).await
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("topic_create", || content::topic_create(&mctx, p)).await
     }
 
     /// Reply to a discussion topic.
@@ -1116,9 +1121,9 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<content::TopicCreateReplyParam>,
     ) -> Result<CallToolResult, McpError> {
-        let token = extract_access_token(&ctx)?;
+        let mctx = extract_context(&ctx)?;
         measured_tool_call("topic_create_reply", || {
-            content::topic_create_reply(&token, p)
+            content::topic_create_reply(&mctx, p)
         })
         .await
     }
@@ -1130,8 +1135,8 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<statement::StatementListParam>,
     ) -> Result<CallToolResult, McpError> {
-        let token = extract_access_token(&ctx)?;
-        measured_tool_call("statement_list", || statement::statement_list(&token, p)).await
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("statement_list", || statement::statement_list(&mctx, p)).await
     }
 
     /// Export account statement.
@@ -1141,11 +1146,8 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<statement::StatementExportParam>,
     ) -> Result<CallToolResult, McpError> {
-        let token = extract_access_token(&ctx)?;
-        measured_tool_call("statement_export", || {
-            statement::statement_export(&token, p)
-        })
-        .await
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("statement_export", || statement::statement_export(&mctx, p)).await
     }
 }
 
