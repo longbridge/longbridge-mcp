@@ -16,19 +16,16 @@ A [Model Context Protocol](https://modelcontextprotocol.io/) (MCP) server that e
 ### Docker (recommended)
 
 ```bash
-docker run -p 8000:8000 ghcr.io/longbridge/longbridge-mcp --bind 0.0.0.0:8000
-```
-
-With HTTPS:
-
-```bash
 docker run -p 8443:8443 \
   -v /path/to/certs:/certs:ro \
   ghcr.io/longbridge/longbridge-mcp \
   --bind 0.0.0.0:8443 \
+  --base-url https://mcp.example.com \
   --tls-cert /certs/cert.pem \
   --tls-key /certs/key.pem
 ```
+
+> **Important:** When deploying to a public network, you **must** set `--base-url` to the externally reachable URL of your server (e.g. `https://mcp.example.com`). This URL is returned in the OAuth protected resource metadata and used by MCP clients to discover the authorization server. If not set, it defaults to `http://localhost:{port}` which will not work for remote clients.
 
 ### Build from source
 
