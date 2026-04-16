@@ -84,6 +84,11 @@ pub fn create_config(token: &str) -> Arc<longbridge::Config> {
     )
 }
 
+/// Returns all registered MCP tools sorted by name.
+pub fn list_tools() -> Vec<rmcp::model::Tool> {
+    Longbridge::tool_router().list_all()
+}
+
 pub fn create_http_client(token: &str) -> longbridge::httpclient::HttpClient {
     longbridge::httpclient::HttpClient::new(longbridge::httpclient::HttpClientConfig::from_oauth(
         longbridge::oauth::OAuth::from_token(token),
@@ -101,7 +106,7 @@ use crate::tools::trade::{
     SubmitOrderParam,
 };
 
-#[tool_router]
+#[tool_router(vis = "pub(crate)")]
 impl Longbridge {
     /// Get current UTC time in RFC3339 format.
     #[tool(description = "Get current UTC time")]
