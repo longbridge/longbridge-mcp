@@ -10,15 +10,7 @@ use rmcp::transport::streamable_http_server::session::local::LocalSessionManager
 use crate::tools::{self, Longbridge};
 
 async fn tools_json() -> axum::Json<serde_json::Value> {
-    let tools = tools::list_tools()
-        .into_iter()
-        .map(|t| {
-            serde_json::json!({
-                "name": t.name,
-                "description": t.description,
-            })
-        })
-        .collect::<Vec<_>>();
+    let tools = tools::list_tools();
     axum::Json(serde_json::json!({ "tools": tools }))
 }
 
