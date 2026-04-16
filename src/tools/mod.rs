@@ -66,6 +66,17 @@ fn extract_access_token(ctx: &RequestContext<RoleServer>) -> Result<String, McpE
     Ok(token.0.clone())
 }
 
+#[allow(dead_code)]
+fn extract_language(ctx: &RequestContext<RoleServer>) -> Option<String> {
+    let parts = ctx.extensions.get::<axum::http::request::Parts>()?;
+    parts
+        .headers
+        .get("accept-language")?
+        .to_str()
+        .ok()
+        .map(|s| s.to_string())
+}
+
 pub fn create_config(token: &str) -> Arc<longbridge::Config> {
     Arc::new(
         longbridge::Config::from_oauth(longbridge::oauth::OAuth::from_token(token))
