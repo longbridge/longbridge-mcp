@@ -140,7 +140,7 @@ pub async fn create_session(client_id: &str) -> Result<(Arc<Config>, HttpClient)
 
     let http_config = HttpClientConfig::from_oauth(oauth.clone());
     let http_client = HttpClient::new(http_config);
-    let config = Arc::new(Config::from_oauth(oauth));
+    let config = Arc::new(Config::from_oauth(oauth).dont_print_quote_packages());
 
     Ok((config, http_client))
 }
