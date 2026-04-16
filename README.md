@@ -62,6 +62,8 @@ When `tls_cert` and `tls_key` are both set, the server runs HTTPS. Otherwise it 
 
 ### Environment Variables
 
+These are **advanced settings** — most users do not need to change them. They are primarily useful for connecting to non-production Longbridge environments or debugging SDK internals.
+
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `LONGBRIDGE_MCP_CONFIG_DIR` | `~/.longbridge/mcp` | Config file directory |
