@@ -33,18 +33,11 @@ struct IssuedCode {
     client_redirect_uri: String,
 }
 
-/// Registered MCP client info (from /oauth/register).
-struct RegisteredClient {
-    redirect_uris: Vec<String>,
-}
-
 pub struct OAuthState {
-    /// state_token -> PendingAuth
+    /// state_token -> PendingAuth (ephemeral, lost on restart is fine)
     pending: RwLock<HashMap<String, PendingAuth>>,
-    /// authorization_code -> IssuedCode
+    /// authorization_code -> IssuedCode (ephemeral)
     codes: RwLock<HashMap<String, IssuedCode>>,
-    /// MCP client_id -> RegisteredClient
-    clients: RwLock<HashMap<String, RegisteredClient>>,
 }
 
 impl OAuthState {
@@ -52,7 +45,6 @@ impl OAuthState {
         Self {
             pending: RwLock::new(HashMap::new()),
             codes: RwLock::new(HashMap::new()),
-            clients: RwLock::new(HashMap::new()),
         }
     }
 }
@@ -134,18 +126,16 @@ async fn authorize(
 
     // Validate MCP client_id and redirect_uri if client_id is provided
     if let Some(ref mcp_client_id) = params.client_id {
-        let oauth_state = state.registry.oauth_state();
-        let clients = oauth_state.clients.read().await;
-        match clients.get(mcp_client_id) {
-            Some(client) => {
-                if !client.redirect_uris.is_empty()
-                    && !client.redirect_uris.contains(&params.redirect_uri)
-                {
-                    return (StatusCode::BAD_REQUEST, "redirect_uri not registered")
-                        .into_response();
-                }
+        match state
+            .registry
+            .validate_mcp_client(mcp_client_id, &params.redirect_uri)
+            .await
+        {
+            Ok(true) => {}
+            Ok(false) => {
+                return (StatusCode::BAD_REQUEST, "redirect_uri not registered").into_response();
             }
-            None => {
+            Err(_) => {
                 return (StatusCode::BAD_REQUEST, "unknown client_id").into_response();
             }
         }
@@ -460,17 +450,18 @@ struct ClientRegistrationResponse {
 async fn register_client(
     State(state): State<Arc<AppState>>,
     Json(req): Json<ClientRegistrationRequest>,
-) -> Json<ClientRegistrationResponse> {
+) -> Response {
     let client_id = Uuid::new_v4().to_string();
     tracing::info!(client_id, client_name = ?req.client_name, "registered MCP client");
 
-    let oauth_state = state.registry.oauth_state();
-    oauth_state.clients.write().await.insert(
-        client_id.clone(),
-        RegisteredClient {
-            redirect_uris: req.redirect_uris.clone(),
-        },
-    );
+    if let Err(e) = state
+        .registry
+        .register_mcp_client(&client_id, req.client_name.as_deref(), &req.redirect_uris)
+        .await
+    {
+        tracing::error!(error = %e, "failed to register MCP client");
+        return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+    }
 
     Json(ClientRegistrationResponse {
         client_id,
@@ -486,6 +477,7 @@ async fn register_client(
             .response_types
             .unwrap_or_else(|| vec!["code".to_string()]),
     })
+    .into_response()
 }
 
 pub fn routes(state: Arc<AppState>) -> Router {

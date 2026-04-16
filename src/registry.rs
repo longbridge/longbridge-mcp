@@ -65,6 +65,15 @@ impl UserRegistry {
             )",
             [],
         )?;
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS mcp_clients (
+                client_id TEXT PRIMARY KEY,
+                client_name TEXT,
+                redirect_uris TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )",
+            [],
+        )?;
         Ok(Self {
             sessions: RwLock::new(HashMap::new()),
             idle_timeout,
@@ -86,6 +95,41 @@ impl UserRegistry {
             Ok(())
         })
         .is_ok()
+    }
+
+    pub async fn register_mcp_client(
+        &self,
+        client_id: &str,
+        client_name: Option<&str>,
+        redirect_uris: &[String],
+    ) -> Result<(), Error> {
+        let conn = Connection::open(&self.db_path)?;
+        let now = time::OffsetDateTime::now_utc()
+            .format(&time::format_description::well_known::Rfc3339)
+            .map_err(|e| Error::Other(e.to_string()))?;
+        let uris_json = serde_json::to_string(redirect_uris)?;
+        conn.execute(
+            "INSERT OR REPLACE INTO mcp_clients (client_id, client_name, redirect_uris, created_at) VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![client_id, client_name.unwrap_or(""), uris_json, now],
+        )?;
+        Ok(())
+    }
+
+    pub async fn validate_mcp_client(
+        &self,
+        client_id: &str,
+        redirect_uri: &str,
+    ) -> Result<bool, Error> {
+        let conn = Connection::open(&self.db_path)?;
+        let uris_json: String = conn
+            .query_row(
+                "SELECT redirect_uris FROM mcp_clients WHERE client_id = ?1",
+                [client_id],
+                |row| row.get(0),
+            )
+            .map_err(|_| Error::SessionNotFound(client_id.to_string()))?;
+        let uris: Vec<String> = serde_json::from_str(&uris_json).unwrap_or_default();
+        Ok(uris.is_empty() || uris.contains(&redirect_uri.to_string()))
     }
 
     pub async fn register_user(&self, user_id: &str, client_id: &str) -> Result<(), Error> {
