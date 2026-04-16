@@ -9,9 +9,10 @@ use rmcp::transport::streamable_http_server::session::local::LocalSessionManager
 
 use crate::tools::{self, Longbridge};
 
-async fn tools_json() -> axum::Json<serde_json::Value> {
-    let tools = tools::list_tools();
-    axum::Json(serde_json::json!({ "tools": tools }))
+async fn tools_json() -> axum::Json<&'static serde_json::Value> {
+    static TOOLS_JSON: std::sync::LazyLock<serde_json::Value> =
+        std::sync::LazyLock::new(|| serde_json::json!({ "tools": tools::list_tools() }));
+    axum::Json(&*TOOLS_JSON)
 }
 
 pub struct AppState {
