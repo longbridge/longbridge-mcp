@@ -66,6 +66,7 @@ fn extract_access_token(ctx: &RequestContext<RoleServer>) -> Result<String, McpE
     Ok(token.0.clone())
 }
 
+#[allow(dead_code)]
 fn extract_language(ctx: &RequestContext<RoleServer>) -> Option<String> {
     let parts = ctx.extensions.get::<axum::http::request::Parts>()?;
     parts
@@ -1058,17 +1059,6 @@ impl Longbridge {
         measured_tool_call("news", || content::news(&token, p)).await
     }
 
-    /// Get news detail by id.
-    #[tool(description = "Get full news article content by news_id")]
-    async fn news_detail(
-        &self,
-        ctx: RequestContext<RoleServer>,
-        Parameters(p): Parameters<content::NewsDetailParam>,
-    ) -> Result<CallToolResult, McpError> {
-        let language = extract_language(&ctx);
-        measured_tool_call("news_detail", || content::news_detail(p, language)).await
-    }
-
     /// Get discussion topics for a symbol.
     #[tool(description = "Get discussion topics for a symbol")]
     async fn topic(
@@ -1087,8 +1077,8 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<content::TopicIdParam>,
     ) -> Result<CallToolResult, McpError> {
-        let language = extract_language(&ctx);
-        measured_tool_call("topic_detail", || content::topic_detail(p, language)).await
+        let token = extract_access_token(&ctx)?;
+        measured_tool_call("topic_detail", || content::topic_detail(&token, p)).await
     }
 
     /// Get topic replies.
@@ -1098,8 +1088,8 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<content::TopicIdParam>,
     ) -> Result<CallToolResult, McpError> {
-        let language = extract_language(&ctx);
-        measured_tool_call("topic_replies", || content::topic_replies(p, language)).await
+        let token = extract_access_token(&ctx)?;
+        measured_tool_call("topic_replies", || content::topic_replies(&token, p)).await
     }
 
     /// Create a discussion topic.
@@ -1125,17 +1115,6 @@ impl Longbridge {
             content::topic_create_reply(&token, p)
         })
         .await
-    }
-
-    /// Get filing detail.
-    #[tool(description = "Get regulatory filing detail by filing_id")]
-    async fn filing_detail(
-        &self,
-        ctx: RequestContext<RoleServer>,
-        Parameters(p): Parameters<content::FilingDetailParam>,
-    ) -> Result<CallToolResult, McpError> {
-        let language = extract_language(&ctx);
-        measured_tool_call("filing_detail", || content::filing_detail(p, language)).await
     }
 
     /// List account statements.

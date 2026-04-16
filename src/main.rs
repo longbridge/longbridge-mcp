@@ -105,8 +105,9 @@ fn load_config() -> AppConfig {
 }
 
 fn init_logging(log_dir: Option<&PathBuf>) {
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("info,longbridge_mcp=debug"));
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+        EnvFilter::new("info,longbridge_mcp=debug,longbridge_httpcli=warn,rmcp=warn")
+    });
 
     if let Some(dir) = log_dir {
         let file_appender = tracing_appender::rolling::daily(dir, "longbridge-mcp.log");
@@ -123,6 +124,12 @@ fn init_logging(log_dir: Option<&PathBuf>) {
 async fn shutdown_signal() {
     tokio::signal::ctrl_c().await.ok();
     tracing::info!("shutting down");
+    // SSE/streaming connections can linger indefinitely; force-exit after 5 s
+    // so the port is released and a new instance can start immediately.
+    tokio::spawn(async {
+        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        std::process::exit(0);
+    });
 }
 
 #[tokio::main]
@@ -146,7 +153,7 @@ async fn main() -> anyhow::Result<()> {
         let shutdown_handle = handle.clone();
         tokio::spawn(async move {
             shutdown_signal().await;
-            shutdown_handle.graceful_shutdown(Some(std::time::Duration::from_secs(10)));
+            shutdown_handle.graceful_shutdown(Some(std::time::Duration::from_secs(5)));
         });
         tracing::info!("listening on https://{}", config.bind);
         axum_server::bind_rustls(config.bind, tls_config)
