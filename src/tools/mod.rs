@@ -1059,17 +1059,6 @@ impl Longbridge {
         measured_tool_call("news", || content::news(&token, p)).await
     }
 
-    /// Get news detail by id.
-    #[tool(description = "Get full news article content by news_id")]
-    async fn news_detail(
-        &self,
-        ctx: RequestContext<RoleServer>,
-        Parameters(p): Parameters<content::NewsDetailParam>,
-    ) -> Result<CallToolResult, McpError> {
-        let token = extract_access_token(&ctx)?;
-        measured_tool_call("news_detail", || content::news_detail(&token, p)).await
-    }
-
     /// Get discussion topics for a symbol.
     #[tool(description = "Get discussion topics for a symbol")]
     async fn topic(
@@ -1126,17 +1115,6 @@ impl Longbridge {
             content::topic_create_reply(&token, p)
         })
         .await
-    }
-
-    /// Get filing detail.
-    #[tool(description = "Get regulatory filing detail by filing_id")]
-    async fn filing_detail(
-        &self,
-        ctx: RequestContext<RoleServer>,
-        Parameters(p): Parameters<content::FilingDetailParam>,
-    ) -> Result<CallToolResult, McpError> {
-        let token = extract_access_token(&ctx)?;
-        measured_tool_call("filing_detail", || content::filing_detail(&token, p)).await
     }
 
     /// List account statements.

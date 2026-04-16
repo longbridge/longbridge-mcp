@@ -5,19 +5,12 @@ use rmcp::schemars::JsonSchema;
 use rmcp::serde::Deserialize;
 
 use crate::error::Error;
-use crate::tools::http_client::http_get_tool;
-use crate::tools::{create_config, create_http_client, tool_json};
+use crate::tools::{create_config, tool_json};
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct SymbolParam {
     /// Security symbol, e.g. "700.HK"
     pub symbol: String,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-pub struct NewsDetailParam {
-    /// News ID
-    pub news_id: String,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -44,21 +37,10 @@ pub struct TopicCreateReplyParam {
     pub body: String,
 }
 
-#[derive(Debug, Deserialize, JsonSchema)]
-pub struct FilingDetailParam {
-    /// Filing ID
-    pub filing_id: String,
-}
-
 pub async fn news(token: &str, p: SymbolParam) -> Result<CallToolResult, McpError> {
     let ctx = ContentContext::new(create_config(token));
     let result = ctx.news(p.symbol).await.map_err(Error::longbridge)?;
     tool_json(&result)
-}
-
-pub async fn news_detail(token: &str, p: NewsDetailParam) -> Result<CallToolResult, McpError> {
-    let client = create_http_client(token);
-    http_get_tool(&client, &format!("/v1/content/news/{}", p.news_id), &[]).await
 }
 
 pub async fn topic(token: &str, p: SymbolParam) -> Result<CallToolResult, McpError> {
@@ -112,9 +94,4 @@ pub async fn topic_create_reply(
         .await
         .map_err(Error::longbridge)?;
     tool_json(&result)
-}
-
-pub async fn filing_detail(token: &str, p: FilingDetailParam) -> Result<CallToolResult, McpError> {
-    let client = create_http_client(token);
-    http_get_tool(&client, &format!("/v1/quote/filings/{}", p.filing_id), &[]).await
 }
