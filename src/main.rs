@@ -84,7 +84,7 @@ fn load_config() -> AppConfig {
     let base_url = cli
         .base_url
         .or(file_config.base_url)
-        .unwrap_or_else(|| format!("http://{bind}"));
+        .unwrap_or_else(|| format!("http://localhost:{}", bind.port()));
 
     AppConfig {
         bind,
