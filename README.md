@@ -13,14 +13,28 @@ A [Model Context Protocol](https://modelcontextprotocol.io/) (MCP) server that e
 
 ## Quick Start
 
-### Prerequisites
+### Docker (recommended)
 
-- Rust toolchain (edition 2024)
+```bash
+docker run -p 8000:8000 ghcr.io/longbridge/mcp --bind 0.0.0.0:8000
+```
 
-### Build
+With HTTPS:
+
+```bash
+docker run -p 8443:8443 \
+  -v /path/to/certs:/certs:ro \
+  ghcr.io/longbridge/mcp \
+  --bind 0.0.0.0:8443 \
+  --tls-cert /certs/cert.pem \
+  --tls-key /certs/key.pem
+```
+
+### Build from source
 
 ```bash
 cargo build --release
+./target/release/longbridge-mcp
 ```
 
 ### Configure
@@ -33,12 +47,6 @@ Create a config file at `~/.longbridge/mcp/config.json` (optional):
   "base_url": "https://mcp.example.com",
   "log_dir": "/var/log/longbridge-mcp"
 }
-```
-
-### Run
-
-```bash
-./target/release/longbridge-mcp
 ```
 
 ## Configuration
