@@ -105,8 +105,9 @@ fn load_config() -> AppConfig {
 }
 
 fn init_logging(log_dir: Option<&PathBuf>) {
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("info,longbridge_mcp=debug"));
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+        EnvFilter::new("info,longbridge_mcp=debug,longbridge_httpcli=warn,rmcp=warn")
+    });
 
     if let Some(dir) = log_dir {
         let file_appender = tracing_appender::rolling::daily(dir, "longbridge-mcp.log");

@@ -66,16 +66,6 @@ fn extract_access_token(ctx: &RequestContext<RoleServer>) -> Result<String, McpE
     Ok(token.0.clone())
 }
 
-fn extract_language(ctx: &RequestContext<RoleServer>) -> Option<String> {
-    let parts = ctx.extensions.get::<axum::http::request::Parts>()?;
-    parts
-        .headers
-        .get("accept-language")?
-        .to_str()
-        .ok()
-        .map(|s| s.to_string())
-}
-
 pub fn create_config(token: &str) -> Arc<longbridge::Config> {
     Arc::new(
         longbridge::Config::from_oauth(longbridge::oauth::OAuth::from_token(token))
@@ -1065,8 +1055,8 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<content::NewsDetailParam>,
     ) -> Result<CallToolResult, McpError> {
-        let language = extract_language(&ctx);
-        measured_tool_call("news_detail", || content::news_detail(p, language)).await
+        let token = extract_access_token(&ctx)?;
+        measured_tool_call("news_detail", || content::news_detail(&token, p)).await
     }
 
     /// Get discussion topics for a symbol.
@@ -1087,8 +1077,8 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<content::TopicIdParam>,
     ) -> Result<CallToolResult, McpError> {
-        let language = extract_language(&ctx);
-        measured_tool_call("topic_detail", || content::topic_detail(p, language)).await
+        let token = extract_access_token(&ctx)?;
+        measured_tool_call("topic_detail", || content::topic_detail(&token, p)).await
     }
 
     /// Get topic replies.
@@ -1098,8 +1088,8 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<content::TopicIdParam>,
     ) -> Result<CallToolResult, McpError> {
-        let language = extract_language(&ctx);
-        measured_tool_call("topic_replies", || content::topic_replies(p, language)).await
+        let token = extract_access_token(&ctx)?;
+        measured_tool_call("topic_replies", || content::topic_replies(&token, p)).await
     }
 
     /// Create a discussion topic.
@@ -1134,8 +1124,8 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<content::FilingDetailParam>,
     ) -> Result<CallToolResult, McpError> {
-        let language = extract_language(&ctx);
-        measured_tool_call("filing_detail", || content::filing_detail(p, language)).await
+        let token = extract_access_token(&ctx)?;
+        measured_tool_call("filing_detail", || content::filing_detail(&token, p)).await
     }
 
     /// List account statements.
