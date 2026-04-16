@@ -3,16 +3,154 @@ use longbridge::quote::{
 };
 use rmcp::ErrorData as McpError;
 use rmcp::model::CallToolResult;
+use rmcp::schemars::JsonSchema;
+use rmcp::serde::Deserialize;
 
 use crate::error::Error;
 use crate::registry::UserRegistry;
 use crate::tools::parse;
-use crate::tools::{
-    CalcIndexesParam, CandlesticksParam, CreateWatchlistGroupParam, DeleteWatchlistGroupParam,
-    HistoryCandlesticksByDateParam, HistoryCandlesticksByOffsetParam, MarketDateRangeParam,
-    MarketParam, SecurityListParam, SymbolCountParam, SymbolDateParam, SymbolParam, SymbolsParam,
-    UpdateWatchlistGroupParam, WarrantListParam, tool_json, tool_result,
-};
+use crate::tools::{tool_json, tool_result};
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct SymbolsParam {
+    /// Security symbols, e.g. ["700.HK", "AAPL.US"]
+    pub symbols: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct SymbolParam {
+    /// Security symbol, e.g. "700.HK"
+    pub symbol: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct SymbolCountParam {
+    pub symbol: String,
+    /// Maximum number of results (max 1000)
+    pub count: usize,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct CandlesticksParam {
+    pub symbol: String,
+    /// Period: 1m, 5m, 15m, 30m, 60m, day, week, month, year
+    pub period: String,
+    /// Number of candlesticks (max 1000)
+    pub count: usize,
+    /// Whether to forward-adjust for splits/dividends
+    pub forward_adjust: bool,
+    /// Trade sessions: "intraday" or "all"
+    pub trade_sessions: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct HistoryCandlesticksByOffsetParam {
+    pub symbol: String,
+    /// Period: 1m, 5m, 15m, 30m, 60m, day, week, month, year
+    pub period: String,
+    /// Whether to forward-adjust for splits/dividends
+    pub forward_adjust: bool,
+    /// Whether to query forward in time (true) or backward (false)
+    pub forward: bool,
+    /// Reference datetime (yyyy-mm-ddTHH:MM:SS), omit to start from latest
+    pub time: Option<String>,
+    /// Number of candlesticks (max 1000)
+    pub count: usize,
+    /// Trade sessions: "intraday" or "all"
+    pub trade_sessions: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct HistoryCandlesticksByDateParam {
+    pub symbol: String,
+    /// Period: 1m, 5m, 15m, 30m, 60m, day, week, month, year
+    pub period: String,
+    /// Whether to forward-adjust for splits/dividends
+    pub forward_adjust: bool,
+    /// Start date (yyyy-mm-dd), optional
+    pub start: Option<String>,
+    /// End date (yyyy-mm-dd), optional
+    pub end: Option<String>,
+    /// Trade sessions: "intraday" or "all"
+    pub trade_sessions: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct MarketParam {
+    /// Market code: HK, US, CN, SG
+    pub market: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct MarketDateRangeParam {
+    /// Market code: HK, US, CN, SG
+    pub market: String,
+    /// Start date (yyyy-mm-dd)
+    pub start: String,
+    /// End date (yyyy-mm-dd)
+    pub end: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct SymbolDateParam {
+    pub symbol: String,
+    /// Date (yyyy-mm-dd)
+    pub date: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct WarrantListParam {
+    /// Underlying symbol, e.g. "700.HK"
+    pub symbol: String,
+    /// Sort field: LastDone, ChangeRate, ChangeValue, Volume, Turnover, ExpiryDate, StrikePrice, UpperStrikePrice, LowerStrikePrice, OutstandingQuantity, OutstandingRatio, Premium, ItmOtm, ImpliedVolatility, Delta
+    pub sort_by: String,
+    /// Sort order: Ascending or Descending
+    pub sort_order: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct CalcIndexesParam {
+    /// Security symbols, e.g. ["700.HK", "AAPL.US"]
+    pub symbols: Vec<String>,
+    /// Calc indexes: LastDone, ChangeValue, ChangeRate, Volume, Turnover, YtdChangeRate, TurnoverRate, TotalMarketValue, CapitalFlow, Amplitude, VolumeRatio, PeTtmRatio, PbRatio, DividendRatioTtm, FiveDayChangeRate, TenDayChangeRate, HalfYearChangeRate, FiveMinutesChangeRate, ExpiryDate, StrikePrice, UpperStrikePrice, LowerStrikePrice, OutstandingQty, OutstandingRatio, Premium, ItmOtm, ImpliedVolatility, WarrantDelta, CallPrice, ToCallPrice, EffectiveLeverage, LeverageRatio, ConversionRatio, BalancePoint, OpenInterest, Delta, Gamma, Theta, Vega, Rho
+    pub indexes: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct CreateWatchlistGroupParam {
+    /// Group name
+    pub name: String,
+    /// Securities to add, e.g. ["700.HK", "AAPL.US"]
+    pub securities: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct DeleteWatchlistGroupParam {
+    /// Watchlist group id
+    pub id: i64,
+    /// Whether to also remove the securities from other groups
+    pub purge: bool,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct UpdateWatchlistGroupParam {
+    /// Watchlist group id
+    pub id: i64,
+    /// New group name (optional)
+    pub name: Option<String>,
+    /// Securities list (optional)
+    pub securities: Option<Vec<String>>,
+    /// Update mode for securities: "add", "remove", or "replace" (default: "replace")
+    pub mode: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct SecurityListParam {
+    /// Market code: HK, US, CN, SG
+    pub market: String,
+    /// Category filter (optional): "Overnight"
+    pub category: Option<String>,
+}
 
 pub async fn static_info(
     registry: &UserRegistry,

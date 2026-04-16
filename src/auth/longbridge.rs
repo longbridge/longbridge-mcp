@@ -111,7 +111,7 @@ pub fn save_token_file(client_id: &str, tokens: &LongbridgeTokens) -> Result<(),
 
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .unwrap()
+        .expect("system clock is before UNIX epoch")
         .as_secs();
 
     let file = TokenFile {

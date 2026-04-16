@@ -1,8 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use axum::Router;
-use axum::extract::{Path, Query, State};
+use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Redirect, Response};
 use serde::{Deserialize, Serialize};
@@ -47,56 +46,6 @@ impl OAuthState {
             codes: RwLock::new(HashMap::new()),
         }
     }
-}
-
-#[derive(Serialize)]
-struct ProtectedResourceMetadata {
-    resource: String,
-    authorization_servers: Vec<String>,
-    scopes_supported: Vec<String>,
-}
-
-async fn protected_resource_metadata(
-    State(state): State<Arc<AppState>>,
-) -> Json<ProtectedResourceMetadata> {
-    // TODO: derive base URL from request
-    let base_url = state.base_url.clone();
-    Json(ProtectedResourceMetadata {
-        resource: base_url.clone(),
-        authorization_servers: vec![base_url],
-        scopes_supported: vec!["openapi".to_string()],
-    })
-}
-
-#[derive(Serialize)]
-struct AuthorizationServerMetadata {
-    issuer: String,
-    authorization_endpoint: String,
-    token_endpoint: String,
-    registration_endpoint: String,
-    response_types_supported: Vec<String>,
-    grant_types_supported: Vec<String>,
-    code_challenge_methods_supported: Vec<String>,
-    scopes_supported: Vec<String>,
-}
-
-async fn authorization_server_metadata(
-    State(state): State<Arc<AppState>>,
-) -> Json<AuthorizationServerMetadata> {
-    let base_url = state.base_url.clone();
-    Json(AuthorizationServerMetadata {
-        issuer: base_url.clone(),
-        authorization_endpoint: format!("{base_url}/oauth/authorize"),
-        token_endpoint: format!("{base_url}/oauth/token"),
-        registration_endpoint: format!("{base_url}/oauth/register"),
-        response_types_supported: vec!["code".to_string()],
-        grant_types_supported: vec![
-            "authorization_code".to_string(),
-            "refresh_token".to_string(),
-        ],
-        code_challenge_methods_supported: vec!["S256".to_string()],
-        scopes_supported: vec!["openapi".to_string()],
-    })
 }
 
 #[derive(Deserialize)]
@@ -405,21 +354,6 @@ fn verify_pkce(verifier: &str, challenge: &str, method: &str) -> bool {
     }
 }
 
-pub async fn list_users(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
-    let users = state.registry.list_users().await;
-    Json(serde_json::json!({ "users": users }))
-}
-
-pub async fn delete_user(
-    State(state): State<Arc<AppState>>,
-    Path(user_id): Path<String>,
-) -> Response {
-    match state.registry.revoke_user(&user_id).await {
-        Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(e) => (StatusCode::NOT_FOUND, e.to_string()).into_response(),
-    }
-}
-
 /// RFC 7591 Dynamic Client Registration request.
 #[derive(Debug, Deserialize)]
 struct ClientRegistrationRequest {
@@ -480,15 +414,15 @@ async fn register_client(
     .into_response()
 }
 
-pub fn routes(state: Arc<AppState>) -> Router {
-    Router::new()
+pub fn routes(state: Arc<AppState>) -> axum::Router {
+    axum::Router::new()
         .route(
             "/.well-known/oauth-protected-resource",
-            axum::routing::get(protected_resource_metadata),
+            axum::routing::get(crate::auth::metadata::protected_resource_metadata),
         )
         .route(
             "/.well-known/oauth-authorization-server",
-            axum::routing::get(authorization_server_metadata),
+            axum::routing::get(crate::auth::metadata::authorization_server_metadata),
         )
         .route("/oauth/register", axum::routing::post(register_client))
         .route("/oauth/authorize", axum::routing::get(authorize))

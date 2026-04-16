@@ -5,8 +5,6 @@ use rmcp::RoleServer;
 use rmcp::ServerHandler;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{CallToolResult, Content};
-use rmcp::schemars::JsonSchema;
-use rmcp::serde::Deserialize;
 use rmcp::service::RequestContext;
 use rmcp::tool;
 use rmcp::tool_handler;
@@ -89,216 +87,16 @@ fn extract_language(ctx: &RequestContext<RoleServer>) -> Option<String> {
         .map(|s| s.to_string())
 }
 
-#[derive(Debug, Deserialize, JsonSchema)]
-struct SymbolsParam {
-    /// Security symbols, e.g. ["700.HK", "AAPL.US"]
-    symbols: Vec<String>,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-struct SymbolParam {
-    /// Security symbol, e.g. "700.HK"
-    symbol: String,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-struct SymbolCountParam {
-    symbol: String,
-    /// Maximum number of results (max 1000)
-    count: usize,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-struct CandlesticksParam {
-    symbol: String,
-    /// Period: 1m, 5m, 15m, 30m, 60m, day, week, month, year
-    period: String,
-    /// Number of candlesticks (max 1000)
-    count: usize,
-    /// Whether to forward-adjust for splits/dividends
-    forward_adjust: bool,
-    /// Trade sessions: "intraday" or "all"
-    trade_sessions: String,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-struct HistoryCandlesticksByOffsetParam {
-    symbol: String,
-    /// Period: 1m, 5m, 15m, 30m, 60m, day, week, month, year
-    period: String,
-    /// Whether to forward-adjust for splits/dividends
-    forward_adjust: bool,
-    /// Whether to query forward in time (true) or backward (false)
-    forward: bool,
-    /// Reference datetime (yyyy-mm-ddTHH:MM:SS), omit to start from latest
-    time: Option<String>,
-    /// Number of candlesticks (max 1000)
-    count: usize,
-    /// Trade sessions: "intraday" or "all"
-    trade_sessions: String,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-struct HistoryCandlesticksByDateParam {
-    symbol: String,
-    /// Period: 1m, 5m, 15m, 30m, 60m, day, week, month, year
-    period: String,
-    /// Whether to forward-adjust for splits/dividends
-    forward_adjust: bool,
-    /// Start date (yyyy-mm-dd), optional
-    start: Option<String>,
-    /// End date (yyyy-mm-dd), optional
-    end: Option<String>,
-    /// Trade sessions: "intraday" or "all"
-    trade_sessions: String,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-struct MarketParam {
-    /// Market code: HK, US, CN, SG
-    market: String,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-struct MarketDateRangeParam {
-    /// Market code: HK, US, CN, SG
-    market: String,
-    /// Start date (yyyy-mm-dd)
-    start: String,
-    /// End date (yyyy-mm-dd)
-    end: String,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-struct SymbolDateParam {
-    symbol: String,
-    /// Date (yyyy-mm-dd)
-    date: String,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-struct WarrantListParam {
-    /// Underlying symbol, e.g. "700.HK"
-    symbol: String,
-    /// Sort field: LastDone, ChangeRate, ChangeValue, Volume, Turnover, ExpiryDate, StrikePrice, UpperStrikePrice, LowerStrikePrice, OutstandingQuantity, OutstandingRatio, Premium, ItmOtm, ImpliedVolatility, Delta
-    sort_by: String,
-    /// Sort order: Ascending or Descending
-    sort_order: String,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-struct CalcIndexesParam {
-    /// Security symbols, e.g. ["700.HK", "AAPL.US"]
-    symbols: Vec<String>,
-    /// Calc indexes: LastDone, ChangeValue, ChangeRate, Volume, Turnover, YtdChangeRate, TurnoverRate, TotalMarketValue, CapitalFlow, Amplitude, VolumeRatio, PeTtmRatio, PbRatio, DividendRatioTtm, FiveDayChangeRate, TenDayChangeRate, HalfYearChangeRate, FiveMinutesChangeRate, ExpiryDate, StrikePrice, UpperStrikePrice, LowerStrikePrice, OutstandingQty, OutstandingRatio, Premium, ItmOtm, ImpliedVolatility, WarrantDelta, CallPrice, ToCallPrice, EffectiveLeverage, LeverageRatio, ConversionRatio, BalancePoint, OpenInterest, Delta, Gamma, Theta, Vega, Rho
-    indexes: Vec<String>,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-struct CreateWatchlistGroupParam {
-    /// Group name
-    name: String,
-    /// Securities to add, e.g. ["700.HK", "AAPL.US"]
-    securities: Option<Vec<String>>,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-struct DeleteWatchlistGroupParam {
-    /// Watchlist group id
-    id: i64,
-    /// Whether to also remove the securities from other groups
-    purge: bool,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-struct UpdateWatchlistGroupParam {
-    /// Watchlist group id
-    id: i64,
-    /// New group name (optional)
-    name: Option<String>,
-    /// Securities list (optional)
-    securities: Option<Vec<String>>,
-    /// Update mode for securities: "add", "remove", or "replace" (default: "replace")
-    mode: Option<String>,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-struct SecurityListParam {
-    /// Market code: HK, US, CN, SG
-    market: String,
-    /// Category filter (optional): "Overnight"
-    category: Option<String>,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-struct OrderIdParam {
-    order_id: String,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-struct SubmitOrderParam {
-    symbol: String,
-    /// LO/ELO/MO/AO/ALO/ODD/LIT/MIT/TSLPAMT/TSLPPCT/SLO
-    order_type: String,
-    /// Buy or Sell
-    side: String,
-    submitted_quantity: String,
-    /// Day/GTC/GTD
-    time_in_force: String,
-    /// For LO, ELO, ALO, ODD, LIT
-    submitted_price: Option<String>,
-    /// For LIT, MIT
-    trigger_price: Option<String>,
-    /// For TSLPAMT, TSLPPCT
-    limit_offset: Option<String>,
-    /// For TSLPAMT
-    trailing_amount: Option<String>,
-    /// For TSLPPCT (0-1)
-    trailing_percent: Option<String>,
-    /// Format: yyyy-mm-dd
-    expire_date: Option<String>,
-    /// RTH_ONLY/ANY_TIME/OVERNIGHT
-    outside_rth: Option<String>,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-struct ReplaceOrderParam {
-    order_id: String,
-    quantity: String,
-    price: Option<String>,
-    trigger_price: Option<String>,
-    limit_offset: Option<String>,
-    trailing_amount: Option<String>,
-    trailing_percent: Option<String>,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-struct HistoryOrdersParam {
-    /// Filter by symbol (optional)
-    symbol: Option<String>,
-    /// Start time (RFC3339)
-    start_at: String,
-    /// End time (RFC3339)
-    end_at: String,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-struct CashFlowParam {
-    /// Start time (RFC3339)
-    start_at: String,
-    /// End time (RFC3339)
-    end_at: String,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-struct EstimateMaxQtyParam {
-    symbol: String,
-    /// Buy or Sell
-    side: String,
-    /// LO/ELO/MO/AO/ALO
-    order_type: String,
-    price: Option<String>,
-}
+use crate::tools::quote::{
+    CalcIndexesParam, CandlesticksParam, CreateWatchlistGroupParam, DeleteWatchlistGroupParam,
+    HistoryCandlesticksByDateParam, HistoryCandlesticksByOffsetParam, MarketDateRangeParam,
+    MarketParam, SecurityListParam, SymbolCountParam, SymbolDateParam, SymbolParam, SymbolsParam,
+    UpdateWatchlistGroupParam, WarrantListParam,
+};
+use crate::tools::trade::{
+    CashFlowParam, EstimateMaxQtyParam, HistoryOrdersParam, OrderIdParam, ReplaceOrderParam,
+    SubmitOrderParam,
+};
 
 #[tool_router]
 impl Longbridge {

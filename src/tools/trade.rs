@@ -1,13 +1,84 @@
 use rmcp::ErrorData as McpError;
 use rmcp::model::CallToolResult;
+use rmcp::schemars::JsonSchema;
+use rmcp::serde::Deserialize;
 
 use crate::error::Error;
 use crate::registry::UserRegistry;
 use crate::tools::parse;
-use crate::tools::{
-    CashFlowParam, EstimateMaxQtyParam, HistoryOrdersParam, OrderIdParam, ReplaceOrderParam,
-    SubmitOrderParam, SymbolParam, tool_json, tool_result,
-};
+use crate::tools::{tool_json, tool_result};
+
+pub use crate::tools::quote::SymbolParam;
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct OrderIdParam {
+    pub order_id: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct SubmitOrderParam {
+    pub symbol: String,
+    /// LO/ELO/MO/AO/ALO/ODD/LIT/MIT/TSLPAMT/TSLPPCT/SLO
+    pub order_type: String,
+    /// Buy or Sell
+    pub side: String,
+    pub submitted_quantity: String,
+    /// Day/GTC/GTD
+    pub time_in_force: String,
+    /// For LO, ELO, ALO, ODD, LIT
+    pub submitted_price: Option<String>,
+    /// For LIT, MIT
+    pub trigger_price: Option<String>,
+    /// For TSLPAMT, TSLPPCT
+    pub limit_offset: Option<String>,
+    /// For TSLPAMT
+    pub trailing_amount: Option<String>,
+    /// For TSLPPCT (0-1)
+    pub trailing_percent: Option<String>,
+    /// Format: yyyy-mm-dd
+    pub expire_date: Option<String>,
+    /// RTH_ONLY/ANY_TIME/OVERNIGHT
+    pub outside_rth: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ReplaceOrderParam {
+    pub order_id: String,
+    pub quantity: String,
+    pub price: Option<String>,
+    pub trigger_price: Option<String>,
+    pub limit_offset: Option<String>,
+    pub trailing_amount: Option<String>,
+    pub trailing_percent: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct HistoryOrdersParam {
+    /// Filter by symbol (optional)
+    pub symbol: Option<String>,
+    /// Start time (RFC3339)
+    pub start_at: String,
+    /// End time (RFC3339)
+    pub end_at: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct CashFlowParam {
+    /// Start time (RFC3339)
+    pub start_at: String,
+    /// End time (RFC3339)
+    pub end_at: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct EstimateMaxQtyParam {
+    pub symbol: String,
+    /// Buy or Sell
+    pub side: String,
+    /// LO/ELO/MO/AO/ALO
+    pub order_type: String,
+    pub price: Option<String>,
+}
 
 pub async fn account_balance(
     registry: &UserRegistry,

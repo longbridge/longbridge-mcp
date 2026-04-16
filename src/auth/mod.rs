@@ -1,4 +1,6 @@
+pub mod admin;
 pub mod longbridge;
+pub mod metadata;
 pub mod middleware;
 pub mod server;
 pub mod token;
@@ -21,10 +23,10 @@ pub struct AppState {
 pub fn create_router(state: Arc<AppState>) -> Router {
     let oauth_routes = server::routes(state.clone());
     let api_routes = Router::new()
-        .route("/api/users", axum::routing::get(server::list_users))
+        .route("/api/users", axum::routing::get(admin::list_users))
         .route(
             "/api/users/{user_id}",
-            axum::routing::delete(server::delete_user),
+            axum::routing::delete(admin::delete_user),
         )
         .with_state(state.clone());
 
