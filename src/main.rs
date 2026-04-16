@@ -127,6 +127,9 @@ async fn shutdown_signal() {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .expect("failed to install rustls crypto provider");
     let config = load_config();
     init_logging(config.log_dir.as_ref());
 

@@ -1598,6 +1598,7 @@ dependencies = [
  "prometheus",
  "reqwest 0.12.28",
  "rmcp",
+ "rustls 0.23.38",
  "schemars",
  "serde",
  "serde-transcode",
@@ -2595,6 +2596,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "69f9466fb2c14ea04357e91413efb882e2a6d4a406e625449bc0a5d360d53a21"
 dependencies = [
  "aws-lc-rs",
+ "log",
  "once_cell",
  "ring",
  "rustls-pki-types",
