@@ -15,7 +15,7 @@ pub struct AlertAddParam {
     pub condition: String,
     /// Threshold price or percentage value
     pub price: String,
-    /// Alert frequency: "once", "daily", "every"
+    /// Alert frequency: "once" (trigger once then disable), "daily" (once per day), "every" (alert every time condition is met)
     pub frequency: Option<String>,
 }
 

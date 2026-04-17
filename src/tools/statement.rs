@@ -24,7 +24,7 @@ pub struct StatementListParam {
 pub struct StatementExportParam {
     /// File key from statement_list
     pub file_key: String,
-    /// Sections to export, e.g. ["equity_holdings", "cash_flow"]
+    /// Sections to export. Valid values: "asset", "account_balances", "equity_holdings", "account_balance_changes", "stock_trades", "equity_holding_changes", "account_balance_locks", "equity_holding_locks", "option_trades", "fund_trades", "ipo_trades", "virtual_trades", "interests", "lending_fees", "custodian_fees", "corps", "bond_equity_holdings", "otc_trades", "outstandings", "financing_transactions", "interest_deposits", "maintenance_fees", "cash_pluses", "gst_details". Omit to export all sections.
     pub sections: Option<Vec<String>>,
 }
 

@@ -34,7 +34,7 @@ pub struct SubmitOrderParam {
     /// Buy or Sell
     pub side: String,
     pub submitted_quantity: String,
-    /// Day/GTC/GTD
+    /// Order validity: "Day" (current session only), "GTC" (Good Till Cancelled), "GTD" (Good Till Date, requires expire_date)
     pub time_in_force: String,
     /// Limit price. Required for: LO, ELO, ALO, ODD, LIT, SLO
     pub submitted_price: Option<String>,
@@ -48,7 +48,7 @@ pub struct SubmitOrderParam {
     pub trailing_percent: Option<String>,
     /// Format: yyyy-mm-dd
     pub expire_date: Option<String>,
-    /// RTH_ONLY/ANY_TIME/OVERNIGHT
+    /// Trading session: "RTH_ONLY" (Regular Trading Hours only), "ANY_TIME" (include pre/post market), "OVERNIGHT" (overnight session only, US stocks)
     pub outside_rth: Option<String>,
 }
 

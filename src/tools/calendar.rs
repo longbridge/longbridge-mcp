@@ -13,7 +13,13 @@ pub struct FinanceCalendarParam {
     pub start: String,
     /// End date (yyyy-mm-dd)
     pub end: String,
-    /// Event category: financial, report, dividend, ipo, macrodata, closed
+    /// Event category:
+    /// - "financial": earnings/financial results announcements
+    /// - "report": scheduled financial report release dates
+    /// - "dividend": dividend ex-dates and payment dates
+    /// - "ipo": IPO listing dates
+    /// - "macrodata": macroeconomic data releases (GDP, CPI, etc.)
+    /// - "closed": market holiday / trading halt dates
     pub category: String,
 }
 

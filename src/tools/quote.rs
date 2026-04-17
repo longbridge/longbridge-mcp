@@ -38,7 +38,7 @@ pub struct CandlesticksParam {
     pub count: usize,
     /// Whether to forward-adjust for splits/dividends
     pub forward_adjust: bool,
-    /// Trade sessions: "intraday" or "all"
+    /// Trade sessions: "intraday" (regular hours only) or "all" (include pre-market and post-market)
     pub trade_sessions: String,
 }
 
@@ -55,7 +55,7 @@ pub struct HistoryCandlesticksByOffsetParam {
     pub time: Option<String>,
     /// Number of candlesticks (max 1000)
     pub count: usize,
-    /// Trade sessions: "intraday" or "all"
+    /// Trade sessions: "intraday" (regular hours only) or "all" (include pre-market and post-market)
     pub trade_sessions: String,
 }
 
@@ -70,7 +70,7 @@ pub struct HistoryCandlesticksByDateParam {
     pub start: Option<String>,
     /// End date (yyyy-mm-dd), optional
     pub end: Option<String>,
-    /// Trade sessions: "intraday" or "all"
+    /// Trade sessions: "intraday" (regular hours only) or "all" (include pre-market and post-market)
     pub trade_sessions: String,
 }
 
