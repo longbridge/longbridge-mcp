@@ -1,7 +1,7 @@
 use longbridge::Market;
 use longbridge::quote::{
-    AdjustType, CalcIndex, Period, SecurityListCategory, SortOrderType, TradeSessions,
-    WarrantSortBy,
+    AdjustType, CalcIndex, FilterWarrantExpiryDate, FilterWarrantInOutBoundsType, Period,
+    SecurityListCategory, SortOrderType, TradeSessions, WarrantSortBy, WarrantStatus, WarrantType,
 };
 use rmcp::model::ErrorData as McpError;
 use time::Date;
@@ -171,6 +171,56 @@ pub fn parse_security_list_category(s: &str) -> Result<SecurityListCategory, Mcp
         "Overnight" => Ok(SecurityListCategory::Overnight),
         _ => Err(McpError::invalid_params(
             format!("invalid category: {s}, expected 'Overnight'"),
+            None,
+        )),
+    }
+}
+
+pub fn parse_warrant_type(s: &str) -> Result<WarrantType, McpError> {
+    match s {
+        "Call" => Ok(WarrantType::Call),
+        "Put" => Ok(WarrantType::Put),
+        "Bull" => Ok(WarrantType::Bull),
+        "Bear" => Ok(WarrantType::Bear),
+        "Inline" => Ok(WarrantType::Inline),
+        _ => Err(McpError::invalid_params(
+            format!("invalid warrant_type: {s}, expected Call/Put/Bull/Bear/Inline"),
+            None,
+        )),
+    }
+}
+
+pub fn parse_warrant_expiry_date(s: &str) -> Result<FilterWarrantExpiryDate, McpError> {
+    match s {
+        "LT_3" => Ok(FilterWarrantExpiryDate::LT_3),
+        "Between_3_6" => Ok(FilterWarrantExpiryDate::Between_3_6),
+        "Between_6_12" => Ok(FilterWarrantExpiryDate::Between_6_12),
+        "GT_12" => Ok(FilterWarrantExpiryDate::GT_12),
+        _ => Err(McpError::invalid_params(
+            format!("invalid expiry_date: {s}, expected LT_3/Between_3_6/Between_6_12/GT_12"),
+            None,
+        )),
+    }
+}
+
+pub fn parse_warrant_price_type(s: &str) -> Result<FilterWarrantInOutBoundsType, McpError> {
+    match s {
+        "In" => Ok(FilterWarrantInOutBoundsType::In),
+        "Out" => Ok(FilterWarrantInOutBoundsType::Out),
+        _ => Err(McpError::invalid_params(
+            format!("invalid price_type: {s}, expected In/Out"),
+            None,
+        )),
+    }
+}
+
+pub fn parse_warrant_status(s: &str) -> Result<WarrantStatus, McpError> {
+    match s {
+        "Suspend" => Ok(WarrantStatus::Suspend),
+        "PrepareList" => Ok(WarrantStatus::PrepareList),
+        "Normal" => Ok(WarrantStatus::Normal),
+        _ => Err(McpError::invalid_params(
+            format!("invalid status: {s}, expected Suspend/PrepareList/Normal"),
             None,
         )),
     }

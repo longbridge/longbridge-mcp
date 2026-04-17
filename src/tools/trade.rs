@@ -50,6 +50,8 @@ pub struct SubmitOrderParam {
     pub expire_date: Option<String>,
     /// Outside regular trading hours: "RTH_ONLY" (regular trading hours only), "ANY_TIME" (any time including pre/post market), "OVERNIGHT" (overnight session, US only)
     pub outside_rth: Option<String>,
+    /// Order remark (max 255 characters)
+    pub remark: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -270,6 +272,9 @@ pub async fn submit_order(
             .outside_rth(rth.parse::<OutsideRTH>().map_err(|e| {
                 McpError::invalid_params(format!("invalid outside_rth: {e}"), None)
             })?);
+    }
+    if let Some(ref v) = p.remark {
+        opts = opts.remark(v.clone());
     }
 
     let (ctx, _) = TradeContext::new(mctx.create_config());

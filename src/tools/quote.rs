@@ -105,6 +105,16 @@ pub struct WarrantListParam {
     pub sort_by: String,
     /// Sort order: Ascending or Descending
     pub sort_order: String,
+    /// Filter by warrant type (optional): "Call", "Put", "Bull", "Bear", "Inline"
+    pub warrant_type: Option<Vec<String>>,
+    /// Filter by issuer ID (optional), use issuer_id from warrant_issuers tool
+    pub issuer: Option<Vec<i32>>,
+    /// Filter by expiry date range (optional): "LT_3" (<3 months), "Between_3_6" (3-6 months), "Between_6_12" (6-12 months), "GT_12" (>12 months)
+    pub expiry_date: Option<Vec<String>>,
+    /// Filter by in/out of bounds (optional): "In" (in bounds), "Out" (out of bounds). Only for Inline warrants.
+    pub price_type: Option<Vec<String>>,
+    /// Filter by status (optional): "Suspend" (suspended), "PrepareList" (pending listing), "Normal" (normal trading)
+    pub status: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -439,9 +449,40 @@ pub async fn warrant_list(
 ) -> Result<CallToolResult, McpError> {
     let sort_by = parse::parse_warrant_sort_by(&p.sort_by)?;
     let sort_order = parse::parse_sort_order_type(&p.sort_order)?;
+
+    let warrant_types: Option<Vec<_>> = p
+        .warrant_type
+        .as_deref()
+        .map(|v| v.iter().map(|s| parse::parse_warrant_type(s)).collect::<Result<_, _>>())
+        .transpose()?;
+    let expiry_dates: Option<Vec<_>> = p
+        .expiry_date
+        .as_deref()
+        .map(|v| v.iter().map(|s| parse::parse_warrant_expiry_date(s)).collect::<Result<_, _>>())
+        .transpose()?;
+    let price_types: Option<Vec<_>> = p
+        .price_type
+        .as_deref()
+        .map(|v| v.iter().map(|s| parse::parse_warrant_price_type(s)).collect::<Result<_, _>>())
+        .transpose()?;
+    let statuses: Option<Vec<_>> = p
+        .status
+        .as_deref()
+        .map(|v| v.iter().map(|s| parse::parse_warrant_status(s)).collect::<Result<_, _>>())
+        .transpose()?;
+
     let (ctx, _) = QuoteContext::new(mctx.create_config());
     let result = ctx
-        .warrant_list(p.symbol, sort_by, sort_order, None, None, None, None, None)
+        .warrant_list(
+            p.symbol,
+            sort_by,
+            sort_order,
+            warrant_types.as_deref(),
+            p.issuer.as_deref(),
+            expiry_dates.as_deref(),
+            price_types.as_deref(),
+            statuses.as_deref(),
+        )
         .await
         .map_err(Error::longbridge)?;
     tool_json(&result)
