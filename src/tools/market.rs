@@ -27,6 +27,16 @@ pub struct BrokerHoldingDailyParam {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct AhPremiumParam {
+    /// Security symbol, e.g. "700.HK"
+    pub symbol: String,
+    /// K-line period: "1m", "5m", "15m", "30m", "60m", "day" (default), "week", "month", "year"
+    pub period: Option<String>,
+    /// Number of K-lines to return (default: 100)
+    pub count: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct IndexSymbolParam {
     /// Index symbol, e.g. "HSI.HK"
     pub symbol: String,
@@ -84,14 +94,30 @@ pub async fn broker_holding_daily(
 
 pub async fn ah_premium(
     mctx: &crate::tools::McpContext,
-    p: SymbolParam,
+    p: AhPremiumParam,
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
     let cid = symbol_to_counter_id(&p.symbol);
+    let line_type = match p.period.as_deref().unwrap_or("day") {
+        "1m" => "1",
+        "5m" => "5",
+        "15m" => "15",
+        "30m" => "30",
+        "60m" => "60",
+        "week" => "2000",
+        "month" => "3000",
+        "year" => "4000",
+        _ => "1000", // day
+    };
+    let count_str = p.count.unwrap_or(100).to_string();
     http_get_tool(
         &client,
         "/v1/quote/ahpremium/klines",
-        &[("counter_id", cid.as_str())],
+        &[
+            ("counter_id", cid.as_str()),
+            ("line_type", line_type),
+            ("line_num", count_str.as_str()),
+        ],
     )
     .await
 }

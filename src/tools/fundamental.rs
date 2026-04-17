@@ -16,7 +16,9 @@ pub struct SymbolParam {
 pub struct FinancialReportParam {
     /// Security symbol, e.g. "AAPL.US"
     pub symbol: String,
-    /// Report type: "annual" or "quarterly"
+    /// Statement kind: "IS" (income statement), "BS" (balance sheet), "CF" (cash flow), "ALL" (default)
+    pub kind: Option<String>,
+    /// Report period: "af" (annual), "saf" (semi-annual), "q1"/"q2"/"q3" (quarterly), "qf" (quarterly full)
     pub report_type: Option<String>,
 }
 
@@ -26,7 +28,8 @@ pub async fn financial_report(
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
     let cid = symbol_to_counter_id(&p.symbol);
-    let mut params: Vec<(&str, &str)> = vec![("counter_id", cid.as_str())];
+    let kind = p.kind.unwrap_or_else(|| "ALL".to_string());
+    let mut params: Vec<(&str, &str)> = vec![("counter_id", cid.as_str()), ("kind", kind.as_str())];
     let report_type = p.report_type.unwrap_or_default();
     if !report_type.is_empty() {
         params.push(("report", report_type.as_str()));
@@ -145,7 +148,11 @@ pub async fn valuation(
     http_get_tool(
         &client,
         "/v1/quote/valuation",
-        &[("counter_id", cid.as_str())],
+        &[
+            ("counter_id", cid.as_str()),
+            ("indicator", "pe"),
+            ("range", "1"),
+        ],
     )
     .await
 }
