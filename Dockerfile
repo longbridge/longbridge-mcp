@@ -12,4 +12,4 @@ COPY --from=builder /app/target/release/longbridge-mcp /usr/local/bin/longbridge
 
 EXPOSE 8000
 
-ENTRYPOINT ["longbridge-mcp"]
+ENTRYPOINT ["longbridge-mcp", "--bind", "0.0.0.0:8000"]
