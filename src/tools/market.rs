@@ -77,10 +77,7 @@ pub async fn market_status(mctx: &crate::tools::McpContext) -> Result<CallToolRe
     let mut data: serde_json::Value =
         serde_json::from_str(&raw).map_err(|e| Error::Other(e.to_string()))?;
 
-    if let Some(list) = data
-        .get_mut("market_time")
-        .and_then(|v| v.as_array_mut())
-    {
+    if let Some(list) = data.get_mut("market_time").and_then(|v| v.as_array_mut()) {
         for item in list.iter_mut() {
             let code = item["trade_status"].as_i64().unwrap_or(0);
             item["trade_status"] = serde_json::json!(trade_status_label(code));

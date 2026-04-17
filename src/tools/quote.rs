@@ -453,22 +453,38 @@ pub async fn warrant_list(
     let warrant_types: Option<Vec<_>> = p
         .warrant_type
         .as_deref()
-        .map(|v| v.iter().map(|s| parse::parse_warrant_type(s)).collect::<Result<_, _>>())
+        .map(|v| {
+            v.iter()
+                .map(|s| parse::parse_warrant_type(s))
+                .collect::<Result<_, _>>()
+        })
         .transpose()?;
     let expiry_dates: Option<Vec<_>> = p
         .expiry_date
         .as_deref()
-        .map(|v| v.iter().map(|s| parse::parse_warrant_expiry_date(s)).collect::<Result<_, _>>())
+        .map(|v| {
+            v.iter()
+                .map(|s| parse::parse_warrant_expiry_date(s))
+                .collect::<Result<_, _>>()
+        })
         .transpose()?;
     let price_types: Option<Vec<_>> = p
         .price_type
         .as_deref()
-        .map(|v| v.iter().map(|s| parse::parse_warrant_price_type(s)).collect::<Result<_, _>>())
+        .map(|v| {
+            v.iter()
+                .map(|s| parse::parse_warrant_price_type(s))
+                .collect::<Result<_, _>>()
+        })
         .transpose()?;
     let statuses: Option<Vec<_>> = p
         .status
         .as_deref()
-        .map(|v| v.iter().map(|s| parse::parse_warrant_status(s)).collect::<Result<_, _>>())
+        .map(|v| {
+            v.iter()
+                .map(|s| parse::parse_warrant_status(s))
+                .collect::<Result<_, _>>()
+        })
         .transpose()?;
 
     let (ctx, _) = QuoteContext::new(mctx.create_config());
