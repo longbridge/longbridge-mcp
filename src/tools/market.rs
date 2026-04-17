@@ -1,9 +1,11 @@
+use reqwest::Method;
 use rmcp::ErrorData as McpError;
-use rmcp::model::CallToolResult;
+use rmcp::model::{CallToolResult, Content};
 use rmcp::schemars::JsonSchema;
 use rmcp::serde::Deserialize;
 
 use crate::counter::{index_symbol_to_counter_id, symbol_to_counter_id};
+use crate::error::Error;
 use crate::tools::http_client::http_get_tool;
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -42,9 +44,46 @@ pub struct IndexSymbolParam {
     pub symbol: String,
 }
 
+fn trade_status_label(code: i64) -> &'static str {
+    match code {
+        101 => "Pre-Open",
+        102 | 103 | 105 | 202 | 203 => "Trading",
+        104 => "Lunch Break",
+        106 => "Post-Trading",
+        108 => "Closed",
+        201 => "Pre-Market",
+        204 => "Post-Market",
+        _ => "Unknown",
+    }
+}
+
 pub async fn market_status(mctx: &crate::tools::McpContext) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
-    http_get_tool(&client, "/v1/quote/market-status", &[]).await
+    let raw: String = client
+        .request(Method::GET, "/v1/quote/market-status")
+        .response::<String>()
+        .send()
+        .await
+        .map_err(|e| Error::Other(e.to_string()))?;
+
+    let mut data: serde_json::Value =
+        serde_json::from_str(&raw).map_err(|e| Error::Other(e.to_string()))?;
+
+    if let Some(list) = data
+        .get_mut("market_time")
+        .and_then(|v| v.as_array_mut())
+    {
+        for item in list.iter_mut() {
+            let code = item["trade_status"].as_i64().unwrap_or(0);
+            item["trade_status"] = serde_json::json!(trade_status_label(code));
+            let delay_code = item["delay_trade_status"].as_i64().unwrap_or(0);
+            item["delay_trade_status"] = serde_json::json!(trade_status_label(delay_code));
+        }
+    }
+
+    Ok(CallToolResult::success(vec![Content::text(
+        data.to_string(),
+    )]))
 }
 
 pub async fn broker_holding(
