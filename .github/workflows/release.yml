@@ -19,9 +19,22 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Generate changelog
+        id: changelog
+        run: |
+          PREV_TAG=$(git tag --sort=-version:refname | grep -E '^v[0-9]' | sed -n '2p')
+          if [ -z "$PREV_TAG" ]; then
+            LOG=$(git log --pretty=format:"- %s" HEAD)
+          else
+            LOG=$(git log --pretty=format:"- %s" "$PREV_TAG"..HEAD)
+          fi
+          echo "CHANGELOG<<EOF" >> "$GITHUB_OUTPUT"
+          echo "$LOG" >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+
       - uses: softprops/action-gh-release@v2
         with:
-          generate_release_notes: true
+          body: ${{ steps.changelog.outputs.CHANGELOG }}
 
   docker:
     runs-on: ubuntu-latest
