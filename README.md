@@ -1,10 +1,10 @@
 # Longbridge MCP Server
 
-A [Model Context Protocol](https://modelcontextprotocol.io/) (MCP) server that exposes Longbridge market data, trading, and financial analysis capabilities as 90 MCP tools. Built with Rust using [rmcp](https://github.com/anthropics/rmcp) and [axum](https://github.com/tokio-rs/axum).
+A [Model Context Protocol](https://modelcontextprotocol.io/) (MCP) server that exposes Longbridge market data, trading, and financial analysis capabilities as 110 MCP tools. Built with Rust using [rmcp](https://github.com/anthropics/rmcp) and [axum](https://github.com/tokio-rs/axum).
 
 ## Features
 
-- **90 MCP tools** across 9 categories: quotes, trading, fundamentals, market data, calendars, portfolio, alerts, content, and account statements
+- **110 MCP tools** across 11 categories: quotes, trading, fundamentals, market data, calendars, portfolio, alerts, content, account statements, DCA, and community sharelists
 - **Stateless architecture** -- each request carries a Bearer token forwarded directly to the Longbridge SDK; no server-side sessions or database
 - **OAuth 2.1 resource metadata** compliant with RFC 9728, pointing clients to Longbridge OAuth for authorization
 - **JSON response transformation** -- field names normalized to snake_case, timestamps converted to RFC 3339, internal counter_id values mapped to human-readable symbols
@@ -98,13 +98,15 @@ Claude Code will handle the OAuth flow automatically when the server requires au
 
 | Category | Count | Description |
 |----------|-------|-------------|
-| **Quote** | 29 | Real-time and historical quotes, candlesticks, depth, brokers, options, warrants, watchlists, capital flow, market temperature |
+| **Quote** | 32 | Real-time and historical quotes, candlesticks, depth, brokers, options, warrants, watchlists, capital flow, market temperature, short positions, option volume |
 | **Trade** | 14 | Order submission/cancellation/replacement, positions, balance, executions, cash flow, margin |
 | **Fundamental** | 18 | Financial reports, analyst ratings, dividends, EPS forecasts, valuations, company info, shareholders, corporate actions |
 | **Market** | 9 | Market status, broker holdings, A/H premium, trade statistics, anomalies, index constituents |
 | **Content** | 8 | News, discussion topics, filing details |
+| **DCA** | 9 | Dollar-cost averaging plan create/update/pause/resume/stop, execution history, statistics, and support check |
+| **Sharelist** | 8 | Community sharelist CRUD, member add/remove/sort, popular lists |
 | **Alert** | 5 | Price alert CRUD (add, delete, enable, disable, list) |
-| **Portfolio** | 3 | Exchange rates, profit/loss analysis |
+| **Portfolio** | 3 | Exchange rates, profit/loss analysis with optional date range |
 | **Statement** | 2 | Account statement listing and export |
 | **Calendar** | 1 | Finance calendar events (earnings, dividends, IPOs, macro data, market closures) |
 | **Utility** | 1 | Current UTC time |
@@ -134,6 +136,8 @@ src/
     market.rs          Market data extensions (HTTP API)
     calendar.rs        Finance calendar (HTTP API)
     portfolio.rs       Portfolio analytics (HTTP API)
+    dca.rs             Dollar-cost averaging / recurring investment (HTTP API)
+    sharelist.rs       Community sharelist management (HTTP API)
     alert.rs           Price alerts (HTTP API)
     content.rs         News, topics, filings (SDK ContentContext + HTTP)
     statement.rs       Account statements (HTTP API)
