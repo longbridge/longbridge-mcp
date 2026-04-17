@@ -56,7 +56,7 @@ pub async fn broker_holding(
     http_get_tool(
         &client,
         "/v1/quote/broker-holding",
-        &[("counter_id", cid.as_str())],
+        &[("counter_id", cid.as_str()), ("type", "rct_1")],
     )
     .await
 }
