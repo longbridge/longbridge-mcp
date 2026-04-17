@@ -469,7 +469,7 @@ impl Longbridge {
     }
 
     /// Get security list by market and category.
-    #[tool(description = "Get security list for a market, optionally filtered by category")]
+    #[tool(description = "Get security list for a market. category must be \"Overnight\"; other values or omitting it will cause an error")]
     async fn security_list(
         &self,
         ctx: RequestContext<RoleServer>,
@@ -903,7 +903,7 @@ impl Longbridge {
     async fn ah_premium(
         &self,
         ctx: RequestContext<RoleServer>,
-        Parameters(p): Parameters<market::SymbolParam>,
+        Parameters(p): Parameters<market::AhPremiumParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
         measured_tool_call("ah_premium", || market::ah_premium(&mctx, p)).await

@@ -147,7 +147,7 @@ pub struct UpdateWatchlistGroupParam {
 pub struct SecurityListParam {
     /// Market code: HK, US, CN, SG
     pub market: String,
-    /// Category filter (optional): "Overnight"
+    /// Category filter. Currently only "Overnight" is supported; passing any other value or omitting this field will result in a param_error.
     pub category: Option<String>,
 }
 
