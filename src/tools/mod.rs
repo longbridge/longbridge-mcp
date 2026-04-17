@@ -29,12 +29,14 @@ where
 mod alert;
 mod calendar;
 mod content;
+mod dca;
 mod fundamental;
 pub mod http_client;
 mod market;
 mod parse;
 mod portfolio;
 mod quote;
+mod sharelist;
 mod statement;
 mod trade;
 
@@ -116,8 +118,9 @@ pub fn list_tools() -> Vec<rmcp::model::Tool> {
 use crate::tools::quote::{
     CalcIndexesParam, CandlesticksParam, CreateWatchlistGroupParam, DeleteWatchlistGroupParam,
     HistoryCandlesticksByDateParam, HistoryCandlesticksByOffsetParam, MarketDateRangeParam,
-    MarketParam, SecurityListParam, SymbolCountParam, SymbolDateParam, SymbolParam, SymbolsParam,
-    UpdateWatchlistGroupParam, WarrantListParam,
+    MarketParam, OptionVolumeDailyParam, OptionVolumeParam, SecurityListParam, ShortPositionsParam,
+    SymbolCountParam, SymbolDateParam, SymbolParam, SymbolsParam, UpdateWatchlistGroupParam,
+    WarrantListParam,
 };
 use crate::tools::trade::{
     CashFlowParam, EstimateMaxQtyParam, HistoryOrdersParam, OrderIdParam, ReplaceOrderParam,
@@ -982,17 +985,22 @@ impl Longbridge {
     }
 
     /// Get profit analysis summary.
-    #[tool(description = "Get portfolio profit and loss analysis summary")]
+    #[tool(
+        description = "Get portfolio profit and loss analysis summary. start/end: optional date range in yyyy-mm-dd format"
+    )]
     async fn profit_analysis(
         &self,
         ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<portfolio::ProfitAnalysisParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("profit_analysis", || portfolio::profit_analysis(&mctx)).await
+        measured_tool_call("profit_analysis", || portfolio::profit_analysis(&mctx, p)).await
     }
 
     /// Get profit analysis detail for a symbol.
-    #[tool(description = "Get detailed profit and loss analysis for a specific symbol")]
+    #[tool(
+        description = "Get detailed profit and loss analysis for a specific symbol. start/end: optional date range in yyyy-mm-dd format"
+    )]
     async fn profit_analysis_detail(
         &self,
         ctx: RequestContext<RoleServer>,
@@ -1150,6 +1158,244 @@ impl Longbridge {
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
         measured_tool_call("statement_export", || statement::statement_export(&mctx, p)).await
+    }
+
+    /// Get short position data for a US stock.
+    #[tool(
+        description = "Get short interest data for a US stock (short ratio, short shares, days to cover). Only US market is supported."
+    )]
+    async fn short_positions(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<ShortPositionsParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("short_positions", || quote::short_positions(&mctx, p)).await
+    }
+
+    /// Get real-time option call/put volume stats.
+    #[tool(description = "Get real-time option call/put volume and put/call ratio for a US stock")]
+    async fn option_volume(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<OptionVolumeParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("option_volume", || quote::option_volume(&mctx, p)).await
+    }
+
+    /// Get daily historical option volume stats.
+    #[tool(
+        description = "Get daily historical option call/put volume, open interest, and put/call ratios for a US stock"
+    )]
+    async fn option_volume_daily(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<OptionVolumeDailyParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("option_volume_daily", || {
+            quote::option_volume_daily(&mctx, p)
+        })
+        .await
+    }
+
+    /// List DCA (recurring investment) plans.
+    #[tool(
+        description = "List DCA recurring investment plans. Filter by status (Active/Suspended/Finished) or symbol."
+    )]
+    async fn dca_list(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<dca::DcaListParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("dca_list", || dca::dca_list(&mctx, p)).await
+    }
+
+    /// Create a DCA (recurring investment) plan.
+    #[tool(
+        description = "Create a DCA recurring investment plan. frequency: Daily/Weekly/Monthly. day_of_week (Weekly): Mon/Tue/Wed/Thu/Fri. day_of_month (Monthly): 1-28."
+    )]
+    async fn dca_create(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<dca::DcaCreateParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("dca_create", || dca::dca_create(&mctx, p)).await
+    }
+
+    /// Update a DCA plan.
+    #[tool(description = "Update an existing DCA recurring investment plan by plan_id")]
+    async fn dca_update(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<dca::DcaUpdateParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("dca_update", || dca::dca_update(&mctx, p)).await
+    }
+
+    /// Pause a DCA plan.
+    #[tool(description = "Pause (suspend) a DCA recurring investment plan by plan_id")]
+    async fn dca_pause(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<dca::DcaPlanIdParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("dca_pause", || dca::dca_pause(&mctx, p)).await
+    }
+
+    /// Resume a paused DCA plan.
+    #[tool(description = "Resume a suspended DCA recurring investment plan by plan_id")]
+    async fn dca_resume(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<dca::DcaPlanIdParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("dca_resume", || dca::dca_resume(&mctx, p)).await
+    }
+
+    /// Stop a DCA plan permanently.
+    #[tool(description = "Permanently stop a DCA recurring investment plan by plan_id")]
+    async fn dca_stop(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<dca::DcaPlanIdParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("dca_stop", || dca::dca_stop(&mctx, p)).await
+    }
+
+    /// Get DCA plan execution history.
+    #[tool(description = "Get execution history records for a DCA plan by plan_id")]
+    async fn dca_history(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<dca::DcaHistoryParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("dca_history", || dca::dca_history(&mctx, p)).await
+    }
+
+    /// Get DCA statistics.
+    #[tool(description = "Get DCA investment statistics summary. Optionally filter by symbol.")]
+    async fn dca_stats(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<dca::DcaStatsParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("dca_stats", || dca::dca_stats(&mctx, p)).await
+    }
+
+    /// Check if symbols support DCA.
+    #[tool(description = "Check whether given symbols support DCA recurring investment")]
+    async fn dca_check(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<dca::DcaCheckParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("dca_check", || dca::dca_check(&mctx, p)).await
+    }
+
+    /// List community sharelists.
+    #[tool(description = "List user's own and subscribed community sharelists")]
+    async fn sharelist_list(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<sharelist::SharelistCountParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("sharelist_list", || sharelist::sharelist_list(&mctx, p)).await
+    }
+
+    /// Get sharelist detail.
+    #[tool(
+        description = "Get community sharelist detail including constituent stocks and quotes by id"
+    )]
+    async fn sharelist_detail(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<sharelist::SharelistIdParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("sharelist_detail", || sharelist::sharelist_detail(&mctx, p)).await
+    }
+
+    /// Create a community sharelist.
+    #[tool(description = "Create a new community sharelist")]
+    async fn sharelist_create(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<sharelist::SharelistCreateParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("sharelist_create", || sharelist::sharelist_create(&mctx, p)).await
+    }
+
+    /// Delete a community sharelist.
+    #[tool(description = "Delete a community sharelist by id")]
+    async fn sharelist_delete(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<sharelist::SharelistIdParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("sharelist_delete", || sharelist::sharelist_delete(&mctx, p)).await
+    }
+
+    /// Add stocks to a sharelist.
+    #[tool(description = "Add securities to a community sharelist")]
+    async fn sharelist_add(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<sharelist::SharelistItemsParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("sharelist_add", || sharelist::sharelist_add(&mctx, p)).await
+    }
+
+    /// Remove stocks from a sharelist.
+    #[tool(description = "Remove securities from a community sharelist")]
+    async fn sharelist_remove(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<sharelist::SharelistItemsParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("sharelist_remove", || sharelist::sharelist_remove(&mctx, p)).await
+    }
+
+    /// Reorder stocks in a sharelist.
+    #[tool(
+        description = "Reorder securities in a community sharelist (provide symbols in desired order)"
+    )]
+    async fn sharelist_sort(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<sharelist::SharelistItemsParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("sharelist_sort", || sharelist::sharelist_sort(&mctx, p)).await
+    }
+
+    /// Get popular community sharelists.
+    #[tool(description = "Get popular/trending community sharelists")]
+    async fn sharelist_popular(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<sharelist::SharelistCountParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("sharelist_popular", || {
+            sharelist::sharelist_popular(&mctx, p)
+        })
+        .await
     }
 }
 

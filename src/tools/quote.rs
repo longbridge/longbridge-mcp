@@ -6,7 +6,9 @@ use rmcp::model::CallToolResult;
 use rmcp::schemars::JsonSchema;
 use rmcp::serde::Deserialize;
 
+use crate::counter::symbol_to_counter_id;
 use crate::error::Error;
+use crate::tools::http_client::http_get_tool;
 use crate::tools::parse;
 use crate::tools::{tool_json, tool_result};
 
@@ -587,4 +589,78 @@ pub async fn security_list(
         .await
         .map_err(Error::longbridge)?;
     tool_json(&result)
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ShortPositionsParam {
+    /// Security symbol (US market only), e.g. "AAPL.US"
+    pub symbol: String,
+    /// Number of records to return (1-100, default 20)
+    pub count: Option<usize>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct OptionVolumeParam {
+    /// Underlying symbol (US market only), e.g. "AAPL.US"
+    pub symbol: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct OptionVolumeDailyParam {
+    /// Underlying symbol (US market only), e.g. "AAPL.US"
+    pub symbol: String,
+    /// Number of trading days to return (default 20)
+    pub count: Option<usize>,
+}
+
+pub async fn short_positions(
+    mctx: &crate::tools::McpContext,
+    p: ShortPositionsParam,
+) -> Result<CallToolResult, McpError> {
+    let client = mctx.create_http_client();
+    let cid = symbol_to_counter_id(&p.symbol);
+    let count = p.count.unwrap_or(20).clamp(1, 100);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+        .to_string();
+    let page_size = count.to_string();
+    let params = [
+        ("counter_id", cid.as_str()),
+        ("last_timestamp", now.as_str()),
+        ("page_size", page_size.as_str()),
+    ];
+    http_get_tool(&client, "/v1/quote/short-positions/us", &params).await
+}
+
+pub async fn option_volume(
+    mctx: &crate::tools::McpContext,
+    p: OptionVolumeParam,
+) -> Result<CallToolResult, McpError> {
+    let client = mctx.create_http_client();
+    let cid = symbol_to_counter_id(&p.symbol);
+    let params = [("underlying_counter_id", cid.as_str())];
+    http_get_tool(&client, "/v1/quote/option-volume-stats", &params).await
+}
+
+pub async fn option_volume_daily(
+    mctx: &crate::tools::McpContext,
+    p: OptionVolumeDailyParam,
+) -> Result<CallToolResult, McpError> {
+    let client = mctx.create_http_client();
+    let cid = symbol_to_counter_id(&p.symbol);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+        .to_string();
+    let line_num = p.count.unwrap_or(20).to_string();
+    let params = [
+        ("counter_id", cid.as_str()),
+        ("timestamp", now.as_str()),
+        ("line_num", line_num.as_str()),
+        ("direction", "1"),
+    ];
+    http_get_tool(&client, "/v1/quote/option-volume-stats/daily", &params).await
 }
