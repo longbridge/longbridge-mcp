@@ -15,6 +15,10 @@ async fn tools_json() -> axum::Json<&'static serde_json::Value> {
     axum::Json(&*TOOLS_JSON)
 }
 
+async fn health() -> axum::http::StatusCode {
+    axum::http::StatusCode::OK
+}
+
 pub struct AppState {
     pub base_url: String,
 }
@@ -26,6 +30,8 @@ pub fn create_router(state: Arc<AppState>) -> Router {
             axum::routing::get(metadata::protected_resource_metadata),
         )
         .with_state(state.clone());
+
+    let health_route = Router::new().route("/health", axum::routing::get(health));
 
     let metrics_route = Router::new().route(
         "/metrics",
@@ -54,6 +60,7 @@ pub fn create_router(state: Arc<AppState>) -> Router {
 
     Router::new()
         .merge(metadata_routes)
+        .merge(health_route)
         .merge(metrics_route)
         .merge(tools_route)
         .nest_service("/mcp", mcp_with_auth)
