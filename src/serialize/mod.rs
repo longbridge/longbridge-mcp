@@ -76,10 +76,10 @@ pub(crate) enum FieldKind {
 }
 
 pub(crate) fn classify_field(snake_name: &str) -> FieldKind {
-    if snake_name == "counter_id" {
-        FieldKind::CounterId
-    } else if snake_name == "counter_ids" {
+    if snake_name.contains("counter_ids") {
         FieldKind::CounterIds
+    } else if snake_name.contains("counter_id") {
+        FieldKind::CounterId
     } else if snake_name.ends_with("_at") {
         FieldKind::Timestamp
     } else {
@@ -87,11 +87,23 @@ pub(crate) fn classify_field(snake_name: &str) -> FieldKind {
     }
 }
 
-pub(crate) fn output_key(snake_name: &str, kind: FieldKind) -> &str {
+pub(crate) fn output_key<'a>(snake_name: &'a str, kind: FieldKind) -> std::borrow::Cow<'a, str> {
     match kind {
-        FieldKind::CounterId => "symbol",
-        FieldKind::CounterIds => "symbols",
-        _ => snake_name,
+        FieldKind::CounterId => {
+            if snake_name == "counter_id" {
+                std::borrow::Cow::Borrowed("symbol")
+            } else {
+                std::borrow::Cow::Owned(snake_name.replace("counter_id", "symbol"))
+            }
+        }
+        FieldKind::CounterIds => {
+            if snake_name == "counter_ids" {
+                std::borrow::Cow::Borrowed("symbols")
+            } else {
+                std::borrow::Cow::Owned(snake_name.replace("counter_ids", "symbols"))
+            }
+        }
+        _ => std::borrow::Cow::Borrowed(snake_name),
     }
 }
 
@@ -208,5 +220,25 @@ mod tests {
         let output = to_tool_json(&input).unwrap();
         assert!(output.contains("\"last_price\""), "got: {output}");
         assert!(output.contains("\"trade_volume\""), "got: {output}");
+    }
+
+    #[test]
+    fn prefixed_counter_id_field() {
+        let input: serde_json::Value =
+            serde_json::from_str(r#"{"underlyingCounterId":"ST/US/AAPL"}"#).unwrap();
+        let output = to_tool_json(&input).unwrap();
+        assert!(output.contains("\"underlying_symbol\""), "got: {output}");
+        assert!(output.contains("\"AAPL.US\""), "got: {output}");
+        assert!(!output.contains("counter_id"), "got: {output}");
+    }
+
+    #[test]
+    fn prefixed_counter_ids_field() {
+        let input: serde_json::Value =
+            serde_json::from_str(r#"{"underlyingCounterIds":["ST/US/AAPL","ST/HK/700"]}"#).unwrap();
+        let output = to_tool_json(&input).unwrap();
+        assert!(output.contains("\"underlying_symbols\""), "got: {output}");
+        assert!(output.contains("AAPL.US"), "got: {output}");
+        assert!(output.contains("700.HK"), "got: {output}");
     }
 }

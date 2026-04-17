@@ -215,7 +215,7 @@ impl<M: SerializeMap> SerializeMap for TransformMap<M> {
         let kind = classify_field(&snake);
         self.current_kind = kind;
         let out = output_key(&snake, kind);
-        self.inner.serialize_key(out)
+        self.inner.serialize_key(out.as_ref())
     }
 
     fn serialize_value<T: Serialize + ?Sized>(&mut self, value: &T) -> Result<(), Self::Error> {
@@ -247,12 +247,8 @@ impl<M: SerializeMap> SerializeStruct for TransformStructAsMap<M> {
     ) -> Result<(), Self::Error> {
         let snake = to_snake_case(key);
         let kind = classify_field(&snake);
-        let out_key = match kind {
-            FieldKind::CounterId => "symbol",
-            FieldKind::CounterIds => "symbols",
-            _ => &snake,
-        };
-        self.inner.serialize_key(out_key)?;
+        let out_key = output_key(&snake, kind);
+        self.inner.serialize_key(out_key.as_ref())?;
         match kind {
             FieldKind::Timestamp => self.inner.serialize_value(&TimestampValue { value }),
             FieldKind::CounterId => self.inner.serialize_value(&CounterIdValue { value }),
@@ -282,11 +278,7 @@ impl<M: SerializeMap> SerializeStructVariant for TransformStructVariantAsMap<M> 
     ) -> Result<(), Self::Error> {
         let snake = to_snake_case(key);
         let kind = classify_field(&snake);
-        let out_key = match kind {
-            FieldKind::CounterId => "symbol".to_string(),
-            FieldKind::CounterIds => "symbols".to_string(),
-            _ => snake.clone(),
-        };
+        let out_key = output_key(&snake, kind).into_owned();
         let val = serde_json::to_value(value).map_err(ser::Error::custom)?;
         self.fields.push((out_key, val));
         Ok(())
