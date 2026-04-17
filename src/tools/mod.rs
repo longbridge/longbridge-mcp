@@ -469,7 +469,7 @@ impl Longbridge {
     }
 
     /// Get security list by market and category.
-    #[tool(description = "Get security list for a market. category must be \"Overnight\"; other values or omitting it will cause an error")]
+    #[tool(description = "Get security list for a market. category must be \"Overnight\"; other values or omitting it will cause an error. Currently only market=\"US\" is supported; other markets will also return an error")]
     async fn security_list(
         &self,
         ctx: RequestContext<RoleServer>,
