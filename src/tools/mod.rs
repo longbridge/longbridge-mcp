@@ -986,7 +986,7 @@ impl Longbridge {
 
     /// Get profit analysis summary.
     #[tool(
-        description = "Get portfolio profit and loss analysis summary. start/end: optional date range in yyyy-mm-dd format"
+        description = "Get portfolio profit and loss analysis summary. start/end: optional date range in yyyy-mm-dd format. Both must be provided together — passing only one returns empty results."
     )]
     async fn profit_analysis(
         &self,
@@ -999,7 +999,7 @@ impl Longbridge {
 
     /// Get profit analysis detail for a symbol.
     #[tool(
-        description = "Get detailed profit and loss analysis for a specific symbol. start/end: optional date range in yyyy-mm-dd format"
+        description = "Get detailed profit and loss analysis for a specific symbol. start/end: optional date range in yyyy-mm-dd format. Both must be provided together — passing only one returns empty results."
     )]
     async fn profit_analysis_detail(
         &self,

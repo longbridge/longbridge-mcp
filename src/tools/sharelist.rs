@@ -73,7 +73,7 @@ pub async fn sharelist_create(
     let body = serde_json::json!({
         "name": p.name,
         "description": desc,
-        "cover": "",
+        "cover": "https://pub.pbkrs.com/files/202107/kaJSk6BsvPt6NJ3Q/sharelist_v1.png",
     });
     http_post_tool(&client, "/v1/sharelists", body).await
 }
