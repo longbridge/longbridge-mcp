@@ -18,22 +18,33 @@ pub struct OrderIdParam {
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct SubmitOrderParam {
     pub symbol: String,
-    /// LO/ELO/MO/AO/ALO/ODD/LIT/MIT/TSLPAMT/TSLPPCT/SLO
+    /// Order type:
+    /// - LO (Limit Order): requires submitted_price
+    /// - ELO (Enhanced Limit Order, HK only): requires submitted_price
+    /// - MO (Market Order): no price required
+    /// - AO (At-auction Order, HK only): executed at auction price, no price required
+    /// - ALO (At-auction Limit Order, HK only): requires submitted_price
+    /// - ODD (Odd Lots Order, HK only): requires submitted_price, for non-standard lot sizes
+    /// - LIT (Limit If Touched): requires submitted_price and trigger_price
+    /// - MIT (Market If Touched): requires trigger_price only
+    /// - TSLPAMT (Trailing Limit If Touched by Amount): requires trailing_amount and limit_offset
+    /// - TSLPPCT (Trailing Limit If Touched by Percent): requires trailing_percent (0-1) and limit_offset
+    /// - SLO (Special Limit Order, HK only): requires submitted_price; cannot be replaced after submission
     pub order_type: String,
     /// Buy or Sell
     pub side: String,
     pub submitted_quantity: String,
     /// Day/GTC/GTD
     pub time_in_force: String,
-    /// For LO, ELO, ALO, ODD, LIT
+    /// Limit price. Required for: LO, ELO, ALO, ODD, LIT, SLO
     pub submitted_price: Option<String>,
-    /// For LIT, MIT
+    /// Trigger price. Required for: LIT, MIT; also used as activation price for TSLPAMT/TSLPPCT
     pub trigger_price: Option<String>,
-    /// For TSLPAMT, TSLPPCT
+    /// Limit offset from trigger price. Required for: TSLPAMT, TSLPPCT
     pub limit_offset: Option<String>,
-    /// For TSLPAMT
+    /// Trailing amount (absolute price). Required for TSLPAMT
     pub trailing_amount: Option<String>,
-    /// For TSLPPCT (0-1)
+    /// Trailing percent as decimal (e.g. 0.05 = 5%). Required for TSLPPCT
     pub trailing_percent: Option<String>,
     /// Format: yyyy-mm-dd
     pub expire_date: Option<String>,
@@ -75,7 +86,7 @@ pub struct EstimateMaxQtyParam {
     pub symbol: String,
     /// Buy or Sell
     pub side: String,
-    /// LO/ELO/MO/AO/ALO
+    /// Order type: LO (Limit Order) / ELO (Enhanced Limit Order) / MO (Market Order) / AO (At-auction) / ALO (At-auction Limit Order)
     pub order_type: String,
     pub price: Option<String>,
 }
