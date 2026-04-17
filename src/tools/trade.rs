@@ -18,37 +18,37 @@ pub struct OrderIdParam {
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct SubmitOrderParam {
     pub symbol: String,
-    /// Order type:
+    /// Order type (HK supports all; US supports LO/MO/LIT/MIT/TSLPAMT/TSLPPCT only):
     /// - LO (Limit Order): requires submitted_price
     /// - ELO (Enhanced Limit Order, HK only): requires submitted_price
     /// - MO (Market Order): no price required
     /// - AO (At-auction Order, HK only): executed at auction price, no price required
     /// - ALO (At-auction Limit Order, HK only): requires submitted_price
     /// - ODD (Odd Lots Order, HK only): requires submitted_price, for non-standard lot sizes
-    /// - LIT (Limit If Touched): requires submitted_price and trigger_price
-    /// - MIT (Market If Touched): requires trigger_price only
-    /// - TSLPAMT (Trailing Limit If Touched by Amount): requires trailing_amount and limit_offset
-    /// - TSLPPCT (Trailing Limit If Touched by Percent): requires trailing_percent (0-1) and limit_offset
+    /// - LIT (Limit If Touched): requires submitted_price and trigger_price; activates when market price touches trigger_price
+    /// - MIT (Market If Touched): requires trigger_price only; executes at market when trigger_price is touched
+    /// - TSLPAMT (Trailing Limit If Touched by Amount): requires trailing_amount and limit_offset; trailing stop by fixed amount
+    /// - TSLPPCT (Trailing Limit If Touched by Percent): requires trailing_percent (0-1) and limit_offset; trailing stop by percentage
     /// - SLO (Special Limit Order, HK only): requires submitted_price; cannot be replaced after submission
     pub order_type: String,
     /// Buy or Sell
     pub side: String,
     pub submitted_quantity: String,
-    /// Order validity: "Day" (current session only), "GTC" (Good Till Cancelled), "GTD" (Good Till Date, requires expire_date)
+    /// Order validity: "Day" (Day Order, expires end of session), "GTC" (Good Til Canceled), "GTD" (Good Til Date, requires expire_date)
     pub time_in_force: String,
     /// Limit price. Required for: LO, ELO, ALO, ODD, LIT, SLO
     pub submitted_price: Option<String>,
-    /// Trigger price. Required for: LIT, MIT; also used as activation price for TSLPAMT/TSLPPCT
+    /// Trigger (activation) price. Required for: LIT, MIT, TSLPAMT, TSLPPCT
     pub trigger_price: Option<String>,
-    /// Limit offset from trigger price. Required for: TSLPAMT, TSLPPCT
+    /// Limit offset from the trailing stop price. Required for: TSLPAMT, TSLPPCT
     pub limit_offset: Option<String>,
-    /// Trailing amount (absolute price). Required for TSLPAMT
+    /// Trailing amount (absolute price distance). Required for TSLPAMT
     pub trailing_amount: Option<String>,
     /// Trailing percent as decimal (e.g. 0.05 = 5%). Required for TSLPPCT
     pub trailing_percent: Option<String>,
-    /// Format: yyyy-mm-dd
+    /// Expiry date (yyyy-mm-dd). Required when time_in_force is GTD
     pub expire_date: Option<String>,
-    /// Trading session: "RTH_ONLY" (Regular Trading Hours only), "ANY_TIME" (include pre/post market), "OVERNIGHT" (overnight session only, US stocks)
+    /// Outside regular trading hours: "RTH_ONLY" (regular trading hours only), "ANY_TIME" (any time including pre/post market), "OVERNIGHT" (overnight session, US only)
     pub outside_rth: Option<String>,
 }
 
