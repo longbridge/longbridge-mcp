@@ -597,7 +597,7 @@ impl Longbridge {
 
     /// Submit an order.
     #[tool(
-        description = "Submit a buy/sell order. order_type: LO/ELO/MO/AO/ALO/ODD/LIT/MIT/TSLPAMT/TSLPPCT/SLO. side: Buy/Sell. time_in_force: Day/GTC/GTD"
+        description = "Submit a buy/sell order. order_type: LO (Limit) / ELO (Enhanced Limit, HK) / MO (Market) / AO (At-auction, HK) / ALO (At-auction Limit, HK) / ODD (Odd Lots, HK) / LIT (Limit If Touched) / MIT (Market If Touched) / TSLPAMT (Trailing Limit by Amount) / TSLPPCT (Trailing Limit by Percent) / SLO (Special Limit, HK). side: Buy/Sell. time_in_force: Day/GTC/GTD"
     )]
     async fn submit_order(
         &self,
