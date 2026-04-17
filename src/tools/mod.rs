@@ -864,7 +864,7 @@ impl Longbridge {
     async fn broker_holding(
         &self,
         ctx: RequestContext<RoleServer>,
-        Parameters(p): Parameters<market::SymbolParam>,
+        Parameters(p): Parameters<market::BrokerHoldingParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
         measured_tool_call("broker_holding", || market::broker_holding(&mctx, p)).await

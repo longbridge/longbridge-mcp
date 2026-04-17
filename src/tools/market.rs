@@ -29,6 +29,14 @@ pub struct BrokerHoldingDailyParam {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct BrokerHoldingParam {
+    /// Security symbol, e.g. "700.HK"
+    pub symbol: String,
+    /// Period: "rct_1" (1 day, default), "rct_5" (5 days), "rct_20" (20 days), "rct_60" (60 days)
+    pub period: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct AhPremiumParam {
     /// Security symbol, e.g. "700.HK"
     pub symbol: String,
@@ -88,14 +96,15 @@ pub async fn market_status(mctx: &crate::tools::McpContext) -> Result<CallToolRe
 
 pub async fn broker_holding(
     mctx: &crate::tools::McpContext,
-    p: SymbolParam,
+    p: BrokerHoldingParam,
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
     let cid = symbol_to_counter_id(&p.symbol);
+    let period = p.period.as_deref().unwrap_or("rct_1");
     http_get_tool(
         &client,
         "/v1/quote/broker-holding",
-        &[("counter_id", cid.as_str()), ("type", "rct_1")],
+        &[("counter_id", cid.as_str()), ("type", period)],
     )
     .await
 }
