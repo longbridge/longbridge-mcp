@@ -1,12 +1,14 @@
 use reqwest::Method;
 use rmcp::ErrorData as McpError;
-use rmcp::model::{CallToolResult, Content};
+use rmcp::model::CallToolResult;
 use rmcp::schemars::JsonSchema;
 use rmcp::serde::Deserialize;
 
 use crate::counter::{index_symbol_to_counter_id, symbol_to_counter_id};
 use crate::error::Error;
-use crate::tools::support::http_client::http_get_tool;
+use crate::serialize::convert_unix_paths;
+use crate::tools::support::http_client::{http_get_tool, http_get_tool_unix};
+use crate::tools::tool_json;
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct SymbolParam {
@@ -86,9 +88,12 @@ pub async fn market_status(mctx: &crate::tools::McpContext) -> Result<CallToolRe
         }
     }
 
-    Ok(CallToolResult::success(vec![Content::text(
-        data.to_string(),
-    )]))
+    convert_unix_paths(
+        &mut data,
+        &["market_time.*.timestamp", "market_time.*.delay_timestamp"],
+    );
+
+    tool_json(&data)
 }
 
 pub async fn broker_holding(
@@ -155,7 +160,7 @@ pub async fn ah_premium(
         _ => "1000", // day
     };
     let count_str = p.count.unwrap_or(100).to_string();
-    http_get_tool(
+    http_get_tool_unix(
         &client,
         "/v1/quote/ahpremium/klines",
         &[
@@ -163,6 +168,7 @@ pub async fn ah_premium(
             ("line_type", line_type),
             ("line_num", count_str.as_str()),
         ],
+        &["klines.*.timestamp"],
     )
     .await
 }
@@ -173,10 +179,11 @@ pub async fn ah_premium_intraday(
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
     let cid = symbol_to_counter_id(&p.symbol);
-    http_get_tool(
+    http_get_tool_unix(
         &client,
         "/v1/quote/ahpremium/timeshares",
         &[("counter_id", cid.as_str()), ("days", "1")],
+        &["klines.*.timestamp"],
     )
     .await
 }
@@ -187,10 +194,11 @@ pub async fn trade_stats(
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
     let cid = symbol_to_counter_id(&p.symbol);
-    http_get_tool(
+    http_get_tool_unix(
         &client,
         "/v1/quote/trades-statistics",
         &[("counter_id", cid.as_str())],
+        &["statistics.timestamp", "statistics.trade_date.*"],
     )
     .await
 }

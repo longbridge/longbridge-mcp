@@ -5,7 +5,8 @@ use rmcp::serde::Deserialize;
 
 use crate::counter::symbol_to_counter_id;
 use crate::error::Error;
-use crate::tools::support::http_client::http_get_tool;
+use crate::serialize::convert_unix_paths;
+use crate::tools::support::http_client::{http_get_tool, http_get_tool_unix};
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ProfitAnalysisParam {
@@ -116,8 +117,11 @@ pub async fn profit_analysis(
     };
     merged.insert("sublist".to_owned(), sublist);
 
+    let mut value = serde_json::Value::Object(merged);
+    convert_unix_paths(&mut value, &["end_time", "trade_update_time"]);
+
     Ok(CallToolResult::success(vec![Content::text(
-        serde_json::Value::Object(merged).to_string(),
+        value.to_string(),
     )]))
 }
 
@@ -150,5 +154,11 @@ pub async fn profit_analysis_detail(
         params.push(("end", e.as_str()));
     }
 
-    http_get_tool(&client, "/v1/portfolio/profit-analysis/detail", &params).await
+    http_get_tool_unix(
+        &client,
+        "/v1/portfolio/profit-analysis/detail",
+        &params,
+        &["start", "end"],
+    )
+    .await
 }

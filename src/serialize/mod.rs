@@ -97,6 +97,70 @@ pub(crate) fn timestamp_to_rfc3339(ts: i64) -> String {
     }
 }
 
+/// Parse a string as a plausible unix-seconds timestamp. Returns `None` for
+/// non-numeric input, or numbers outside 2000-01-01..2100-01-01 UTC (which
+/// filters out sentinel values like `"0"`, `"-62135596800"`, counts, ids).
+pub(crate) fn try_parse_unix_string(s: &str) -> Option<i64> {
+    const MIN: i64 = 946_684_800; // 2000-01-01T00:00:00Z
+    const MAX: i64 = 4_102_444_800; // 2100-01-01T00:00:00Z
+    let n: i64 = s.trim().parse().ok()?;
+    (MIN..=MAX).contains(&n).then_some(n)
+}
+
+/// Walk a JSON value and convert unix-seconds strings at the given paths to
+/// RFC3339 in place.
+///
+/// Path syntax:
+/// - `a.b.c` — dot-separated field names, applied against `Object` values
+/// - `*` — wildcard that matches either every array element or every map value
+///   at the current level
+///
+/// Example: `"statistics.trade_date.*"` converts each element of the array at
+/// `statistics.trade_date`; `"plans.*.next_trd_date"` converts `next_trd_date`
+/// inside every element of the `plans` array.
+///
+/// Only strings that parse as unix seconds inside [2000-01-01, 2100-01-01] are
+/// transformed; non-numeric strings and out-of-range sentinels (`"0"`,
+/// `"-62135596800"`) are left untouched so the caller's "no value" semantics
+/// survive.
+pub fn convert_unix_paths(value: &mut serde_json::Value, paths: &[&str]) {
+    for path in paths {
+        let segments: Vec<&str> = path.split('.').collect();
+        walk_convert(value, &segments);
+    }
+}
+
+fn walk_convert(value: &mut serde_json::Value, segments: &[&str]) {
+    if segments.is_empty() {
+        if let serde_json::Value::String(s) = value
+            && let Some(ts) = try_parse_unix_string(s)
+        {
+            *value = serde_json::Value::String(timestamp_to_rfc3339(ts));
+        }
+        return;
+    }
+    let (seg, rest) = (segments[0], &segments[1..]);
+    match value {
+        serde_json::Value::Object(map) => {
+            if seg == "*" {
+                for v in map.values_mut() {
+                    walk_convert(v, rest);
+                }
+            } else if let Some(v) = map.get_mut(seg) {
+                walk_convert(v, rest);
+            }
+        }
+        serde_json::Value::Array(arr) => {
+            if seg == "*" {
+                for v in arr.iter_mut() {
+                    walk_convert(v, rest);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
 #[derive(Clone, Copy, PartialEq)]
 pub(crate) enum FieldKind {
     Normal,
@@ -308,5 +372,135 @@ mod tests {
         assert!(output.contains("\"underlying_symbols\""), "got: {output}");
         assert!(output.contains("AAPL.US"), "got: {output}");
         assert!(output.contains("700.HK"), "got: {output}");
+    }
+
+    #[test]
+    fn string_unix_on_at_field() {
+        let input: serde_json::Value =
+            serde_json::from_str(r#"{"created_at":"1700000000"}"#).unwrap();
+        let output = to_tool_json(&input).unwrap();
+        assert!(
+            output.contains("\"created_at\":\"2023-11-14T"),
+            "got: {output}"
+        );
+    }
+
+    #[test]
+    fn bare_timestamp_field_no_longer_whitelisted() {
+        let input: serde_json::Value =
+            serde_json::from_str(r#"{"timestamp":"1776756761"}"#).unwrap();
+        let output = to_tool_json(&input).unwrap();
+        // Without path-level opt-in, `timestamp` (not ending in `_at`) is left as-is.
+        assert!(
+            output.contains("\"timestamp\":\"1776756761\""),
+            "got: {output}"
+        );
+    }
+
+    #[test]
+    fn out_of_range_at_string_kept_as_is() {
+        let input: serde_json::Value =
+            serde_json::from_str(r#"{"created_at":"0","edited_at":"-62135596800"}"#).unwrap();
+        let output = to_tool_json(&input).unwrap();
+        assert!(output.contains("\"created_at\":\"0\""), "got: {output}");
+        assert!(
+            output.contains("\"edited_at\":\"-62135596800\""),
+            "got: {output}"
+        );
+    }
+
+    #[test]
+    fn unrelated_fields_with_numeric_strings_not_converted() {
+        let input: serde_json::Value = serde_json::from_str(
+            r#"{"volume":"1700000000","total":"1776652800","count":"1000000000"}"#,
+        )
+        .unwrap();
+        let output = to_tool_json(&input).unwrap();
+        assert!(
+            output.contains("\"volume\":\"1700000000\""),
+            "got: {output}"
+        );
+        assert!(output.contains("\"total\":\"1776652800\""), "got: {output}");
+        assert!(output.contains("\"count\":\"1000000000\""), "got: {output}");
+    }
+
+    #[test]
+    fn try_parse_unix_string_bounds() {
+        assert_eq!(try_parse_unix_string("1700000000"), Some(1_700_000_000));
+        assert_eq!(try_parse_unix_string(" 1700000000 "), Some(1_700_000_000));
+        assert_eq!(try_parse_unix_string("0"), None);
+        assert_eq!(try_parse_unix_string("-62135596800"), None);
+        assert_eq!(try_parse_unix_string("946684799"), None); // below MIN
+        assert_eq!(try_parse_unix_string("4102444801"), None); // above MAX
+        assert_eq!(try_parse_unix_string("2026.04.20"), None);
+        assert_eq!(try_parse_unix_string(""), None);
+    }
+
+    #[test]
+    fn convert_unix_paths_simple_field() {
+        let mut v: serde_json::Value =
+            serde_json::from_str(r#"{"timestamp":"1700000000","other":"1700000000"}"#).unwrap();
+        convert_unix_paths(&mut v, &["timestamp"]);
+        assert_eq!(v["timestamp"], "2023-11-14T22:13:20Z");
+        // `other` is not in paths — untouched.
+        assert_eq!(v["other"], "1700000000");
+    }
+
+    #[test]
+    fn convert_unix_paths_nested() {
+        let mut v: serde_json::Value =
+            serde_json::from_str(r#"{"statistics":{"timestamp":"1700000000","preclose":"522.5"}}"#)
+                .unwrap();
+        convert_unix_paths(&mut v, &["statistics.timestamp"]);
+        assert_eq!(v["statistics"]["timestamp"], "2023-11-14T22:13:20Z");
+        assert_eq!(v["statistics"]["preclose"], "522.5");
+    }
+
+    #[test]
+    fn convert_unix_paths_array_wildcard() {
+        let mut v: serde_json::Value =
+            serde_json::from_str(r#"{"statistics":{"trade_date":["1776643200","1776729600"]}}"#)
+                .unwrap();
+        convert_unix_paths(&mut v, &["statistics.trade_date.*"]);
+        assert_eq!(v["statistics"]["trade_date"][0], "2026-04-20T00:00:00Z");
+        assert_eq!(v["statistics"]["trade_date"][1], "2026-04-21T00:00:00Z");
+    }
+
+    #[test]
+    fn convert_unix_paths_field_inside_array_elements() {
+        let mut v: serde_json::Value = serde_json::from_str(
+            r#"{"plans":[{"id":1,"next_trd_date":"1778853600"},{"id":2,"next_trd_date":"1781445600"}]}"#,
+        )
+        .unwrap();
+        convert_unix_paths(&mut v, &["plans.*.next_trd_date"]);
+        assert_eq!(v["plans"][0]["next_trd_date"], "2026-05-15T14:00:00Z");
+        assert_eq!(v["plans"][1]["next_trd_date"], "2026-06-14T14:00:00Z");
+        assert_eq!(v["plans"][0]["id"], 1);
+    }
+
+    #[test]
+    fn convert_unix_paths_preserves_sentinels() {
+        let mut v: serde_json::Value =
+            serde_json::from_str(r#"{"end_date":"0","edited_at":"-62135596800"}"#).unwrap();
+        convert_unix_paths(&mut v, &["end_date", "edited_at"]);
+        assert_eq!(v["end_date"], "0");
+        assert_eq!(v["edited_at"], "-62135596800");
+    }
+
+    #[test]
+    fn convert_unix_paths_skips_non_numeric_strings() {
+        let mut v: serde_json::Value =
+            serde_json::from_str(r#"{"start_date":"2026.04.20","other":"notanumber"}"#).unwrap();
+        convert_unix_paths(&mut v, &["start_date", "other"]);
+        assert_eq!(v["start_date"], "2026.04.20");
+        assert_eq!(v["other"], "notanumber");
+    }
+
+    #[test]
+    fn convert_unix_paths_missing_path_is_noop() {
+        let mut v: serde_json::Value = serde_json::from_str(r#"{"a":1}"#).unwrap();
+        let before = v.clone();
+        convert_unix_paths(&mut v, &["missing", "a.b.c"]);
+        assert_eq!(v, before);
     }
 }

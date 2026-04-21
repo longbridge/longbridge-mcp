@@ -1,10 +1,10 @@
-use serde::ser::{Serialize, SerializeMap, Serializer};
+use serde::ser::{Serialize, SerializeMap, SerializeSeq, Serializer};
 
 use crate::serialize::transform::{
-    TransformMap, TransformSeq, TransformStructAsMap, TransformStructVariantAsMap, TransformTuple,
+    TransformMap, TransformStructAsMap, TransformStructVariantAsMap, TransformTuple,
     TransformTupleStruct, TransformTupleVariant,
 };
-use crate::serialize::{FieldKind, Transformed, delegate_simple, timestamp_to_rfc3339};
+use crate::serialize::{FieldKind, delegate_simple, timestamp_to_rfc3339, try_parse_unix_string};
 
 pub(crate) struct TimestampValue<'a, T: ?Sized> {
     pub(crate) value: &'a T,
@@ -24,7 +24,7 @@ struct TimestampSerializer<S> {
 impl<S: Serializer> Serializer for TimestampSerializer<S> {
     type Ok = S::Ok;
     type Error = S::Error;
-    type SerializeSeq = TransformSeq<S::SerializeSeq>;
+    type SerializeSeq = TimestampSeq<S::SerializeSeq>;
     type SerializeTuple = TransformTuple<S::SerializeTuple>;
     type SerializeTupleStruct = TransformTupleStruct<S::SerializeTupleStruct>;
     type SerializeTupleVariant = TransformTupleVariant<S::SerializeTupleVariant>;
@@ -38,6 +38,12 @@ impl<S: Serializer> Serializer for TimestampSerializer<S> {
     fn serialize_u64(self, v: u64) -> Result<Self::Ok, Self::Error> {
         self.inner.serialize_str(&timestamp_to_rfc3339(v as i64))
     }
+    fn serialize_str(self, v: &str) -> Result<Self::Ok, Self::Error> {
+        match try_parse_unix_string(v) {
+            Some(ts) => self.inner.serialize_str(&timestamp_to_rfc3339(ts)),
+            None => self.inner.serialize_str(v),
+        }
+    }
 
     delegate_simple!(serialize_bool, bool);
     delegate_simple!(serialize_i8, i8);
@@ -49,14 +55,13 @@ impl<S: Serializer> Serializer for TimestampSerializer<S> {
     delegate_simple!(serialize_f32, f32);
     delegate_simple!(serialize_f64, f64);
     delegate_simple!(serialize_char, char);
-    delegate_simple!(serialize_str, &str);
     delegate_simple!(serialize_bytes, &[u8]);
 
     fn serialize_none(self) -> Result<Self::Ok, Self::Error> {
         self.inner.serialize_none()
     }
     fn serialize_some<T: Serialize + ?Sized>(self, v: &T) -> Result<Self::Ok, Self::Error> {
-        self.inner.serialize_some(&Transformed { value: v })
+        self.inner.serialize_some(&TimestampValue { value: v })
     }
     fn serialize_unit(self) -> Result<Self::Ok, Self::Error> {
         self.inner.serialize_unit()
@@ -78,7 +83,7 @@ impl<S: Serializer> Serializer for TimestampSerializer<S> {
         v: &T,
     ) -> Result<Self::Ok, Self::Error> {
         self.inner
-            .serialize_newtype_struct(n, &Transformed { value: v })
+            .serialize_newtype_struct(n, &TimestampValue { value: v })
     }
     fn serialize_newtype_variant<T: Serialize + ?Sized>(
         self,
@@ -88,10 +93,10 @@ impl<S: Serializer> Serializer for TimestampSerializer<S> {
         v: &T,
     ) -> Result<Self::Ok, Self::Error> {
         self.inner
-            .serialize_newtype_variant(n, vi, variant, &Transformed { value: v })
+            .serialize_newtype_variant(n, vi, variant, &TimestampValue { value: v })
     }
     fn serialize_seq(self, len: Option<usize>) -> Result<Self::SerializeSeq, Self::Error> {
-        Ok(TransformSeq {
+        Ok(TimestampSeq {
             inner: self.inner.serialize_seq(len)?,
         })
     }
@@ -148,5 +153,23 @@ impl<S: Serializer> Serializer for TimestampSerializer<S> {
             outer: m,
             fields: Vec::with_capacity(len),
         })
+    }
+}
+
+/// Sequence serializer that keeps timestamp semantics for each element,
+/// so arrays of unix-seconds strings (e.g. `trade_date: ["1776752384", ...]`)
+/// get converted element by element.
+pub(crate) struct TimestampSeq<S> {
+    pub(crate) inner: S,
+}
+
+impl<S: SerializeSeq> SerializeSeq for TimestampSeq<S> {
+    type Ok = S::Ok;
+    type Error = S::Error;
+    fn serialize_element<T: Serialize + ?Sized>(&mut self, value: &T) -> Result<(), Self::Error> {
+        self.inner.serialize_element(&TimestampValue { value })
+    }
+    fn end(self) -> Result<Self::Ok, Self::Error> {
+        self.inner.end()
     }
 }

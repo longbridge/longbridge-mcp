@@ -4,7 +4,8 @@ use rmcp::schemars::JsonSchema;
 use rmcp::serde::Deserialize;
 
 use crate::counter::symbol_to_counter_id;
-use crate::tools::support::http_client::http_get_tool;
+use crate::serialize::convert_unix_paths;
+use crate::tools::support::http_client::{http_get_tool, http_get_tool_unix};
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct SymbolParam {
@@ -61,8 +62,20 @@ pub async fn institution_rating(
                 .map(|t| t.text.as_str())
                 .unwrap_or("null");
             let combined = format!(r#"{{"analyst":{r_text},"instratings":{i_text}}}"#);
+            let mut value: serde_json::Value =
+                serde_json::from_str(&combined).map_err(crate::error::Error::Serialize)?;
+            convert_unix_paths(
+                &mut value,
+                &[
+                    "analyst.evaluate.start_date",
+                    "analyst.evaluate.end_date",
+                    "analyst.target.start_date",
+                    "analyst.target.end_date",
+                ],
+            );
+            let out = serde_json::to_string(&value).map_err(crate::error::Error::Serialize)?;
             Ok(CallToolResult::success(vec![rmcp::model::Content::text(
-                combined,
+                out,
             )]))
         }
         (Err(e), _) | (_, Err(e)) => Err(e),
@@ -75,10 +88,11 @@ pub async fn institution_rating_detail(
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
     let cid = symbol_to_counter_id(&p.symbol);
-    http_get_tool(
+    http_get_tool_unix(
         &client,
         "/v1/quote/institution-ratings/detail",
         &[("counter_id", cid.as_str())],
+        &["target.list.*.timestamp"],
     )
     .await
 }
@@ -117,10 +131,11 @@ pub async fn forecast_eps(
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
     let cid = symbol_to_counter_id(&p.symbol);
-    http_get_tool(
+    http_get_tool_unix(
         &client,
         "/v1/quote/forecast-eps",
         &[("counter_id", cid.as_str())],
+        &["items.*.forecast_start_date", "items.*.forecast_end_date"],
     )
     .await
 }
@@ -145,7 +160,7 @@ pub async fn valuation(
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
     let cid = symbol_to_counter_id(&p.symbol);
-    http_get_tool(
+    http_get_tool_unix(
         &client,
         "/v1/quote/valuation",
         &[
@@ -153,6 +168,7 @@ pub async fn valuation(
             ("indicator", "pe"),
             ("range", "1"),
         ],
+        &["metrics.pe.list.*.timestamp"],
     )
     .await
 }
@@ -163,10 +179,11 @@ pub async fn valuation_history(
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
     let cid = symbol_to_counter_id(&p.symbol);
-    http_get_tool(
+    http_get_tool_unix(
         &client,
         "/v1/quote/valuation/detail",
         &[("counter_id", cid.as_str())],
+        &["history.metrics.pe.list.*.timestamp"],
     )
     .await
 }
@@ -177,10 +194,11 @@ pub async fn industry_valuation(
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
     let cid = symbol_to_counter_id(&p.symbol);
-    http_get_tool(
+    http_get_tool_unix(
         &client,
         "/v1/quote/industry-valuation-comparison",
         &[("counter_id", cid.as_str())],
+        &["list.*.history.*.date"],
     )
     .await
 }

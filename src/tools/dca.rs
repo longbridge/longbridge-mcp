@@ -6,7 +6,7 @@ use rmcp::schemars::JsonSchema;
 use rmcp::serde::Deserialize;
 
 use crate::counter::symbol_to_counter_id;
-use crate::tools::support::http_client::{http_get_tool, http_post_tool};
+use crate::tools::support::http_client::{http_get_tool, http_get_tool_unix, http_post_tool};
 use crate::tools::support::tolerant::{
     tolerant_option_bool, tolerant_option_u32, tolerant_vec_string,
 };
@@ -108,7 +108,13 @@ pub async fn dca_list(
     if let Some(ref c) = cid {
         params.push(("counter_id", c.as_str()));
     }
-    http_get_tool(&client, "/v1/dailycoins/query", &params).await
+    http_get_tool_unix(
+        &client,
+        "/v1/dailycoins/query",
+        &params,
+        &["plans.*.next_trd_date"],
+    )
+    .await
 }
 
 pub async fn dca_create(
