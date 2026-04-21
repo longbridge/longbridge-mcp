@@ -4,8 +4,8 @@ pub mod middleware;
 use std::sync::Arc;
 
 use axum::Router;
-use rmcp::transport::streamable_http_server::StreamableHttpService;
 use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
+use rmcp::transport::streamable_http_server::{StreamableHttpServerConfig, StreamableHttpService};
 
 use crate::tools::{self, Longbridge};
 
@@ -44,7 +44,7 @@ pub fn create_router(state: Arc<AppState>) -> Router {
     let mcp_service = StreamableHttpService::new(
         move || Ok(Longbridge),
         Arc::new(LocalSessionManager::default()),
-        Default::default(),
+        StreamableHttpServerConfig::default().disable_allowed_hosts(),
     );
 
     // Auth middleware layer: extracts Bearer token into extensions
