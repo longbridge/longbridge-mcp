@@ -22,7 +22,7 @@ pub struct StatementListParam {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
-pub struct StatementDownloadUrlParam {
+pub struct StatementExportParam {
     /// File key from statement_list, e.g. "/statement_data/data/.../20975338.json"
     pub file_key: String,
 }
@@ -72,9 +72,9 @@ pub async fn statement_list(
     tool_json(&result)
 }
 
-pub async fn statement_download_url(
+pub async fn statement_export(
     mctx: &crate::tools::McpContext,
-    p: StatementDownloadUrlParam,
+    p: StatementExportParam,
 ) -> Result<CallToolResult, McpError> {
     let ctx = AssetContext::new(mctx.create_config());
     let options = GetStatementOptions::new(p.file_key);

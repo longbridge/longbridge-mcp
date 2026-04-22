@@ -1152,16 +1152,13 @@ impl Longbridge {
     #[tool(
         description = "Get a pre-signed download URL for a statement data file (obtained from statement_list). Returns {url}; fetch that URL to get the statement JSON."
     )]
-    async fn statement_download_url(
+    async fn statement_export(
         &self,
         ctx: RequestContext<RoleServer>,
-        Parameters(p): Parameters<statement::StatementDownloadUrlParam>,
+        Parameters(p): Parameters<statement::StatementExportParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("statement_download_url", || {
-            statement::statement_download_url(&mctx, p)
-        })
-        .await
+        measured_tool_call("statement_export", || statement::statement_export(&mctx, p)).await
     }
 
     /// Get short position data for a US stock.
