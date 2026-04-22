@@ -1402,7 +1402,7 @@ impl Longbridge {
 
 #[tool_handler(
     name = "longbridge-mcp",
-    version = "0.1.0",
+    version = "0.1.6",
     instructions = "Longbridge OpenAPI MCP Server - provides market data, trading, and financial analysis tools"
 )]
 impl ServerHandler for Longbridge {}
