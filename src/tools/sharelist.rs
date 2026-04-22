@@ -6,11 +6,13 @@ use rmcp::schemars::JsonSchema;
 use rmcp::serde::Deserialize;
 
 use crate::counter::symbol_to_counter_id;
-use crate::tools::http_client::{http_delete_tool, http_get_tool, http_post_tool};
+use crate::tools::support::http_client::{http_delete_tool, http_get_tool, http_post_tool};
+use crate::tools::support::tolerant::{tolerant_option_u32, tolerant_vec_string};
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct SharelistCountParam {
     /// Number of lists to return (default 20)
+    #[serde(default, deserialize_with = "tolerant_option_u32")]
     pub count: Option<u32>,
 }
 
@@ -33,6 +35,7 @@ pub struct SharelistItemsParam {
     /// Sharelist ID
     pub id: String,
     /// Security symbols, e.g. ["AAPL.US", "700.HK"]
+    #[serde(deserialize_with = "tolerant_vec_string")]
     pub symbols: Vec<String>,
 }
 

@@ -4,8 +4,8 @@ use rmcp::schemars::JsonSchema;
 use rmcp::serde::Deserialize;
 
 use crate::counter::symbol_to_counter_id;
-use crate::tools::http_client::{http_delete_tool, http_get_tool, http_post_tool};
-use crate::tools::tool_result;
+use crate::tools::support::http_client::{http_delete_tool, http_get_tool, http_post_tool};
+use crate::tools::tool_json;
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct AlertAddParam {
@@ -140,8 +140,10 @@ async fn alert_set_enabled(
                         "state": ind["state"],
                     });
                     http_post_tool(&client, "/v1/notify/reminders", body).await?;
-                    let action = if enabled { "enabled" } else { "disabled" };
-                    return Ok(tool_result(format!("alert {alert_id} {action}")));
+                    return tool_json(&serde_json::json!({
+                        "alert_id": alert_id,
+                        "enabled": enabled,
+                    }));
                 }
             }
         }

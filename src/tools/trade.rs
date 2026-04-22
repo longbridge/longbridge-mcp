@@ -5,7 +5,7 @@ use rmcp::schemars::JsonSchema;
 use rmcp::serde::Deserialize;
 
 use crate::error::Error;
-use crate::tools::parse;
+use crate::tools::support::parse;
 use crate::tools::{tool_json, tool_result};
 
 pub use crate::tools::quote::SymbolParam;

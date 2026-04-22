@@ -5,6 +5,7 @@ use rmcp::schemars::JsonSchema;
 use rmcp::serde::Deserialize;
 
 use crate::error::Error;
+use crate::tools::support::tolerant::tolerant_option_vec_string;
 use crate::tools::tool_json;
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -26,6 +27,7 @@ pub struct TopicCreateParam {
     /// Topic body content
     pub body: String,
     /// Related security symbols
+    #[serde(default, deserialize_with = "tolerant_option_vec_string")]
     pub symbols: Option<Vec<String>>,
 }
 

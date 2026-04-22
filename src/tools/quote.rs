@@ -8,13 +8,18 @@ use rmcp::serde::Deserialize;
 
 use crate::counter::symbol_to_counter_id;
 use crate::error::Error;
-use crate::tools::http_client::http_get_tool;
-use crate::tools::parse;
-use crate::tools::{tool_json, tool_result};
+use crate::tools::support::http_client::{http_get_tool, http_get_tool_unix};
+use crate::tools::support::parse;
+use crate::tools::support::tolerant::{
+    tolerant_bool, tolerant_i64, tolerant_option_usize, tolerant_option_vec_i32,
+    tolerant_option_vec_string, tolerant_usize, tolerant_vec_string,
+};
+use crate::tools::tool_json;
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct SymbolsParam {
     /// Security symbols, e.g. ["700.HK", "AAPL.US"]
+    #[serde(deserialize_with = "tolerant_vec_string")]
     pub symbols: Vec<String>,
 }
 
@@ -28,6 +33,7 @@ pub struct SymbolParam {
 pub struct SymbolCountParam {
     pub symbol: String,
     /// Maximum number of results (max 1000)
+    #[serde(deserialize_with = "tolerant_usize")]
     pub count: usize,
 }
 
@@ -37,8 +43,10 @@ pub struct CandlesticksParam {
     /// Period: 1m, 5m, 15m, 30m, 60m, day, week, month, year
     pub period: String,
     /// Number of candlesticks (max 1000)
+    #[serde(deserialize_with = "tolerant_usize")]
     pub count: usize,
     /// Whether to forward-adjust for splits/dividends
+    #[serde(deserialize_with = "tolerant_bool")]
     pub forward_adjust: bool,
     /// Trade sessions: "intraday" (regular hours only) or "all" (include pre-market and post-market)
     pub trade_sessions: String,
@@ -50,12 +58,15 @@ pub struct HistoryCandlesticksByOffsetParam {
     /// Period: 1m, 5m, 15m, 30m, 60m, day, week, month, year
     pub period: String,
     /// Whether to forward-adjust for splits/dividends
+    #[serde(deserialize_with = "tolerant_bool")]
     pub forward_adjust: bool,
     /// Whether to query forward in time (true) or backward (false)
+    #[serde(deserialize_with = "tolerant_bool")]
     pub forward: bool,
     /// Reference datetime (yyyy-mm-ddTHH:MM:SS), omit to start from latest
     pub time: Option<String>,
     /// Number of candlesticks (max 1000)
+    #[serde(deserialize_with = "tolerant_usize")]
     pub count: usize,
     /// Trade sessions: "intraday" (regular hours only) or "all" (include pre-market and post-market)
     pub trade_sessions: String,
@@ -67,6 +78,7 @@ pub struct HistoryCandlesticksByDateParam {
     /// Period: 1m, 5m, 15m, 30m, 60m, day, week, month, year
     pub period: String,
     /// Whether to forward-adjust for splits/dividends
+    #[serde(deserialize_with = "tolerant_bool")]
     pub forward_adjust: bool,
     /// Start date (yyyy-mm-dd), optional
     pub start: Option<String>,
@@ -108,22 +120,29 @@ pub struct WarrantListParam {
     /// Sort order: Ascending or Descending
     pub sort_order: String,
     /// Filter by warrant type (optional): "Call", "Put", "Bull", "Bear", "Inline"
+    #[serde(default, deserialize_with = "tolerant_option_vec_string")]
     pub warrant_type: Option<Vec<String>>,
     /// Filter by issuer ID (optional), use issuer_id from warrant_issuers tool
+    #[serde(default, deserialize_with = "tolerant_option_vec_i32")]
     pub issuer: Option<Vec<i32>>,
     /// Filter by expiry date range (optional): "LT_3" (<3 months), "Between_3_6" (3-6 months), "Between_6_12" (6-12 months), "GT_12" (>12 months)
+    #[serde(default, deserialize_with = "tolerant_option_vec_string")]
     pub expiry_date: Option<Vec<String>>,
     /// Filter by in/out of bounds (optional): "In" (in bounds), "Out" (out of bounds). Only for Inline warrants.
+    #[serde(default, deserialize_with = "tolerant_option_vec_string")]
     pub price_type: Option<Vec<String>>,
     /// Filter by status (optional): "Suspend" (suspended), "PrepareList" (pending listing), "Normal" (normal trading)
+    #[serde(default, deserialize_with = "tolerant_option_vec_string")]
     pub status: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct CalcIndexesParam {
     /// Security symbols, e.g. ["700.HK", "AAPL.US"]
+    #[serde(deserialize_with = "tolerant_vec_string")]
     pub symbols: Vec<String>,
     /// Calc indexes: LastDone, ChangeValue, ChangeRate, Volume, Turnover, YtdChangeRate, TurnoverRate, TotalMarketValue, CapitalFlow, Amplitude, VolumeRatio, PeTtmRatio, PbRatio, DividendRatioTtm, FiveDayChangeRate, TenDayChangeRate, HalfYearChangeRate, FiveMinutesChangeRate, ExpiryDate, StrikePrice, UpperStrikePrice, LowerStrikePrice, OutstandingQty, OutstandingRatio, Premium, ItmOtm, ImpliedVolatility, WarrantDelta, CallPrice, ToCallPrice, EffectiveLeverage, LeverageRatio, ConversionRatio, BalancePoint, OpenInterest, Delta, Gamma, Theta, Vega, Rho
+    #[serde(deserialize_with = "tolerant_vec_string")]
     pub indexes: Vec<String>,
 }
 
@@ -132,24 +151,29 @@ pub struct CreateWatchlistGroupParam {
     /// Group name
     pub name: String,
     /// Securities to add, e.g. ["700.HK", "AAPL.US"]
+    #[serde(default, deserialize_with = "tolerant_option_vec_string")]
     pub securities: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct DeleteWatchlistGroupParam {
     /// Watchlist group id
+    #[serde(deserialize_with = "tolerant_i64")]
     pub id: i64,
     /// Whether to also remove the securities from other groups
+    #[serde(deserialize_with = "tolerant_bool")]
     pub purge: bool,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct UpdateWatchlistGroupParam {
     /// Watchlist group id
+    #[serde(deserialize_with = "tolerant_i64")]
     pub id: i64,
     /// New group name (optional)
     pub name: Option<String>,
     /// Securities list (optional)
+    #[serde(default, deserialize_with = "tolerant_option_vec_string")]
     pub securities: Option<Vec<String>>,
     /// Update mode for securities: "add", "remove", or "replace" (default: "replace")
     pub mode: Option<String>,
@@ -536,7 +560,7 @@ pub async fn create_watchlist_group(
         .create_watchlist_group(req)
         .await
         .map_err(Error::longbridge)?;
-    Ok(tool_result(id.to_string()))
+    tool_json(&serde_json::json!({ "id": id }))
 }
 
 pub async fn delete_watchlist_group(
@@ -544,17 +568,19 @@ pub async fn delete_watchlist_group(
     p: DeleteWatchlistGroupParam,
 ) -> Result<CallToolResult, McpError> {
     let (ctx, _) = QuoteContext::new(mctx.create_config());
-    ctx.delete_watchlist_group(p.id, p.purge)
+    let id = p.id;
+    ctx.delete_watchlist_group(id, p.purge)
         .await
         .map_err(Error::longbridge)?;
-    Ok(tool_result("watchlist group deleted".to_string()))
+    tool_json(&serde_json::json!({ "id": id, "deleted": true }))
 }
 
 pub async fn update_watchlist_group(
     mctx: &crate::tools::McpContext,
     p: UpdateWatchlistGroupParam,
 ) -> Result<CallToolResult, McpError> {
-    let mut req = RequestUpdateWatchlistGroup::new(p.id);
+    let id = p.id;
+    let mut req = RequestUpdateWatchlistGroup::new(id);
     if let Some(name) = p.name {
         req = req.name(name);
     }
@@ -571,7 +597,7 @@ pub async fn update_watchlist_group(
     ctx.update_watchlist_group(req)
         .await
         .map_err(Error::longbridge)?;
-    Ok(tool_result("watchlist group updated".to_string()))
+    tool_json(&serde_json::json!({ "id": id, "updated": true }))
 }
 
 pub async fn security_list(
@@ -596,6 +622,7 @@ pub struct ShortPositionsParam {
     /// Security symbol (US market only), e.g. "AAPL.US"
     pub symbol: String,
     /// Number of records to return (1-100, default 20)
+    #[serde(default, deserialize_with = "tolerant_option_usize")]
     pub count: Option<usize>,
 }
 
@@ -610,6 +637,7 @@ pub struct OptionVolumeDailyParam {
     /// Underlying symbol (US market only), e.g. "AAPL.US"
     pub symbol: String,
     /// Number of trading days to return (default 20)
+    #[serde(default, deserialize_with = "tolerant_option_usize")]
     pub count: Option<usize>,
 }
 
@@ -631,7 +659,13 @@ pub async fn short_positions(
         ("last_timestamp", now.as_str()),
         ("page_size", page_size.as_str()),
     ];
-    http_get_tool(&client, "/v1/quote/short-positions/us", &params).await
+    http_get_tool_unix(
+        &client,
+        "/v1/quote/short-positions/us",
+        &params,
+        &["data.*.timestamp"],
+    )
+    .await
 }
 
 pub async fn option_volume(
@@ -662,5 +696,11 @@ pub async fn option_volume_daily(
         ("line_num", line_num.as_str()),
         ("direction", "1"),
     ];
-    http_get_tool(&client, "/v1/quote/option-volume-stats/daily", &params).await
+    http_get_tool_unix(
+        &client,
+        "/v1/quote/option-volume-stats/daily",
+        &params,
+        &["stats.*.timestamp"],
+    )
+    .await
 }

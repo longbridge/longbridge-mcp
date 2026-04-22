@@ -3,11 +3,12 @@ use serde::ser::{
     SerializeTuple, SerializeTupleStruct, SerializeTupleVariant, Serializer,
 };
 
+use crate::counter::counter_id_to_symbol;
 use crate::serialize::counter_id::{CounterIdValue, CounterIdsValue};
 use crate::serialize::timestamp::TimestampValue;
 use crate::serialize::{
-    FieldKind, Transformed, classify_field, delegate_simple, key_to_string, output_key,
-    to_snake_case,
+    FieldKind, Transformed, classify_field, delegate_simple, key_to_string, looks_like_counter_id,
+    output_key, to_snake_case,
 };
 
 pub(crate) struct TransformSerializer<S> {
@@ -211,6 +212,15 @@ impl<M: SerializeMap> SerializeMap for TransformMap<M> {
 
     fn serialize_key<T: Serialize + ?Sized>(&mut self, key: &T) -> Result<(), Self::Error> {
         let raw = key_to_string(key).map_err(ser::Error::custom)?;
+        // If the key itself is a counter_id value (e.g. `ST/US/AAPL`),
+        // convert it to a symbol and skip snake_case conversion, which would
+        // otherwise insert underscores before each uppercase letter and mangle
+        // the key into `s_t/_u_s/_a_a_p_l`.
+        if looks_like_counter_id(&raw) {
+            self.current_kind = FieldKind::Normal;
+            let symbol = counter_id_to_symbol(&raw);
+            return self.inner.serialize_key(&symbol);
+        }
         let snake = to_snake_case(&raw);
         let kind = classify_field(&snake);
         self.current_kind = kind;

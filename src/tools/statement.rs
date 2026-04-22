@@ -1,5 +1,5 @@
 use longbridge::AssetContext;
-use longbridge::asset::{GetStatementListOptions, StatementType};
+use longbridge::asset::{GetStatementListOptions, GetStatementOptions, StatementType};
 use rmcp::ErrorData as McpError;
 use rmcp::model::CallToolResult;
 use rmcp::schemars::JsonSchema;
@@ -7,7 +7,7 @@ use rmcp::serde::Deserialize;
 use time::OffsetDateTime;
 
 use crate::error::Error;
-use crate::tools::http_client::http_get_tool;
+use crate::tools::support::tolerant::tolerant_option_i32;
 use crate::tools::tool_json;
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -17,15 +17,14 @@ pub struct StatementListParam {
     /// Start date (yyyy-mm-dd), optional
     pub start_date: Option<String>,
     /// Number of records to return
+    #[serde(default, deserialize_with = "tolerant_option_i32")]
     pub limit: Option<i32>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct StatementExportParam {
-    /// File key from statement_list
+    /// File key from statement_list, e.g. "/statement_data/data/.../20975338.json"
     pub file_key: String,
-    /// Sections to export. Valid values: "asset", "account_balances", "equity_holdings", "account_balance_changes", "stock_trades", "equity_holding_changes", "account_balance_locks", "equity_holding_locks", "option_trades", "fund_trades", "ipo_trades", "virtual_trades", "interests", "lending_fees", "custodian_fees", "corps", "bond_equity_holdings", "otc_trades", "outstandings", "financing_transactions", "interest_deposits", "maintenance_fees", "cash_pluses", "gst_details". Omit to export all sections.
-    pub sections: Option<Vec<String>>,
 }
 
 pub async fn statement_list(
@@ -77,12 +76,11 @@ pub async fn statement_export(
     mctx: &crate::tools::McpContext,
     p: StatementExportParam,
 ) -> Result<CallToolResult, McpError> {
-    let client = mctx.create_http_client();
-    let mut params: Vec<(&str, &str)> = vec![("file_key", p.file_key.as_str())];
-    let sections_str;
-    if let Some(ref sections) = p.sections {
-        sections_str = sections.join(",");
-        params.push(("sections", sections_str.as_str()));
-    }
-    http_get_tool(&client, "/v1/asset/statement", &params).await
+    let ctx = AssetContext::new(mctx.create_config());
+    let options = GetStatementOptions::new(p.file_key);
+    let resp = ctx
+        .statement_download_url(options)
+        .await
+        .map_err(Error::longbridge)?;
+    tool_json(&resp)
 }

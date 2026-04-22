@@ -31,13 +31,12 @@ mod calendar;
 mod content;
 mod dca;
 mod fundamental;
-pub mod http_client;
 mod market;
-mod parse;
 mod portfolio;
 mod quote;
 mod sharelist;
 mod statement;
+mod support;
 mod trade;
 
 /// Longbridge MCP tool server (stateless).
@@ -1149,8 +1148,10 @@ impl Longbridge {
         measured_tool_call("statement_list", || statement::statement_list(&mctx, p)).await
     }
 
-    /// Export account statement.
-    #[tool(description = "Export account statement sections by file_key")]
+    /// Get the pre-signed download URL for a statement file.
+    #[tool(
+        description = "Get a pre-signed download URL for a statement data file (obtained from statement_list). Returns {url}; fetch that URL to get the statement JSON."
+    )]
     async fn statement_export(
         &self,
         ctx: RequestContext<RoleServer>,

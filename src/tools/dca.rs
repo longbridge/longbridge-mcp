@@ -6,7 +6,10 @@ use rmcp::schemars::JsonSchema;
 use rmcp::serde::Deserialize;
 
 use crate::counter::symbol_to_counter_id;
-use crate::tools::http_client::{http_get_tool, http_post_tool};
+use crate::tools::support::http_client::{http_get_tool, http_get_tool_unix, http_post_tool};
+use crate::tools::support::tolerant::{
+    tolerant_option_bool, tolerant_option_u32, tolerant_vec_string,
+};
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct DcaListParam {
@@ -15,8 +18,10 @@ pub struct DcaListParam {
     /// Filter by symbol, e.g. "AAPL.US". Omit to return all plans.
     pub symbol: Option<String>,
     /// Page number (default 1)
+    #[serde(default, deserialize_with = "tolerant_option_u32")]
     pub page: Option<u32>,
     /// Records per page (default 20)
+    #[serde(default, deserialize_with = "tolerant_option_u32")]
     pub limit: Option<u32>,
 }
 
@@ -31,8 +36,10 @@ pub struct DcaCreateParam {
     /// Day of week for Weekly frequency: Mon, Tue, Wed, Thu, Fri
     pub day_of_week: Option<String>,
     /// Day of month for Monthly frequency (1-28)
+    #[serde(default, deserialize_with = "tolerant_option_u32")]
     pub day_of_month: Option<u32>,
     /// Allow margin financing (default false)
+    #[serde(default, deserialize_with = "tolerant_option_bool")]
     pub allow_margin: Option<bool>,
 }
 
@@ -47,8 +54,10 @@ pub struct DcaUpdateParam {
     /// Day of week for Weekly frequency: Mon, Tue, Wed, Thu, Fri
     pub day_of_week: Option<String>,
     /// Day of month for Monthly frequency (1-28)
+    #[serde(default, deserialize_with = "tolerant_option_u32")]
     pub day_of_month: Option<u32>,
     /// Allow margin financing
+    #[serde(default, deserialize_with = "tolerant_option_bool")]
     pub allow_margin: Option<bool>,
 }
 
@@ -63,8 +72,10 @@ pub struct DcaHistoryParam {
     /// Plan ID
     pub plan_id: String,
     /// Page number (default 1)
+    #[serde(default, deserialize_with = "tolerant_option_u32")]
     pub page: Option<u32>,
     /// Records per page (default 20)
+    #[serde(default, deserialize_with = "tolerant_option_u32")]
     pub limit: Option<u32>,
 }
 
@@ -77,6 +88,7 @@ pub struct DcaStatsParam {
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct DcaCheckParam {
     /// Security symbols to check, e.g. ["AAPL.US", "TSLA.US"]
+    #[serde(deserialize_with = "tolerant_vec_string")]
     pub symbols: Vec<String>,
 }
 
@@ -96,7 +108,13 @@ pub async fn dca_list(
     if let Some(ref c) = cid {
         params.push(("counter_id", c.as_str()));
     }
-    http_get_tool(&client, "/v1/dailycoins/query", &params).await
+    http_get_tool_unix(
+        &client,
+        "/v1/dailycoins/query",
+        &params,
+        &["plans.*.next_trd_date"],
+    )
+    .await
 }
 
 pub async fn dca_create(
