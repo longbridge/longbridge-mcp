@@ -1,0 +1,195 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-09-29/server.schema.json",
+  "name": "com.longbridge/mcp",
+  "description": "Longbridge official MCP — 110 tools for US/HK quotes, trading & portfolio analytics.",
+  "version": "0.1.7",
+  "repository": {
+    "url": "https://github.com/longbridge/longbridge-mcp",
+    "source": "github"
+  },
+  "websiteUrl": "https://longbridge.com",
+  "remotes": [
+    {
+      "type": "streamable-http",
+      "url": "https://openapi.longbridge.com/mcp",
+      "headers": [
+        {
+          "name": "Authorization",
+          "description": "Longbridge OAuth 2.1 bearer token in the form `Bearer <access_token>`. Clients should follow the authorization server URL returned by GET /.well-known/oauth-protected-resource (RFC 9728).",
+          "isRequired": true,
+          "isSecret": true
+        }
+      ]
+    }
+  ],
+  "packages": [
+    {
+      "registryType": "oci",
+      "identifier": "ghcr.io/longbridge/longbridge-mcp:0.1.7",
+      "transport": {
+        "type": "streamable-http",
+        "url": "http://localhost:8000/mcp",
+        "headers": [
+          {
+            "name": "Authorization",
+            "description": "Longbridge OAuth 2.1 bearer token in the form `Bearer <access_token>`.",
+            "isRequired": true,
+            "isSecret": true
+          }
+        ]
+      },
+      "runtimeArguments": [
+        {
+          "type": "named",
+          "name": "--bind",
+          "description": "HTTP bind address inside the container.",
+          "isRequired": false,
+          "default": "0.0.0.0:8000"
+        },
+        {
+          "type": "named",
+          "name": "--base-url",
+          "description": "Externally reachable URL of the server. Required for public deployments; returned via OAuth protected resource metadata.",
+          "isRequired": false,
+          "default": "http://localhost:8000"
+        }
+      ],
+      "environmentVariables": [
+        {
+          "name": "LONGBRIDGE_HTTP_URL",
+          "description": "Longbridge OpenAPI base URL. Used for OAuth metadata discovery.",
+          "isRequired": false,
+          "default": "https://openapi.longbridge.com"
+        },
+        {
+          "name": "LONGBRIDGE_QUOTE_WS_URL",
+          "description": "Quote WebSocket endpoint used by the embedded Longbridge SDK.",
+          "isRequired": false,
+          "default": "wss://openapi-quote.longbridge.com/v2"
+        },
+        {
+          "name": "LONGBRIDGE_TRADE_WS_URL",
+          "description": "Trade WebSocket endpoint used by the embedded Longbridge SDK.",
+          "isRequired": false,
+          "default": "wss://openapi-trade.longbridge.com/v2"
+        }
+      ]
+    }
+  ],
+  "_meta": {
+    "io.modelcontextprotocol.registry/publisher-provided": {
+      "brand": {
+        "displayName": "Longbridge",
+        "legalName": "Long Bridge Securities",
+        "tagline": "HK & US stocks, commission-free",
+        "website": "https://longbridge.com",
+        "developerPortal": "https://open.longbridge.com",
+        "documentation": "https://open.longbridge.com/docs",
+        "publisher": {
+          "name": "Longbridge",
+          "url": "https://longbridge.com",
+          "github": "https://github.com/longbridge"
+        }
+      },
+      "localizedDescriptions": {
+        "en": "Longbridge — official MCP server for the Longbridge brokerage. 110 tools across real-time quotes, options, order routing, fundamentals, calendars, alerts, DCA and portfolio analytics for US / HK markets.",
+        "zh-CN": "长桥证券官方 MCP 服务：110 个工具覆盖美股 / 港股的实时行情、期权、下单路由、基本面、财报日历、价格预警、定投计划与组合分析。",
+        "zh-HK": "長橋證券官方 MCP 伺服器：110 個工具覆蓋美股 / 港股的即時行情、期權、下單路由、基本面、財報日曆、價格警示、定投計劃與組合分析。"
+      },
+      "icons": [
+        {
+          "src": "https://assets.wbrks.com/assets/logo/light/logo.svg",
+          "sizes": "any",
+          "mimeType": "image/svg+xml",
+          "purpose": "any"
+        }
+      ],
+      "categories": [
+        "finance",
+        "trading",
+        "market-data",
+        "brokerage"
+      ],
+      "keywords": [
+        "longbridge",
+        "长桥",
+        "長橋",
+        "brokerage",
+        "stocks",
+        "options",
+        "warrants",
+        "futures",
+        "us-stocks",
+        "hk-stocks",
+        "trading",
+        "quotes",
+        "fundamentals",
+        "portfolio",
+        "dca",
+        "alerts"
+      ],
+      "markets": [
+        {
+          "code": "US",
+          "name": "United States"
+        },
+        {
+          "code": "HK",
+          "name": "Hong Kong"
+        }
+      ],
+      "toolCount": 110,
+      "toolCategories": {
+        "quote": 32,
+        "fundamental": 18,
+        "trade": 14,
+        "market": 9,
+        "dca": 9,
+        "content": 8,
+        "sharelist": 8,
+        "alert": 5,
+        "portfolio": 3,
+        "statement": 2,
+        "calendar": 1,
+        "utility": 1
+      },
+      "authentication": {
+        "type": "oauth2",
+        "flow": "authorization_code",
+        "discoveryUrl": "https://openapi.longbridge.com/.well-known/oauth-authorization-server",
+        "resourceMetadataUrl": "https://openapi.longbridge.com/.well-known/oauth-protected-resource",
+        "docs": "https://open.longbridge.com/docs/getting-started#authentication-methods"
+      },
+      "observability": {
+        "prometheusMetricsEndpoint": "/metrics",
+        "metrics": [
+          "mcp_tool_calls_total",
+          "mcp_tool_call_duration_seconds",
+          "mcp_tool_call_errors_total"
+        ]
+      },
+      "transport": {
+        "rfc9728Compliant": true,
+        "stateless": true
+      },
+      "builtWith": {
+        "language": "Rust",
+        "edition": "2024",
+        "framework": "rmcp 1.4 + axum 0.8",
+        "sdk": "https://github.com/longbridge/openapi"
+      },
+      "license": {
+        "spdxId": "MIT",
+        "url": "https://github.com/longbridge/longbridge-mcp/blob/main/LICENSE"
+      },
+      "links": {
+        "homepage": "https://longbridge.com",
+        "developerPortal": "https://open.longbridge.com",
+        "documentation": "https://open.longbridge.com/docs",
+        "source": "https://github.com/longbridge/longbridge-mcp",
+        "issues": "https://github.com/longbridge/longbridge-mcp/issues",
+        "changelog": "https://github.com/longbridge/longbridge-mcp/releases"
+      }
+    }
+  }
+}
