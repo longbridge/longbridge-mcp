@@ -1,6 +1,16 @@
-# Longbridge MCP Server
+<p align="center">
+  <img src="docs/logo.png" alt="Longbridge" width="120" height="120">
+</p>
 
-A [Model Context Protocol](https://modelcontextprotocol.io/) (MCP) server that exposes Longbridge market data, trading, and financial analysis capabilities as 110 MCP tools. Built with Rust using [rmcp](https://github.com/anthropics/rmcp) and [axum](https://github.com/tokio-rs/axum).
+<h1 align="center">Longbridge MCP Server</h1>
+
+<p align="center">
+  <a href="https://registry.modelcontextprotocol.io/v0/servers/com.longbridge%2Fmcp"><img alt="Official MCP Registry" src="https://img.shields.io/badge/MCP%20Registry-com.longbridge%2Fmcp-0a66c2"></a>
+  <a href="https://github.com/longbridge/longbridge-mcp/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/badge/license-MIT-blue"></a>
+  <a href="https://longbridge.com"><img alt="Longbridge" src="https://img.shields.io/badge/brokerage-Longbridge-ffe000?labelColor=000"></a>
+</p>
+
+Official MCP server for the [Longbridge](https://longbridge.com) brokerage. **110 tools** across real-time quotes, options, order routing, fundamentals, analyst ratings, calendars, price alerts, DCA plans, portfolio analytics and community sharelists — covering **US and HK markets**. Built with Rust using [rmcp](https://github.com/anthropics/rmcp) and [axum](https://github.com/tokio-rs/axum).
 
 ## Features
 
@@ -11,7 +21,41 @@ A [Model Context Protocol](https://modelcontextprotocol.io/) (MCP) server that e
 - **Prometheus metrics** for monitoring tool calls, latency, and errors
 - **Configurable** via CLI arguments or a JSON config file (CLI takes precedence)
 
-## Quick Start
+## Connect from an MCP client
+
+Longbridge operates a hosted endpoint at `https://openapi.longbridge.com/mcp`, so most users don't need to run their own server — just point your MCP client at it and complete OAuth when prompted. Authorization is auto-discovered via RFC 9728.
+
+### Claude Desktop
+
+Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or the equivalent on your OS:
+
+```json
+{
+  "mcpServers": {
+    "longbridge": {
+      "url": "https://openapi.longbridge.com/mcp"
+    }
+  }
+}
+```
+
+Restart Claude Desktop. On first tool invocation it will open a browser to complete the Longbridge OAuth flow.
+
+### Claude Code
+
+```bash
+claude mcp add --transport http longbridge https://openapi.longbridge.com/mcp
+```
+
+### Cursor / Cline / Windsurf / other MCP clients
+
+Point the client at `https://openapi.longbridge.com/mcp` using transport `streamable-http`. OAuth is auto-discovered via RFC 9728; no manual token required.
+
+---
+
+## Self-hosting
+
+Prefer running your own instance? Use Docker or build from source.
 
 ### Docker (recommended)
 
@@ -76,15 +120,27 @@ These are **advanced settings** — most users do not need to change them. They 
 
 The server expects a Longbridge OAuth access token in the `Authorization: Bearer <token>` header. On missing or invalid auth, it returns 401 with a `WWW-Authenticate` header pointing to the protected resource metadata endpoint, which in turn directs MCP clients to the Longbridge OAuth authorization server.
 
-## Claude Code Integration
+## Claude Code integration
 
-Register the server as a remote MCP endpoint:
+The one-liner in [Connect → Claude Code](#claude-code) gets you connected. Below are the extra commands you'll reach for while developing against this server.
 
 ```bash
-claude mcp add --transport http longbridge-mcp http://localhost:8000/mcp
+# Hosted — use this unless you have a reason not to
+claude mcp add --transport http longbridge https://openapi.longbridge.com/mcp
+
+# Local self-hosted instance (see Self-hosting above)
+claude mcp add --transport http longbridge-local http://localhost:8000/mcp
+
+# Inspect
+claude mcp list                         # registered servers
+claude mcp get longbridge               # config + auth status of one server
+claude mcp remove longbridge            # unregister
+
+# Re-trigger OAuth (e.g. after token revocation on the Longbridge side)
+claude mcp logout longbridge
 ```
 
-Claude Code will handle the OAuth flow automatically when the server requires authentication.
+On the first tool invocation, Claude Code reads the `WWW-Authenticate` challenge from the server, fetches `/.well-known/oauth-protected-resource` (RFC 9728), and opens your browser for the Longbridge OAuth flow. Access tokens are cached per-session and refreshed automatically.
 
 ## API Endpoints
 
