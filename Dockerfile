@@ -5,6 +5,7 @@ COPY . .
 RUN cargo build --release
 
 FROM debian:bookworm-slim
+LABEL io.modelcontextprotocol.server.name="com.longbridge/mcp"
 
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
 
