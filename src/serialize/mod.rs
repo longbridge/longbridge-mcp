@@ -3,6 +3,7 @@
 //! - Fields ending with `_at` containing i64/u64 -> RFC3339 UTC string
 //! - Field `counter_id` (string) -> renamed to `symbol`, value converted
 //! - Field `counter_ids` (array of strings) -> renamed to `symbols`, each converted
+//! - Fields `aaic` and `account_channel` -> excluded from output entirely
 //!
 //! Zero intermediate allocation for SDK types (`to_tool_json`).
 
@@ -165,6 +166,7 @@ pub(crate) enum FieldKind {
     Timestamp,
     CounterId,
     CounterIds,
+    Excluded,
 }
 
 pub(crate) fn classify_field(snake_name: &str) -> FieldKind {
@@ -174,6 +176,8 @@ pub(crate) fn classify_field(snake_name: &str) -> FieldKind {
         FieldKind::CounterId
     } else if snake_name.ends_with("_at") {
         FieldKind::Timestamp
+    } else if matches!(snake_name, "aaic" | "account_channel") {
+        FieldKind::Excluded
     } else {
         FieldKind::Normal
     }
@@ -500,5 +504,34 @@ mod tests {
         let before = v.clone();
         convert_unix_paths(&mut v, &["missing", "a.b.c"]);
         assert_eq!(v, before);
+    }
+
+    #[test]
+    fn excluded_fields_aaic_and_account_channel() {
+        #[derive(Serialize)]
+        struct Data {
+            aaic: String,
+            account_channel: String,
+            name: String,
+        }
+        let d = Data {
+            aaic: "some_value".to_string(),
+            account_channel: "channel".to_string(),
+            name: "keep_me".to_string(),
+        };
+        let json = to_tool_json(&d).unwrap();
+        assert!(!json.contains("aaic"), "got: {json}");
+        assert!(!json.contains("account_channel"), "got: {json}");
+        assert!(json.contains("\"name\":\"keep_me\""), "got: {json}");
+    }
+
+    #[test]
+    fn excluded_fields_via_transform_json() {
+        let input: serde_json::Value =
+            serde_json::from_str(r#"{"aaic":"x","accountChannel":"ch","price":1.5}"#).unwrap();
+        let output = to_tool_json(&input).unwrap();
+        assert!(!output.contains("aaic"), "got: {output}");
+        assert!(!output.contains("account_channel"), "got: {output}");
+        assert!(output.contains("\"price\""), "got: {output}");
     }
 }
