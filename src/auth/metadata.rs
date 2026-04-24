@@ -50,7 +50,7 @@ pub(crate) struct ServerCard {
 
 static SERVER_CARD: LazyLock<ServerCard> = LazyLock::new(|| ServerCard {
     server_info: ServerInfoCard {
-        name: "Longbridge MCP Server",
+        name: "Longbridge MCP",
         version: env!("CARGO_PKG_VERSION"),
     },
     authentication: AuthCard {
