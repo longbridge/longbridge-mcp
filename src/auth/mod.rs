@@ -31,6 +31,11 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         )
         .with_state(state.clone());
 
+    let server_card_route = Router::new().route(
+        "/.well-known/mcp/server-card.json",
+        axum::routing::get(metadata::server_card),
+    );
+
     let health_route = Router::new().route("/health", axum::routing::get(health));
 
     let metrics_route = Router::new().route(
@@ -60,6 +65,7 @@ pub fn create_router(state: Arc<AppState>) -> Router {
 
     Router::new()
         .merge(metadata_routes)
+        .merge(server_card_route)
         .merge(health_route)
         .merge(metrics_route)
         .merge(tools_route)
