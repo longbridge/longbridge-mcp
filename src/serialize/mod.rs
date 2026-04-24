@@ -3,7 +3,7 @@
 //! - Fields ending with `_at` containing i64/u64 -> RFC3339 UTC string
 //! - Field `counter_id` (string) -> renamed to `symbol`, value converted
 //! - Field `counter_ids` (array of strings) -> renamed to `symbols`, each converted
-//! - Fields `aaic` and `account_channel` -> excluded from output entirely
+//! - Fields `aaid` and `account_channel` -> value set to null
 //!
 //! Zero intermediate allocation for SDK types (`to_tool_json`).
 
@@ -166,7 +166,7 @@ pub(crate) enum FieldKind {
     Timestamp,
     CounterId,
     CounterIds,
-    Excluded,
+    Nullified,
 }
 
 pub(crate) fn classify_field(snake_name: &str) -> FieldKind {
@@ -176,8 +176,8 @@ pub(crate) fn classify_field(snake_name: &str) -> FieldKind {
         FieldKind::CounterId
     } else if snake_name.ends_with("_at") {
         FieldKind::Timestamp
-    } else if matches!(snake_name, "aaic" | "account_channel") {
-        FieldKind::Excluded
+    } else if matches!(snake_name, "aaid" | "account_channel") {
+        FieldKind::Nullified
     } else {
         FieldKind::Normal
     }
@@ -507,31 +507,31 @@ mod tests {
     }
 
     #[test]
-    fn excluded_fields_aaic_and_account_channel() {
+    fn nullified_fields_to_tool_json() {
         #[derive(Serialize)]
         struct Data {
-            aaic: String,
+            aaid: String,
             account_channel: String,
             name: String,
         }
-        let d = Data {
-            aaic: "some_value".to_string(),
-            account_channel: "channel".to_string(),
-            name: "keep_me".to_string(),
-        };
-        let json = to_tool_json(&d).unwrap();
-        assert!(!json.contains("aaic"), "got: {json}");
-        assert!(!json.contains("account_channel"), "got: {json}");
-        assert!(json.contains("\"name\":\"keep_me\""), "got: {json}");
+        let json = to_tool_json(&Data {
+            aaid: "20975338".to_string(),
+            account_channel: "lb_papertrading".to_string(),
+            name: "keep".to_string(),
+        })
+        .unwrap();
+        assert!(json.contains("\"aaid\":null"), "got: {json}");
+        assert!(json.contains("\"account_channel\":null"), "got: {json}");
+        assert!(json.contains("\"name\":\"keep\""), "got: {json}");
     }
 
     #[test]
-    fn excluded_fields_via_transform_json() {
-        let input: serde_json::Value =
-            serde_json::from_str(r#"{"aaic":"x","accountChannel":"ch","price":1.5}"#).unwrap();
-        let output = to_tool_json(&input).unwrap();
-        assert!(!output.contains("aaic"), "got: {output}");
-        assert!(!output.contains("account_channel"), "got: {output}");
-        assert!(output.contains("\"price\""), "got: {output}");
+    fn nullified_fields_transform_json() {
+        let raw = r#"{"planId":"1","aaid":"999","accountChannel":"lb","market":"US"}"#;
+        let output = transform_json(raw.as_bytes()).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&output).unwrap();
+        assert_eq!(v["aaid"], serde_json::Value::Null);
+        assert_eq!(v["account_channel"], serde_json::Value::Null);
+        assert_eq!(v["plan_id"], "1");
     }
 }
