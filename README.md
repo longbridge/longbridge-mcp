@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/logo.png" alt="Longbridge" width="120" height="120">
+  <img src="https://raw.githubusercontent.com/longbridge/longbridge-mcp/main/docs/logo.png" alt="Longbridge" width="120" height="120">
 </p>
 
 <h1 align="center">Longbridge MCP Server</h1>
