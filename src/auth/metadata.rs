@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use axum::extract::State;
 use axum::response::Json;
@@ -26,4 +26,47 @@ pub async fn protected_resource_metadata(
         authorization_servers: vec![longbridge_oauth_url()],
         scopes_supported: vec!["openapi".to_string()],
     })
+}
+
+#[derive(Serialize)]
+struct ServerInfoCard {
+    name: &'static str,
+    version: &'static str,
+}
+
+#[derive(Serialize)]
+struct AuthCard {
+    required: bool,
+    schemes: Vec<&'static str>,
+}
+
+#[derive(Serialize)]
+pub(crate) struct ServerCard {
+    #[serde(rename = "serverInfo")]
+    server_info: ServerInfoCard,
+    authentication: AuthCard,
+    tools: Vec<rmcp::model::Tool>,
+}
+
+static SERVER_CARD: LazyLock<ServerCard> = LazyLock::new(|| ServerCard {
+    server_info: ServerInfoCard {
+        name: "Longbridge MCP Server",
+        version: env!("CARGO_PKG_VERSION"),
+    },
+    authentication: AuthCard {
+        required: true,
+        schemes: vec!["oauth2"],
+    },
+    tools: crate::tools::list_tools(),
+});
+
+/// Static MCP server card served at `/.well-known/mcp/server-card.json`.
+///
+/// Lets directory scanners (e.g. Smithery) discover server metadata and the
+/// full tool list without performing the authenticated `tools/list` probe.
+/// Declaring `authentication.schemes = ["oauth2"]` signals that the client
+/// should follow the RFC 9728 protected-resource-metadata flow rather than
+/// attempting Dynamic Client Registration directly.
+pub async fn server_card() -> Json<&'static ServerCard> {
+    Json(&*SERVER_CARD)
 }
