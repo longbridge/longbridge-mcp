@@ -31,10 +31,18 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         )
         .with_state(state.clone());
 
-    let server_card_route = Router::new().route(
-        "/.well-known/mcp/server-card.json",
-        axum::routing::get(metadata::server_card),
-    );
+    // Serve the static server card at both the host-root path Smithery's docs
+    // specify and the `/mcp/`-prefixed path (some upstream gateways only forward
+    // `/mcp/*` to this service, so the prefixed copy is a fallback).
+    let server_card_route = Router::new()
+        .route(
+            "/.well-known/mcp/server-card.json",
+            axum::routing::get(metadata::server_card),
+        )
+        .route(
+            "/mcp/.well-known/mcp/server-card.json",
+            axum::routing::get(metadata::server_card),
+        );
 
     let health_route = Router::new().route("/health", axum::routing::get(health));
 
