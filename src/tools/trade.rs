@@ -1,4 +1,4 @@
-use longbridge::trade::TradeContext;
+use longbridge::trade::{GetTodayExecutionsOptions, GetTodayOrdersOptions, TradeContext};
 use rmcp::ErrorData as McpError;
 use rmcp::model::CallToolResult;
 use rmcp::schemars::JsonSchema;
@@ -13,6 +13,26 @@ pub use crate::tools::quote::SymbolParam;
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct OrderIdParam {
     pub order_id: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct AccountBalanceParam {
+    /// Filter by currency code (e.g. "USD", "HKD"). Omit to return all currencies.
+    pub currency: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct TodayOrdersParam {
+    /// Filter by symbol, e.g. "700.HK". Omit to return all today's orders.
+    pub symbol: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct TodayExecutionsParam {
+    /// Filter by symbol, e.g. "700.HK".
+    pub symbol: Option<String>,
+    /// Filter by a specific order_id.
+    pub order_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -93,9 +113,15 @@ pub struct EstimateMaxQtyParam {
     pub price: Option<String>,
 }
 
-pub async fn account_balance(mctx: &crate::tools::McpContext) -> Result<CallToolResult, McpError> {
+pub async fn account_balance(
+    mctx: &crate::tools::McpContext,
+    p: AccountBalanceParam,
+) -> Result<CallToolResult, McpError> {
     let (ctx, _) = TradeContext::new(mctx.create_config());
-    let result = ctx.account_balance(None).await.map_err(Error::longbridge)?;
+    let result = ctx
+        .account_balance(p.currency.as_deref())
+        .await
+        .map_err(Error::longbridge)?;
     tool_json(&result)
 }
 
@@ -123,9 +149,16 @@ pub async fn margin_ratio(
     tool_json(&result)
 }
 
-pub async fn today_orders(mctx: &crate::tools::McpContext) -> Result<CallToolResult, McpError> {
+pub async fn today_orders(
+    mctx: &crate::tools::McpContext,
+    p: TodayOrdersParam,
+) -> Result<CallToolResult, McpError> {
+    let mut opts = GetTodayOrdersOptions::new();
+    if let Some(symbol) = p.symbol {
+        opts = opts.symbol(symbol);
+    }
     let (ctx, _) = TradeContext::new(mctx.create_config());
-    let result = ctx.today_orders(None).await.map_err(Error::longbridge)?;
+    let result = ctx.today_orders(opts).await.map_err(Error::longbridge)?;
     tool_json(&result)
 }
 
@@ -152,10 +185,20 @@ pub async fn cancel_order(
     Ok(tool_result("order cancelled".to_string()))
 }
 
-pub async fn today_executions(mctx: &crate::tools::McpContext) -> Result<CallToolResult, McpError> {
+pub async fn today_executions(
+    mctx: &crate::tools::McpContext,
+    p: TodayExecutionsParam,
+) -> Result<CallToolResult, McpError> {
+    let mut opts = GetTodayExecutionsOptions::new();
+    if let Some(symbol) = p.symbol {
+        opts = opts.symbol(symbol);
+    }
+    if let Some(order_id) = p.order_id {
+        opts = opts.order_id(order_id);
+    }
     let (ctx, _) = TradeContext::new(mctx.create_config());
     let result = ctx
-        .today_executions(None)
+        .today_executions(opts)
         .await
         .map_err(Error::longbridge)?;
     tool_json(&result)

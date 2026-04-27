@@ -24,9 +24,9 @@ pub struct SharelistIdParam {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct SharelistCreateParam {
-    /// List name
+    /// List name (also used as description if `description` is omitted).
     pub name: String,
-    /// List description (optional)
+    /// List description. Defaults to `name` when omitted.
     pub description: Option<String>,
 }
 

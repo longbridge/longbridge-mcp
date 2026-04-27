@@ -30,6 +30,14 @@ pub struct SymbolParam {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct IntradayParam {
+    /// Security symbol, e.g. "700.HK"
+    pub symbol: String,
+    /// Trade sessions to include: "intraday" (default, regular hours only) or "all" (include pre-market and post-market).
+    pub trade_sessions: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct SymbolCountParam {
     pub symbol: String,
     /// Maximum number of results (max 1000)
@@ -270,11 +278,15 @@ pub async fn trades(
 
 pub async fn intraday(
     mctx: &crate::tools::McpContext,
-    p: SymbolParam,
+    p: IntradayParam,
 ) -> Result<CallToolResult, McpError> {
+    let sessions = match p.trade_sessions.as_deref() {
+        Some(s) => parse::parse_trade_sessions(s)?,
+        None => longbridge::quote::TradeSessions::Intraday,
+    };
     let (ctx, _) = QuoteContext::new(mctx.create_config());
     let result = ctx
-        .intraday(p.symbol, longbridge::quote::TradeSessions::Intraday)
+        .intraday(p.symbol, sessions)
         .await
         .map_err(Error::longbridge)?;
     tool_json(&result)

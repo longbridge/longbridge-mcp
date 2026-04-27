@@ -224,11 +224,13 @@ impl Longbridge {
     }
 
     /// Get intraday line data.
-    #[tool(description = "Get intraday minute-by-minute price/volume data")]
+    #[tool(
+        description = "Get intraday minute-by-minute price/volume data. trade_sessions: \"intraday\" (default, regular hours) or \"all\" (include pre-market and post-market)"
+    )]
     async fn intraday(
         &self,
         ctx: RequestContext<RoleServer>,
-        Parameters(p): Parameters<SymbolParam>,
+        Parameters(p): Parameters<quote::IntradayParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
         measured_tool_call("intraday", || quote::intraday(&mctx, p)).await
@@ -484,13 +486,16 @@ impl Longbridge {
     }
 
     /// Get account balance.
-    #[tool(description = "Get account cash balance and asset summary")]
+    #[tool(
+        description = "Get account cash balance and asset summary. Pass currency (e.g. \"USD\", \"HKD\") to filter; omit to return all currencies."
+    )]
     async fn account_balance(
         &self,
         ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<trade::AccountBalanceParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("account_balance", || trade::account_balance(&mctx)).await
+        measured_tool_call("account_balance", || trade::account_balance(&mctx, p)).await
     }
 
     /// Get stock positions.
@@ -525,13 +530,14 @@ impl Longbridge {
     }
 
     /// Get today's orders.
-    #[tool(description = "Get orders placed today")]
+    #[tool(description = "Get orders placed today. Pass symbol to filter; omit to return all.")]
     async fn today_orders(
         &self,
         ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<trade::TodayOrdersParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("today_orders", || trade::today_orders(&mctx)).await
+        measured_tool_call("today_orders", || trade::today_orders(&mctx, p)).await
     }
 
     /// Get order detail.
@@ -557,13 +563,16 @@ impl Longbridge {
     }
 
     /// Get today's trade executions.
-    #[tool(description = "Get today's trade executions (fills)")]
+    #[tool(
+        description = "Get today's trade executions (fills). Pass symbol or order_id to filter; omit both to return all."
+    )]
     async fn today_executions(
         &self,
         ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<trade::TodayExecutionsParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("today_executions", || trade::today_executions(&mctx)).await
+        measured_tool_call("today_executions", || trade::today_executions(&mctx, p)).await
     }
 
     /// Get historical orders (not including today).
@@ -1102,18 +1111,22 @@ impl Longbridge {
     }
 
     /// Get topic replies.
-    #[tool(description = "Get replies to a discussion topic")]
+    #[tool(
+        description = "Get replies to a discussion topic, paginated (page default 1, size default 20, range 1-50)"
+    )]
     async fn topic_replies(
         &self,
         ctx: RequestContext<RoleServer>,
-        Parameters(p): Parameters<content::TopicIdParam>,
+        Parameters(p): Parameters<content::TopicRepliesParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
         measured_tool_call("topic_replies", || content::topic_replies(&mctx, p)).await
     }
 
     /// Create a discussion topic.
-    #[tool(description = "Create a new discussion topic")]
+    #[tool(
+        description = "Create a new discussion topic. topic_type=\"post\" (default) is plain text; \"article\" requires a non-empty title and accepts Markdown body."
+    )]
     async fn topic_create(
         &self,
         ctx: RequestContext<RoleServer>,
@@ -1124,7 +1137,9 @@ impl Longbridge {
     }
 
     /// Reply to a discussion topic.
-    #[tool(description = "Create a reply to a discussion topic")]
+    #[tool(
+        description = "Create a reply to a discussion topic. Pass reply_to_id to nest under another reply; omit for a top-level reply."
+    )]
     async fn topic_create_reply(
         &self,
         ctx: RequestContext<RoleServer>,

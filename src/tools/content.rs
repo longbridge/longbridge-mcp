@@ -5,7 +5,7 @@ use rmcp::schemars::JsonSchema;
 use rmcp::serde::Deserialize;
 
 use crate::error::Error;
-use crate::tools::support::tolerant::tolerant_option_vec_string;
+use crate::tools::support::tolerant::{tolerant_option_i32, tolerant_option_vec_string};
 use crate::tools::tool_json;
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -22,21 +22,37 @@ pub struct TopicIdParam {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct TopicCreateParam {
-    /// Topic title
+    /// Topic title. Required when topic_type is "article", optional for "post".
     pub title: String,
-    /// Topic body content
+    /// Topic body. "post" type is plain text only; "article" type accepts Markdown.
     pub body: String,
-    /// Related security symbols
+    /// Related security symbols, e.g. ["700.HK", "TSLA.US"] (max 10).
     #[serde(default, deserialize_with = "tolerant_option_vec_string")]
     pub symbols: Option<Vec<String>>,
+    /// Topic type: "post" (default, plain text) or "article" (Markdown, title required).
+    pub topic_type: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct TopicCreateReplyParam {
-    /// Topic ID to reply to
+    /// Topic ID to reply to.
     pub topic_id: String,
-    /// Reply body content
+    /// Reply body (plain text only).
     pub body: String,
+    /// Optional parent reply ID for nested replies. Get IDs from `topic_replies`. Omit for a top-level reply.
+    pub reply_to_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct TopicRepliesParam {
+    /// Topic ID.
+    pub topic_id: String,
+    /// Page number, 1-based (default: 1).
+    #[serde(default, deserialize_with = "tolerant_option_i32")]
+    pub page: Option<i32>,
+    /// Records per page, 1-50 (default: 20).
+    #[serde(default, deserialize_with = "tolerant_option_i32")]
+    pub size: Option<i32>,
 }
 
 pub async fn news(
@@ -71,11 +87,15 @@ pub async fn topic_detail(
 
 pub async fn topic_replies(
     mctx: &crate::tools::McpContext,
-    p: TopicIdParam,
+    p: TopicRepliesParam,
 ) -> Result<CallToolResult, McpError> {
     let ctx = ContentContext::new(mctx.create_config());
+    let opts = longbridge::content::ListTopicRepliesOptions {
+        page: p.page,
+        size: p.size,
+    };
     let result = ctx
-        .list_topic_replies(p.topic_id, Default::default())
+        .list_topic_replies(p.topic_id, opts)
         .await
         .map_err(Error::longbridge)?;
     tool_json(&result)
@@ -89,7 +109,7 @@ pub async fn topic_create(
     let opts = longbridge::content::CreateTopicOptions {
         title: p.title,
         body: p.body,
-        topic_type: None,
+        topic_type: p.topic_type,
         tickers: p.symbols,
         hashtags: None,
     };
@@ -104,7 +124,7 @@ pub async fn topic_create_reply(
     let ctx = ContentContext::new(mctx.create_config());
     let opts = longbridge::content::CreateReplyOptions {
         body: p.body,
-        reply_to_id: None,
+        reply_to_id: p.reply_to_id,
     };
     let result = ctx
         .create_topic_reply(p.topic_id, opts)
