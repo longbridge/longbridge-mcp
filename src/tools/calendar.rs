@@ -7,7 +7,7 @@ use crate::tools::support::http_client::http_get_tool;
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct FinanceCalendarParam {
-    /// Market code: HK, US, CN, SG
+    /// Market code: HK, US, CN, SG. Omit to query across all markets.
     pub market: Option<String>,
     /// Start date (yyyy-mm-dd)
     pub start: String,

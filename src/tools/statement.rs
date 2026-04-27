@@ -12,11 +12,11 @@ use crate::tools::tool_json;
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct StatementListParam {
-    /// Statement type: "daily" or "monthly"
+    /// Statement type: "daily" (default) or "monthly".
     pub statement_type: Option<String>,
-    /// Start date (yyyy-mm-dd), optional
+    /// Start date (yyyy-mm-dd). Defaults to 30 days ago for "daily" or 12 months ago for "monthly".
     pub start_date: Option<String>,
-    /// Number of records to return
+    /// Number of records to return. Defaults to 30 for "daily" or 12 for "monthly".
     #[serde(default, deserialize_with = "tolerant_option_i32")]
     pub limit: Option<i32>,
 }

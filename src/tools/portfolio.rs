@@ -10,9 +10,9 @@ use crate::tools::support::http_client::{http_get_tool, http_get_tool_unix};
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ProfitAnalysisParam {
-    /// Start date (yyyy-mm-dd), optional
+    /// Start date (yyyy-mm-dd). Must be paired with `end`; passing only one returns empty results.
     pub start: Option<String>,
-    /// End date (yyyy-mm-dd), optional
+    /// End date (yyyy-mm-dd). Must be paired with `start`; passing only one returns empty results.
     pub end: Option<String>,
 }
 
@@ -20,9 +20,9 @@ pub struct ProfitAnalysisParam {
 pub struct ProfitAnalysisDetailParam {
     /// Security symbol, e.g. "700.HK"
     pub symbol: String,
-    /// Start date (yyyy-mm-dd), optional
+    /// Start date (yyyy-mm-dd). Must be paired with `end`; passing only one returns empty results.
     pub start: Option<String>,
-    /// End date (yyyy-mm-dd), optional
+    /// End date (yyyy-mm-dd). Must be paired with `start`; passing only one returns empty results.
     pub end: Option<String>,
 }
 
