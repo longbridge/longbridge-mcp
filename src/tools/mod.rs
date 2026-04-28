@@ -33,6 +33,7 @@ mod dca;
 mod fundamental;
 mod market;
 mod portfolio;
+mod quant;
 mod quote;
 mod sharelist;
 mod statement;
@@ -1412,6 +1413,19 @@ impl Longbridge {
             sharelist::sharelist_popular(&mctx, p)
         })
         .await
+    }
+
+    /// Run a quant indicator script against historical K-line data on the server.
+    #[tool(
+        description = "Run a quant indicator script against historical K-line data on the server. Executes the script server-side and returns the computed indicator/plot values as JSON. The script language is compatible with PineScript V6 syntax (minor exceptions may apply). Periods: 1m, 5m, 15m, 30m, 1h, day, week, month, year (default: day). The optional input flag accepts a JSON array matching the order of input.*() calls in the script, e.g. \"[14,2.0]\"."
+    )]
+    async fn quant_run(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<quant::RunScriptParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("quant_run", || quant::run_script(&mctx, p)).await
     }
 }
 
