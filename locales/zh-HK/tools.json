@@ -1,0 +1,743 @@
+{
+  "$schema": "../tools.schema.json",
+  "server_instructions": "長橋 OpenAPI MCP 服務器 —— 提供市場數據、交易與金融分析工具。",
+  "tools": {
+    "create_watchlist_group": {
+      "description": "新建一個自選分組，可選地附帶初始股票列表",
+      "params": {
+        "name": "分組名稱",
+        "securities": "要加入的證券代碼，例如 `[\"700.HK\", \"AAPL.US\"]`"
+      }
+    },
+    "delete_watchlist_group": {
+      "description": "按分組 id 刪除自選分組",
+      "params": {
+        "id": "自選分組 id",
+        "purge": "是否同時從其他分組中清除這些證券"
+      }
+    },
+    "security_list": {
+      "description": "獲取指定市場的證券列表。`category` 當前必須為 `\"Overnight\"`，其他取值或留空都會報錯；並且目前僅支持 `market=\"US\"`，其他市場同樣會返回錯誤",
+      "params": {
+        "market": "市場代碼：HK、US、CN、SG",
+        "category": "類別篩選。當前僅支持 `\"Overnight\"`，傳入其他值或不傳都會觸發 `param_error`；並且 `\"Overnight\"` 類別目前僅支持 `US` 市場，其他市場同樣會返回 `param_error`"
+      }
+    },
+    "update_watchlist_group": {
+      "description": "更新自選分組（重命名，或對其中的證券進行新增 / 移除 / 替換）",
+      "params": {
+        "id": "自選分組 id",
+        "name": "新的分組名稱（可選）",
+        "securities": "證券代碼列表（可選）",
+        "mode": "證券更新模式：`add`（新增）、`remove`（移除）或 `replace`（替換，默認）"
+      }
+    },
+    "watchlist": {
+      "description": "獲取所有自選分組及其包含的證券"
+    },
+    "account_balance": {
+      "description": "查詢賬戶現金餘額與資產概覽。可傳入 `currency`（如 `\"USD\"`、`\"HKD\"`）按幣種篩選，省略則返回全部幣種",
+      "params": {
+        "currency": "按幣種代碼篩選（如 `\"USD\"`、`\"HKD\"`），省略則返回所有幣種"
+      }
+    },
+    "cash_flow": {
+      "description": "查詢資金流水記錄（出入金、派息等）",
+      "params": {
+        "start_at": "起始時間（RFC3339 格式）",
+        "end_at": "結束時間（RFC3339 格式）"
+      }
+    },
+    "fund_positions": {
+      "description": "查詢當前的基金持倉"
+    },
+    "margin_ratio": {
+      "description": "查詢保證金比率（初始 / 維持 / 強平）",
+      "params": {
+        "symbol": "證券代碼，例如 `\"700.HK\"`"
+      }
+    },
+    "profit_analysis": {
+      "description": "獲取組合盈虧分析彙總。`start` / `end` 為可選日期區間（`yyyy-mm-dd`），必須成對傳入；只傳其中之一會返回空結果",
+      "params": {
+        "start": "起始日期（`yyyy-mm-dd`）。必須與 `end` 成對傳入，只傳其一會返回空結果",
+        "end": "結束日期（`yyyy-mm-dd`）。必須與 `start` 成對傳入，只傳其一會返回空結果"
+      }
+    },
+    "profit_analysis_detail": {
+      "description": "獲取指定標的的詳細盈虧分析。`start` / `end` 為可選日期區間（`yyyy-mm-dd`），必須成對傳入；只傳其中之一會返回空結果",
+      "params": {
+        "symbol": "證券代碼，例如 `\"700.HK\"`",
+        "start": "起始日期（`yyyy-mm-dd`）。必須與 `end` 成對傳入，只傳其一會返回空結果",
+        "end": "結束日期（`yyyy-mm-dd`）。必須與 `start` 成對傳入，只傳其一會返回空結果"
+      }
+    },
+    "statement_export": {
+      "description": "獲取對賬單數據文件的預簽名下載 URL（`file_key` 來自 `statement_list`）。返回 `{url}`，訪問該 URL 即可獲取對賬單 JSON",
+      "params": {
+        "file_key": "來自 `statement_list` 的文件 key，例如 `\"/statement_data/data/.../20975338.json\"`"
+      }
+    },
+    "statement_list": {
+      "description": "列出可獲取的賬戶對賬單（日 / 月對賬單）",
+      "params": {
+        "statement_type": "對賬單類型：`\"daily\"`（默認，日報）或 `\"monthly\"`（月報）",
+        "start_date": "起始日期（`yyyy-mm-dd`）。`daily` 默認 30 天前，`monthly` 默認 12 個月前",
+        "limit": "返回條數。`daily` 默認 30，`monthly` 默認 12"
+      }
+    },
+    "stock_positions": {
+      "description": "查詢所有渠道下的當前股票持倉"
+    },
+    "dca_history": {
+      "description": "按 `plan_id` 查詢定投計劃的扣款執行歷史",
+      "params": {
+        "plan_id": "定投計劃 ID",
+        "page": "頁碼（默認 1）",
+        "limit": "每頁條數（默認 20）"
+      }
+    },
+    "dca_list": {
+      "description": "列出定投計劃，可按狀態（`Active` 進行中 / `Suspended` 暫停 / `Finished` 已結束）或證券篩選",
+      "params": {
+        "status": "按狀態篩選：`Active`、`Suspended`、`Finished`，省略則返回全部",
+        "symbol": "按證券篩選，例如 `\"AAPL.US\"`，省略則返回全部計劃",
+        "page": "頁碼（默認 1）",
+        "limit": "每頁條數（默認 20）"
+      }
+    },
+    "dca_stats": {
+      "description": "獲取定投投資統計彙總，可選地按證券篩選",
+      "params": {
+        "symbol": "按證券篩選，例如 `\"AAPL.US\"`，省略則返回所有計劃的合計統計"
+      }
+    },
+    "estimate_max_purchase_quantity": {
+      "description": "估算指定證券的最大可買 / 可賣數量",
+      "params": {
+        "symbol": "證券代碼",
+        "side": "買賣方向：`Buy`（買入）或 `Sell`（賣出）",
+        "order_type": "委託類型：`LO`（限價單）/ `ELO`（增強限價單）/ `MO`（市價單）/ `AO`（競價單）/ `ALO`（競價限價單）",
+        "price": "委託價格（限價類委託需要）"
+      }
+    },
+    "history_executions": {
+      "description": "查詢指定日期區間內的歷史成交記錄",
+      "params": {
+        "symbol": "按證券篩選（可選）",
+        "start_at": "起始時間（RFC3339 格式）",
+        "end_at": "結束時間（RFC3339 格式）"
+      }
+    },
+    "history_orders": {
+      "description": "查詢指定日期區間內的歷史委託（不含當日）",
+      "params": {
+        "symbol": "按證券篩選（可選）",
+        "start_at": "起始時間（RFC3339 格式）",
+        "end_at": "結束時間（RFC3339 格式）"
+      }
+    },
+    "order_detail": {
+      "description": "查詢單個委託的詳細信息",
+      "params": {
+        "order_id": "委託單號"
+      }
+    },
+    "today_executions": {
+      "description": "查詢當日成交（filled）。可傳入 `symbol` 或 `order_id` 篩選，兩者都省略則返回全部",
+      "params": {
+        "symbol": "按證券篩選，例如 `\"700.HK\"`",
+        "order_id": "按指定委託單號篩選"
+      }
+    },
+    "today_orders": {
+      "description": "查詢當日委託。可傳入 `symbol` 篩選，省略則返回全部",
+      "params": {
+        "symbol": "按證券篩選，例如 `\"700.HK\"`，省略則返回當日全部委託"
+      }
+    },
+    "cancel_order": {
+      "description": "按 `order_id` 撤銷未成交的委託",
+      "params": {
+        "order_id": "委託單號"
+      }
+    },
+    "dca_create": {
+      "description": "創建定投（DCA）計劃。`frequency` 可選 `Daily` / `Weekly` / `Monthly`；周頻對應 `day_of_week`（`Mon`–`Fri`），月頻對應 `day_of_month`（1-28）",
+      "params": {
+        "symbol": "證券代碼，例如 `\"AAPL.US\"`",
+        "amount": "每期投入金額，例如 `\"100\"`",
+        "frequency": "定投頻率：`Daily`（每日）、`Weekly`（每週）、`Monthly`（每月）",
+        "day_of_week": "周頻時指定的周幾：`Mon`、`Tue`、`Wed`、`Thu`、`Fri`",
+        "day_of_month": "月頻時指定的日期（1-28）",
+        "allow_margin": "是否允許使用融資（默認 `false`）"
+      }
+    },
+    "dca_pause": {
+      "description": "按 `plan_id` 暫停定投計劃",
+      "params": {
+        "plan_id": "定投計劃 ID"
+      }
+    },
+    "dca_resume": {
+      "description": "按 `plan_id` 恢復已暫停的定投計劃",
+      "params": {
+        "plan_id": "定投計劃 ID"
+      }
+    },
+    "dca_stop": {
+      "description": "按 `plan_id` 永久終止定投計劃",
+      "params": {
+        "plan_id": "定投計劃 ID"
+      }
+    },
+    "dca_update": {
+      "description": "按 `plan_id` 更新已存在的定投計劃",
+      "params": {
+        "plan_id": "待更新的定投計劃 ID",
+        "amount": "新的每期投入金額",
+        "frequency": "新的定投頻率：`Daily`、`Weekly`、`Monthly`",
+        "day_of_week": "周頻時指定的周幾：`Mon`、`Tue`、`Wed`、`Thu`、`Fri`",
+        "day_of_month": "月頻時指定的日期（1-28）",
+        "allow_margin": "是否允許使用融資"
+      }
+    },
+    "replace_order": {
+      "description": "改單（替換 / 修改已存在的委託）",
+      "params": {
+        "order_id": "委託單號",
+        "quantity": "新的委託數量",
+        "price": "新的委託價格",
+        "trigger_price": "新的觸發價",
+        "limit_offset": "新的限價偏移量",
+        "trailing_amount": "新的跟蹤止損金額",
+        "trailing_percent": "新的跟蹤止損百分比"
+      }
+    },
+    "submit_order": {
+      "description": "提交買入 / 賣出委託。`order_type` 可選：`LO`（限價）/ `ELO`（港股增強限價）/ `MO`（市價）/ `AO`（港股競價）/ `ALO`（港股競價限價）/ `ODD`（港股碎股）/ `LIT`（觸價限價）/ `MIT`（觸價市價）/ `TSLPAMT`（按金額跟蹤止損限價）/ `TSLPPCT`（按百分比跟蹤止損限價）/ `SLO`（港股特別限價）；`side` 為 `Buy` / `Sell`；`time_in_force` 為 `Day` / `GTC` / `GTD`",
+      "params": {
+        "symbol": "證券代碼",
+        "order_type": "委託類型（港股全部支持；美股僅支持 `LO` / `MO` / `LIT` / `MIT` / `TSLPAMT` / `TSLPPCT`）：<br>- `LO`（限價單）：需 `submitted_price`<br>- `ELO`（增強限價單，港股）：需 `submitted_price`<br>- `MO`（市價單）：無需價格<br>- `AO`（競價單，港股）：以競價價成交，無需價格<br>- `ALO`（競價限價單，港股）：需 `submitted_price`<br>- `ODD`（碎股單，港股）：需 `submitted_price`，用於非標準手數<br>- `LIT`（觸價限價）：需 `submitted_price` 與 `trigger_price`，行情觸及觸發價時激活<br>- `MIT`（觸價市價）：僅需 `trigger_price`，觸及後按市價成交<br>- `TSLPAMT`（按金額跟蹤止損限價）：需 `trailing_amount` 與 `limit_offset`<br>- `TSLPPCT`（按百分比跟蹤止損限價）：需 `trailing_percent`（0-1）與 `limit_offset`<br>- `SLO`（特別限價單，港股）：需 `submitted_price`，提交後不可改單",
+        "side": "買賣方向：`Buy`（買入）或 `Sell`（賣出）",
+        "submitted_quantity": "委託數量",
+        "time_in_force": "委託有效期：`Day`（當日有效）、`GTC`（撤單前有效）、`GTD`（指定日期前有效，需 `expire_date`）",
+        "submitted_price": "委託限價。`LO` / `ELO` / `ALO` / `ODD` / `LIT` / `SLO` 必填",
+        "trigger_price": "觸發價。`LIT` / `MIT` / `TSLPAMT` / `TSLPPCT` 必填",
+        "limit_offset": "相對跟蹤止損價的限價偏移量。`TSLPAMT` / `TSLPPCT` 必填",
+        "trailing_amount": "跟蹤金額（絕對價格距離），`TSLPAMT` 必填",
+        "trailing_percent": "跟蹤百分比（小數形式，例如 `0.05` 表示 5%），`TSLPPCT` 必填",
+        "expire_date": "到期日期（`yyyy-mm-dd`），`time_in_force=GTD` 時必填",
+        "outside_rth": "盤前盤後設置：`RTH_ONLY`（僅常規交易時段）、`ANY_TIME`（含盤前盤後任意時段）、`OVERNIGHT`（夜盤，僅美股）",
+        "remark": "委託備註（最多 255 字符）"
+      }
+    },
+    "ah_premium": {
+      "description": "獲取 A/H 股溢價的歷史 K 線數據",
+      "params": {
+        "symbol": "證券代碼，例如 `\"700.HK\"`",
+        "period": "K 線週期：`1m`、`5m`、`15m`、`30m`、`60m`、`day`（默認）、`week`、`month`、`year`",
+        "count": "返回的 K 線數量（默認 100）"
+      }
+    },
+    "ah_premium_intraday": {
+      "description": "獲取 A/H 股溢價的當日分時數據",
+      "params": {
+        "symbol": "證券代碼，例如 `\"700.HK\"`"
+      }
+    },
+    "alert_add": {
+      "description": "新增價格預警。`condition` 可選 `price_rise`（漲破）/ `price_fall`（跌破）/ `percent_rise`（漲幅）/ `percent_fall`（跌幅）",
+      "params": {
+        "symbol": "證券代碼，例如 `\"700.HK\"`",
+        "condition": "預警條件：`price_rise`、`price_fall`、`percent_rise`、`percent_fall`",
+        "price": "閾值價格或百分比數值",
+        "frequency": "預警頻率：`once`（觸發一次後停用）、`daily`（每日一次）、`every`（每次滿足條件都觸發）"
+      }
+    },
+    "alert_delete": {
+      "description": "按 `alert_id` 刪除價格預警",
+      "params": {
+        "alert_id": "預警指標 id"
+      }
+    },
+    "alert_disable": {
+      "description": "按 `alert_id` 停用價格預警",
+      "params": {
+        "alert_id": "預警指標 id"
+      }
+    },
+    "alert_enable": {
+      "description": "按 `alert_id` 啓用價格預警",
+      "params": {
+        "alert_id": "預警指標 id"
+      }
+    },
+    "alert_list": {
+      "description": "獲取所有已配置的價格預警"
+    },
+    "anomaly": {
+      "description": "獲取市場異動提醒（價量異常變動）",
+      "params": {
+        "market": "市場代碼：HK、US、CN、SG"
+      }
+    },
+    "broker_holding": {
+      "description": "獲取指定證券的主要券商持倉數據",
+      "params": {
+        "symbol": "證券代碼，例如 `\"700.HK\"`",
+        "period": "時間窗口：`rct_1`（近 1 日，默認）、`rct_5`（近 5 日）、`rct_20`（近 20 日）、`rct_60`（近 60 日）"
+      }
+    },
+    "broker_holding_daily": {
+      "description": "獲取指定券商對某證券的逐日持倉歷史",
+      "params": {
+        "symbol": "證券代碼，例如 `\"700.HK\"`",
+        "broker_id": "券商參與者編號"
+      }
+    },
+    "broker_holding_detail": {
+      "description": "獲取完整的券商持倉明細列表",
+      "params": {
+        "symbol": "證券代碼，例如 `\"700.HK\"`"
+      }
+    },
+    "brokers": {
+      "description": "獲取經紀商買賣盤隊列數據",
+      "params": {
+        "symbol": "證券代碼，例如 `\"700.HK\"`"
+      }
+    },
+    "calc_indexes": {
+      "description": "為證券計算財務 / 行情指標（PE、PB、股息率等）",
+      "params": {
+        "symbols": "證券代碼，例如 `[\"700.HK\", \"AAPL.US\"]`",
+        "indexes": "待計算指標：`LastDone`、`ChangeValue`、`ChangeRate`、`Volume`、`Turnover`、`YtdChangeRate`、`TurnoverRate`、`TotalMarketValue`、`CapitalFlow`、`Amplitude`、`VolumeRatio`、`PeTtmRatio`、`PbRatio`、`DividendRatioTtm`、`FiveDayChangeRate`、`TenDayChangeRate`、`HalfYearChangeRate`、`FiveMinutesChangeRate`、`ExpiryDate`、`StrikePrice`、`UpperStrikePrice`、`LowerStrikePrice`、`OutstandingQty`、`OutstandingRatio`、`Premium`、`ItmOtm`、`ImpliedVolatility`、`WarrantDelta`、`CallPrice`、`ToCallPrice`、`EffectiveLeverage`、`LeverageRatio`、`ConversionRatio`、`BalancePoint`、`OpenInterest`、`Delta`、`Gamma`、`Theta`、`Vega`、`Rho`"
+      }
+    },
+    "candlesticks": {
+      "description": "獲取 K 線數據（OHLCV）。`period` 可選 `1m` / `5m` / `15m` / `30m` / `60m` / `day` / `week` / `month` / `year`；`trade_sessions` 可選 `intraday` / `all`",
+      "params": {
+        "symbol": "證券代碼",
+        "period": "K 線週期：`1m`、`5m`、`15m`、`30m`、`60m`、`day`、`week`、`month`、`year`",
+        "count": "K 線數量（最多 1000）",
+        "forward_adjust": "是否對拆股 / 派息進行前復權",
+        "trade_sessions": "交易時段：`intraday`（僅常規時段）或 `all`（含盤前盤後）"
+      }
+    },
+    "capital_distribution": {
+      "description": "獲取資金分佈（大 / 中 / 小單的資金流向）",
+      "params": {
+        "symbol": "證券代碼，例如 `\"700.HK\"`"
+      }
+    },
+    "capital_flow": {
+      "description": "獲取資金流入 / 流出的時間序列",
+      "params": {
+        "symbol": "證券代碼，例如 `\"700.HK\"`"
+      }
+    },
+    "company": {
+      "description": "獲取公司概況（名稱、CEO、員工數、簡介等）",
+      "params": {
+        "symbol": "證券代碼，例如 `\"700.HK\"`"
+      }
+    },
+    "consensus": {
+      "description": "獲取分析師一致預期（營收、EPS、淨利潤等）",
+      "params": {
+        "symbol": "證券代碼，例如 `\"700.HK\"`"
+      }
+    },
+    "constituent": {
+      "description": "獲取指數成分股（例如 `HSI.HK`）",
+      "params": {
+        "symbol": "指數代碼，例如 `\"HSI.HK\"`"
+      }
+    },
+    "corp_action": {
+      "description": "獲取公司行動信息（拆股、回購、更名等）",
+      "params": {
+        "symbol": "證券代碼，例如 `\"700.HK\"`"
+      }
+    },
+    "dca_check": {
+      "description": "檢查指定證券是否支持定投（DCA）",
+      "params": {
+        "symbols": "待檢查的證券代碼，例如 `[\"AAPL.US\", \"TSLA.US\"]`"
+      }
+    },
+    "depth": {
+      "description": "獲取盤口深度數據（買賣各檔位）",
+      "params": {
+        "symbol": "證券代碼，例如 `\"700.HK\"`"
+      }
+    },
+    "dividend": {
+      "description": "獲取證券的派息歷史",
+      "params": {
+        "symbol": "證券代碼，例如 `\"700.HK\"`"
+      }
+    },
+    "dividend_detail": {
+      "description": "獲取詳細的派息分紅方案",
+      "params": {
+        "symbol": "證券代碼，例如 `\"700.HK\"`"
+      }
+    },
+    "exchange_rate": {
+      "description": "獲取全部支持幣種的匯率"
+    },
+    "executive": {
+      "description": "獲取公司高管及董事會成員信息",
+      "params": {
+        "symbol": "證券代碼，例如 `\"700.HK\"`"
+      }
+    },
+    "filings": {
+      "description": "獲取監管文件公告（8-K、10-Q、10-K 等）",
+      "params": {
+        "symbol": "證券代碼，例如 `\"700.HK\"`"
+      }
+    },
+    "finance_calendar": {
+      "description": "獲取財經日曆事件。`category` 可選 `financial` / `report` / `dividend` / `ipo` / `macrodata` / `closed`",
+      "params": {
+        "market": "市場代碼：HK、US、CN、SG，省略則查詢所有市場",
+        "start": "起始日期（`yyyy-mm-dd`）",
+        "end": "結束日期（`yyyy-mm-dd`）",
+        "category": "事件類別：<br>- `financial`：業績 / 財報公告<br>- `report`：財報披露排期<br>- `dividend`：除息日與派發日<br>- `ipo`：IPO 上市日期<br>- `macrodata`：宏觀數據發佈（GDP、CPI 等）<br>- `closed`：市場休市 / 停牌日期"
+      }
+    },
+    "financial_report": {
+      "description": "獲取證券的財務報告。`report_type` 用於區分年報或季報等",
+      "params": {
+        "symbol": "證券代碼，例如 `\"AAPL.US\"`",
+        "kind": "報表種類：`IS`（利潤表）、`BS`（資產負債表）、`CF`（現金流量表）、`ALL`（默認全部）",
+        "report_type": "報告期：`af`（年度）、`saf`（半年度）、`q1` / `q2` / `q3`（季度）、`qf`（季度全量）"
+      }
+    },
+    "forecast_eps": {
+      "description": "獲取 EPS 預測及分析師預期歷史",
+      "params": {
+        "symbol": "證券代碼，例如 `\"700.HK\"`"
+      }
+    },
+    "fund_holder": {
+      "description": "獲取持有指定證券的基金及 ETF",
+      "params": {
+        "symbol": "證券代碼，例如 `\"700.HK\"`"
+      }
+    },
+    "history_candlesticks_by_date": {
+      "description": "按日期區間獲取歷史 K 線數據。`period` 可選 `1m` / `5m` / `15m` / `30m` / `60m` / `day` / `week` / `month` / `year`",
+      "params": {
+        "symbol": "證券代碼",
+        "period": "K 線週期：`1m`、`5m`、`15m`、`30m`、`60m`、`day`、`week`、`month`、`year`",
+        "forward_adjust": "是否對拆股 / 派息進行前復權",
+        "start": "起始日期（`yyyy-mm-dd`），可選",
+        "end": "結束日期（`yyyy-mm-dd`），可選",
+        "trade_sessions": "交易時段：`intraday`（僅常規時段）或 `all`（含盤前盤後）"
+      }
+    },
+    "history_candlesticks_by_offset": {
+      "description": "以參考時間為錨點，按偏移量獲取歷史 K 線數據。`period` 可選 `1m` / `5m` / `15m` / `30m` / `60m` / `day` / `week` / `month` / `year`",
+      "params": {
+        "symbol": "證券代碼",
+        "period": "K 線週期：`1m`、`5m`、`15m`、`30m`、`60m`、`day`、`week`、`month`、`year`",
+        "forward_adjust": "是否對拆股 / 派息進行前復權",
+        "forward": "查詢方向：`true` 向後（向未來），`false` 向前（向過去）",
+        "time": "參考時間（`yyyy-mm-ddTHH:MM:SS`），省略則以最新時間為起點",
+        "count": "K 線數量（最多 1000）",
+        "trade_sessions": "交易時段：`intraday`（僅常規時段）或 `all`（含盤前盤後）"
+      }
+    },
+    "history_market_temperature": {
+      "description": "獲取市場情緒温度的歷史時間序列",
+      "params": {
+        "market": "市場代碼：HK、US、CN、SG",
+        "start": "起始日期（`yyyy-mm-dd`）",
+        "end": "結束日期（`yyyy-mm-dd`）"
+      }
+    },
+    "industry_valuation": {
+      "description": "獲取同行業可比公司的估值對比",
+      "params": {
+        "symbol": "證券代碼，例如 `\"700.HK\"`"
+      }
+    },
+    "industry_valuation_dist": {
+      "description": "獲取行業 PE / PB / PS 估值分佈",
+      "params": {
+        "symbol": "證券代碼，例如 `\"700.HK\"`"
+      }
+    },
+    "institution_rating": {
+      "description": "獲取機構評級彙總，含一致評級與目標價",
+      "params": {
+        "symbol": "證券代碼，例如 `\"700.HK\"`"
+      }
+    },
+    "institution_rating_detail": {
+      "description": "獲取詳細的機構評級與目標價歷史",
+      "params": {
+        "symbol": "證券代碼，例如 `\"700.HK\"`"
+      }
+    },
+    "intraday": {
+      "description": "獲取分時（逐分鐘）價格 / 成交數據。`trade_sessions` 可選 `intraday`（默認，僅常規時段）或 `all`（含盤前盤後）",
+      "params": {
+        "symbol": "證券代碼，例如 `\"700.HK\"`",
+        "trade_sessions": "包含的交易時段：`intraday`（默認，僅常規時段）或 `all`（含盤前盤後）"
+      }
+    },
+    "invest_relation": {
+      "description": "獲取投資者關係事件與公告",
+      "params": {
+        "symbol": "證券代碼，例如 `\"700.HK\"`"
+      }
+    },
+    "market_status": {
+      "description": "獲取所有市場當前的交易狀態"
+    },
+    "market_temperature": {
+      "description": "獲取當前市場情緒温度（0-100）",
+      "params": {
+        "market": "市場代碼：HK、US、CN、SG"
+      }
+    },
+    "news": {
+      "description": "獲取證券相關的最新新聞",
+      "params": {
+        "symbol": "證券代碼，例如 `\"700.HK\"`"
+      }
+    },
+    "now": {
+      "description": "獲取當前 UTC 時間"
+    },
+    "operating": {
+      "description": "獲取公司經營指標",
+      "params": {
+        "symbol": "證券代碼，例如 `\"700.HK\"`"
+      }
+    },
+    "option_chain_expiry_date_list": {
+      "description": "獲取期權鏈可選的到期日列表",
+      "params": {
+        "symbol": "證券代碼，例如 `\"700.HK\"`"
+      }
+    },
+    "option_chain_info_by_date": {
+      "description": "獲取指定到期日的期權鏈行權價及希臘字母",
+      "params": {
+        "symbol": "證券代碼",
+        "date": "到期日（`yyyy-mm-dd`）"
+      }
+    },
+    "option_quote": {
+      "description": "獲取期權行情（最多 500 個標的）",
+      "params": {
+        "symbols": "證券代碼，例如 `[\"700.HK\", \"AAPL.US\"]`"
+      }
+    },
+    "option_volume": {
+      "description": "獲取美股的實時期權認購 / 認沽成交量及 PCR",
+      "params": {
+        "symbol": "標的代碼（僅美股），例如 `\"AAPL.US\"`"
+      }
+    },
+    "option_volume_daily": {
+      "description": "獲取美股的逐日期權認購 / 認沽成交量、未平倉量及 PCR 歷史",
+      "params": {
+        "symbol": "標的代碼（僅美股），例如 `\"AAPL.US\"`",
+        "count": "返回的交易日數量（默認 20）"
+      }
+    },
+    "participants": {
+      "description": "獲取市場參與者（券商）信息"
+    },
+    "quote": {
+      "description": "獲取最新行情快照（最新價、開盤、最高、最低、成交量、成交額）",
+      "params": {
+        "symbols": "證券代碼，例如 `[\"700.HK\", \"AAPL.US\"]`"
+      }
+    },
+    "shareholder": {
+      "description": "獲取證券的機構股東信息",
+      "params": {
+        "symbol": "證券代碼，例如 `\"700.HK\"`"
+      }
+    },
+    "sharelist_add": {
+      "description": "向社區分享股單中添加證券",
+      "params": {
+        "id": "分享股單 ID",
+        "symbols": "證券代碼，例如 `[\"AAPL.US\", \"700.HK\"]`"
+      }
+    },
+    "sharelist_create": {
+      "description": "新建一個社區分享股單",
+      "params": {
+        "name": "股單名稱（若未傳 `description`，名稱同時作為描述）",
+        "description": "股單描述，省略時默認與 `name` 相同"
+      }
+    },
+    "sharelist_delete": {
+      "description": "按 id 刪除社區分享股單",
+      "params": {
+        "id": "分享股單 ID"
+      }
+    },
+    "sharelist_detail": {
+      "description": "按 id 獲取社區分享股單詳情，含成分股及行情",
+      "params": {
+        "id": "分享股單 ID"
+      }
+    },
+    "sharelist_list": {
+      "description": "列出用戶自建以及已訂閲的社區分享股單",
+      "params": {
+        "count": "返回數量（默認 20）"
+      }
+    },
+    "sharelist_popular": {
+      "description": "獲取熱門 / 正在流行的社區分享股單",
+      "params": {
+        "count": "返回數量（默認 20）"
+      }
+    },
+    "sharelist_remove": {
+      "description": "從社區分享股單中移除證券",
+      "params": {
+        "id": "分享股單 ID",
+        "symbols": "證券代碼，例如 `[\"AAPL.US\", \"700.HK\"]`"
+      }
+    },
+    "sharelist_sort": {
+      "description": "調整社區分享股單中證券的順序（按目標順序傳入 `symbols`）",
+      "params": {
+        "id": "分享股單 ID",
+        "symbols": "證券代碼，例如 `[\"AAPL.US\", \"700.HK\"]`"
+      }
+    },
+    "short_positions": {
+      "description": "獲取美股的做空數據（空頭比率、空頭股數、回補天數等），僅支持美股市場",
+      "params": {
+        "symbol": "證券代碼（僅美股），例如 `\"AAPL.US\"`",
+        "count": "返回條數（1-100，默認 20）"
+      }
+    },
+    "static_info": {
+      "description": "獲取證券的基礎信息（名稱、交易所、類型、每手股數等）",
+      "params": {
+        "symbols": "證券代碼，例如 `[\"700.HK\", \"AAPL.US\"]`"
+      }
+    },
+    "topic": {
+      "description": "獲取與某證券相關的討論話題",
+      "params": {
+        "symbol": "證券代碼，例如 `\"700.HK\"`"
+      }
+    },
+    "topic_create": {
+      "description": "發佈討論話題。`topic_type=\"post\"`（默認）為純文本；`\"article\"` 需要非空 `title`，正文可使用 Markdown",
+      "params": {
+        "title": "話題標題。`topic_type=\"article\"` 時必填，`\"post\"` 時可選",
+        "body": "話題正文。`post` 僅支持純文本，`article` 支持 Markdown",
+        "symbols": "相關證券代碼，例如 `[\"700.HK\", \"TSLA.US\"]`（最多 10 個）",
+        "topic_type": "話題類型：`post`（默認，純文本）或 `article`（Markdown，需 `title`）"
+      }
+    },
+    "topic_create_reply": {
+      "description": "對討論話題發表回覆。傳入 `reply_to_id` 表示對某條回覆的子級回覆，省略則為頂層回覆",
+      "params": {
+        "topic_id": "待回覆的話題 ID",
+        "body": "回覆正文（僅支持純文本）",
+        "reply_to_id": "可選的父回覆 ID，用於樓中樓回覆，從 `topic_replies` 獲取；省略則為頂層回覆"
+      }
+    },
+    "topic_detail": {
+      "description": "按 `topic_id` 獲取討論話題詳情",
+      "params": {
+        "topic_id": "話題 ID"
+      }
+    },
+    "topic_replies": {
+      "description": "分頁獲取討論話題的回覆（`page` 默認 1，`size` 默認 20，範圍 1-50）",
+      "params": {
+        "topic_id": "話題 ID",
+        "page": "頁碼（從 1 開始，默認 1）",
+        "size": "每頁條數（1-50，默認 20）"
+      }
+    },
+    "trade_stats": {
+      "description": "獲取成交統計（主動買 / 主動賣 / 中性盤的成交量分佈）",
+      "params": {
+        "symbol": "證券代碼，例如 `\"700.HK\"`"
+      }
+    },
+    "trades": {
+      "description": "獲取最近的逐筆成交（最多 1000 條）",
+      "params": {
+        "symbol": "證券代碼",
+        "count": "返回的最大條數（最多 1000）"
+      }
+    },
+    "trading_days": {
+      "description": "獲取指定市場在某日期區間內的交易日",
+      "params": {
+        "market": "市場代碼：HK、US、CN、SG",
+        "start": "起始日期（`yyyy-mm-dd`）",
+        "end": "結束日期（`yyyy-mm-dd`）"
+      }
+    },
+    "trading_session": {
+      "description": "獲取所有市場的交易時段安排"
+    },
+    "valuation": {
+      "description": "獲取估值概覽及同業對比",
+      "params": {
+        "symbol": "證券代碼，例如 `\"700.HK\"`"
+      }
+    },
+    "valuation_history": {
+      "description": "獲取詳細的估值歷史時間序列",
+      "params": {
+        "symbol": "證券代碼，例如 `\"700.HK\"`"
+      }
+    },
+    "warrant_issuers": {
+      "description": "獲取窩輪 / 牛熊證發行商信息"
+    },
+    "warrant_list": {
+      "description": "按篩選條件獲取指定標的的窩輪 / 牛熊證列表",
+      "params": {
+        "symbol": "標的代碼，例如 `\"700.HK\"`",
+        "sort_by": "排序字段：`LastDone`、`ChangeRate`、`ChangeValue`、`Volume`、`Turnover`、`ExpiryDate`、`StrikePrice`、`UpperStrikePrice`、`LowerStrikePrice`、`OutstandingQuantity`、`OutstandingRatio`、`Premium`、`ItmOtm`、`ImpliedVolatility`、`Delta`",
+        "sort_order": "排序方向：`Ascending`（升序）或 `Descending`（降序）",
+        "warrant_type": "按品種篩選（可選）：`Call`（認購證）、`Put`（認沽證）、`Bull`（牛證）、`Bear`（熊證）、`Inline`（界內證）",
+        "issuer": "按發行商 ID 篩選（可選），`issuer_id` 來自 `warrant_issuers`",
+        "expiry_date": "按到期時段篩選（可選）：`LT_3`（<3 個月）、`Between_3_6`（3-6 個月）、`Between_6_12`（6-12 個月）、`GT_12`（>12 個月）",
+        "price_type": "按界內 / 界外篩選（可選）：`In`（界內）、`Out`（界外），僅適用於界內證",
+        "status": "按狀態篩選（可選）：`Suspend`（停牌）、`PrepareList`（待上市）、`Normal`（正常交易）"
+      }
+    },
+    "warrant_quote": {
+      "description": "獲取窩輪 / 牛熊證行情",
+      "params": {
+        "symbols": "證券代碼，例如 `[\"700.HK\", \"AAPL.US\"]`"
+      }
+    },
+    "quant_run": {
+      "description": "在服務端針對歷史 K 線數據運行量化指標腳本，執行後將計算得到的指標/繪圖值以 JSON 形式返回。腳本語言兼容 PineScript V6 語法（個別語法可能不適用）。週期：1m、5m、15m、30m、1h、day、week、month、year（默認 day）。可選 input 參數接收一個 JSON 數組，順序需與腳本中 input.*() 調用一致，例如 \"[14,2.0]\"。",
+      "params": {
+        "symbol": "證券代碼，`<CODE>.<MARKET>` 格式，例如 `TSLA.US`、`700.HK`",
+        "period": "K 線週期：`1m`、`5m`、`15m`、`30m`、`1h`、`day`、`week`、`month`、`year`（默認 `day`）",
+        "start": "K 線區間起始日期（YYYY-MM-DD）",
+        "end": "K 線區間結束日期（YYYY-MM-DD）",
+        "script": "指標腳本源代碼（PineScript V6 語法）",
+        "input": "腳本輸入參數（JSON 數組字符串），順序需與腳本中 `input.*()` 調用一致，例如 `\"[14,2.0]\"`"
+      }
+    }
+  }
+}

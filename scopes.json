@@ -3,10 +3,7 @@
     {
       "id": "4",
       "name": "Watchlist",
-      "name_locales": {
-        "zh-CN": "自选列表",
-        "zh-HK": "自選列表"
-      },
+      "description": "Manage the user's watchlist groups (read/create/update/delete) and look up the securities each group contains.",
       "tools": [
         "create_watchlist_group",
         "delete_watchlist_group",
@@ -18,10 +15,7 @@
     {
       "id": "6",
       "name": "Account & Positions",
-      "name_locales": {
-        "zh-CN": "账户资产与资金明细查询",
-        "zh-HK": "賬戶資產與資金明細查詢"
-      },
+      "description": "Query account assets and cash flow — fund/stock holdings, account cash and equity, margin ratio, profit analysis and statements — for portfolio overviews, position display and account reconciliation.",
       "tools": [
         "account_balance",
         "cash_flow",
@@ -37,10 +31,7 @@
     {
       "id": "10",
       "name": "Trade Order Lookup",
-      "name_locales": {
-        "zh-CN": "交易查询",
-        "zh-HK": "交易查詢"
-      },
+      "description": "Cover the post-submit order lifecycle and execution data: order detail, today/history orders, today/history executions, DCA plan reads, plus pre-trade max purchase quantity estimation.",
       "tools": [
         "dca_history",
         "dca_list",
@@ -56,10 +47,7 @@
     {
       "id": "11",
       "name": "Trade Execution",
-      "name_locales": {
-        "zh-CN": "交易下单",
-        "zh-HK": "交易下單"
-      },
+      "description": "Place, replace and cancel orders, plus DCA plan create/update/pause/resume/stop.",
       "tools": [
         "cancel_order",
         "dca_create",
