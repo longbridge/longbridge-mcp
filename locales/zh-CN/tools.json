@@ -1,6 +1,6 @@
 {
   "$schema": "../tools.schema.json",
-  "server_instructions": "长桥 OpenAPI MCP 服务器 —— 提供市场数据、交易与金融分析工具。",
+  "server_instructions": "长桥 MCP 服务 —— 提供市场数据、交易与金融分析工具。",
   "tools": {
     "create_watchlist_group": {
       "description": "新建一个自选分组，可选地附带初始股票列表",

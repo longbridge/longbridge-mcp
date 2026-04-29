@@ -1,6 +1,6 @@
 {
   "$schema": "../tools.schema.json",
-  "server_instructions": "長橋 OpenAPI MCP 服務器 —— 提供市場數據、交易與金融分析工具。",
+  "server_instructions": "長橋 MCP 服務 —— 提供市場數據、交易與金融分析工具。",
   "tools": {
     "create_watchlist_group": {
       "description": "新建一個自選分組，可選地附帶初始股票列表",
