@@ -1,0 +1,75 @@
+{
+  "scopes": [
+    {
+      "id": "4",
+      "name": "Watchlist",
+      "name_locales": {
+        "zh-CN": "自选列表",
+        "zh-HK": "自選列表"
+      },
+      "tools": [
+        "create_watchlist_group",
+        "delete_watchlist_group",
+        "security_list",
+        "update_watchlist_group",
+        "watchlist"
+      ]
+    },
+    {
+      "id": "6",
+      "name": "Account & Positions",
+      "name_locales": {
+        "zh-CN": "账户资产与资金明细查询",
+        "zh-HK": "賬戶資產與資金明細查詢"
+      },
+      "tools": [
+        "account_balance",
+        "cash_flow",
+        "fund_positions",
+        "margin_ratio",
+        "profit_analysis",
+        "profit_analysis_detail",
+        "statement_export",
+        "statement_list",
+        "stock_positions"
+      ]
+    },
+    {
+      "id": "10",
+      "name": "Trade Order Lookup",
+      "name_locales": {
+        "zh-CN": "交易查询",
+        "zh-HK": "交易查詢"
+      },
+      "tools": [
+        "dca_history",
+        "dca_list",
+        "dca_stats",
+        "estimate_max_purchase_quantity",
+        "history_executions",
+        "history_orders",
+        "order_detail",
+        "today_executions",
+        "today_orders"
+      ]
+    },
+    {
+      "id": "11",
+      "name": "Trade Execution",
+      "name_locales": {
+        "zh-CN": "交易下单",
+        "zh-HK": "交易下單"
+      },
+      "tools": [
+        "cancel_order",
+        "dca_create",
+        "dca_pause",
+        "dca_resume",
+        "dca_stop",
+        "dca_update",
+        "replace_order",
+        "submit_order"
+      ]
+    }
+  ]
+}

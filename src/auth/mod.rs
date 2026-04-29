@@ -10,9 +10,34 @@ use rmcp::transport::streamable_http_server::{StreamableHttpServerConfig, Stream
 use crate::tools::{self, Longbridge};
 
 async fn tools_json() -> axum::Json<&'static serde_json::Value> {
-    static TOOLS_JSON: std::sync::LazyLock<serde_json::Value> =
-        std::sync::LazyLock::new(|| serde_json::json!({ "tools": tools::list_tools() }));
+    static TOOLS_JSON: std::sync::LazyLock<serde_json::Value> = std::sync::LazyLock::new(|| {
+        // Build the response object so `tools` is emitted first, then merge
+        // every top-level key from scopes.json (currently `scopes`) after it.
+        // Relies on serde_json's `preserve_order` feature to keep this order.
+        let mut out = serde_json::Map::new();
+        out.insert(
+            "tools".to_string(),
+            serde_json::to_value(tools::list_tools()).expect("tool list must be JSON-serialisable"),
+        );
+        let scopes: serde_json::Value = serde_json::from_str(include_str!("../../scopes.json"))
+            .expect("scopes.json must be valid JSON");
+        if let serde_json::Value::Object(scopes_map) = scopes {
+            for (k, v) in scopes_map {
+                // Live tool list always wins over any `tools` in scopes.json.
+                out.entry(k).or_insert(v);
+            }
+        }
+        serde_json::Value::Object(out)
+    });
     axum::Json(&*TOOLS_JSON)
+}
+
+async fn scopes_json() -> axum::Json<&'static serde_json::Value> {
+    static SCOPES_JSON: std::sync::LazyLock<serde_json::Value> = std::sync::LazyLock::new(|| {
+        serde_json::from_str(include_str!("../../scopes.json"))
+            .expect("scopes.json must be valid JSON")
+    });
+    axum::Json(&*SCOPES_JSON)
 }
 
 async fn health() -> axum::http::StatusCode {
@@ -51,8 +76,9 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         axum::routing::get(crate::metrics::metrics_handler),
     );
 
-    let tools_route: Router =
-        Router::new().route("/mcp/tools.json", axum::routing::get(tools_json));
+    let tools_route: Router = Router::new()
+        .route("/mcp/tools.json", axum::routing::get(tools_json))
+        .route("/mcp/scopes.json", axum::routing::get(scopes_json));
 
     let mcp_service = StreamableHttpService::new(
         move || Ok(Longbridge),
