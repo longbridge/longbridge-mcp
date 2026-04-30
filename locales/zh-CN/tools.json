@@ -3,29 +3,33 @@
   "server_instructions": "长桥 MCP 服务 —— 提供市场数据、交易与金融分析工具。",
   "tools": {
     "create_watchlist_group": {
+      "title": "新建自选分组",
       "description": "新建一个自选分组，可选地附带初始股票列表",
-      "params": {
+      "properties": {
         "name": "分组名称",
         "securities": "要加入的证券代码，例如 `[\"700.HK\", \"AAPL.US\"]`"
       }
     },
     "delete_watchlist_group": {
+      "title": "删除自选分组",
       "description": "按分组 id 删除自选分组",
-      "params": {
+      "properties": {
         "id": "自选分组 id",
         "purge": "是否同时从其他分组中清除这些证券"
       }
     },
     "security_list": {
+      "title": "证券列表",
       "description": "获取指定市场的证券列表。`category` 当前必须为 `\"Overnight\"`，其他取值或留空都会报错；并且目前仅支持 `market=\"US\"`，其他市场同样会返回错误",
-      "params": {
+      "properties": {
         "market": "市场代码：HK、US、CN、SG",
         "category": "类别筛选。当前仅支持 `\"Overnight\"`，传入其他值或不传都会触发 `param_error`；并且 `\"Overnight\"` 类别目前仅支持 `US` 市场，其他市场同样会返回 `param_error`"
       }
     },
     "update_watchlist_group": {
+      "title": "更新自选分组",
       "description": "更新自选分组（重命名，或对其中的证券进行新增 / 移除 / 替换）",
-      "params": {
+      "properties": {
         "id": "自选分组 id",
         "name": "新的分组名称（可选）",
         "securities": "证券代码列表（可选）",
@@ -33,73 +37,85 @@
       }
     },
     "watchlist": {
+      "title": "自选列表",
       "description": "获取所有自选分组及其包含的证券"
     },
     "account_balance": {
+      "title": "账户余额",
       "description": "查询账户现金余额与资产概览。可传入 `currency`（如 `\"USD\"`、`\"HKD\"`）按币种筛选，省略则返回全部币种",
-      "params": {
+      "properties": {
         "currency": "按币种代码筛选（如 `\"USD\"`、`\"HKD\"`），省略则返回所有币种"
       }
     },
     "cash_flow": {
+      "title": "资金流水",
       "description": "查询资金流水记录（出入金、派息等）",
-      "params": {
+      "properties": {
         "start_at": "起始时间（RFC3339 格式）",
         "end_at": "结束时间（RFC3339 格式）"
       }
     },
     "fund_positions": {
+      "title": "基金持仓",
       "description": "查询当前的基金持仓"
     },
     "margin_ratio": {
+      "title": "保证金比率",
       "description": "查询保证金比率（初始 / 维持 / 强平）",
-      "params": {
+      "properties": {
         "symbol": "证券代码，例如 `\"700.HK\"`"
       }
     },
     "profit_analysis": {
+      "title": "盈亏分析",
       "description": "获取组合盈亏分析汇总。`start` / `end` 为可选日期区间（`yyyy-mm-dd`），必须成对传入；只传其中之一会返回空结果",
-      "params": {
+      "properties": {
         "start": "起始日期（`yyyy-mm-dd`）。必须与 `end` 成对传入，只传其一会返回空结果",
         "end": "结束日期（`yyyy-mm-dd`）。必须与 `start` 成对传入，只传其一会返回空结果"
       }
     },
     "profit_analysis_detail": {
+      "title": "盈亏分析明细",
       "description": "获取指定标的的详细盈亏分析。`start` / `end` 为可选日期区间（`yyyy-mm-dd`），必须成对传入；只传其中之一会返回空结果",
-      "params": {
+      "properties": {
         "symbol": "证券代码，例如 `\"700.HK\"`",
         "start": "起始日期（`yyyy-mm-dd`）。必须与 `end` 成对传入，只传其一会返回空结果",
         "end": "结束日期（`yyyy-mm-dd`）。必须与 `start` 成对传入，只传其一会返回空结果"
       }
     },
     "statement_export": {
+      "title": "对账单导出",
       "description": "获取对账单数据文件的预签名下载 URL（`file_key` 来自 `statement_list`）。返回 `{url}`，访问该 URL 即可获取对账单 JSON",
-      "params": {
+      "properties": {
         "file_key": "来自 `statement_list` 的文件 key，例如 `\"/statement_data/data/.../20975338.json\"`"
       }
     },
     "statement_list": {
+      "title": "对账单列表",
       "description": "列出可获取的账户对账单（日 / 月对账单）",
-      "params": {
+      "properties": {
         "statement_type": "对账单类型：`\"daily\"`（默认，日报）或 `\"monthly\"`（月报）",
         "start_date": "起始日期（`yyyy-mm-dd`）。`daily` 默认 30 天前，`monthly` 默认 12 个月前",
         "limit": "返回条数。`daily` 默认 30，`monthly` 默认 12"
       }
     },
     "stock_positions": {
+      "title": "股票持仓",
       "description": "查询所有渠道下的当前股票持仓"
     },
     "dca_history": {
+      "title": "定投执行历史",
       "description": "按 `plan_id` 查询定投计划的扣款执行历史",
-      "params": {
+      "properties": {
         "plan_id": "定投计划 ID",
         "page": "页码（默认 1）",
         "limit": "每页条数（默认 20）"
       }
     },
     "dca_list": {
+      "title": "定投计划列表",
       "description": "列出定投计划，可按状态（`Active` 进行中 / `Suspended` 暂停 / `Finished` 已结束）或证券筛选",
-      "params": {
+      "properties": {
         "status": "按状态筛选：`Active`、`Suspended`、`Finished`，省略则返回全部",
         "symbol": "按证券筛选，例如 `\"AAPL.US\"`，省略则返回全部计划",
         "page": "页码（默认 1）",
@@ -107,14 +123,16 @@
       }
     },
     "dca_stats": {
+      "title": "定投统计",
       "description": "获取定投投资统计汇总，可选地按证券筛选",
-      "params": {
+      "properties": {
         "symbol": "按证券筛选，例如 `\"AAPL.US\"`，省略则返回所有计划的合计统计"
       }
     },
     "estimate_max_purchase_quantity": {
+      "title": "最大可买估算",
       "description": "估算指定证券的最大可买 / 可卖数量",
-      "params": {
+      "properties": {
         "symbol": "证券代码",
         "side": "买卖方向：`Buy`（买入）或 `Sell`（卖出）",
         "order_type": "委托类型：`LO`（限价单）/ `ELO`（增强限价单）/ `MO`（市价单）/ `AO`（竞价单）/ `ALO`（竞价限价单）",
@@ -122,49 +140,56 @@
       }
     },
     "history_executions": {
+      "title": "历史成交",
       "description": "查询指定日期区间内的历史成交记录",
-      "params": {
+      "properties": {
         "symbol": "按证券筛选（可选）",
         "start_at": "起始时间（RFC3339 格式）",
         "end_at": "结束时间（RFC3339 格式）"
       }
     },
     "history_orders": {
+      "title": "历史委托",
       "description": "查询指定日期区间内的历史委托（不含当日）",
-      "params": {
+      "properties": {
         "symbol": "按证券筛选（可选）",
         "start_at": "起始时间（RFC3339 格式）",
         "end_at": "结束时间（RFC3339 格式）"
       }
     },
     "order_detail": {
+      "title": "委托详情",
       "description": "查询单个委托的详细信息",
-      "params": {
+      "properties": {
         "order_id": "委托单号"
       }
     },
     "today_executions": {
+      "title": "当日成交",
       "description": "查询当日成交（filled）。可传入 `symbol` 或 `order_id` 筛选，两者都省略则返回全部",
-      "params": {
+      "properties": {
         "symbol": "按证券筛选，例如 `\"700.HK\"`",
         "order_id": "按指定委托单号筛选"
       }
     },
     "today_orders": {
+      "title": "当日委托",
       "description": "查询当日委托。可传入 `symbol` 筛选，省略则返回全部",
-      "params": {
+      "properties": {
         "symbol": "按证券筛选，例如 `\"700.HK\"`，省略则返回当日全部委托"
       }
     },
     "cancel_order": {
+      "title": "撤销委托",
       "description": "按 `order_id` 撤销未成交的委托",
-      "params": {
+      "properties": {
         "order_id": "委托单号"
       }
     },
     "dca_create": {
+      "title": "创建定投计划",
       "description": "创建定投（DCA）计划。`frequency` 可选 `Daily` / `Weekly` / `Monthly`；周频对应 `day_of_week`（`Mon`–`Fri`），月频对应 `day_of_month`（1-28）",
-      "params": {
+      "properties": {
         "symbol": "证券代码，例如 `\"AAPL.US\"`",
         "amount": "每期投入金额，例如 `\"100\"`",
         "frequency": "定投频率：`Daily`（每日）、`Weekly`（每周）、`Monthly`（每月）",
@@ -174,26 +199,30 @@
       }
     },
     "dca_pause": {
+      "title": "暂停定投计划",
       "description": "按 `plan_id` 暂停定投计划",
-      "params": {
+      "properties": {
         "plan_id": "定投计划 ID"
       }
     },
     "dca_resume": {
+      "title": "恢复定投计划",
       "description": "按 `plan_id` 恢复已暂停的定投计划",
-      "params": {
+      "properties": {
         "plan_id": "定投计划 ID"
       }
     },
     "dca_stop": {
+      "title": "终止定投计划",
       "description": "按 `plan_id` 永久终止定投计划",
-      "params": {
+      "properties": {
         "plan_id": "定投计划 ID"
       }
     },
     "dca_update": {
+      "title": "更新定投计划",
       "description": "按 `plan_id` 更新已存在的定投计划",
-      "params": {
+      "properties": {
         "plan_id": "待更新的定投计划 ID",
         "amount": "新的每期投入金额",
         "frequency": "新的定投频率：`Daily`、`Weekly`、`Monthly`",
@@ -203,8 +232,9 @@
       }
     },
     "replace_order": {
+      "title": "修改委托",
       "description": "改单（替换 / 修改已存在的委托）",
-      "params": {
+      "properties": {
         "order_id": "委托单号",
         "quantity": "新的委托数量",
         "price": "新的委托价格",
@@ -215,8 +245,9 @@
       }
     },
     "submit_order": {
+      "title": "提交委托",
       "description": "提交买入 / 卖出委托。`order_type` 可选：`LO`（限价）/ `ELO`（港股增强限价）/ `MO`（市价）/ `AO`（港股竞价）/ `ALO`（港股竞价限价）/ `ODD`（港股碎股）/ `LIT`（触价限价）/ `MIT`（触价市价）/ `TSLPAMT`（按金额跟踪止损限价）/ `TSLPPCT`（按百分比跟踪止损限价）/ `SLO`（港股特别限价）；`side` 为 `Buy` / `Sell`；`time_in_force` 为 `Day` / `GTC` / `GTD`",
-      "params": {
+      "properties": {
         "symbol": "证券代码",
         "order_type": "委托类型（港股全部支持；美股仅支持 `LO` / `MO` / `LIT` / `MIT` / `TSLPAMT` / `TSLPPCT`）：<br>- `LO`（限价单）：需 `submitted_price`<br>- `ELO`（增强限价单，港股）：需 `submitted_price`<br>- `MO`（市价单）：无需价格<br>- `AO`（竞价单，港股）：以竞价价成交，无需价格<br>- `ALO`（竞价限价单，港股）：需 `submitted_price`<br>- `ODD`（碎股单，港股）：需 `submitted_price`，用于非标准手数<br>- `LIT`（触价限价）：需 `submitted_price` 与 `trigger_price`，行情触及触发价时激活<br>- `MIT`（触价市价）：仅需 `trigger_price`，触及后按市价成交<br>- `TSLPAMT`（按金额跟踪止损限价）：需 `trailing_amount` 与 `limit_offset`<br>- `TSLPPCT`（按百分比跟踪止损限价）：需 `trailing_percent`（0-1）与 `limit_offset`<br>- `SLO`（特别限价单，港股）：需 `submitted_price`，提交后不可改单",
         "side": "买卖方向：`Buy`（买入）或 `Sell`（卖出）",
@@ -233,22 +264,25 @@
       }
     },
     "ah_premium": {
+      "title": "A/H 溢价",
       "description": "获取 A/H 股溢价的历史 K 线数据",
-      "params": {
+      "properties": {
         "symbol": "证券代码，例如 `\"700.HK\"`",
         "period": "K 线周期：`1m`、`5m`、`15m`、`30m`、`60m`、`day`（默认）、`week`、`month`、`year`",
         "count": "返回的 K 线数量（默认 100）"
       }
     },
     "ah_premium_intraday": {
+      "title": "A/H 溢价（分时）",
       "description": "获取 A/H 股溢价的当日分时数据",
-      "params": {
+      "properties": {
         "symbol": "证券代码，例如 `\"700.HK\"`"
       }
     },
     "alert_add": {
+      "title": "新增价格预警",
       "description": "新增价格预警。`condition` 可选 `price_rise`（涨破）/ `price_fall`（跌破）/ `percent_rise`（涨幅）/ `percent_fall`（跌幅）",
-      "params": {
+      "properties": {
         "symbol": "证券代码，例如 `\"700.HK\"`",
         "condition": "预警条件：`price_rise`、`price_fall`、`percent_rise`、`percent_fall`",
         "price": "阈值价格或百分比数值",
@@ -256,68 +290,79 @@
       }
     },
     "alert_delete": {
+      "title": "删除价格预警",
       "description": "按 `alert_id` 删除价格预警",
-      "params": {
+      "properties": {
         "alert_id": "预警指标 id"
       }
     },
     "alert_disable": {
+      "title": "停用价格预警",
       "description": "按 `alert_id` 停用价格预警",
-      "params": {
+      "properties": {
         "alert_id": "预警指标 id"
       }
     },
     "alert_enable": {
+      "title": "启用价格预警",
       "description": "按 `alert_id` 启用价格预警",
-      "params": {
+      "properties": {
         "alert_id": "预警指标 id"
       }
     },
     "alert_list": {
+      "title": "价格预警列表",
       "description": "获取所有已配置的价格预警"
     },
     "anomaly": {
+      "title": "市场异动",
       "description": "获取市场异动提醒（价量异常变动）",
-      "params": {
+      "properties": {
         "market": "市场代码：HK、US、CN、SG"
       }
     },
     "broker_holding": {
+      "title": "券商持仓",
       "description": "获取指定证券的主要券商持仓数据",
-      "params": {
+      "properties": {
         "symbol": "证券代码，例如 `\"700.HK\"`",
         "period": "时间窗口：`rct_1`（近 1 日，默认）、`rct_5`（近 5 日）、`rct_20`（近 20 日）、`rct_60`（近 60 日）"
       }
     },
     "broker_holding_daily": {
+      "title": "券商持仓（日度）",
       "description": "获取指定券商对某证券的逐日持仓历史",
-      "params": {
+      "properties": {
         "symbol": "证券代码，例如 `\"700.HK\"`",
         "broker_id": "券商参与者编号"
       }
     },
     "broker_holding_detail": {
+      "title": "券商持仓明细",
       "description": "获取完整的券商持仓明细列表",
-      "params": {
+      "properties": {
         "symbol": "证券代码，例如 `\"700.HK\"`"
       }
     },
     "brokers": {
+      "title": "经纪商队列",
       "description": "获取经纪商买卖盘队列数据",
-      "params": {
+      "properties": {
         "symbol": "证券代码，例如 `\"700.HK\"`"
       }
     },
     "calc_indexes": {
+      "title": "指标计算",
       "description": "为证券计算财务 / 行情指标（PE、PB、股息率等）",
-      "params": {
+      "properties": {
         "symbols": "证券代码，例如 `[\"700.HK\", \"AAPL.US\"]`",
         "indexes": "待计算指标：`LastDone`、`ChangeValue`、`ChangeRate`、`Volume`、`Turnover`、`YtdChangeRate`、`TurnoverRate`、`TotalMarketValue`、`CapitalFlow`、`Amplitude`、`VolumeRatio`、`PeTtmRatio`、`PbRatio`、`DividendRatioTtm`、`FiveDayChangeRate`、`TenDayChangeRate`、`HalfYearChangeRate`、`FiveMinutesChangeRate`、`ExpiryDate`、`StrikePrice`、`UpperStrikePrice`、`LowerStrikePrice`、`OutstandingQty`、`OutstandingRatio`、`Premium`、`ItmOtm`、`ImpliedVolatility`、`WarrantDelta`、`CallPrice`、`ToCallPrice`、`EffectiveLeverage`、`LeverageRatio`、`ConversionRatio`、`BalancePoint`、`OpenInterest`、`Delta`、`Gamma`、`Theta`、`Vega`、`Rho`"
       }
     },
     "candlesticks": {
+      "title": "K 线数据",
       "description": "获取 K 线数据（OHLCV）。`period` 可选 `1m` / `5m` / `15m` / `30m` / `60m` / `day` / `week` / `month` / `year`；`trade_sessions` 可选 `intraday` / `all`",
-      "params": {
+      "properties": {
         "symbol": "证券代码",
         "period": "K 线周期：`1m`、`5m`、`15m`、`30m`、`60m`、`day`、`week`、`month`、`year`",
         "count": "K 线数量（最多 1000）",
@@ -326,83 +371,97 @@
       }
     },
     "capital_distribution": {
+      "title": "资金分布",
       "description": "获取资金分布（大 / 中 / 小单的资金流向）",
-      "params": {
+      "properties": {
         "symbol": "证券代码，例如 `\"700.HK\"`"
       }
     },
     "capital_flow": {
+      "title": "资金流向",
       "description": "获取资金流入 / 流出的时间序列",
-      "params": {
+      "properties": {
         "symbol": "证券代码，例如 `\"700.HK\"`"
       }
     },
     "company": {
+      "title": "公司概况",
       "description": "获取公司概况（名称、CEO、员工数、简介等）",
-      "params": {
+      "properties": {
         "symbol": "证券代码，例如 `\"700.HK\"`"
       }
     },
     "consensus": {
+      "title": "一致预期",
       "description": "获取分析师一致预期（营收、EPS、净利润等）",
-      "params": {
+      "properties": {
         "symbol": "证券代码，例如 `\"700.HK\"`"
       }
     },
     "constituent": {
+      "title": "指数成份股",
       "description": "获取指数成分股（例如 `HSI.HK`）",
-      "params": {
+      "properties": {
         "symbol": "指数代码，例如 `\"HSI.HK\"`"
       }
     },
     "corp_action": {
+      "title": "公司行动",
       "description": "获取公司行动信息（拆股、回购、更名等）",
-      "params": {
+      "properties": {
         "symbol": "证券代码，例如 `\"700.HK\"`"
       }
     },
     "dca_check": {
+      "title": "检查定投支持",
       "description": "检查指定证券是否支持定投（DCA）",
-      "params": {
+      "properties": {
         "symbols": "待检查的证券代码，例如 `[\"AAPL.US\", \"TSLA.US\"]`"
       }
     },
     "depth": {
+      "title": "盘口深度",
       "description": "获取盘口深度数据（买卖各档位）",
-      "params": {
+      "properties": {
         "symbol": "证券代码，例如 `\"700.HK\"`"
       }
     },
     "dividend": {
+      "title": "派息历史",
       "description": "获取证券的派息历史",
-      "params": {
+      "properties": {
         "symbol": "证券代码，例如 `\"700.HK\"`"
       }
     },
     "dividend_detail": {
+      "title": "派息明细",
       "description": "获取详细的派息分红方案",
-      "params": {
+      "properties": {
         "symbol": "证券代码，例如 `\"700.HK\"`"
       }
     },
     "exchange_rate": {
+      "title": "汇率",
       "description": "获取全部支持币种的汇率"
     },
     "executive": {
+      "title": "高管与董事",
       "description": "获取公司高管及董事会成员信息",
-      "params": {
+      "properties": {
         "symbol": "证券代码，例如 `\"700.HK\"`"
       }
     },
     "filings": {
+      "title": "监管公告",
       "description": "获取监管文件公告（8-K、10-Q、10-K 等）",
-      "params": {
+      "properties": {
         "symbol": "证券代码，例如 `\"700.HK\"`"
       }
     },
     "finance_calendar": {
+      "title": "财经日历",
       "description": "获取财经日历事件。`category` 可选 `financial` / `report` / `dividend` / `ipo` / `macrodata` / `closed`",
-      "params": {
+      "properties": {
         "market": "市场代码：HK、US、CN、SG，省略则查询所有市场",
         "start": "起始日期（`yyyy-mm-dd`）",
         "end": "结束日期（`yyyy-mm-dd`）",
@@ -410,28 +469,32 @@
       }
     },
     "financial_report": {
+      "title": "财务报表",
       "description": "获取证券的财务报告。`report_type` 用于区分年报或季报等",
-      "params": {
+      "properties": {
         "symbol": "证券代码，例如 `\"AAPL.US\"`",
         "kind": "报表种类：`IS`（利润表）、`BS`（资产负债表）、`CF`（现金流量表）、`ALL`（默认全部）",
         "report_type": "报告期：`af`（年度）、`saf`（半年度）、`q1` / `q2` / `q3`（季度）、`qf`（季度全量）"
       }
     },
     "forecast_eps": {
+      "title": "EPS 预测",
       "description": "获取 EPS 预测及分析师预期历史",
-      "params": {
+      "properties": {
         "symbol": "证券代码，例如 `\"700.HK\"`"
       }
     },
     "fund_holder": {
+      "title": "持仓基金",
       "description": "获取持有指定证券的基金及 ETF",
-      "params": {
+      "properties": {
         "symbol": "证券代码，例如 `\"700.HK\"`"
       }
     },
     "history_candlesticks_by_date": {
+      "title": "历史 K 线（按日期）",
       "description": "按日期区间获取历史 K 线数据。`period` 可选 `1m` / `5m` / `15m` / `30m` / `60m` / `day` / `week` / `month` / `year`",
-      "params": {
+      "properties": {
         "symbol": "证券代码",
         "period": "K 线周期：`1m`、`5m`、`15m`、`30m`、`60m`、`day`、`week`、`month`、`year`",
         "forward_adjust": "是否对拆股 / 派息进行前复权",
@@ -441,8 +504,9 @@
       }
     },
     "history_candlesticks_by_offset": {
+      "title": "历史 K 线（按偏移）",
       "description": "以参考时间为锚点，按偏移量获取历史 K 线数据。`period` 可选 `1m` / `5m` / `15m` / `30m` / `60m` / `day` / `week` / `month` / `year`",
-      "params": {
+      "properties": {
         "symbol": "证券代码",
         "period": "K 线周期：`1m`、`5m`、`15m`、`30m`、`60m`、`day`、`week`、`month`、`year`",
         "forward_adjust": "是否对拆股 / 派息进行前复权",
@@ -453,265 +517,308 @@
       }
     },
     "history_market_temperature": {
+      "title": "历史市场温度",
       "description": "获取市场情绪温度的历史时间序列",
-      "params": {
+      "properties": {
         "market": "市场代码：HK、US、CN、SG",
         "start": "起始日期（`yyyy-mm-dd`）",
         "end": "结束日期（`yyyy-mm-dd`）"
       }
     },
     "industry_valuation": {
+      "title": "行业估值",
       "description": "获取同行业可比公司的估值对比",
-      "params": {
+      "properties": {
         "symbol": "证券代码，例如 `\"700.HK\"`"
       }
     },
     "industry_valuation_dist": {
+      "title": "行业估值分布",
       "description": "获取行业 PE / PB / PS 估值分布",
-      "params": {
+      "properties": {
         "symbol": "证券代码，例如 `\"700.HK\"`"
       }
     },
     "institution_rating": {
+      "title": "机构评级",
       "description": "获取机构评级汇总，含一致评级与目标价",
-      "params": {
+      "properties": {
         "symbol": "证券代码，例如 `\"700.HK\"`"
       }
     },
     "institution_rating_detail": {
+      "title": "机构评级明细",
       "description": "获取详细的机构评级与目标价历史",
-      "params": {
+      "properties": {
         "symbol": "证券代码，例如 `\"700.HK\"`"
       }
     },
     "intraday": {
+      "title": "分时数据",
       "description": "获取分时（逐分钟）价格 / 成交数据。`trade_sessions` 可选 `intraday`（默认，仅常规时段）或 `all`（含盘前盘后）",
-      "params": {
+      "properties": {
         "symbol": "证券代码，例如 `\"700.HK\"`",
         "trade_sessions": "包含的交易时段：`intraday`（默认，仅常规时段）或 `all`（含盘前盘后）"
       }
     },
     "invest_relation": {
+      "title": "投资者关系",
       "description": "获取投资者关系事件与公告",
-      "params": {
+      "properties": {
         "symbol": "证券代码，例如 `\"700.HK\"`"
       }
     },
     "market_status": {
+      "title": "市场状态",
       "description": "获取所有市场当前的交易状态"
     },
     "market_temperature": {
+      "title": "市场温度",
       "description": "获取当前市场情绪温度（0-100）",
-      "params": {
+      "properties": {
         "market": "市场代码：HK、US、CN、SG"
       }
     },
     "news": {
+      "title": "资讯",
       "description": "获取证券相关的最新新闻",
-      "params": {
+      "properties": {
         "symbol": "证券代码，例如 `\"700.HK\"`"
       }
     },
     "now": {
+      "title": "当前时间",
       "description": "获取当前 UTC 时间"
     },
     "operating": {
+      "title": "经营业绩",
       "description": "获取公司经营指标",
-      "params": {
+      "properties": {
         "symbol": "证券代码，例如 `\"700.HK\"`"
       }
     },
     "option_chain_expiry_date_list": {
+      "title": "期权到期日列表",
       "description": "获取期权链可选的到期日列表",
-      "params": {
+      "properties": {
         "symbol": "证券代码，例如 `\"700.HK\"`"
       }
     },
     "option_chain_info_by_date": {
+      "title": "期权链",
       "description": "获取指定到期日的期权链行权价及希腊字母",
-      "params": {
+      "properties": {
         "symbol": "证券代码",
         "date": "到期日（`yyyy-mm-dd`）"
       }
     },
     "option_quote": {
+      "title": "期权报价",
       "description": "获取期权行情（最多 500 个标的）",
-      "params": {
+      "properties": {
         "symbols": "证券代码，例如 `[\"700.HK\", \"AAPL.US\"]`"
       }
     },
     "option_volume": {
+      "title": "期权成交量",
       "description": "获取美股的实时期权认购 / 认沽成交量及 PCR",
-      "params": {
+      "properties": {
         "symbol": "标的代码（仅美股），例如 `\"AAPL.US\"`"
       }
     },
     "option_volume_daily": {
+      "title": "期权成交量（日度）",
       "description": "获取美股的逐日期权认购 / 认沽成交量、未平仓量及 PCR 历史",
-      "params": {
+      "properties": {
         "symbol": "标的代码（仅美股），例如 `\"AAPL.US\"`",
         "count": "返回的交易日数量（默认 20）"
       }
     },
     "participants": {
+      "title": "市场参与者",
       "description": "获取市场参与者（券商）信息"
     },
     "quote": {
+      "title": "行情快照",
       "description": "获取最新行情快照（最新价、开盘、最高、最低、成交量、成交额）",
-      "params": {
+      "properties": {
         "symbols": "证券代码，例如 `[\"700.HK\", \"AAPL.US\"]`"
       }
     },
     "shareholder": {
+      "title": "机构股东",
       "description": "获取证券的机构股东信息",
-      "params": {
+      "properties": {
         "symbol": "证券代码，例如 `\"700.HK\"`"
       }
     },
     "sharelist_add": {
+      "title": "加入分享股单",
       "description": "向社区分享股单中添加证券",
-      "params": {
+      "properties": {
         "id": "分享股单 ID",
         "symbols": "证券代码，例如 `[\"AAPL.US\", \"700.HK\"]`"
       }
     },
     "sharelist_create": {
+      "title": "创建分享股单",
       "description": "新建一个社区分享股单",
-      "params": {
+      "properties": {
         "name": "股单名称（若未传 `description`，名称同时作为描述）",
         "description": "股单描述，省略时默认与 `name` 相同"
       }
     },
     "sharelist_delete": {
+      "title": "删除分享股单",
       "description": "按 id 删除社区分享股单",
-      "params": {
+      "properties": {
         "id": "分享股单 ID"
       }
     },
     "sharelist_detail": {
+      "title": "分享股单详情",
       "description": "按 id 获取社区分享股单详情，含成分股及行情",
-      "params": {
+      "properties": {
         "id": "分享股单 ID"
       }
     },
     "sharelist_list": {
+      "title": "分享股单列表",
       "description": "列出用户自建以及已订阅的社区分享股单",
-      "params": {
+      "properties": {
         "count": "返回数量（默认 20）"
       }
     },
     "sharelist_popular": {
+      "title": "热门分享股单",
       "description": "获取热门 / 正在流行的社区分享股单",
-      "params": {
+      "properties": {
         "count": "返回数量（默认 20）"
       }
     },
     "sharelist_remove": {
+      "title": "移出分享股单",
       "description": "从社区分享股单中移除证券",
-      "params": {
+      "properties": {
         "id": "分享股单 ID",
         "symbols": "证券代码，例如 `[\"AAPL.US\", \"700.HK\"]`"
       }
     },
     "sharelist_sort": {
+      "title": "分享股单排序",
       "description": "调整社区分享股单中证券的顺序（按目标顺序传入 `symbols`）",
-      "params": {
+      "properties": {
         "id": "分享股单 ID",
         "symbols": "证券代码，例如 `[\"AAPL.US\", \"700.HK\"]`"
       }
     },
     "short_positions": {
+      "title": "空头持仓",
       "description": "获取美股的做空数据（空头比率、空头股数、回补天数等），仅支持美股市场",
-      "params": {
+      "properties": {
         "symbol": "证券代码（仅美股），例如 `\"AAPL.US\"`",
         "count": "返回条数（1-100，默认 20）"
       }
     },
     "static_info": {
+      "title": "证券基础信息",
       "description": "获取证券的基础信息（名称、交易所、类型、每手股数等）",
-      "params": {
+      "properties": {
         "symbols": "证券代码，例如 `[\"700.HK\", \"AAPL.US\"]`"
       }
     },
     "topic": {
-      "description": "获取与某证券相关的讨论话题",
-      "params": {
+      "title": "讨论列表",
+      "description": "获取与某证券相关的讨论",
+      "properties": {
         "symbol": "证券代码，例如 `\"700.HK\"`"
       }
     },
     "topic_create": {
-      "description": "发布讨论话题。`topic_type=\"post\"`（默认）为纯文本；`\"article\"` 需要非空 `title`，正文可使用 Markdown",
-      "params": {
-        "title": "话题标题。`topic_type=\"article\"` 时必填，`\"post\"` 时可选",
-        "body": "话题正文。`post` 仅支持纯文本，`article` 支持 Markdown",
+      "title": "发布讨论",
+      "description": "发布讨论。`topic_type=\"post\"`（默认）为纯文本；`\"article\"` 需要非空 `title`，正文可使用 Markdown",
+      "properties": {
+        "title": "讨论标题。`topic_type=\"article\"` 时必填，`\"post\"` 时可选",
+        "body": "讨论正文。`post` 仅支持纯文本，`article` 支持 Markdown",
         "symbols": "相关证券代码，例如 `[\"700.HK\", \"TSLA.US\"]`（最多 10 个）",
-        "topic_type": "话题类型：`post`（默认，纯文本）或 `article`（Markdown，需 `title`）"
+        "topic_type": "讨论类型：`post`（默认，纯文本）或 `article`（Markdown，需 `title`）"
       }
     },
     "topic_create_reply": {
-      "description": "对讨论话题发表回复。传入 `reply_to_id` 表示对某条回复的子级回复，省略则为顶层回复",
-      "params": {
-        "topic_id": "待回复的话题 ID",
+      "title": "发布讨论回复",
+      "description": "对讨论发表回复。传入 `reply_to_id` 表示对某条回复的子级回复，省略则为顶层回复",
+      "properties": {
+        "topic_id": "待回复的讨论 ID",
         "body": "回复正文（仅支持纯文本）",
         "reply_to_id": "可选的父回复 ID，用于楼中楼回复，从 `topic_replies` 获取；省略则为顶层回复"
       }
     },
     "topic_detail": {
-      "description": "按 `topic_id` 获取讨论话题详情",
-      "params": {
-        "topic_id": "话题 ID"
+      "title": "讨论详情",
+      "description": "按 `topic_id` 获取讨论详情",
+      "properties": {
+        "topic_id": "讨论 ID"
       }
     },
     "topic_replies": {
-      "description": "分页获取讨论话题的回复（`page` 默认 1，`size` 默认 20，范围 1-50）",
-      "params": {
-        "topic_id": "话题 ID",
+      "title": "讨论回复",
+      "description": "分页获取讨论的回复（`page` 默认 1，`size` 默认 20，范围 1-50）",
+      "properties": {
+        "topic_id": "讨论 ID",
         "page": "页码（从 1 开始，默认 1）",
         "size": "每页条数（1-50，默认 20）"
       }
     },
     "trade_stats": {
+      "title": "成交统计",
       "description": "获取成交统计（主动买 / 主动卖 / 中性盘的成交量分布）",
-      "params": {
+      "properties": {
         "symbol": "证券代码，例如 `\"700.HK\"`"
       }
     },
     "trades": {
+      "title": "最近成交",
       "description": "获取最近的逐笔成交（最多 1000 条）",
-      "params": {
+      "properties": {
         "symbol": "证券代码",
         "count": "返回的最大条数（最多 1000）"
       }
     },
     "trading_days": {
+      "title": "交易日列表",
       "description": "获取指定市场在某日期区间内的交易日",
-      "params": {
+      "properties": {
         "market": "市场代码：HK、US、CN、SG",
         "start": "起始日期（`yyyy-mm-dd`）",
         "end": "结束日期（`yyyy-mm-dd`）"
       }
     },
     "trading_session": {
+      "title": "交易时段",
       "description": "获取所有市场的交易时段安排"
     },
     "valuation": {
+      "title": "估值",
       "description": "获取估值概览及同业对比",
-      "params": {
+      "properties": {
         "symbol": "证券代码，例如 `\"700.HK\"`"
       }
     },
     "valuation_history": {
+      "title": "估值历史",
       "description": "获取详细的估值历史时间序列",
-      "params": {
+      "properties": {
         "symbol": "证券代码，例如 `\"700.HK\"`"
       }
     },
     "warrant_issuers": {
+      "title": "权证发行商",
       "description": "获取窝轮 / 牛熊证发行商信息"
     },
     "warrant_list": {
+      "title": "权证列表",
       "description": "按筛选条件获取指定标的的窝轮 / 牛熊证列表",
-      "params": {
+      "properties": {
         "symbol": "标的代码，例如 `\"700.HK\"`",
         "sort_by": "排序字段：`LastDone`、`ChangeRate`、`ChangeValue`、`Volume`、`Turnover`、`ExpiryDate`、`StrikePrice`、`UpperStrikePrice`、`LowerStrikePrice`、`OutstandingQuantity`、`OutstandingRatio`、`Premium`、`ItmOtm`、`ImpliedVolatility`、`Delta`",
         "sort_order": "排序方向：`Ascending`（升序）或 `Descending`（降序）",
@@ -723,14 +830,16 @@
       }
     },
     "warrant_quote": {
+      "title": "权证报价",
       "description": "获取窝轮 / 牛熊证行情",
-      "params": {
+      "properties": {
         "symbols": "证券代码，例如 `[\"700.HK\", \"AAPL.US\"]`"
       }
     },
     "quant_run": {
+      "title": "量化指标脚本运行",
       "description": "在服务端针对历史 K 线数据运行量化指标脚本，执行后将计算得到的指标/绘图值以 JSON 形式返回。脚本语言兼容 PineScript V6 语法（个别语法可能不适用）。周期：1m、5m、15m、30m、1h、day、week、month、year（默认 day）。可选 input 参数接收一个 JSON 数组，顺序需与脚本中 input.*() 调用一致，例如 \"[14,2.0]\"。",
-      "params": {
+      "properties": {
         "symbol": "证券代码，`<CODE>.<MARKET>` 格式，例如 `TSLA.US`、`700.HK`",
         "period": "K 线周期：`1m`、`5m`、`15m`、`30m`、`1h`、`day`、`week`、`month`、`year`（默认 `day`）",
         "start": "K 线区间起始日期（YYYY-MM-DD）",

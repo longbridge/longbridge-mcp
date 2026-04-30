@@ -130,7 +130,7 @@ use crate::tools::trade::{
 #[tool_router(vis = "pub(crate)")]
 impl Longbridge {
     /// Get current UTC time in RFC3339 format.
-    #[tool(description = "Get current UTC time")]
+    #[tool(title = "Current Time", description = "Get current UTC time")]
     async fn now(&self) -> String {
         time::OffsetDateTime::now_utc()
             .format(&time::format_description::well_known::Rfc3339)
@@ -138,7 +138,10 @@ impl Longbridge {
     }
 
     /// Get basic information of securities.
-    #[tool(description = "Get basic information of securities (name, exchange, type, lot_size)")]
+    #[tool(
+        title = "Security Static Info",
+        description = "Get basic information of securities (name, exchange, type, lot_size)"
+    )]
     async fn static_info(
         &self,
         ctx: RequestContext<RoleServer>,
@@ -149,7 +152,10 @@ impl Longbridge {
     }
 
     /// Get the latest price quotes.
-    #[tool(description = "Get latest price quotes (last_done, open, high, low, volume, turnover)")]
+    #[tool(
+        title = "Quote",
+        description = "Get latest price quotes (last_done, open, high, low, volume, turnover)"
+    )]
     async fn quote(
         &self,
         ctx: RequestContext<RoleServer>,
@@ -160,7 +166,10 @@ impl Longbridge {
     }
 
     /// Get option quotes.
-    #[tool(description = "Get option quotes (max 500 symbols)")]
+    #[tool(
+        title = "Option Quote",
+        description = "Get option quotes (max 500 symbols)"
+    )]
     async fn option_quote(
         &self,
         ctx: RequestContext<RoleServer>,
@@ -171,7 +180,7 @@ impl Longbridge {
     }
 
     /// Get warrant quotes.
-    #[tool(description = "Get warrant quotes")]
+    #[tool(title = "Warrant Quote", description = "Get warrant quotes")]
     async fn warrant_quote(
         &self,
         ctx: RequestContext<RoleServer>,
@@ -182,7 +191,10 @@ impl Longbridge {
     }
 
     /// Get the order book depth.
-    #[tool(description = "Get order book depth (bid/ask levels)")]
+    #[tool(
+        title = "Order Book Depth",
+        description = "Get order book depth (bid/ask levels)"
+    )]
     async fn depth(
         &self,
         ctx: RequestContext<RoleServer>,
@@ -193,7 +205,7 @@ impl Longbridge {
     }
 
     /// Get broker queue data.
-    #[tool(description = "Get broker queue data")]
+    #[tool(title = "Broker Queue", description = "Get broker queue data")]
     async fn brokers(
         &self,
         ctx: RequestContext<RoleServer>,
@@ -204,7 +216,10 @@ impl Longbridge {
     }
 
     /// Get market participant broker information.
-    #[tool(description = "Get market participant broker information")]
+    #[tool(
+        title = "Market Participants",
+        description = "Get market participant broker information"
+    )]
     async fn participants(
         &self,
         ctx: RequestContext<RoleServer>,
@@ -214,7 +229,7 @@ impl Longbridge {
     }
 
     /// Get recent trades.
-    #[tool(description = "Get recent trades (max 1000)")]
+    #[tool(title = "Recent Trades", description = "Get recent trades (max 1000)")]
     async fn trades(
         &self,
         ctx: RequestContext<RoleServer>,
@@ -226,6 +241,7 @@ impl Longbridge {
 
     /// Get intraday line data.
     #[tool(
+        title = "Intraday Line",
         description = "Get intraday minute-by-minute price/volume data. trade_sessions: \"intraday\" (default, regular hours) or \"all\" (include pre-market and post-market)"
     )]
     async fn intraday(
@@ -239,6 +255,7 @@ impl Longbridge {
 
     /// Get candlestick (K-line) data.
     #[tool(
+        title = "Candlesticks",
         description = "Get candlestick data (OHLCV). period: 1m/5m/15m/30m/60m/day/week/month/year. trade_sessions: intraday/all"
     )]
     async fn candlesticks(
@@ -252,6 +269,7 @@ impl Longbridge {
 
     /// Get historical candlesticks by offset.
     #[tool(
+        title = "Historical Candlesticks by Offset",
         description = "Get historical candlestick data by offset from a reference time. period: 1m/5m/15m/30m/60m/day/week/month/year"
     )]
     async fn history_candlesticks_by_offset(
@@ -268,6 +286,7 @@ impl Longbridge {
 
     /// Get historical candlesticks by date range.
     #[tool(
+        title = "Historical Candlesticks by Date",
         description = "Get historical candlestick data by date range. period: 1m/5m/15m/30m/60m/day/week/month/year"
     )]
     async fn history_candlesticks_by_date(
@@ -283,7 +302,10 @@ impl Longbridge {
     }
 
     /// Get trading days between dates.
-    #[tool(description = "Get trading days for a market between dates")]
+    #[tool(
+        title = "Trading Days",
+        description = "Get trading days for a market between dates"
+    )]
     async fn trading_days(
         &self,
         ctx: RequestContext<RoleServer>,
@@ -294,7 +316,10 @@ impl Longbridge {
     }
 
     /// Get option chain expiry date list.
-    #[tool(description = "Get option chain expiry dates for a symbol")]
+    #[tool(
+        title = "Option Expiry Dates",
+        description = "Get option chain expiry dates for a symbol"
+    )]
     async fn option_chain_expiry_date_list(
         &self,
         ctx: RequestContext<RoleServer>,
@@ -308,7 +333,10 @@ impl Longbridge {
     }
 
     /// Get option chain info by expiry date.
-    #[tool(description = "Get option chain strike prices and Greeks for an expiry date")]
+    #[tool(
+        title = "Option Chain by Date",
+        description = "Get option chain strike prices and Greeks for an expiry date"
+    )]
     async fn option_chain_info_by_date(
         &self,
         ctx: RequestContext<RoleServer>,
@@ -322,7 +350,10 @@ impl Longbridge {
     }
 
     /// Get capital flow of a security.
-    #[tool(description = "Get capital inflow/outflow time series")]
+    #[tool(
+        title = "Capital Flow",
+        description = "Get capital inflow/outflow time series"
+    )]
     async fn capital_flow(
         &self,
         ctx: RequestContext<RoleServer>,
@@ -333,7 +364,10 @@ impl Longbridge {
     }
 
     /// Get capital distribution.
-    #[tool(description = "Get capital distribution (large/medium/small holder flows)")]
+    #[tool(
+        title = "Capital Distribution",
+        description = "Get capital distribution (large/medium/small holder flows)"
+    )]
     async fn capital_distribution(
         &self,
         ctx: RequestContext<RoleServer>,
@@ -347,7 +381,10 @@ impl Longbridge {
     }
 
     /// Get trading session schedule.
-    #[tool(description = "Get trading session schedule for all markets")]
+    #[tool(
+        title = "Trading Sessions",
+        description = "Get trading session schedule for all markets"
+    )]
     async fn trading_session(
         &self,
         ctx: RequestContext<RoleServer>,
@@ -357,7 +394,10 @@ impl Longbridge {
     }
 
     /// Get market temperature.
-    #[tool(description = "Get current market sentiment temperature (0-100)")]
+    #[tool(
+        title = "Market Temperature",
+        description = "Get current market sentiment temperature (0-100)"
+    )]
     async fn market_temperature(
         &self,
         ctx: RequestContext<RoleServer>,
@@ -368,7 +408,10 @@ impl Longbridge {
     }
 
     /// Get historical market temperature.
-    #[tool(description = "Get historical market temperature time series")]
+    #[tool(
+        title = "Historical Market Temperature",
+        description = "Get historical market temperature time series"
+    )]
     async fn history_market_temperature(
         &self,
         ctx: RequestContext<RoleServer>,
@@ -382,14 +425,20 @@ impl Longbridge {
     }
 
     /// Get watchlist groups.
-    #[tool(description = "Get all watchlist groups and their securities")]
+    #[tool(
+        title = "Watchlist",
+        description = "Get all watchlist groups and their securities"
+    )]
     async fn watchlist(&self, ctx: RequestContext<RoleServer>) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
         measured_tool_call("watchlist", || quote::watchlist(&mctx)).await
     }
 
     /// Get filings for a symbol.
-    #[tool(description = "Get regulatory filings (8-K, 10-Q, 10-K, etc.)")]
+    #[tool(
+        title = "Filings",
+        description = "Get regulatory filings (8-K, 10-Q, 10-K, etc.)"
+    )]
     async fn filings(
         &self,
         ctx: RequestContext<RoleServer>,
@@ -400,7 +449,10 @@ impl Longbridge {
     }
 
     /// Get warrant issuers.
-    #[tool(description = "Get warrant issuer information")]
+    #[tool(
+        title = "Warrant Issuers",
+        description = "Get warrant issuer information"
+    )]
     async fn warrant_issuers(
         &self,
         ctx: RequestContext<RoleServer>,
@@ -410,7 +462,10 @@ impl Longbridge {
     }
 
     /// Get warrant list for a symbol.
-    #[tool(description = "Get filtered warrant list for an underlying symbol")]
+    #[tool(
+        title = "Warrant List",
+        description = "Get filtered warrant list for an underlying symbol"
+    )]
     async fn warrant_list(
         &self,
         ctx: RequestContext<RoleServer>,
@@ -421,7 +476,10 @@ impl Longbridge {
     }
 
     /// Calculate indexes for symbols.
-    #[tool(description = "Calculate financial indexes (PE, PB, dividend ratio, etc.) for symbols")]
+    #[tool(
+        title = "Calc Indexes",
+        description = "Calculate financial indexes (PE, PB, dividend ratio, etc.) for symbols"
+    )]
     async fn calc_indexes(
         &self,
         ctx: RequestContext<RoleServer>,
@@ -432,7 +490,10 @@ impl Longbridge {
     }
 
     /// Create a watchlist group.
-    #[tool(description = "Create a new watchlist group with optional initial securities")]
+    #[tool(
+        title = "Create Watchlist Group",
+        description = "Create a new watchlist group with optional initial securities"
+    )]
     async fn create_watchlist_group(
         &self,
         ctx: RequestContext<RoleServer>,
@@ -446,7 +507,10 @@ impl Longbridge {
     }
 
     /// Delete a watchlist group.
-    #[tool(description = "Delete a watchlist group by id")]
+    #[tool(
+        title = "Delete Watchlist Group",
+        description = "Delete a watchlist group by id"
+    )]
     async fn delete_watchlist_group(
         &self,
         ctx: RequestContext<RoleServer>,
@@ -460,7 +524,10 @@ impl Longbridge {
     }
 
     /// Update a watchlist group.
-    #[tool(description = "Update a watchlist group (rename or add/remove/replace securities)")]
+    #[tool(
+        title = "Update Watchlist Group",
+        description = "Update a watchlist group (rename or add/remove/replace securities)"
+    )]
     async fn update_watchlist_group(
         &self,
         ctx: RequestContext<RoleServer>,
@@ -475,6 +542,7 @@ impl Longbridge {
 
     /// Get security list by market and category.
     #[tool(
+        title = "Security List",
         description = "Get security list for a market. category must be \"Overnight\"; other values or omitting it will cause an error. Currently only market=\"US\" is supported; other markets will also return an error"
     )]
     async fn security_list(
@@ -488,6 +556,7 @@ impl Longbridge {
 
     /// Get account balance.
     #[tool(
+        title = "Account Balance",
         description = "Get account cash balance and asset summary. Pass currency (e.g. \"USD\", \"HKD\") to filter; omit to return all currencies."
     )]
     async fn account_balance(
@@ -500,7 +569,10 @@ impl Longbridge {
     }
 
     /// Get stock positions.
-    #[tool(description = "Get current stock positions across all channels")]
+    #[tool(
+        title = "Stock Positions",
+        description = "Get current stock positions across all channels"
+    )]
     async fn stock_positions(
         &self,
         ctx: RequestContext<RoleServer>,
@@ -510,7 +582,7 @@ impl Longbridge {
     }
 
     /// Get fund positions.
-    #[tool(description = "Get current fund positions")]
+    #[tool(title = "Fund Positions", description = "Get current fund positions")]
     async fn fund_positions(
         &self,
         ctx: RequestContext<RoleServer>,
@@ -520,7 +592,10 @@ impl Longbridge {
     }
 
     /// Get margin ratio.
-    #[tool(description = "Get margin ratio (initial/maintenance/forced liquidation)")]
+    #[tool(
+        title = "Margin Ratio",
+        description = "Get margin ratio (initial/maintenance/forced liquidation)"
+    )]
     async fn margin_ratio(
         &self,
         ctx: RequestContext<RoleServer>,
@@ -531,7 +606,10 @@ impl Longbridge {
     }
 
     /// Get today's orders.
-    #[tool(description = "Get orders placed today. Pass symbol to filter; omit to return all.")]
+    #[tool(
+        title = "Today's Orders",
+        description = "Get orders placed today. Pass symbol to filter; omit to return all."
+    )]
     async fn today_orders(
         &self,
         ctx: RequestContext<RoleServer>,
@@ -542,7 +620,10 @@ impl Longbridge {
     }
 
     /// Get order detail.
-    #[tool(description = "Get detailed information about a specific order")]
+    #[tool(
+        title = "Order Detail",
+        description = "Get detailed information about a specific order"
+    )]
     async fn order_detail(
         &self,
         ctx: RequestContext<RoleServer>,
@@ -553,7 +634,10 @@ impl Longbridge {
     }
 
     /// Cancel an order.
-    #[tool(description = "Cancel an open order by order_id")]
+    #[tool(
+        title = "Cancel Order",
+        description = "Cancel an open order by order_id"
+    )]
     async fn cancel_order(
         &self,
         ctx: RequestContext<RoleServer>,
@@ -565,6 +649,7 @@ impl Longbridge {
 
     /// Get today's trade executions.
     #[tool(
+        title = "Today's Executions",
         description = "Get today's trade executions (fills). Pass symbol or order_id to filter; omit both to return all."
     )]
     async fn today_executions(
@@ -577,7 +662,10 @@ impl Longbridge {
     }
 
     /// Get historical orders (not including today).
-    #[tool(description = "Get historical orders between dates (excludes today)")]
+    #[tool(
+        title = "Historical Orders",
+        description = "Get historical orders between dates (excludes today)"
+    )]
     async fn history_orders(
         &self,
         ctx: RequestContext<RoleServer>,
@@ -588,7 +676,10 @@ impl Longbridge {
     }
 
     /// Get historical executions.
-    #[tool(description = "Get historical trade executions between dates")]
+    #[tool(
+        title = "Historical Executions",
+        description = "Get historical trade executions between dates"
+    )]
     async fn history_executions(
         &self,
         ctx: RequestContext<RoleServer>,
@@ -599,7 +690,10 @@ impl Longbridge {
     }
 
     /// Get cash flow records.
-    #[tool(description = "Get cash flow records (deposits, withdrawals, dividends)")]
+    #[tool(
+        title = "Cash Flow",
+        description = "Get cash flow records (deposits, withdrawals, dividends)"
+    )]
     async fn cash_flow(
         &self,
         ctx: RequestContext<RoleServer>,
@@ -611,6 +705,7 @@ impl Longbridge {
 
     /// Submit an order.
     #[tool(
+        title = "Submit Order",
         description = "Submit a buy/sell order. order_type: LO (Limit) / ELO (Enhanced Limit, HK) / MO (Market) / AO (At-auction, HK) / ALO (At-auction Limit, HK) / ODD (Odd Lots, HK) / LIT (Limit If Touched) / MIT (Market If Touched) / TSLPAMT (Trailing Limit by Amount) / TSLPPCT (Trailing Limit by Percent) / SLO (Special Limit, HK). side: Buy/Sell. time_in_force: Day/GTC/GTD"
     )]
     async fn submit_order(
@@ -623,7 +718,10 @@ impl Longbridge {
     }
 
     /// Replace (modify) an order.
-    #[tool(description = "Replace/modify an existing order")]
+    #[tool(
+        title = "Replace Order",
+        description = "Replace/modify an existing order"
+    )]
     async fn replace_order(
         &self,
         ctx: RequestContext<RoleServer>,
@@ -634,7 +732,10 @@ impl Longbridge {
     }
 
     /// Estimate max purchase quantity.
-    #[tool(description = "Estimate maximum buy/sell quantity for a symbol")]
+    #[tool(
+        title = "Estimate Max Purchase Quantity",
+        description = "Estimate maximum buy/sell quantity for a symbol"
+    )]
     async fn estimate_max_purchase_quantity(
         &self,
         ctx: RequestContext<RoleServer>,
@@ -648,7 +749,10 @@ impl Longbridge {
     }
 
     /// Get financial reports (income statement, balance sheet, cash flow).
-    #[tool(description = "Get financial reports for a symbol. report_type: annual or quarterly")]
+    #[tool(
+        title = "Financial Report",
+        description = "Get financial reports for a symbol. report_type: annual or quarterly"
+    )]
     async fn financial_report(
         &self,
         ctx: RequestContext<RoleServer>,
@@ -662,7 +766,10 @@ impl Longbridge {
     }
 
     /// Get institution rating summary (analyst consensus + target price).
-    #[tool(description = "Get institution rating summary with analyst consensus and target price")]
+    #[tool(
+        title = "Institution Rating",
+        description = "Get institution rating summary with analyst consensus and target price"
+    )]
     async fn institution_rating(
         &self,
         ctx: RequestContext<RoleServer>,
@@ -676,7 +783,10 @@ impl Longbridge {
     }
 
     /// Get institution rating detail (historical ratings and target prices).
-    #[tool(description = "Get detailed historical institution ratings and target price history")]
+    #[tool(
+        title = "Institution Rating Detail",
+        description = "Get detailed historical institution ratings and target price history"
+    )]
     async fn institution_rating_detail(
         &self,
         ctx: RequestContext<RoleServer>,
@@ -690,7 +800,7 @@ impl Longbridge {
     }
 
     /// Get dividend history.
-    #[tool(description = "Get dividend history for a symbol")]
+    #[tool(title = "Dividend", description = "Get dividend history for a symbol")]
     async fn dividend(
         &self,
         ctx: RequestContext<RoleServer>,
@@ -701,7 +811,10 @@ impl Longbridge {
     }
 
     /// Get dividend distribution details.
-    #[tool(description = "Get detailed dividend distribution scheme")]
+    #[tool(
+        title = "Dividend Detail",
+        description = "Get detailed dividend distribution scheme"
+    )]
     async fn dividend_detail(
         &self,
         ctx: RequestContext<RoleServer>,
@@ -712,7 +825,10 @@ impl Longbridge {
     }
 
     /// Get EPS forecast data.
-    #[tool(description = "Get EPS forecast and analyst estimate history")]
+    #[tool(
+        title = "Forecast EPS",
+        description = "Get EPS forecast and analyst estimate history"
+    )]
     async fn forecast_eps(
         &self,
         ctx: RequestContext<RoleServer>,
@@ -723,7 +839,10 @@ impl Longbridge {
     }
 
     /// Get financial consensus estimates.
-    #[tool(description = "Get financial consensus estimates (revenue, EPS, net income)")]
+    #[tool(
+        title = "Analyst Consensus",
+        description = "Get financial consensus estimates (revenue, EPS, net income)"
+    )]
     async fn consensus(
         &self,
         ctx: RequestContext<RoleServer>,
@@ -734,7 +853,10 @@ impl Longbridge {
     }
 
     /// Get valuation overview (PE, PB, PS, dividend yield).
-    #[tool(description = "Get valuation overview with peer comparison")]
+    #[tool(
+        title = "Valuation",
+        description = "Get valuation overview with peer comparison"
+    )]
     async fn valuation(
         &self,
         ctx: RequestContext<RoleServer>,
@@ -745,7 +867,10 @@ impl Longbridge {
     }
 
     /// Get detailed valuation history.
-    #[tool(description = "Get detailed valuation history time series")]
+    #[tool(
+        title = "Valuation History",
+        description = "Get detailed valuation history time series"
+    )]
     async fn valuation_history(
         &self,
         ctx: RequestContext<RoleServer>,
@@ -759,7 +884,10 @@ impl Longbridge {
     }
 
     /// Get industry valuation comparison.
-    #[tool(description = "Get industry valuation comparison for peers")]
+    #[tool(
+        title = "Industry Valuation",
+        description = "Get industry valuation comparison for peers"
+    )]
     async fn industry_valuation(
         &self,
         ctx: RequestContext<RoleServer>,
@@ -773,7 +901,10 @@ impl Longbridge {
     }
 
     /// Get industry valuation distribution.
-    #[tool(description = "Get industry PE/PB/PS valuation distribution")]
+    #[tool(
+        title = "Industry Valuation Distribution",
+        description = "Get industry PE/PB/PS valuation distribution"
+    )]
     async fn industry_valuation_dist(
         &self,
         ctx: RequestContext<RoleServer>,
@@ -787,7 +918,10 @@ impl Longbridge {
     }
 
     /// Get company overview.
-    #[tool(description = "Get company overview (name, CEO, employees, profile)")]
+    #[tool(
+        title = "Company Profile",
+        description = "Get company overview (name, CEO, employees, profile)"
+    )]
     async fn company(
         &self,
         ctx: RequestContext<RoleServer>,
@@ -798,7 +932,10 @@ impl Longbridge {
     }
 
     /// Get company executives.
-    #[tool(description = "Get company executive and board member information")]
+    #[tool(
+        title = "Executive",
+        description = "Get company executive and board member information"
+    )]
     async fn executive(
         &self,
         ctx: RequestContext<RoleServer>,
@@ -809,7 +946,10 @@ impl Longbridge {
     }
 
     /// Get shareholders.
-    #[tool(description = "Get institutional shareholders for a symbol")]
+    #[tool(
+        title = "Shareholders",
+        description = "Get institutional shareholders for a symbol"
+    )]
     async fn shareholder(
         &self,
         ctx: RequestContext<RoleServer>,
@@ -820,7 +960,10 @@ impl Longbridge {
     }
 
     /// Get fund holders.
-    #[tool(description = "Get funds and ETFs that hold a given symbol")]
+    #[tool(
+        title = "Fund Holders",
+        description = "Get funds and ETFs that hold a given symbol"
+    )]
     async fn fund_holder(
         &self,
         ctx: RequestContext<RoleServer>,
@@ -831,7 +974,10 @@ impl Longbridge {
     }
 
     /// Get corporate actions.
-    #[tool(description = "Get corporate actions (splits, buybacks, name changes)")]
+    #[tool(
+        title = "Corporate Actions",
+        description = "Get corporate actions (splits, buybacks, name changes)"
+    )]
     async fn corp_action(
         &self,
         ctx: RequestContext<RoleServer>,
@@ -842,7 +988,10 @@ impl Longbridge {
     }
 
     /// Get investor relations events.
-    #[tool(description = "Get investor relations events and announcements")]
+    #[tool(
+        title = "Investor Relations",
+        description = "Get investor relations events and announcements"
+    )]
     async fn invest_relation(
         &self,
         ctx: RequestContext<RoleServer>,
@@ -853,7 +1002,10 @@ impl Longbridge {
     }
 
     /// Get operating metrics.
-    #[tool(description = "Get company operating metrics")]
+    #[tool(
+        title = "Operating Performance",
+        description = "Get company operating metrics"
+    )]
     async fn operating(
         &self,
         ctx: RequestContext<RoleServer>,
@@ -864,7 +1016,10 @@ impl Longbridge {
     }
 
     /// Get market trading status.
-    #[tool(description = "Get current market trading status for all markets")]
+    #[tool(
+        title = "Market Status",
+        description = "Get current market trading status for all markets"
+    )]
     async fn market_status(
         &self,
         ctx: RequestContext<RoleServer>,
@@ -874,7 +1029,10 @@ impl Longbridge {
     }
 
     /// Get broker holding data.
-    #[tool(description = "Get top broker holding data for a symbol")]
+    #[tool(
+        title = "Broker Holding",
+        description = "Get top broker holding data for a symbol"
+    )]
     async fn broker_holding(
         &self,
         ctx: RequestContext<RoleServer>,
@@ -885,7 +1043,10 @@ impl Longbridge {
     }
 
     /// Get broker holding detail.
-    #[tool(description = "Get full broker holding detail list")]
+    #[tool(
+        title = "Broker Holding Detail",
+        description = "Get full broker holding detail list"
+    )]
     async fn broker_holding_detail(
         &self,
         ctx: RequestContext<RoleServer>,
@@ -899,7 +1060,10 @@ impl Longbridge {
     }
 
     /// Get daily broker holding for a specific broker.
-    #[tool(description = "Get daily holding history for a specific broker")]
+    #[tool(
+        title = "Broker Holding (Daily)",
+        description = "Get daily holding history for a specific broker"
+    )]
     async fn broker_holding_daily(
         &self,
         ctx: RequestContext<RoleServer>,
@@ -913,7 +1077,10 @@ impl Longbridge {
     }
 
     /// Get AH premium K-line data.
-    #[tool(description = "Get A/H share premium historical K-line data")]
+    #[tool(
+        title = "A/H Premium",
+        description = "Get A/H share premium historical K-line data"
+    )]
     async fn ah_premium(
         &self,
         ctx: RequestContext<RoleServer>,
@@ -924,7 +1091,10 @@ impl Longbridge {
     }
 
     /// Get AH premium intraday data.
-    #[tool(description = "Get A/H share premium intraday time-share data")]
+    #[tool(
+        title = "A/H Premium (Intraday)",
+        description = "Get A/H share premium intraday time-share data"
+    )]
     async fn ah_premium_intraday(
         &self,
         ctx: RequestContext<RoleServer>,
@@ -938,7 +1108,10 @@ impl Longbridge {
     }
 
     /// Get trade statistics.
-    #[tool(description = "Get trade statistics (buy/sell/neutral volume distribution)")]
+    #[tool(
+        title = "Trade Statistics",
+        description = "Get trade statistics (buy/sell/neutral volume distribution)"
+    )]
     async fn trade_stats(
         &self,
         ctx: RequestContext<RoleServer>,
@@ -949,7 +1122,10 @@ impl Longbridge {
     }
 
     /// Get market anomalies.
-    #[tool(description = "Get market anomaly alerts (unusual price/volume changes)")]
+    #[tool(
+        title = "Market Anomaly",
+        description = "Get market anomaly alerts (unusual price/volume changes)"
+    )]
     async fn anomaly(
         &self,
         ctx: RequestContext<RoleServer>,
@@ -960,7 +1136,10 @@ impl Longbridge {
     }
 
     /// Get index constituents.
-    #[tool(description = "Get constituent stocks of an index (e.g. HSI.HK)")]
+    #[tool(
+        title = "Index Constituents",
+        description = "Get constituent stocks of an index (e.g. HSI.HK)"
+    )]
     async fn constituent(
         &self,
         ctx: RequestContext<RoleServer>,
@@ -972,6 +1151,7 @@ impl Longbridge {
 
     /// Get finance calendar events.
     #[tool(
+        title = "Financial Calendar",
         description = "Get finance calendar events. category: financial/report/dividend/ipo/macrodata/closed"
     )]
     async fn finance_calendar(
@@ -984,7 +1164,10 @@ impl Longbridge {
     }
 
     /// Get exchange rates.
-    #[tool(description = "Get exchange rates for all supported currencies")]
+    #[tool(
+        title = "Exchange Rate",
+        description = "Get exchange rates for all supported currencies"
+    )]
     async fn exchange_rate(
         &self,
         ctx: RequestContext<RoleServer>,
@@ -995,6 +1178,7 @@ impl Longbridge {
 
     /// Get profit analysis summary.
     #[tool(
+        title = "Profit Analysis",
         description = "Get portfolio profit and loss analysis summary. start/end: optional date range in yyyy-mm-dd format. Both must be provided together — passing only one returns empty results."
     )]
     async fn profit_analysis(
@@ -1008,6 +1192,7 @@ impl Longbridge {
 
     /// Get profit analysis detail for a symbol.
     #[tool(
+        title = "Profit Analysis Detail",
         description = "Get detailed profit and loss analysis for a specific symbol. start/end: optional date range in yyyy-mm-dd format. Both must be provided together — passing only one returns empty results."
     )]
     async fn profit_analysis_detail(
@@ -1023,7 +1208,10 @@ impl Longbridge {
     }
 
     /// Get price alert list.
-    #[tool(description = "Get all configured price alerts")]
+    #[tool(
+        title = "List Price Alerts",
+        description = "Get all configured price alerts"
+    )]
     async fn alert_list(
         &self,
         ctx: RequestContext<RoleServer>,
@@ -1034,6 +1222,7 @@ impl Longbridge {
 
     /// Add a price alert.
     #[tool(
+        title = "Add Price Alert",
         description = "Add a price alert. condition: price_rise/price_fall/percent_rise/percent_fall"
     )]
     async fn alert_add(
@@ -1046,7 +1235,10 @@ impl Longbridge {
     }
 
     /// Delete a price alert.
-    #[tool(description = "Delete a price alert by alert_id")]
+    #[tool(
+        title = "Delete Price Alert",
+        description = "Delete a price alert by alert_id"
+    )]
     async fn alert_delete(
         &self,
         ctx: RequestContext<RoleServer>,
@@ -1057,7 +1249,10 @@ impl Longbridge {
     }
 
     /// Enable a price alert.
-    #[tool(description = "Enable a price alert by alert_id")]
+    #[tool(
+        title = "Enable Price Alert",
+        description = "Enable a price alert by alert_id"
+    )]
     async fn alert_enable(
         &self,
         ctx: RequestContext<RoleServer>,
@@ -1068,7 +1263,10 @@ impl Longbridge {
     }
 
     /// Disable a price alert.
-    #[tool(description = "Disable a price alert by alert_id")]
+    #[tool(
+        title = "Disable Price Alert",
+        description = "Disable a price alert by alert_id"
+    )]
     async fn alert_disable(
         &self,
         ctx: RequestContext<RoleServer>,
@@ -1079,7 +1277,7 @@ impl Longbridge {
     }
 
     /// Get news for a symbol.
-    #[tool(description = "Get latest news articles for a symbol")]
+    #[tool(title = "News", description = "Get latest news articles for a symbol")]
     async fn news(
         &self,
         ctx: RequestContext<RoleServer>,
@@ -1090,7 +1288,10 @@ impl Longbridge {
     }
 
     /// Get discussion topics for a symbol.
-    #[tool(description = "Get discussion topics for a symbol")]
+    #[tool(
+        title = "Topic List",
+        description = "Get discussion topics for a symbol"
+    )]
     async fn topic(
         &self,
         ctx: RequestContext<RoleServer>,
@@ -1101,7 +1302,10 @@ impl Longbridge {
     }
 
     /// Get topic detail.
-    #[tool(description = "Get discussion topic detail by topic_id")]
+    #[tool(
+        title = "Topic Detail",
+        description = "Get discussion topic detail by topic_id"
+    )]
     async fn topic_detail(
         &self,
         ctx: RequestContext<RoleServer>,
@@ -1113,6 +1317,7 @@ impl Longbridge {
 
     /// Get topic replies.
     #[tool(
+        title = "Topic Replies",
         description = "Get replies to a discussion topic, paginated (page default 1, size default 20, range 1-50)"
     )]
     async fn topic_replies(
@@ -1126,6 +1331,7 @@ impl Longbridge {
 
     /// Create a discussion topic.
     #[tool(
+        title = "Create Topic",
         description = "Create a new discussion topic. topic_type=\"post\" (default) is plain text; \"article\" requires a non-empty title and accepts Markdown body."
     )]
     async fn topic_create(
@@ -1139,6 +1345,7 @@ impl Longbridge {
 
     /// Reply to a discussion topic.
     #[tool(
+        title = "Create Topic Reply",
         description = "Create a reply to a discussion topic. Pass reply_to_id to nest under another reply; omit for a top-level reply."
     )]
     async fn topic_create_reply(
@@ -1154,7 +1361,10 @@ impl Longbridge {
     }
 
     /// List account statements.
-    #[tool(description = "List available account statements (daily/monthly)")]
+    #[tool(
+        title = "Statement List",
+        description = "List available account statements (daily/monthly)"
+    )]
     async fn statement_list(
         &self,
         ctx: RequestContext<RoleServer>,
@@ -1166,6 +1376,7 @@ impl Longbridge {
 
     /// Get the pre-signed download URL for a statement file.
     #[tool(
+        title = "Export Statement",
         description = "Get a pre-signed download URL for a statement data file (obtained from statement_list). Returns {url}; fetch that URL to get the statement JSON."
     )]
     async fn statement_export(
@@ -1179,6 +1390,7 @@ impl Longbridge {
 
     /// Get short position data for a US stock.
     #[tool(
+        title = "Short Positions",
         description = "Get short interest data for a US stock (short ratio, short shares, days to cover). Only US market is supported."
     )]
     async fn short_positions(
@@ -1191,7 +1403,10 @@ impl Longbridge {
     }
 
     /// Get real-time option call/put volume stats.
-    #[tool(description = "Get real-time option call/put volume and put/call ratio for a US stock")]
+    #[tool(
+        title = "Option Volume",
+        description = "Get real-time option call/put volume and put/call ratio for a US stock"
+    )]
     async fn option_volume(
         &self,
         ctx: RequestContext<RoleServer>,
@@ -1203,6 +1418,7 @@ impl Longbridge {
 
     /// Get daily historical option volume stats.
     #[tool(
+        title = "Option Volume (Daily)",
         description = "Get daily historical option call/put volume, open interest, and put/call ratios for a US stock"
     )]
     async fn option_volume_daily(
@@ -1219,6 +1435,7 @@ impl Longbridge {
 
     /// List DCA (recurring investment) plans.
     #[tool(
+        title = "List DCA Plans",
         description = "List DCA recurring investment plans. Filter by status (Active/Suspended/Finished) or symbol."
     )]
     async fn dca_list(
@@ -1232,6 +1449,7 @@ impl Longbridge {
 
     /// Create a DCA (recurring investment) plan.
     #[tool(
+        title = "Create DCA Plan",
         description = "Create a DCA recurring investment plan. frequency: Daily/Weekly/Monthly. day_of_week (Weekly): Mon/Tue/Wed/Thu/Fri. day_of_month (Monthly): 1-28."
     )]
     async fn dca_create(
@@ -1244,7 +1462,10 @@ impl Longbridge {
     }
 
     /// Update a DCA plan.
-    #[tool(description = "Update an existing DCA recurring investment plan by plan_id")]
+    #[tool(
+        title = "Update DCA Plan",
+        description = "Update an existing DCA recurring investment plan by plan_id"
+    )]
     async fn dca_update(
         &self,
         ctx: RequestContext<RoleServer>,
@@ -1255,7 +1476,10 @@ impl Longbridge {
     }
 
     /// Pause a DCA plan.
-    #[tool(description = "Pause (suspend) a DCA recurring investment plan by plan_id")]
+    #[tool(
+        title = "Pause DCA Plan",
+        description = "Pause (suspend) a DCA recurring investment plan by plan_id"
+    )]
     async fn dca_pause(
         &self,
         ctx: RequestContext<RoleServer>,
@@ -1266,7 +1490,10 @@ impl Longbridge {
     }
 
     /// Resume a paused DCA plan.
-    #[tool(description = "Resume a suspended DCA recurring investment plan by plan_id")]
+    #[tool(
+        title = "Resume DCA Plan",
+        description = "Resume a suspended DCA recurring investment plan by plan_id"
+    )]
     async fn dca_resume(
         &self,
         ctx: RequestContext<RoleServer>,
@@ -1277,7 +1504,10 @@ impl Longbridge {
     }
 
     /// Stop a DCA plan permanently.
-    #[tool(description = "Permanently stop a DCA recurring investment plan by plan_id")]
+    #[tool(
+        title = "Stop DCA Plan",
+        description = "Permanently stop a DCA recurring investment plan by plan_id"
+    )]
     async fn dca_stop(
         &self,
         ctx: RequestContext<RoleServer>,
@@ -1288,7 +1518,10 @@ impl Longbridge {
     }
 
     /// Get DCA plan execution history.
-    #[tool(description = "Get execution history records for a DCA plan by plan_id")]
+    #[tool(
+        title = "DCA Execution History",
+        description = "Get execution history records for a DCA plan by plan_id"
+    )]
     async fn dca_history(
         &self,
         ctx: RequestContext<RoleServer>,
@@ -1299,7 +1532,10 @@ impl Longbridge {
     }
 
     /// Get DCA statistics.
-    #[tool(description = "Get DCA investment statistics summary. Optionally filter by symbol.")]
+    #[tool(
+        title = "DCA Statistics",
+        description = "Get DCA investment statistics summary. Optionally filter by symbol."
+    )]
     async fn dca_stats(
         &self,
         ctx: RequestContext<RoleServer>,
@@ -1310,7 +1546,10 @@ impl Longbridge {
     }
 
     /// Check if symbols support DCA.
-    #[tool(description = "Check whether given symbols support DCA recurring investment")]
+    #[tool(
+        title = "Check DCA Support",
+        description = "Check whether given symbols support DCA recurring investment"
+    )]
     async fn dca_check(
         &self,
         ctx: RequestContext<RoleServer>,
@@ -1321,7 +1560,10 @@ impl Longbridge {
     }
 
     /// List community sharelists.
-    #[tool(description = "List user's own and subscribed community sharelists")]
+    #[tool(
+        title = "List Sharelists",
+        description = "List user's own and subscribed community sharelists"
+    )]
     async fn sharelist_list(
         &self,
         ctx: RequestContext<RoleServer>,
@@ -1333,6 +1575,7 @@ impl Longbridge {
 
     /// Get sharelist detail.
     #[tool(
+        title = "Sharelist Detail",
         description = "Get community sharelist detail including constituent stocks and quotes by id"
     )]
     async fn sharelist_detail(
@@ -1345,7 +1588,10 @@ impl Longbridge {
     }
 
     /// Create a community sharelist.
-    #[tool(description = "Create a new community sharelist")]
+    #[tool(
+        title = "Create Sharelist",
+        description = "Create a new community sharelist"
+    )]
     async fn sharelist_create(
         &self,
         ctx: RequestContext<RoleServer>,
@@ -1356,7 +1602,10 @@ impl Longbridge {
     }
 
     /// Delete a community sharelist.
-    #[tool(description = "Delete a community sharelist by id")]
+    #[tool(
+        title = "Delete Sharelist",
+        description = "Delete a community sharelist by id"
+    )]
     async fn sharelist_delete(
         &self,
         ctx: RequestContext<RoleServer>,
@@ -1367,7 +1616,10 @@ impl Longbridge {
     }
 
     /// Add stocks to a sharelist.
-    #[tool(description = "Add securities to a community sharelist")]
+    #[tool(
+        title = "Add to Sharelist",
+        description = "Add securities to a community sharelist"
+    )]
     async fn sharelist_add(
         &self,
         ctx: RequestContext<RoleServer>,
@@ -1378,7 +1630,10 @@ impl Longbridge {
     }
 
     /// Remove stocks from a sharelist.
-    #[tool(description = "Remove securities from a community sharelist")]
+    #[tool(
+        title = "Remove from Sharelist",
+        description = "Remove securities from a community sharelist"
+    )]
     async fn sharelist_remove(
         &self,
         ctx: RequestContext<RoleServer>,
@@ -1390,6 +1645,7 @@ impl Longbridge {
 
     /// Reorder stocks in a sharelist.
     #[tool(
+        title = "Sort Sharelist",
         description = "Reorder securities in a community sharelist (provide symbols in desired order)"
     )]
     async fn sharelist_sort(
@@ -1402,7 +1658,10 @@ impl Longbridge {
     }
 
     /// Get popular community sharelists.
-    #[tool(description = "Get popular/trending community sharelists")]
+    #[tool(
+        title = "Popular Sharelists",
+        description = "Get popular/trending community sharelists"
+    )]
     async fn sharelist_popular(
         &self,
         ctx: RequestContext<RoleServer>,
@@ -1417,6 +1676,7 @@ impl Longbridge {
 
     /// Run a quant indicator script against historical K-line data on the server.
     #[tool(
+        title = "Quant — Run Indicator Script",
         description = "Run a quant indicator script against historical K-line data on the server. Executes the script server-side and returns the computed indicator/plot values as JSON. The script language is compatible with PineScript V6 syntax (minor exceptions may apply). Periods: 1m, 5m, 15m, 30m, 1h, day, week, month, year (default: day). The optional input parameter accepts a JSON array matching the order of input.*() calls in the script, e.g. \"[14,2.0]\"."
     )]
     async fn quant_run(

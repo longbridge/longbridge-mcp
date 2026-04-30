@@ -197,7 +197,7 @@ mod tests {
             );
 
             for (tool_name, entry) in tools {
-                let Some(params) = entry.get("params").and_then(|v| v.as_object()) else {
+                let Some(params) = entry.get("properties").and_then(|v| v.as_object()) else {
                     continue;
                 };
                 let real_params = live_params.get(tool_name).expect("name already validated");
