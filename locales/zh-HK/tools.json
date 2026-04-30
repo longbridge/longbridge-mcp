@@ -838,13 +838,13 @@
     },
     "quant_run": {
       "title": "量化指標腳本運行",
-      "description": "在服務端針對歷史 K 線數據運行量化指標腳本，執行後將計算得到的指標/繪圖值以 JSON 形式返回。腳本語言兼容 PineScript V6 語法（個別語法可能不適用）。週期：1m、5m、15m、30m、1h、day、week、month、year（默認 day）。可選 input 參數接收一個 JSON 數組，順序需與腳本中 input.*() 調用一致，例如 \"[14,2.0]\"。",
+      "description": "在服務端針對歷史 K 線數據運行量化指標腳本，執行後將計算得到的指標/繪圖值以 JSON 形式返回。週期：1m、5m、15m、30m、1h、day、week、month、year（默認 day）。可選 input 參數接收一個 JSON 數組，順序需與腳本中 input.*() 調用一致，例如 \"[14,2.0]\"。",
       "properties": {
         "symbol": "證券代碼，`<CODE>.<MARKET>` 格式，例如 `TSLA.US`、`700.HK`",
         "period": "K 線週期：`1m`、`5m`、`15m`、`30m`、`1h`、`day`、`week`、`month`、`year`（默認 `day`）",
         "start": "K 線區間起始日期（YYYY-MM-DD）",
         "end": "K 線區間結束日期（YYYY-MM-DD）",
-        "script": "指標腳本源代碼（PineScript V6 語法）",
+        "script": "指標腳本源代碼",
         "input": "腳本輸入參數（JSON 數組字符串），順序需與腳本中 `input.*()` 調用一致，例如 `\"[14,2.0]\"`"
       }
     }

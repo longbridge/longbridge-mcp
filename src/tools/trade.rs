@@ -12,6 +12,7 @@ pub use crate::tools::quote::SymbolParam;
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct OrderIdParam {
+    /// Order ID (returned by submit_order or listed in today_orders / history_orders)
     pub order_id: String,
 }
 
@@ -37,6 +38,7 @@ pub struct TodayExecutionsParam {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct SubmitOrderParam {
+    /// Security symbol, e.g. "700.HK"
     pub symbol: String,
     /// Order type (HK supports all; US supports LO/MO/LIT/MIT/TSLPAMT/TSLPPCT only):
     /// - LO (Limit Order): requires submitted_price
@@ -53,6 +55,7 @@ pub struct SubmitOrderParam {
     pub order_type: String,
     /// Buy or Sell
     pub side: String,
+    /// Order quantity (number of shares)
     pub submitted_quantity: String,
     /// Order validity: "Day" (Day Order, expires end of session), "GTC" (Good Til Canceled), "GTD" (Good Til Date, requires expire_date)
     pub time_in_force: String,
@@ -76,12 +79,19 @@ pub struct SubmitOrderParam {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ReplaceOrderParam {
+    /// Order ID to replace (returned by submit_order or listed in today_orders / history_orders)
     pub order_id: String,
+    /// New order quantity (number of shares)
     pub quantity: String,
+    /// New limit price (for limit-style orders)
     pub price: Option<String>,
+    /// New trigger (activation) price (for LIT / MIT / trailing-stop orders)
     pub trigger_price: Option<String>,
+    /// New limit offset from the trailing stop price (for TSLPAMT / TSLPPCT)
     pub limit_offset: Option<String>,
+    /// New trailing amount as absolute price distance (for TSLPAMT)
     pub trailing_amount: Option<String>,
+    /// New trailing percent as decimal e.g. 0.05 = 5% (for TSLPPCT)
     pub trailing_percent: Option<String>,
 }
 
@@ -105,11 +115,13 @@ pub struct CashFlowParam {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct EstimateMaxQtyParam {
+    /// Security symbol, e.g. "700.HK"
     pub symbol: String,
     /// Buy or Sell
     pub side: String,
     /// Order type: LO (Limit Order) / ELO (Enhanced Limit Order) / MO (Market Order) / AO (At-auction) / ALO (At-auction Limit Order)
     pub order_type: String,
+    /// Limit price for limit-style orders. Omit for market orders.
     pub price: Option<String>,
 }
 

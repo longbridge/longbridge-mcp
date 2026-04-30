@@ -22,7 +22,7 @@ pub struct RunScriptParam {
     pub start: String,
     /// End date (YYYY-MM-DD) for the K-line range
     pub end: String,
-    /// Indicator script source (PineScript V6 syntax).
+    /// Indicator script source.
     pub script: Option<String>,
     /// Script input values as a JSON array, e.g. "[14,2.0]". Must match the order of input.*() calls in the script.
     pub input: Option<String>,

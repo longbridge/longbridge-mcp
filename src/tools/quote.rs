@@ -39,6 +39,7 @@ pub struct IntradayParam {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct SymbolCountParam {
+    /// Security symbol, e.g. "700.HK"
     pub symbol: String,
     /// Maximum number of results (max 1000)
     #[serde(deserialize_with = "tolerant_usize")]
@@ -47,6 +48,7 @@ pub struct SymbolCountParam {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct CandlesticksParam {
+    /// Security symbol, e.g. "700.HK"
     pub symbol: String,
     /// Period: 1m, 5m, 15m, 30m, 60m, day, week, month, year
     pub period: String,
@@ -62,6 +64,7 @@ pub struct CandlesticksParam {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct HistoryCandlesticksByOffsetParam {
+    /// Security symbol, e.g. "700.HK"
     pub symbol: String,
     /// Period: 1m, 5m, 15m, 30m, 60m, day, week, month, year
     pub period: String,
@@ -82,6 +85,7 @@ pub struct HistoryCandlesticksByOffsetParam {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct HistoryCandlesticksByDateParam {
+    /// Security symbol, e.g. "700.HK"
     pub symbol: String,
     /// Period: 1m, 5m, 15m, 30m, 60m, day, week, month, year
     pub period: String,
@@ -114,6 +118,7 @@ pub struct MarketDateRangeParam {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct SymbolDateParam {
+    /// Security symbol, e.g. "700.HK"
     pub symbol: String,
     /// Date (yyyy-mm-dd)
     pub date: String,
