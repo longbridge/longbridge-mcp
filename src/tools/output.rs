@@ -53,20 +53,21 @@ pub struct MarginRatioResponse {
     pub fm_factor: String,
 }
 
-/// Returned by `stock_positions`. Top-level wraps a `channels` array
-/// (one per linked broker channel), each carrying its own positions list.
+/// Returned by `stock_positions`. Top-level wraps a `list` array
+/// (one entry per linked broker channel), each carrying its own positions.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct StockPositionsResponse {
-    /// Position channels (one per broker channel).
-    pub channels: Vec<StockPositionChannel>,
+    /// Position channels — one entry per broker channel.
+    pub list: Vec<StockPositionChannel>,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct StockPositionChannel {
-    /// Broker channel identifier.
-    pub account_channel: String,
+    /// Broker channel identifier. Always emitted as `null` for privacy.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub account_channel: Option<String>,
     /// Stock positions held in this channel.
-    pub positions: Vec<StockPosition>,
+    pub stock_info: Vec<StockPosition>,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -94,15 +95,16 @@ pub struct StockPosition {
 /// `StockPositionsResponse`, but with fund-specific position fields.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct FundPositionsResponse {
-    pub channels: Vec<FundPositionChannel>,
+    pub list: Vec<FundPositionChannel>,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct FundPositionChannel {
-    /// Broker channel identifier.
-    pub account_channel: String,
+    /// Broker channel identifier. Always emitted as `null` for privacy.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub account_channel: Option<String>,
     /// Fund positions held in this channel.
-    pub positions: Vec<FundPosition>,
+    pub fund_info: Vec<FundPosition>,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -144,7 +146,7 @@ pub struct MarketTemperatureResponse {
     /// Market sentiment indicator (0-100).
     pub sentiment: i32,
     /// Snapshot timestamp (RFC3339).
-    pub updated_at: String,
+    pub timestamp: String,
 }
 
 /// Returned by `history_market_temperature`.
@@ -154,6 +156,7 @@ pub struct HistoryMarketTemperatureResponse {
     #[serde(rename = "type")]
     pub granularity: String,
     /// Per-period samples in chronological order.
+    #[serde(rename = "list")]
     pub records: Vec<MarketTemperatureResponse>,
 }
 
