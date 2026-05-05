@@ -1295,7 +1295,7 @@ impl Longbridge {
     #[tool(
         title = "Financial Calendar",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get finance calendar events. category: financial/report/dividend/ipo/macrodata/closed"
+        description = "Get finance calendar events by category and date range. category: report (earnings + financials) / dividend / split (splits & reverse splits) / ipo / macrodata (CPI, NFP, rate decisions) / closed (market holidays). market: HK/US/CN/SG/JP/UK/DE/AU (optional)."
     )]
     async fn finance_calendar(
         &self,

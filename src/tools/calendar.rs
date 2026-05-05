@@ -7,20 +7,21 @@ use crate::tools::support::http_client::http_get_tool;
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct FinanceCalendarParam {
-    /// Market code: HK, US, CN, SG. Omit to query across all markets.
-    pub market: Option<String>,
-    /// Start date (yyyy-mm-dd)
-    pub start: String,
-    /// End date (yyyy-mm-dd)
-    pub end: String,
-    /// Event category:
-    /// - "financial": earnings/financial results announcements
-    /// - "report": scheduled financial report release dates
-    /// - "dividend": dividend ex-dates and payment dates
-    /// - "ipo": IPO listing dates
-    /// - "macrodata": macroeconomic data releases (GDP, CPI, etc.)
-    /// - "closed": market holiday / trading halt dates
+    /// Event category. One of:
+    /// - "report": earnings reports (includes financial statements)
+    /// - "dividend": dividend announcements
+    /// - "split": stock splits and reverse splits (share consolidations)
+    /// - "ipo": upcoming IPO listings
+    /// - "macrodata": macro economic data releases (CPI, NFP, rate decisions, etc.)
+    /// - "closed": market closure days
     pub category: String,
+    /// Start date in YYYY-MM-DD format (inclusive)
+    pub start: String,
+    /// End date in YYYY-MM-DD format (inclusive)
+    pub end: String,
+    /// Optional market filter. One of: HK, US, CN, SG, JP, UK, DE, AU.
+    /// Omit to include all markets.
+    pub market: Option<String>,
 }
 
 pub async fn finance_calendar(
