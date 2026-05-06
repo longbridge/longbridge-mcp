@@ -141,29 +141,37 @@ If the tool takes no parameters, you can skip this step.
 
 ### Step 2 — Implement the handler function
 
-Add a `pub async fn` in the same category file. Use `tool_json` to serialise a successful response and map SDK errors through `Error::Longbridge`.
+Add a `pub async fn` in the same category file. Use `tool_json` to serialise a successful response and map SDK errors through `Error::longbridge`.
 
 ```rust
 // src/tools/quote.rs
 pub async fn my_tool(ctx: &McpContext, p: MyToolParam) -> Result<CallToolResult, McpError> {
     let quote_ctx = QuoteContext::new(ctx.create_config())
         .await
-        .map_err(Error::Longbridge)?;
+        .map_err(Error::longbridge)?;
     let result = quote_ctx
         .some_api_call(&p.symbol)
         .await
-        .map_err(Error::Longbridge)?;
+        .map_err(Error::longbridge)?;
     tool_json(&result)
 }
 ```
 
-### Step 3 — Import the param type in `mod.rs`
+### Step 3 — Make the param type available in `mod.rs`
 
-Add the new type to the existing `use` block for its module near the top of `src/tools/mod.rs`:
+How you do this depends on which category the tool belongs to:
 
-```rust
-use crate::tools::quote::{..., MyToolParam};
-```
+- **`quote` and `trade` categories**: add the new type to the existing `use` block near the top of `src/tools/mod.rs`:
+
+  ```rust
+  use crate::tools::quote::{..., MyToolParam};
+  ```
+
+- **All other categories** (`fundamental`, `market`, `content`, `alert`, `portfolio`, `statement`, `calendar`): no import is needed — reference the type via its qualified path in the handler registration (Step 4):
+
+  ```rust
+  Parameters(p): Parameters<fundamental::MyToolParam>,
+  ```
 
 ### Step 4 — Register the tool in the `#[tool_router]` impl
 
