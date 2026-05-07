@@ -56,7 +56,13 @@ where
 pub struct Longbridge;
 
 fn tool_result(json: String) -> CallToolResult {
-    CallToolResult::success(vec![Content::text(json)])
+    // MCP spec §tool-result: a tool that declares an `outputSchema` MUST
+    // return `structuredContent`. We populate it for every response so the
+    // invariant holds regardless of which tools gain a schema in the future.
+    let structured = serde_json::from_str::<serde_json::Value>(&json).ok();
+    let mut result = CallToolResult::success(vec![Content::text(json)]);
+    result.structured_content = structured;
+    result
 }
 
 fn tool_json<T>(value: &T) -> Result<CallToolResult, McpError>
@@ -1955,7 +1961,6 @@ impl Longbridge {
 
 #[tool_handler(
     name = "longbridge-mcp",
-    version = "0.1.6",
     instructions = "Longbridge OpenAPI MCP Server - provides market data, trading, and financial analysis tools"
 )]
 impl ServerHandler for Longbridge {}
