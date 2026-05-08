@@ -409,6 +409,7 @@ pub async fn rating_history(
         "/v1/quote/ratings/history",
         &[("counter_id", cid.as_str())],
         &[
+            "target_history.*.timestamp",
             "evaluate_history.*.start_date",
             "evaluate_history.*.end_date",
         ],
