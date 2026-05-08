@@ -847,6 +847,162 @@
         "script": "指標腳本源代碼",
         "input": "腳本輸入參數（JSON 數組字符串），順序需與腳本中 `input.*()` 調用一致，例如 `\"[14,2.0]\"`"
       }
+    },
+    "news_search": {
+      "title": "新聞搜尋",
+      "description": "按關鍵詞搜尋新聞文章，返回 id、標題、時間、來源及連結。",
+      "properties": {
+        "keyword": "搜尋關鍵詞",
+        "limit": "最多返回條數（預設 20）"
+      }
+    },
+    "topic_search": {
+      "title": "社區話題搜尋",
+      "description": "按關鍵詞搜尋社區帖子/話題，返回 id、作者、時間及摘要。",
+      "properties": {
+        "keyword": "搜尋關鍵詞",
+        "limit": "最多返回條數（預設 20）"
+      }
+    },
+    "financial_statement": {
+      "title": "財務報表",
+      "description": "獲取證券的財務報表（損益表、資產負債表或現金流量表）。kind：IS（損益表）、BS（資產負債表）、CF（現金流量表）、ALL（全部，預設）。report：af（年報）、saf（半年報）、qf（季報）、q1/q2/q3。",
+      "properties": {
+        "symbol": "證券代碼，例如 `\"AAPL.US\"`",
+        "kind": "報表類型：`IS`（損益表）、`BS`（資產負債表）、`CF`（現金流量表）、`ALL`（全部，預設）",
+        "report": "報告期：`af`（年報）、`saf`（半年報）、`qf`（季報）、`q1`/`q2`/`q3`"
+      }
+    },
+    "financial_report_latest": {
+      "title": "最新財務報告",
+      "description": "獲取證券最新財務報告的摘要資訊，包含主要財務指標。",
+      "properties": {
+        "symbol": "證券代碼，例如 `\"AAPL.US\"`"
+      }
+    },
+    "valuation_rank": {
+      "title": "估值分位",
+      "description": "獲取證券在指定日期區間內的每日估值分位（PE/PB/PS/股息率行業百分位）。start/end 格式：yyyymmdd。",
+      "properties": {
+        "symbol": "證券代碼，例如 `\"AAPL.US\"`",
+        "start": "起始日期，yyyymmdd 格式（預設近 30 天）",
+        "end": "結束日期，yyyymmdd 格式（預設今日）"
+      }
+    },
+    "analyst_estimates": {
+      "title": "分析師一致預期",
+      "description": "獲取證券的分析師一致預期（EPS、營收、淨利潤、EBITDA）。item：EPS（預設）、REV、NET_PROFIT、EBITDA。",
+      "properties": {
+        "symbol": "證券代碼，例如 `\"AAPL.US\"`",
+        "item": "預期指標：`EPS`（預設）、`REV`（營收）、`NET_PROFIT`（淨利潤）、`EBITDA`"
+      }
+    },
+    "institution_rating_history": {
+      "title": "機構評級歷史",
+      "description": "獲取證券的機構評級歷史，包含目標價變動和評級變動記錄。",
+      "properties": {
+        "symbol": "證券代碼，例如 `\"AAPL.US\"`"
+      }
+    },
+    "institution_rating_industry_rank": {
+      "title": "機構評級行業排名",
+      "description": "獲取同行業內各證券按機構分析師評級的排名對比。",
+      "properties": {
+        "symbol": "證券代碼，例如 `\"AAPL.US\"`",
+        "page": "頁碼（預設 1）",
+        "size": "每頁條數（預設 20）"
+      }
+    },
+    "short_margin": {
+      "title": "沽空保證金",
+      "description": "獲取當前帳戶的沽空保證金存款明細。"
+    },
+    "holding_period": {
+      "title": "持倉天數",
+      "description": "獲取一個或多個持倉證券的持有天數。不指定 symbols 則查詢全部持倉。",
+      "properties": {
+        "symbols": "證券代碼列表，例如 `[\"AAPL.US\", \"700.HK\"]`，留空則查詢全部持倉"
+      }
+    },
+    "trade_info": {
+      "title": "交易資訊",
+      "description": "獲取證券持倉的交易資訊（交割規則、可用數量、T+N 規則等）。",
+      "properties": {
+        "symbol": "證券代碼，例如 `\"700.HK\"`"
+      }
+    },
+    "bank_cards": {
+      "title": "綁定銀行卡",
+      "description": "列出當前帳戶綁定的提款銀行卡。"
+    },
+    "withdrawals": {
+      "title": "提款記錄",
+      "description": "獲取當前帳戶的提款歷史記錄。",
+      "properties": {
+        "page": "頁碼（預設 1）",
+        "size": "每頁條數（預設 20）"
+      }
+    },
+    "deposits": {
+      "title": "入款記錄",
+      "description": "獲取當前帳戶的入款歷史記錄。states：逗號分隔的入款狀態過濾。currencies：逗號分隔的貨幣代碼，例如 `\"USD,HKD\"`。",
+      "properties": {
+        "page": "頁碼（預設 1）",
+        "size": "每頁條數（預設 20）",
+        "states": "入款狀態過濾（逗號分隔）",
+        "currencies": "貨幣代碼過濾（逗號分隔），例如 `\"USD,HKD\"`"
+      }
+    },
+    "ipo_subscriptions": {
+      "title": "IPO 認購列表",
+      "description": "列出當前港股和美股市場處於認購或預申請階段的 IPO 股票（合併返回 HK 和 US 兩市結果）。"
+    },
+    "ipo_calendar": {
+      "title": "IPO 日曆",
+      "description": "顯示 IPO 日曆，包含所有即將上市及近期已上市的 IPO，含認購日期和上市日期。"
+    },
+    "ipo_listed": {
+      "title": "IPO 已上市列表",
+      "description": "列出港股和美股近期已上市的 IPO，包含發行價、首日升跌幅及成交量資訊。",
+      "properties": {
+        "page": "頁碼（預設 1）",
+        "size": "每頁條數（預設 20）"
+      }
+    },
+    "ipo_detail": {
+      "title": "IPO 詳情",
+      "description": "查看某隻股票的 IPO 詳情，包含招股簡介（profile）、時間線（timeline）及認購資格（eligibility）。",
+      "properties": {
+        "symbol": "證券代碼，例如 `\"6871.HK\"` 或 `\"ARM.US\"`",
+        "market": "市場：`HK` 或 `US`（預設根據代碼後綴推斷）"
+      }
+    },
+    "ipo_orders": {
+      "title": "IPO 訂單列表",
+      "description": "列出當前帳戶的 IPO 訂單（有效訂單和歷史訂單），可按證券代碼、市場或狀態過濾。",
+      "properties": {
+        "symbol": "按證券代碼過濾，例如 `\"6871.HK\"`",
+        "market": "按市場過濾：`HK` 或 `US`",
+        "status": "按訂單狀態過濾",
+        "page": "頁碼（預設 1）",
+        "size": "每頁條數（預設 20）"
+      }
+    },
+    "ipo_order_detail": {
+      "title": "IPO 訂單詳情",
+      "description": "按訂單 ID 查看 IPO 訂單的詳細資訊。",
+      "properties": {
+        "order_id": "IPO 訂單 ID"
+      }
+    },
+    "ipo_profit_loss": {
+      "title": "IPO 盈虧",
+      "description": "查看當前帳戶的 IPO 打新盈虧匯總及逐筆明細。period：all（全部，預設）、ytd（今年）、1y（近一年）、3y（近三年）。",
+      "properties": {
+        "period": "時間範圍：`all`（全部，預設）、`ytd`（今年）、`1y`（近一年）、`3y`（近三年）",
+        "page": "頁碼（預設 1）",
+        "size": "每頁條數（預設 20）"
+      }
     }
   }
 }
