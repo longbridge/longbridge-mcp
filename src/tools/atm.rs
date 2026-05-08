@@ -39,10 +39,15 @@ pub async fn withdrawals(
     let client = mctx.create_http_client();
     let page_str = p.page.unwrap_or(1).to_string();
     let size_str = p.size.unwrap_or(20).to_string();
+    let channel = mctx.account_channel();
     http_get_tool(
         &client,
         "/v1/account/withdrawals",
-        &[("page", page_str.as_str()), ("size", size_str.as_str())],
+        &[
+            ("page", page_str.as_str()),
+            ("size", size_str.as_str()),
+            ("account_channel", channel.as_str()),
+        ],
     )
     .await
 }
@@ -55,8 +60,12 @@ pub async fn deposits(
     let client = mctx.create_http_client();
     let page_str = p.page.unwrap_or(1).to_string();
     let size_str = p.size.unwrap_or(20).to_string();
-    let mut params: Vec<(&str, &str)> =
-        vec![("page", page_str.as_str()), ("size", size_str.as_str())];
+    let channel = mctx.account_channel();
+    let mut params: Vec<(&str, &str)> = vec![
+        ("page", page_str.as_str()),
+        ("size", size_str.as_str()),
+        ("account_channel", channel.as_str()),
+    ];
     if let Some(ref s) = p.states {
         params.push(("states", s.as_str()));
     }

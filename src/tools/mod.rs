@@ -108,6 +108,63 @@ impl McpContext {
             ),
         )
     }
+
+    /// Extracts `account_channel` from the JWT bearer token's `sub` claim.
+    /// Falls back to `"lb"` when the token cannot be decoded.
+    pub fn account_channel(&self) -> String {
+        decode_jwt_account_channel(&self.token).unwrap_or_else(|| "lb".to_string())
+    }
+}
+
+/// Decodes the JWT payload (no signature verification) and extracts `account_channel`
+/// from the `sub` claim, which Longbridge encodes as a nested JSON string.
+fn decode_jwt_account_channel(token: &str) -> Option<String> {
+    let payload_b64 = token.split('.').nth(1)?;
+    let bytes = base64url_decode(payload_b64)?;
+    let claims: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+    let sub_str = claims["sub"].as_str()?;
+    let sub: serde_json::Value = serde_json::from_str(sub_str).ok()?;
+    sub["account_channel"]
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned)
+}
+
+/// Minimal base64url decoder (no padding required, no external crate).
+fn base64url_decode(input: &str) -> Option<Vec<u8>> {
+    let mut table = [0xffu8; 256];
+    for (i, &c) in b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+        .iter()
+        .enumerate()
+    {
+        table[c as usize] = i as u8;
+    }
+    // base64url uses - and _ instead of + and /
+    table[b'-' as usize] = 62;
+    table[b'_' as usize] = 63;
+
+    let input: Vec<u8> = input.bytes().filter(|&b| b != b'=').collect();
+    let mut out = Vec::with_capacity(input.len() * 3 / 4);
+    let mut i = 0;
+    while i < input.len() {
+        let get = |pos: usize| -> Option<u8> {
+            input.get(pos).and_then(|&b| {
+                let v = table[b as usize];
+                if v == 0xff { None } else { Some(v) }
+            })
+        };
+        let b0 = get(i)?;
+        let b1 = get(i + 1)?;
+        out.push((b0 << 2) | (b1 >> 4));
+        if let Some(b2) = get(i + 2) {
+            out.push((b1 << 4) | (b2 >> 2));
+            if let Some(b3) = get(i + 3) {
+                out.push((b2 << 6) | b3);
+            }
+        }
+        i += 4;
+    }
+    Some(out)
 }
 
 fn extract_context(ctx: &RequestContext<RoleServer>) -> Result<McpContext, McpError> {
