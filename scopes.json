@@ -18,14 +18,21 @@
       "description": "Query account assets and cash flow — fund/stock holdings, account cash and equity, margin ratio, profit analysis and statements — for portfolio overviews, position display and account reconciliation.",
       "tools": [
         "account_balance",
+        "bank_cards",
         "cash_flow",
+        "deposits",
         "fund_positions",
+        "ipo_order_detail",
+        "ipo_orders",
+        "ipo_profit_loss",
         "margin_ratio",
         "profit_analysis",
         "profit_analysis_detail",
+        "short_margin",
         "statement_export",
         "statement_list",
-        "stock_positions"
+        "stock_positions",
+        "withdrawals"
       ]
     },
     {
