@@ -3,7 +3,7 @@ use rmcp::model::CallToolResult;
 use rmcp::schemars::JsonSchema;
 use rmcp::serde::Deserialize;
 
-use crate::counter::symbol_to_counter_id;
+use crate::counter::{counter_id_to_symbol, symbol_to_counter_id};
 use crate::serialize::convert_unix_paths;
 use crate::tools::support::http_client::{http_get_tool, http_get_tool_unix};
 
@@ -317,4 +317,183 @@ pub async fn operating(
         &[("counter_id", cid.as_str())],
     )
     .await
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct FinancialStatementParam {
+    /// Security symbol, e.g. "AAPL.US"
+    pub symbol: String,
+    /// Statement kind: "IS" (income statement), "BS" (balance sheet), "CF" (cash flow), "ALL" (default)
+    pub kind: Option<String>,
+    /// Report period: "af" (annual), "saf" (semi-annual), "qf" (quarterly full), "q1"/"q2"/"q3"
+    pub report: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ValuationRankParam {
+    /// Security symbol, e.g. "AAPL.US"
+    pub symbol: String,
+    /// Start date in yyyymmdd format (default: 30 days ago)
+    pub start: Option<String>,
+    /// End date in yyyymmdd format (default: today)
+    pub end: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct AnalystEstimatesParam {
+    /// Security symbol, e.g. "AAPL.US"
+    pub symbol: String,
+    /// Estimate item: "EPS" (default), "REV", "NET_PROFIT", "EBITDA"
+    pub item: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct InstitutionRatingIndustryRankParam {
+    /// Security symbol, e.g. "AAPL.US"
+    pub symbol: String,
+    /// Page number (default: 1)
+    pub page: Option<u32>,
+    /// Page size (default: 20)
+    pub size: Option<u32>,
+}
+
+/// Get financial statements (income statement, balance sheet, or cash flow).
+pub async fn financial_statement(
+    mctx: &crate::tools::McpContext,
+    p: FinancialStatementParam,
+) -> Result<CallToolResult, McpError> {
+    let client = mctx.create_http_client();
+    let cid = symbol_to_counter_id(&p.symbol);
+    let kind = p.kind.unwrap_or_else(|| "ALL".to_string()).to_uppercase();
+    let report = p.report.unwrap_or_else(|| "af".to_string()).to_lowercase();
+    http_get_tool(
+        &client,
+        "/v1/quote/financials/statements",
+        &[
+            ("counter_id", cid.as_str()),
+            ("kind", kind.as_str()),
+            ("report", report.as_str()),
+        ],
+    )
+    .await
+}
+
+/// Get latest financial report summary for a security.
+pub async fn financial_report_latest(
+    mctx: &crate::tools::McpContext,
+    p: SymbolParam,
+) -> Result<CallToolResult, McpError> {
+    let client = mctx.create_http_client();
+    let cid = symbol_to_counter_id(&p.symbol);
+    http_get_tool(
+        &client,
+        "/v1/quote/financials/latest-report",
+        &[("counter_id", cid.as_str())],
+    )
+    .await
+}
+
+/// Get daily valuation rank (PE/PB/PS/dividend yield percentile) for a security.
+pub async fn valuation_rank(
+    mctx: &crate::tools::McpContext,
+    p: ValuationRankParam,
+) -> Result<CallToolResult, McpError> {
+    let client = mctx.create_http_client();
+    let cid = symbol_to_counter_id(&p.symbol);
+    let mut params: Vec<(&str, &str)> = vec![("counter_id", cid.as_str())];
+    if let Some(ref s) = p.start {
+        params.push(("start_date", s.as_str()));
+    }
+    if let Some(ref e) = p.end {
+        params.push(("end_date", e.as_str()));
+    }
+    http_get_tool_unix(
+        &client,
+        "/v1/quote/valuation/rank",
+        &params,
+        &[
+            "pe.*.timestamp",
+            "pb.*.timestamp",
+            "ps.*.timestamp",
+            "dvd.*.timestamp",
+        ],
+    )
+    .await
+}
+
+/// Get analyst consensus estimates for a security.
+pub async fn analyst_estimates(
+    mctx: &crate::tools::McpContext,
+    p: AnalystEstimatesParam,
+) -> Result<CallToolResult, McpError> {
+    let client = mctx.create_http_client();
+    let cid = symbol_to_counter_id(&p.symbol);
+    let item = p.item.unwrap_or_else(|| "EPS".to_string()).to_uppercase();
+    http_get_tool(
+        &client,
+        "/v1/quote/estimates",
+        &[("counter_id", cid.as_str()), ("item", item.as_str())],
+    )
+    .await
+}
+
+/// Get institution rating history (target price + evaluate history) for a security.
+pub async fn institution_rating_history(
+    mctx: &crate::tools::McpContext,
+    p: SymbolParam,
+) -> Result<CallToolResult, McpError> {
+    let client = mctx.create_http_client();
+    let cid = symbol_to_counter_id(&p.symbol);
+    http_get_tool(
+        &client,
+        "/v1/quote/ratings/history",
+        &[("counter_id", cid.as_str())],
+    )
+    .await
+}
+
+/// Get institution rating industry rank for a security (peers ranked by analyst ratings).
+pub async fn institution_rating_industry_rank(
+    mctx: &crate::tools::McpContext,
+    p: InstitutionRatingIndustryRankParam,
+) -> Result<CallToolResult, McpError> {
+    let client = mctx.create_http_client();
+    let cid = symbol_to_counter_id(&p.symbol);
+    let page_str = p.page.unwrap_or(1).to_string();
+    let size_str = p.size.unwrap_or(20).to_string();
+    let resp = http_get_tool(
+        &client,
+        "/v1/quote/institution-ratings/industry-rank",
+        &[
+            ("counter_id", cid.as_str()),
+            ("page", page_str.as_str()),
+            ("size", size_str.as_str()),
+        ],
+    )
+    .await?;
+    // Convert counter_id fields to symbol format in items list
+    let json_str = resp
+        .content
+        .first()
+        .and_then(|c| c.as_text())
+        .map(|t| t.text.as_str())
+        .unwrap_or("null");
+    let mut value: serde_json::Value =
+        serde_json::from_str(json_str).map_err(crate::error::Error::Serialize)?;
+    if let Some(items) = value.get_mut("items").and_then(|v| v.as_array_mut()) {
+        for item in items.iter_mut() {
+            if let Some(cid_val) = item.get("counter_id").and_then(|v| v.as_str()) {
+                let symbol = counter_id_to_symbol(cid_val);
+                if let Some(obj) = item.as_object_mut() {
+                    obj.remove("counter_id");
+                    obj.insert("symbol".to_string(), serde_json::Value::String(symbol));
+                }
+            }
+        }
+    }
+    let out = serde_json::to_string(&value).map_err(crate::error::Error::Serialize)?;
+    let structured = serde_json::from_str::<serde_json::Value>(&out).ok();
+    let mut result = rmcp::model::CallToolResult::success(vec![rmcp::model::Content::text(out)]);
+    result.structured_content = structured;
+    Ok(result)
 }
