@@ -917,13 +917,6 @@
       "title": "沽空保證金",
       "description": "獲取當前帳戶的沽空保證金存款明細。"
     },
-    "holding_period": {
-      "title": "持倉天數",
-      "description": "獲取一個或多個持倉證券的持有天數。不指定 symbols 則查詢全部持倉。",
-      "properties": {
-        "symbols": "證券代碼列表，例如 `[\"AAPL.US\", \"700.HK\"]`，留空則查詢全部持倉"
-      }
-    },
     "bank_cards": {
       "title": "綁定銀行卡",
       "description": "列出當前帳戶綁定的提款銀行卡。"

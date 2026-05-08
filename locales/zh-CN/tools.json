@@ -917,13 +917,6 @@
       "title": "卖空保证金",
       "description": "获取当前账户的卖空保证金存款明细。"
     },
-    "holding_period": {
-      "title": "持仓天数",
-      "description": "获取一个或多个持仓证券的持有天数。不指定 symbols 则查询全部持仓。",
-      "properties": {
-        "symbols": "证券代码列表，例如 `[\"AAPL.US\", \"700.HK\"]`，留空则查询全部持仓"
-      }
-    },
     "bank_cards": {
       "title": "绑定银行卡",
       "description": "列出当前账户绑定的提款银行卡。"

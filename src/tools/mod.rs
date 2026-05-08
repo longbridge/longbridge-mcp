@@ -2167,21 +2167,6 @@ impl Longbridge {
         measured_tool_call("short_margin", || trade::short_margin(&mctx)).await
     }
 
-    /// Get holding period (days held) for positions.
-    #[tool(
-        title = "Holding Period",
-        annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get holding period in days for one or more security positions. Omit symbols to query all current positions."
-    )]
-    async fn holding_period(
-        &self,
-        ctx: RequestContext<RoleServer>,
-        Parameters(p): Parameters<trade::HoldingPeriodParam>,
-    ) -> Result<CallToolResult, McpError> {
-        let mctx = extract_context(&ctx)?;
-        measured_tool_call("holding_period", || trade::holding_period(&mctx, p)).await
-    }
-
     /// List linked withdrawal bank cards.
     #[tool(
         title = "Bank Cards",

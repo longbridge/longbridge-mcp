@@ -4,9 +4,8 @@ use rmcp::model::CallToolResult;
 use rmcp::schemars::JsonSchema;
 use rmcp::serde::Deserialize;
 
-use crate::counter::symbol_to_counter_id;
 use crate::error::Error;
-use crate::tools::support::http_client::{http_get_tool, http_post_tool};
+use crate::tools::support::http_client::http_get_tool;
 use crate::tools::support::parse;
 use crate::tools::{tool_json, tool_result};
 
@@ -414,29 +413,8 @@ pub async fn estimate_max_purchase_quantity(
     tool_json(&result)
 }
 
-#[derive(Debug, Deserialize, JsonSchema)]
-pub struct HoldingPeriodParam {
-    /// List of security symbols to query, e.g. ["AAPL.US", "700.HK"]. Omit to query all current positions.
-    pub symbols: Option<Vec<String>>,
-}
-
 /// Get short margin deposit details for the current account.
 pub async fn short_margin(mctx: &crate::tools::McpContext) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
     http_get_tool(&client, "/v1/asset/cash/short-margin", &[]).await
-}
-
-/// Get holding period (days held) for positions.
-pub async fn holding_period(
-    mctx: &crate::tools::McpContext,
-    p: HoldingPeriodParam,
-) -> Result<CallToolResult, McpError> {
-    let client = mctx.create_http_client();
-    let symbols = p.symbols.unwrap_or_default();
-    let cids: Vec<serde_json::Value> = symbols
-        .iter()
-        .map(|s| serde_json::Value::String(symbol_to_counter_id(s)))
-        .collect();
-    let body = serde_json::json!({ "counter_ids": cids });
-    http_post_tool(&client, "/v1/asset/positions/holding-period", body).await
 }
