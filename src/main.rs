@@ -49,6 +49,13 @@ struct Cli {
     /// TLS private key file (PEM format)
     #[arg(long)]
     tls_key: Option<PathBuf>,
+
+    /// Run as a stdio MCP server instead of HTTP.
+    /// Exposes tools/list without authentication for directory scanners
+    /// (e.g. Glama).  tools/call will return auth errors for upstream
+    /// calls that require credentials.
+    #[arg(long)]
+    stdio: bool,
 }
 
 /// Resolved configuration (CLI > config file > defaults)
@@ -137,6 +144,30 @@ async fn main() -> anyhow::Result<()> {
     rustls::crypto::ring::default_provider()
         .install_default()
         .expect("failed to install rustls crypto provider");
+
+    // stdio mode: serve via stdin/stdout for directory scanners like Glama.
+    // tools/list works without credentials; tools/call returns auth errors.
+    if std::env::args().any(|a| a == "--stdio") {
+        // In stdio mode stdout is the MCP transport; send all logs to stderr.
+        let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+            .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+        tracing_subscriber::fmt()
+            .with_env_filter(filter)
+            .with_writer(std::io::stderr)
+            .init();
+        let tools = crate::tools::list_tools();
+        tracing::info!(count = tools.len(), "stdio mode: tools available");
+        use rmcp::transport::async_rw::AsyncRwTransport;
+        let transport = AsyncRwTransport::<rmcp::RoleServer, _, _>::new(
+            tokio::io::stdin(),
+            tokio::io::stdout(),
+        );
+        if let Ok(service) = rmcp::serve_server(crate::tools::Longbridge, transport).await {
+            service.waiting().await.ok();
+        }
+        return Ok(());
+    }
+
     let config = load_config();
     init_logging(config.log_dir.as_ref());
 
