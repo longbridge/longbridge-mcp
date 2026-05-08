@@ -31,11 +31,13 @@ mod calendar;
 mod content;
 mod dca;
 mod fundamental;
+mod ipo;
 mod market;
 mod output;
 mod portfolio;
 mod quant;
 mod quote;
+mod search;
 mod sharelist;
 mod statement;
 mod support;
@@ -1956,6 +1958,504 @@ impl Longbridge {
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
         measured_tool_call("quant_run", || quant::run_script(&mctx, p)).await
+    }
+
+    /// Get latest financial report summary for a security.
+    #[tool(
+        title = "Latest Financial Report",
+        annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
+        description = "Get the most recent financial report summary including key indicators"
+    )]
+    async fn latest_financial_report(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<fundamental::SymbolParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("latest_financial_report", || {
+            fundamental::latest_financial_report(&mctx, p)
+        })
+        .await
+    }
+
+    /// Get valuation industry rank over a date range.
+    #[tool(
+        title = "Valuation Industry Rank",
+        annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
+        description = "Get PE/PB/PS/dividend yield industry rank for a security over a date range (YYYYMMDD)"
+    )]
+    async fn valuation_rank(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<fundamental::ValuationRankParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("valuation_rank", || fundamental::valuation_rank(&mctx, p)).await
+    }
+
+    /// Get analyst estimates for a security.
+    #[tool(
+        title = "Analyst Estimates",
+        annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
+        description = "Get multi-dimensional analyst estimates (revenue, EPS, net income) for a security"
+    )]
+    async fn analyst_estimates(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<fundamental::AnalystEstimatesParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("analyst_estimates", || {
+            fundamental::analyst_estimates(&mctx, p)
+        })
+        .await
+    }
+
+    /// Get institution rating history for a security.
+    #[tool(
+        title = "Rating History",
+        annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
+        description = "Get historical institution buy/sell/hold rating distribution over time"
+    )]
+    async fn rating_history(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<fundamental::SymbolParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("rating_history", || fundamental::rating_history(&mctx, p)).await
+    }
+
+    /// Get institution rating industry rank.
+    #[tool(
+        title = "Institution Rating Industry Rank",
+        annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
+        description = "Get institution rating industry ranking and peer comparison for a security"
+    )]
+    async fn institution_rating_industry_rank(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<fundamental::InstitutionRatingIndustryRankParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("institution_rating_industry_rank", || {
+            fundamental::institution_rating_industry_rank(&mctx, p)
+        })
+        .await
+    }
+
+    /// Get short margin collateral detail.
+    #[tool(
+        title = "Short Margin",
+        annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
+        description = "Get short selling margin collateral detail for the account"
+    )]
+    async fn short_margin(
+        &self,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("short_margin", || portfolio::short_margin(&mctx)).await
+    }
+
+    /// Get stock holding period for a position.
+    #[tool(
+        title = "Holding Period",
+        annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
+        description = "Get holding period breakdown for a stock position"
+    )]
+    async fn holding_period(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<portfolio::PortfolioSymbolParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("holding_period", || portfolio::holding_period(&mctx, p)).await
+    }
+
+    /// Get multi-leg option positions.
+    #[tool(
+        title = "Multi-Leg Positions",
+        annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
+        description = "Get multi-leg option combination position details"
+    )]
+    async fn multi_leg_positions(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<portfolio::MultiLegPositionsParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("multi_leg_positions", || {
+            portfolio::multi_leg_positions(&mctx, p)
+        })
+        .await
+    }
+
+    /// Get position and cash detail for order placement.
+    #[tool(
+        title = "Position Trade Info",
+        annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
+        description = "Get current position and available cash detail for a symbol on the order page"
+    )]
+    async fn position_trade_info(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<portfolio::PortfolioSymbolParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("position_trade_info", || {
+            portfolio::position_trade_info(&mctx, p)
+        })
+        .await
+    }
+
+    /// Get trade execution statistics for today.
+    #[tool(
+        title = "Order Statistics",
+        annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
+        description = "Get today's trade execution statistics (orders, fills, amounts, P&L)"
+    )]
+    async fn order_statistics(
+        &self,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("order_statistics", || portfolio::order_statistics(&mctx)).await
+    }
+
+    /// Get user bank card list.
+    #[tool(
+        title = "Bank Cards",
+        annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
+        description = "Get the list of bank cards linked to the account"
+    )]
+    async fn bank_cards(
+        &self,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("bank_cards", || portfolio::bank_cards(&mctx)).await
+    }
+
+    /// Get withdrawal records.
+    #[tool(
+        title = "Withdrawal Records",
+        annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
+        description = "Get account withdrawal history records"
+    )]
+    async fn withdrawal_records(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<portfolio::WithdrawalRecordsParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("withdrawal_records", || {
+            portfolio::withdrawal_records(&mctx, p)
+        })
+        .await
+    }
+
+    /// Get deposit records.
+    #[tool(
+        title = "Deposit Records",
+        annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
+        description = "Get account deposit history records. states: 0=processing, 1=credited, 2=failed"
+    )]
+    async fn deposit_records(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<portfolio::DepositRecordsParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("deposit_records", || portfolio::deposit_records(&mctx, p)).await
+    }
+
+    /// Search news articles by keyword.
+    #[tool(
+        title = "Search News",
+        annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
+        description = "Search news articles by keyword. Use score/publish_at_timestamp/id cursors for pagination."
+    )]
+    async fn search_news(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<search::SearchNewsParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("search_news", || search::search_news(&mctx, p)).await
+    }
+
+    /// Search community posts by keyword.
+    #[tool(
+        title = "Search Topics",
+        annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
+        description = "Search community posts by keyword. topic_type \"1\" = long articles only. Use score/created_at_timestamp cursors for pagination."
+    )]
+    async fn search_topics(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<search::SearchTopicsParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("search_topics", || search::search_topics(&mctx, p)).await
+    }
+
+    /// Get HK IPO subscription list (pending and active).
+    #[tool(
+        title = "IPO Subscriptions (HK)",
+        annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
+        description = "Get HK IPO list including filed and currently subscribing new shares"
+    )]
+    async fn ipo_subscriptions(
+        &self,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("ipo_subscriptions", || ipo::ipo_subscriptions(&mctx)).await
+    }
+
+    /// Get US IPO subscription list (pending and active).
+    #[tool(
+        title = "IPO Subscriptions (US)",
+        annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
+        description = "Get US IPO list including filed and currently subscribing new shares"
+    )]
+    async fn ipo_us_subscriptions(
+        &self,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("ipo_us_subscriptions", || ipo::ipo_us_subscriptions(&mctx)).await
+    }
+
+    /// Get HK IPOs pending listing (grey market).
+    #[tool(
+        title = "IPO Wait Listing (HK)",
+        annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
+        description = "Get HK IPOs in the grey market (pending listing) for a given day timestamp"
+    )]
+    async fn ipo_wait_listing(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<ipo::IpoWaitListingParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("ipo_wait_listing", || ipo::ipo_wait_listing(&mctx, p)).await
+    }
+
+    /// Get US IPOs pending listing (grey market).
+    #[tool(
+        title = "IPO Wait Listing (US)",
+        annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
+        description = "Get US IPOs in the grey market (pending listing) for a given day timestamp"
+    )]
+    async fn ipo_us_wait_listing(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<ipo::IpoWaitListingParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("ipo_us_wait_listing", || ipo::ipo_us_wait_listing(&mctx, p)).await
+    }
+
+    /// Get HK IPO listed securities.
+    #[tool(
+        title = "IPO Listed (HK)",
+        annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
+        description = "Get paginated list of recently listed HK IPO securities"
+    )]
+    async fn ipo_listed(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<ipo::IpoListedParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("ipo_listed", || ipo::ipo_listed(&mctx, p)).await
+    }
+
+    /// Get US IPO listed securities.
+    #[tool(
+        title = "IPO Listed (US)",
+        annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
+        description = "Get paginated list of recently listed US IPO securities"
+    )]
+    async fn ipo_us_listed(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<ipo::IpoListedParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("ipo_us_listed", || ipo::ipo_us_listed(&mctx, p)).await
+    }
+
+    /// Get IPO calendar (all statuses).
+    #[tool(
+        title = "IPO Calendar",
+        annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
+        description = "Get full IPO calendar including subscription dates, result dates, listing dates"
+    )]
+    async fn ipo_calendar(
+        &self,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("ipo_calendar", || ipo::ipo_calendar(&mctx)).await
+    }
+
+    /// Get IPO basic info (price range, total shares).
+    #[tool(
+        title = "IPO Basic",
+        annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
+        description = "Get IPO basic info: min/max/issue price and total shares"
+    )]
+    async fn ipo_basic(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<ipo::IpoSymbolParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("ipo_basic", || ipo::ipo_basic(&mctx, p)).await
+    }
+
+    /// Get IPO detail page info.
+    #[tool(
+        title = "IPO Profile",
+        annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
+        description = "Get detailed IPO profile including prospectus, investors, and schedule"
+    )]
+    async fn ipo_profile(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<ipo::IpoSymbolParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("ipo_profile", || ipo::ipo_profile(&mctx, p)).await
+    }
+
+    /// Get IPO timeline.
+    #[tool(
+        title = "IPO Timeline",
+        annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
+        description = "Get IPO timeline milestones. market: HK. flag: 0=regular, 2=international allocation."
+    )]
+    async fn ipo_timeline(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<ipo::IpoTimelineParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("ipo_timeline", || ipo::ipo_timeline(&mctx, p)).await
+    }
+
+    /// Get current IPO subscription status for a security.
+    #[tool(
+        title = "IPO Active Order",
+        annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
+        description = "Get current IPO subscription order status shown on the stock detail page"
+    )]
+    async fn ipo_active_order(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<ipo::IpoSymbolParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("ipo_active_order", || ipo::ipo_active_order(&mctx, p)).await
+    }
+
+    /// Get user's existing IPO subscription orders.
+    #[tool(
+        title = "IPO Orders",
+        annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
+        description = "Get user's active IPO subscription orders. Optionally filter by symbol."
+    )]
+    async fn ipo_orders(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<ipo::IpoOrdersParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("ipo_orders", || ipo::ipo_orders(&mctx, p)).await
+    }
+
+    /// Get IPO subscription order detail.
+    #[tool(
+        title = "IPO Order Detail",
+        annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
+        description = "Get detailed information for a specific IPO subscription order by order_id"
+    )]
+    async fn ipo_order_detail(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<ipo::IpoOrderDetailParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("ipo_order_detail", || ipo::ipo_order_detail(&mctx, p)).await
+    }
+
+    /// Check if a security is eligible for IPO subscription.
+    #[tool(
+        title = "IPO Eligibility",
+        annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
+        description = "Check whether the current user can subscribe to a given IPO"
+    )]
+    async fn ipo_eligibility(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<ipo::IpoSymbolParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("ipo_eligibility", || ipo::ipo_eligibility(&mctx, p)).await
+    }
+
+    /// Get IPO profit/loss summary.
+    #[tool(
+        title = "IPO Profit/Loss",
+        annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
+        description = "Get IPO profit and loss summary for a period. period: 1m/3m/6m/1y/all"
+    )]
+    async fn ipo_profit_loss(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<ipo::IpoProfitLossParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("ipo_profit_loss", || ipo::ipo_profit_loss(&mctx, p)).await
+    }
+
+    /// Get IPO profit/loss item list.
+    #[tool(
+        title = "IPO Profit/Loss Items",
+        annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
+        description = "Get paginated IPO profit and loss item list for a period. period: 1m/3m/6m/1y/all"
+    )]
+    async fn ipo_profit_loss_items(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<ipo::IpoProfitLossItemsParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("ipo_profit_loss_items", || {
+            ipo::ipo_profit_loss_items(&mctx, p)
+        })
+        .await
+    }
+
+    /// Get IPO holdings detail.
+    #[tool(
+        title = "IPO Holdings Detail",
+        annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
+        description = "Get IPO portfolio detail including financing rate and available purchase limit"
+    )]
+    async fn ipo_holdings_detail(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<ipo::IpoHoldingsDetailParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("ipo_holdings_detail", || {
+            ipo::ipo_holdings_detail(&mctx, p)
+        })
+        .await
     }
 }
 

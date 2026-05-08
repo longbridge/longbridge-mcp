@@ -26,6 +26,44 @@ pub struct ProfitAnalysisDetailParam {
     pub end: Option<String>,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct PortfolioSymbolParam {
+    /// Security symbol, e.g. "700.HK"
+    pub symbol: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct MultiLegPositionsParam {
+    /// List of multi-leg combination identifiers
+    pub multi_legs: Vec<String>,
+    /// Strategy type (optional)
+    pub strategy: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct WithdrawalRecordsParam {
+    /// Page number (optional)
+    pub page: Option<u32>,
+    /// Page size (optional)
+    pub size: Option<u32>,
+    /// Account channel (optional)
+    pub account_channel: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct DepositRecordsParam {
+    /// Page number (optional)
+    pub page: Option<u32>,
+    /// Page size (optional)
+    pub size: Option<u32>,
+    /// Account channel (optional)
+    pub account_channel: Option<String>,
+    /// Currency filter (optional)
+    pub currencies: Option<String>,
+    /// Status filter: 0=processing, 1=credited, 2=failed (optional)
+    pub states: Option<String>,
+}
+
 fn date_to_unix(s: &str, end_of_day: bool) -> Result<i64, McpError> {
     let date = time::Date::parse(s, time::macros::format_description!("[year]-[month]-[day]"))
         .map_err(|e| McpError::invalid_params(format!("invalid date '{s}': {e}"), None))?;
@@ -161,4 +199,109 @@ pub async fn profit_analysis_detail(
         &["start", "end"],
     )
     .await
+}
+
+pub async fn short_margin(mctx: &crate::tools::McpContext) -> Result<CallToolResult, McpError> {
+    let client = mctx.create_http_client();
+    http_get_tool(&client, "/v1/asset/cash/short-margin", &[]).await
+}
+
+pub async fn holding_period(
+    mctx: &crate::tools::McpContext,
+    p: PortfolioSymbolParam,
+) -> Result<CallToolResult, McpError> {
+    let client = mctx.create_http_client();
+    let cid = symbol_to_counter_id(&p.symbol);
+    http_get_tool(
+        &client,
+        "/v1/asset/positions/holding-period",
+        &[("counter_id", cid.as_str())],
+    )
+    .await
+}
+
+pub async fn multi_leg_positions(
+    mctx: &crate::tools::McpContext,
+    p: MultiLegPositionsParam,
+) -> Result<CallToolResult, McpError> {
+    let client = mctx.create_http_client();
+    let mut params: Vec<(&str, &str)> = p
+        .multi_legs
+        .iter()
+        .map(|leg| ("multi_legs", leg.as_str()))
+        .collect();
+    if let Some(ref strategy) = p.strategy {
+        params.push(("strategy", strategy.as_str()));
+    }
+    http_get_tool(&client, "/v1/asset/positions/multi-leg", &params).await
+}
+
+pub async fn position_trade_info(
+    mctx: &crate::tools::McpContext,
+    p: PortfolioSymbolParam,
+) -> Result<CallToolResult, McpError> {
+    let client = mctx.create_http_client();
+    let cid = symbol_to_counter_id(&p.symbol);
+    http_get_tool(
+        &client,
+        "/v1/asset/positions/trade-info",
+        &[("counter_id", cid.as_str())],
+    )
+    .await
+}
+
+pub async fn order_statistics(mctx: &crate::tools::McpContext) -> Result<CallToolResult, McpError> {
+    let client = mctx.create_http_client();
+    http_get_tool(&client, "/v1/asset/trade-analysis", &[]).await
+}
+
+pub async fn bank_cards(mctx: &crate::tools::McpContext) -> Result<CallToolResult, McpError> {
+    let client = mctx.create_http_client();
+    http_get_tool(&client, "/v1/account/bank-cards", &[]).await
+}
+
+pub async fn withdrawal_records(
+    mctx: &crate::tools::McpContext,
+    p: WithdrawalRecordsParam,
+) -> Result<CallToolResult, McpError> {
+    let client = mctx.create_http_client();
+    let page_str = p.page.map(|v| v.to_string());
+    let size_str = p.size.map(|v| v.to_string());
+    let mut params: Vec<(&str, &str)> = vec![];
+    if let Some(ref s) = page_str {
+        params.push(("page", s.as_str()));
+    }
+    if let Some(ref s) = size_str {
+        params.push(("size", s.as_str()));
+    }
+    if let Some(ref s) = p.account_channel {
+        params.push(("account_channel", s.as_str()));
+    }
+    http_get_tool(&client, "/v1/account/withdrawals", &params).await
+}
+
+pub async fn deposit_records(
+    mctx: &crate::tools::McpContext,
+    p: DepositRecordsParam,
+) -> Result<CallToolResult, McpError> {
+    let client = mctx.create_http_client();
+    let page_str = p.page.map(|v| v.to_string());
+    let size_str = p.size.map(|v| v.to_string());
+    let mut params: Vec<(&str, &str)> = vec![];
+    if let Some(ref s) = page_str {
+        params.push(("page", s.as_str()));
+    }
+    if let Some(ref s) = size_str {
+        params.push(("size", s.as_str()));
+    }
+    if let Some(ref s) = p.account_channel {
+        params.push(("account_channel", s.as_str()));
+    }
+    if let Some(ref s) = p.currencies {
+        params.push(("currencies", s.as_str()));
+    }
+    if let Some(ref s) = p.states {
+        params.push(("states", s.as_str()));
+    }
+    http_get_tool(&client, "/v1/account/deposits", &params).await
 }
