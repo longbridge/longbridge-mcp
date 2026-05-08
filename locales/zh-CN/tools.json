@@ -847,6 +847,148 @@
         "script": "指标脚本源代码",
         "input": "脚本输入参数（JSON 数组字符串），顺序需与脚本中 `input.*()` 调用一致，例如 `\"[14,2.0]\"`"
       }
+    },
+    "news_search": {
+      "title": "新闻搜索",
+      "description": "按关键词搜索新闻文章，返回 id、标题、时间、来源及链接。",
+      "properties": {
+        "keyword": "搜索关键词",
+        "limit": "最多返回条数（默认 20）"
+      }
+    },
+    "topic_search": {
+      "title": "社区话题搜索",
+      "description": "按关键词搜索社区帖子/话题，返回 id、作者、时间及摘要。",
+      "properties": {
+        "keyword": "搜索关键词",
+        "limit": "最多返回条数（默认 20）"
+      }
+    },
+    "financial_statement": {
+      "title": "财务报表",
+      "description": "获取证券的财务报表（利润表、资产负债表或现金流量表）。kind：IS（利润表）、BS（资产负债表）、CF（现金流量表）、ALL（全部，默认）。report：af（年报）、saf（半年报）、qf（季报）、q1/q2/q3。",
+      "properties": {
+        "symbol": "证券代码，例如 `\"AAPL.US\"`",
+        "kind": "报表类型：`IS`（利润表）、`BS`（资产负债表）、`CF`（现金流量表）、`ALL`（全部，默认）",
+        "report": "报告期：`af`（年报）、`saf`（半年报）、`qf`（季报）、`q1`/`q2`/`q3`"
+      }
+    },
+    "financial_report_latest": {
+      "title": "最新财务报告",
+      "description": "获取证券最新财务报告的摘要信息，包含主要财务指标。",
+      "properties": {
+        "symbol": "证券代码，例如 `\"AAPL.US\"`"
+      }
+    },
+    "valuation_rank": {
+      "title": "估值分位",
+      "description": "获取证券在指定日期区间内的每日估值分位（PE/PB/PS/股息率行业百分位）。start/end 格式：yyyymmdd。",
+      "properties": {
+        "symbol": "证券代码，例如 `\"AAPL.US\"`",
+        "start": "起始日期，yyyymmdd 格式（默认近 30 天）",
+        "end": "结束日期，yyyymmdd 格式（默认今日）"
+      }
+    },
+    "analyst_estimates": {
+      "title": "分析师一致预期",
+      "description": "获取证券的分析师一致预期（EPS、营收、净利润、EBITDA）。item：EPS（默认）、REV、NET_PROFIT、EBITDA。",
+      "properties": {
+        "symbol": "证券代码，例如 `\"AAPL.US\"`",
+        "item": "预期指标：`EPS`（默认）、`REV`（营收）、`NET_PROFIT`（净利润）、`EBITDA`"
+      }
+    },
+    "institution_rating_history": {
+      "title": "机构评级历史",
+      "description": "获取证券的机构评级历史，包含目标价变动和评级变动记录。",
+      "properties": {
+        "symbol": "证券代码，例如 `\"AAPL.US\"`"
+      }
+    },
+    "institution_rating_industry_rank": {
+      "title": "机构评级行业排名",
+      "description": "获取同行业内各证券按机构分析师评级的排名对比。",
+      "properties": {
+        "symbol": "证券代码，例如 `\"AAPL.US\"`",
+        "page": "页码（默认 1）",
+        "size": "每页条数（默认 20）"
+      }
+    },
+    "short_margin": {
+      "title": "卖空保证金",
+      "description": "获取当前账户的卖空保证金存款明细。"
+    },
+    "bank_cards": {
+      "title": "绑定银行卡",
+      "description": "列出当前账户绑定的提款银行卡。"
+    },
+    "withdrawals": {
+      "title": "提款记录",
+      "description": "获取当前账户的提款历史记录。",
+      "properties": {
+        "page": "页码（默认 1）",
+        "size": "每页条数（默认 20）"
+      }
+    },
+    "deposits": {
+      "title": "入款记录",
+      "description": "获取当前账户的入款历史记录。states：逗号分隔的入款状态过滤。currencies：逗号分隔的货币代码，例如 `\"USD,HKD\"`。",
+      "properties": {
+        "page": "页码（默认 1）",
+        "size": "每页条数（默认 20）",
+        "states": "入款状态过滤（逗号分隔）",
+        "currencies": "货币代码过滤（逗号分隔），例如 `\"USD,HKD\"`"
+      }
+    },
+    "ipo_subscriptions": {
+      "title": "IPO 认购列表",
+      "description": "列出当前港股和美股市场处于认购或预申请阶段的 IPO 股票（合并返回 HK 和 US 两市结果）。"
+    },
+    "ipo_calendar": {
+      "title": "IPO 日历",
+      "description": "显示 IPO 日历，包含所有即将上市及近期已上市的 IPO，含认购日期和上市日期。"
+    },
+    "ipo_listed": {
+      "title": "IPO 已上市列表",
+      "description": "列出港股和美股近期已上市的 IPO，包含发行价、首日涨跌幅及成交量信息。",
+      "properties": {
+        "page": "页码（默认 1）",
+        "size": "每页条数（默认 20）"
+      }
+    },
+    "ipo_detail": {
+      "title": "IPO 详情",
+      "description": "查看某只股票的 IPO 详情，包含招股简介（profile）、时间线（timeline）及认购资格（eligibility）。",
+      "properties": {
+        "symbol": "证券代码，例如 `\"6871.HK\"` 或 `\"ARM.US\"`",
+        "market": "市场：`HK` 或 `US`（默认根据代码后缀推断）"
+      }
+    },
+    "ipo_orders": {
+      "title": "IPO 订单列表",
+      "description": "列出当前账户的 IPO 订单（有效订单和历史订单），可按证券代码、市场或状态过滤。",
+      "properties": {
+        "symbol": "按证券代码过滤，例如 `\"6871.HK\"`",
+        "market": "按市场过滤：`HK` 或 `US`",
+        "status": "按订单状态过滤",
+        "page": "页码（默认 1）",
+        "size": "每页条数（默认 20）"
+      }
+    },
+    "ipo_order_detail": {
+      "title": "IPO 订单详情",
+      "description": "按订单 ID 查看 IPO 订单的详细信息。",
+      "properties": {
+        "order_id": "IPO 订单 ID"
+      }
+    },
+    "ipo_profit_loss": {
+      "title": "IPO 盈亏",
+      "description": "查看当前账户的 IPO 打新盈亏汇总及逐笔明细。period：all（全部，默认）、ytd（今年）、1y（近一年）、3y（近三年）。",
+      "properties": {
+        "period": "时间范围：`all`（全部，默认）、`ytd`（今年）、`1y`（近一年）、`3y`（近三年）",
+        "page": "页码（默认 1）",
+        "size": "每页条数（默认 20）"
+      }
     }
   }
 }

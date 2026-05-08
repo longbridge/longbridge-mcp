@@ -5,6 +5,7 @@ use rmcp::schemars::JsonSchema;
 use rmcp::serde::Deserialize;
 
 use crate::error::Error;
+use crate::tools::support::http_client::http_get_tool;
 use crate::tools::support::parse;
 use crate::tools::{tool_json, tool_result};
 
@@ -410,4 +411,10 @@ pub async fn estimate_max_purchase_quantity(
         .await
         .map_err(Error::longbridge)?;
     tool_json(&result)
+}
+
+/// Get short margin deposit details for the current account.
+pub async fn short_margin(mctx: &crate::tools::McpContext) -> Result<CallToolResult, McpError> {
+    let client = mctx.create_http_client();
+    http_get_tool(&client, "/v1/asset/cash/short-margin", &[]).await
 }
