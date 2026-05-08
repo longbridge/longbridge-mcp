@@ -148,7 +148,13 @@ async fn main() -> anyhow::Result<()> {
     // stdio mode: serve via stdin/stdout for directory scanners like Glama.
     // tools/list works without credentials; tools/call returns auth errors.
     if std::env::args().any(|a| a == "--stdio") {
-        init_logging(None);
+        // In stdio mode stdout is the MCP transport; send all logs to stderr.
+        let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+            .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+        tracing_subscriber::fmt()
+            .with_env_filter(filter)
+            .with_writer(std::io::stderr)
+            .init();
         let tools = crate::tools::list_tools();
         tracing::info!(count = tools.len(), "stdio mode: tools available");
         use rmcp::transport::async_rw::AsyncRwTransport;
@@ -156,9 +162,9 @@ async fn main() -> anyhow::Result<()> {
             tokio::io::stdin(),
             tokio::io::stdout(),
         );
-        rmcp::serve_server(crate::tools::Longbridge, transport)
-            .await
-            .ok();
+        if let Ok(service) = rmcp::serve_server(crate::tools::Longbridge, transport).await {
+            service.waiting().await.ok();
+        }
         return Ok(());
     }
 
