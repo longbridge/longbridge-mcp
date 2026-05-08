@@ -36,6 +36,7 @@ mod output;
 mod portfolio;
 mod quant;
 mod quote;
+mod server_info;
 mod sharelist;
 mod statement;
 mod support;
@@ -156,6 +157,16 @@ impl Longbridge {
         time::OffsetDateTime::now_utc()
             .format(&time::format_description::well_known::Rfc3339)
             .expect("failed to format current time")
+    }
+
+    /// Get server endpoints, capabilities overview, and quick-setup instructions.
+    #[tool(
+        title = "Server Info",
+        annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = false),
+        description = "Get Longbridge MCP server endpoint, capabilities overview, and quick-setup instructions for Claude Code, Cursor, Codex, Zed, and Cherry Studio"
+    )]
+    async fn server_info(&self) -> String {
+        server_info::server_info()
     }
 
     /// Get basic information of securities.
