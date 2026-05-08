@@ -8,6 +8,7 @@ longbridge = { git = "https://github.com/longbridge/openapi.git" }
 rmcp = { version = "1.4", features = [
     "server",
     "transport-streamable-http-server",
+    "transport-io",
     "macros",
 ] }
 axum = { version = "0.8", features = ["macros"] }
