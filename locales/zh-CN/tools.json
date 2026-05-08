@@ -924,13 +924,6 @@
         "symbols": "证券代码列表，例如 `[\"AAPL.US\", \"700.HK\"]`，留空则查询全部持仓"
       }
     },
-    "trade_info": {
-      "title": "交易信息",
-      "description": "获取证券持仓的交易信息（交割规则、可用数量、T+N 规则等）。",
-      "properties": {
-        "symbol": "证券代码，例如 `\"700.HK\"`"
-      }
-    },
     "bank_cards": {
       "title": "绑定银行卡",
       "description": "列出当前账户绑定的提款银行卡。"

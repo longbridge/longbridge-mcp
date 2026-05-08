@@ -2182,21 +2182,6 @@ impl Longbridge {
         measured_tool_call("holding_period", || trade::holding_period(&mctx, p)).await
     }
 
-    /// Get trade info for a security position.
-    #[tool(
-        title = "Trade Info",
-        annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get trade info (settlement, available quantity, T+N rules) for a security position."
-    )]
-    async fn trade_info(
-        &self,
-        ctx: RequestContext<RoleServer>,
-        Parameters(p): Parameters<SymbolParam>,
-    ) -> Result<CallToolResult, McpError> {
-        let mctx = extract_context(&ctx)?;
-        measured_tool_call("trade_info", || trade::trade_info(&mctx, p)).await
-    }
-
     /// List linked withdrawal bank cards.
     #[tool(
         title = "Bank Cards",

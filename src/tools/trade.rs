@@ -440,18 +440,3 @@ pub async fn holding_period(
     let body = serde_json::json!({ "counter_ids": cids });
     http_post_tool(&client, "/v1/asset/positions/holding-period", body).await
 }
-
-/// Get trade info (settlement, available qty, etc.) for a security position.
-pub async fn trade_info(
-    mctx: &crate::tools::McpContext,
-    p: SymbolParam,
-) -> Result<CallToolResult, McpError> {
-    let client = mctx.create_http_client();
-    let cid = symbol_to_counter_id(&p.symbol);
-    http_get_tool(
-        &client,
-        "/v1/asset/positions/trade-info",
-        &[("counter_id", cid.as_str())],
-    )
-    .await
-}

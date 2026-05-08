@@ -924,13 +924,6 @@
         "symbols": "證券代碼列表，例如 `[\"AAPL.US\", \"700.HK\"]`，留空則查詢全部持倉"
       }
     },
-    "trade_info": {
-      "title": "交易資訊",
-      "description": "獲取證券持倉的交易資訊（交割規則、可用數量、T+N 規則等）。",
-      "properties": {
-        "symbol": "證券代碼，例如 `\"700.HK\"`"
-      }
-    },
     "bank_cards": {
       "title": "綁定銀行卡",
       "description": "列出當前帳戶綁定的提款銀行卡。"
