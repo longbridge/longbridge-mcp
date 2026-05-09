@@ -3,7 +3,7 @@ use rmcp::model::CallToolResult;
 use rmcp::schemars::JsonSchema;
 use rmcp::serde::Deserialize;
 
-use crate::tools::support::http_client::http_get_tool;
+use crate::tools::support::http_client::http_get_tool_unix;
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct FinanceCalendarParam {
@@ -39,5 +39,11 @@ pub async fn finance_calendar(
         market_upper = m.to_uppercase();
         params.push(("markets[]", market_upper.as_str()));
     }
-    http_get_tool(&client, "/v1/quote/finance_calendar", &params).await
+    http_get_tool_unix(
+        &client,
+        "/v1/quote/finance_calendar",
+        &params,
+        &["list.*.infos.*.datetime"],
+    )
+    .await
 }

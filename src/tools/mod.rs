@@ -222,7 +222,7 @@ impl Longbridge {
     #[tool(
         title = "Security Static Info",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get basic information of securities (name, exchange, type, lot_size)"
+        description = "Get basic information of securities (name_cn, name_en, exchange, type, lot_size)"
     )]
     async fn static_info(
         &self,
@@ -283,7 +283,7 @@ impl Longbridge {
         title = "Order Book Depth",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
         output_schema = schema_for::<output::DepthResponse>(),
-        description = "Get order book depth (bid/ask levels)"
+        description = "Get order book depth (asks/bids arrays with price, volume, order_count)"
     )]
     async fn depth(
         &self,
