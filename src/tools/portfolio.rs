@@ -118,7 +118,7 @@ pub async fn profit_analysis(
     merged.insert("sublist".to_owned(), sublist);
 
     let mut value = serde_json::Value::Object(merged);
-    convert_unix_paths(&mut value, &["end_time", "trade_update_time"]);
+    convert_unix_paths(&mut value, &["start_time", "end_time", "trade_update_time"]);
 
     Ok(CallToolResult::success(vec![Content::text(
         value.to_string(),
