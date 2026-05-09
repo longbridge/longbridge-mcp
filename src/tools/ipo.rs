@@ -4,7 +4,7 @@ use rmcp::schemars::JsonSchema;
 use rmcp::serde::Deserialize;
 
 use crate::counter::symbol_to_counter_id;
-use crate::tools::support::http_client::http_get_tool;
+use crate::tools::support::http_client::{http_get_tool, http_get_tool_unix};
 
 fn make_result(json: String) -> CallToolResult {
     let structured = serde_json::from_str::<serde_json::Value>(&json).ok();
@@ -81,7 +81,7 @@ pub async fn ipo_subscriptions(
 /// Show the IPO calendar (all upcoming and recent IPOs).
 pub async fn ipo_calendar(mctx: &crate::tools::McpContext) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
-    http_get_tool(&client, "/v1/ipo/calendar", &[]).await
+    http_get_tool_unix(&client, "/v1/ipo/calendar", &[], &["timestamp"]).await
 }
 
 /// List recently listed IPO stocks (HK and US).
