@@ -340,14 +340,6 @@ pub struct ValuationRankParam {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
-pub struct AnalystEstimatesParam {
-    /// Security symbol, e.g. "AAPL.US"
-    pub symbol: String,
-    /// Estimate item: "EPS" (default), "REV", "NET_PROFIT", "EBITDA"
-    pub item: Option<String>,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
 pub struct InstitutionRatingIndustryRankParam {
     /// Security symbol, e.g. "AAPL.US"
     pub symbol: String,
@@ -417,22 +409,6 @@ pub async fn valuation_rank(
             "ps.*.timestamp",
             "dvd.*.timestamp",
         ],
-    )
-    .await
-}
-
-/// Get analyst consensus estimates for a security.
-pub async fn analyst_estimates(
-    mctx: &crate::tools::McpContext,
-    p: AnalystEstimatesParam,
-) -> Result<CallToolResult, McpError> {
-    let client = mctx.create_http_client();
-    let cid = symbol_to_counter_id(&p.symbol);
-    let item = p.item.unwrap_or_else(|| "EPS".to_string()).to_uppercase();
-    http_get_tool(
-        &client,
-        "/v1/quote/estimates",
-        &[("counter_id", cid.as_str()), ("item", item.as_str())],
     )
     .await
 }
