@@ -1203,7 +1203,7 @@ impl Longbridge {
     #[tool(
         title = "Operating Performance",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get company operating metrics"
+        description = "Get company operating metrics. Only supports HK stocks."
     )]
     async fn operating(
         &self,
@@ -2097,24 +2097,6 @@ impl Longbridge {
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
         measured_tool_call("valuation_rank", || fundamental::valuation_rank(&mctx, p)).await
-    }
-
-    /// Get analyst consensus estimates for a security.
-    #[tool(
-        title = "Analyst Estimates",
-        annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get analyst consensus estimates (EPS, revenue, net profit, EBITDA) for a security. item: EPS (default), REV, NET_PROFIT, EBITDA."
-    )]
-    async fn analyst_estimates(
-        &self,
-        ctx: RequestContext<RoleServer>,
-        Parameters(p): Parameters<fundamental::AnalystEstimatesParam>,
-    ) -> Result<CallToolResult, McpError> {
-        let mctx = extract_context(&ctx)?;
-        measured_tool_call("analyst_estimates", || {
-            fundamental::analyst_estimates(&mctx, p)
-        })
-        .await
     }
 
     /// Get institution rating history for a security.
