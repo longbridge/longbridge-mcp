@@ -1203,7 +1203,7 @@ impl Longbridge {
     #[tool(
         title = "Operating Performance",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get company operating metrics"
+        description = "Get company operating metrics. Only supports HK stocks."
     )]
     async fn operating(
         &self,
