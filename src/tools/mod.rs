@@ -82,6 +82,8 @@ where
 pub struct McpContext {
     pub token: String,
     pub language: Option<String>,
+    /// Extra headers to forward to upstream Longbridge services.
+    pub extra_headers: Vec<(String, String)>,
 }
 
 impl McpContext {
@@ -104,11 +106,17 @@ impl McpContext {
     }
 
     pub fn create_http_client(&self) -> longbridge::httpclient::HttpClient {
-        longbridge::httpclient::HttpClient::new(
+        let mut client = longbridge::httpclient::HttpClient::new(
             longbridge::httpclient::HttpClientConfig::from_oauth(
                 longbridge::oauth::OAuth::from_token(&self.token),
             ),
-        )
+        );
+        // NOTE: This is very important for passing headers to upstream Longbridge services.
+        // Do not remove this unless you have a good reason and know exactly which headers to forward instead.
+        for (key, value) in &self.extra_headers {
+            client = client.header(key.as_str(), value.as_str());
+        }
+        client
     }
 
     /// Extracts `account_channel` from the JWT bearer token's `sub` claim.
@@ -169,6 +177,15 @@ fn base64url_decode(input: &str) -> Option<Vec<u8>> {
     Some(out)
 }
 
+fn collect_headers(headers: &axum::http::HeaderMap) -> Vec<(String, String)> {
+    headers
+        .iter()
+        .filter_map(|(name, value)| {
+            Some((name.as_str().to_string(), value.to_str().ok()?.to_string()))
+        })
+        .collect()
+}
+
 fn extract_context(ctx: &RequestContext<RoleServer>) -> Result<McpContext, McpError> {
     let parts = ctx
         .extensions
@@ -186,6 +203,9 @@ fn extract_context(ctx: &RequestContext<RoleServer>) -> Result<McpContext, McpEr
     Ok(McpContext {
         token: token.0.clone(),
         language,
+        // NOTE: This is very important for passing headers to upstream Longbridge services.
+        // Do not remove this unless you have a good reason and know exactly which headers to forward instead.
+        extra_headers: collect_headers(&parts.headers),
     })
 }
 
@@ -2304,3 +2324,51 @@ impl Longbridge {
     instructions = "Longbridge OpenAPI MCP Server - provides market data, trading, and financial analysis tools"
 )]
 impl ServerHandler for Longbridge {}
+
+#[cfg(test)]
+mod tests {
+    use axum::http::{HeaderMap, HeaderName, HeaderValue};
+
+    use super::collect_headers;
+
+    #[test]
+    fn collects_all_valid_headers() {
+        let mut map = HeaderMap::new();
+        map.insert(
+            HeaderName::from_static("x-custom"),
+            HeaderValue::from_static("hello"),
+        );
+        map.insert(
+            HeaderName::from_static("accept-language"),
+            HeaderValue::from_static("zh-CN"),
+        );
+        let headers = collect_headers(&map);
+        assert!(headers.iter().any(|(k, v)| k == "x-custom" && v == "hello"));
+        assert!(
+            headers
+                .iter()
+                .any(|(k, v)| k == "accept-language" && v == "zh-CN")
+        );
+    }
+
+    #[test]
+    fn skips_non_utf8_values() {
+        let mut map = HeaderMap::new();
+        map.insert(
+            HeaderName::from_static("x-valid"),
+            HeaderValue::from_static("ok"),
+        );
+        map.insert(
+            HeaderName::from_static("x-binary"),
+            HeaderValue::from_bytes(&[0x80, 0x81]).unwrap(),
+        );
+        let headers = collect_headers(&map);
+        assert!(headers.iter().any(|(k, v)| k == "x-valid" && v == "ok"));
+        assert!(!headers.iter().any(|(k, _)| k == "x-binary"));
+    }
+
+    #[test]
+    fn empty_map_returns_empty() {
+        assert!(collect_headers(&HeaderMap::new()).is_empty());
+    }
+}
