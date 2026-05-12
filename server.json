@@ -1,8 +1,8 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-09-29/server.schema.json",
   "name": "com.longbridge/mcp",
-  "description": "US/HK markets — 110 tools: real-time quotes, options, orders, fundamentals, alerts, DCA & portfolio",
-  "version": "0.2.1",
+  "description": "US/HK markets — 127 tools: real-time quotes, options, orders, fundamentals, IPO, alerts, DCA & portfolio",
+  "version": "0.2.2",
   "repository": {
     "url": "https://github.com/longbridge/longbridge-mcp",
     "source": "github"
@@ -25,7 +25,7 @@
   "packages": [
     {
       "registryType": "oci",
-      "identifier": "ghcr.io/longbridge/longbridge-mcp:0.2.1",
+      "identifier": "ghcr.io/longbridge/longbridge-mcp:0.2.2",
       "transport": {
         "type": "streamable-http",
         "url": "http://localhost:8000/mcp",
@@ -92,9 +92,9 @@
         }
       },
       "localizedDescriptions": {
-        "en": "Longbridge — official MCP server for the Longbridge brokerage. 110 tools across real-time quotes, options, order routing, fundamentals, calendars, alerts, DCA and portfolio analytics for US / HK markets.",
-        "zh-CN": "长桥证券官方 MCP 服务：110 个工具覆盖美股 / 港股的实时行情、期权、下单路由、基本面、财报日历、价格预警、定投计划与组合分析。",
-        "zh-HK": "長橋證券官方 MCP 伺服器：110 個工具覆蓋美股 / 港股的即時行情、期權、下單路由、基本面、財報日曆、價格警示、定投計劃與組合分析。"
+        "en": "Longbridge — official MCP server for the Longbridge brokerage. 127 tools across real-time quotes, options, order routing, fundamentals, IPO, calendars, alerts, DCA and portfolio analytics for US / HK markets.",
+        "zh-CN": "长桥证券官方 MCP 服务：127 个工具覆盖美股 / 港股的实时行情、期权、下单路由、基本面、IPO 打新、财报日历、价格预警、定投计划与组合分析。",
+        "zh-HK": "長橋證券官方 MCP 伺服器：127 個工具覆蓋美股 / 港股的即時行情、期權、下單路由、基本面、IPO 打新、財報日曆、價格警示、定投計劃與組合分析。"
       },
       "icons": [
         {
@@ -138,17 +138,20 @@
           "name": "Hong Kong"
         }
       ],
-      "toolCount": 110,
+      "toolCount": 127,
       "toolCategories": {
         "quote": 32,
-        "fundamental": 18,
+        "fundamental": 16,
         "trade": 14,
         "market": 9,
         "dca": 9,
+        "ipo": 8,
         "content": 8,
         "sharelist": 8,
         "alert": 5,
+        "atm": 3,
         "portfolio": 3,
+        "search": 2,
         "statement": 2,
         "calendar": 1,
         "utility": 1

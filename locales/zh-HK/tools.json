@@ -889,14 +889,6 @@
         "end": "結束日期，yyyymmdd 格式（預設今日）"
       }
     },
-    "analyst_estimates": {
-      "title": "分析師一致預期",
-      "description": "獲取證券的分析師一致預期（EPS、營收、淨利潤、EBITDA）。item：EPS（預設）、REV、NET_PROFIT、EBITDA。",
-      "properties": {
-        "symbol": "證券代碼，例如 `\"AAPL.US\"`",
-        "item": "預期指標：`EPS`（預設）、`REV`（營收）、`NET_PROFIT`（淨利潤）、`EBITDA`"
-      }
-    },
     "institution_rating_history": {
       "title": "機構評級歷史",
       "description": "獲取證券的機構評級歷史，包含目標價變動和評級變動記錄。",
