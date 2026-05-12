@@ -82,6 +82,8 @@ where
 pub struct McpContext {
     pub token: String,
     pub language: Option<String>,
+    /// Extra headers to forward to upstream Longbridge services.
+    pub extra_headers: Vec<(String, String)>,
 }
 
 impl McpContext {
@@ -104,11 +106,15 @@ impl McpContext {
     }
 
     pub fn create_http_client(&self) -> longbridge::httpclient::HttpClient {
-        longbridge::httpclient::HttpClient::new(
+        let mut client = longbridge::httpclient::HttpClient::new(
             longbridge::httpclient::HttpClientConfig::from_oauth(
                 longbridge::oauth::OAuth::from_token(&self.token),
             ),
-        )
+        );
+        for (key, value) in &self.extra_headers {
+            client = client.header(key.as_str(), value.as_str());
+        }
+        client
     }
 
     /// Extracts `account_channel` from the JWT bearer token's `sub` claim.
@@ -183,9 +189,18 @@ fn extract_context(ctx: &RequestContext<RoleServer>) -> Result<McpContext, McpEr
         .get("accept-language")
         .and_then(|v| v.to_str().ok())
         .map(|s| s.to_string());
+    let extra_headers: Vec<(String, String)> = parts
+        .headers
+        .iter()
+        .filter_map(|(name, value)| {
+            Some((name.as_str().to_string(), value.to_str().ok()?.to_string()))
+        })
+        .collect();
+    tracing::debug!(headers = ?extra_headers, "forwarding headers to upstream");
     Ok(McpContext {
         token: token.0.clone(),
         language,
+        extra_headers,
     })
 }
 
