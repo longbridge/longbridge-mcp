@@ -235,8 +235,15 @@ pub async fn constituent(
 pub struct IndustryRankParam {
     /// Market: "US" | "HK" | "CN" | "SG"
     pub market: String,
-    /// Ranking indicator: 0=leading-gainer 1=today-trend 2=popularity 3=market-cap
-    ///   4=revenue 5=revenue-growth 6=net-profit 7=net-profit-growth (default: 0)
+    /// Ranking indicator (default: 0):
+    ///   0 = 领涨行业 (leading-gainer)
+    ///   1 = 今日走势 (today-trend)
+    ///   2 = 行业人气 (popularity)
+    ///   3 = 市值 (market-cap)
+    ///   4 = 营收 (revenue)
+    ///   5 = 营收增长率 (revenue-growth)
+    ///   6 = 净利润 (net-profit)
+    ///   7 = 净利润增长率 (net-profit-growth)
     pub indicator: Option<u32>,
     /// Sort direction: "desc" (default) | "asc"
     pub sort_type: Option<String>,
