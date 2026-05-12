@@ -1,8 +1,8 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-09-29/server.schema.json",
   "name": "com.longbridge/mcp",
-  "description": "US/HK markets — 127 tools: real-time quotes, options, orders, fundamentals, IPO, alerts, DCA & portfolio",
-  "version": "0.2.2",
+  "description": "US/HK markets — 127 tools: quotes, options, orders, fundamentals, IPO, alerts, DCA & portfolio",
+  "version": "0.2.3",
   "repository": {
     "url": "https://github.com/longbridge/longbridge-mcp",
     "source": "github"
@@ -25,7 +25,7 @@
   "packages": [
     {
       "registryType": "oci",
-      "identifier": "ghcr.io/longbridge/longbridge-mcp:0.2.2",
+      "identifier": "ghcr.io/longbridge/longbridge-mcp:0.2.3",
       "transport": {
         "type": "streamable-http",
         "url": "http://localhost:8000/mcp",
