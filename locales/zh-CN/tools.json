@@ -889,14 +889,6 @@
         "end": "结束日期，yyyymmdd 格式（默认今日）"
       }
     },
-    "analyst_estimates": {
-      "title": "分析师一致预期",
-      "description": "获取证券的分析师一致预期（EPS、营收、净利润、EBITDA）。item：EPS（默认）、REV、NET_PROFIT、EBITDA。",
-      "properties": {
-        "symbol": "证券代码，例如 `\"AAPL.US\"`",
-        "item": "预期指标：`EPS`（默认）、`REV`（营收）、`NET_PROFIT`（净利润）、`EBITDA`"
-      }
-    },
     "institution_rating_history": {
       "title": "机构评级历史",
       "description": "获取证券的机构评级历史，包含目标价变动和评级变动记录。",
