@@ -4,7 +4,7 @@ use rmcp::model::CallToolResult;
 use rmcp::schemars::JsonSchema;
 use rmcp::serde::Deserialize;
 
-use crate::counter::{index_symbol_to_counter_id, symbol_to_counter_id};
+use crate::counter::{bk_counter_to_symbol, index_symbol_to_counter_id, symbol_to_counter_id};
 use crate::error::Error;
 use crate::serialize::convert_unix_paths;
 use crate::tools::support::http_client::{http_get_tool, http_get_tool_unix};
@@ -229,4 +229,74 @@ pub async fn constituent(
         &[("counter_id", cid.as_str())],
     )
     .await
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct IndustryRankParam {
+    /// Market: "US" | "HK" | "CN" | "SG"
+    pub market: String,
+    /// Ranking indicator: 0=leading-gainer 1=today-trend 2=popularity 3=market-cap
+    ///   4=revenue 5=revenue-growth 6=net-profit 7=net-profit-growth (default: 0)
+    pub indicator: Option<u32>,
+    /// Sort direction: "desc" (default) | "asc"
+    pub sort_type: Option<String>,
+    /// Number of results (default: 20)
+    pub limit: Option<u32>,
+}
+
+pub async fn industry_rank(
+    mctx: &crate::tools::McpContext,
+    p: IndustryRankParam,
+) -> Result<CallToolResult, McpError> {
+    let client = mctx.create_http_client();
+    let indicator = p.indicator.unwrap_or(0).to_string();
+    let sort_type = p.sort_type.unwrap_or_else(|| "desc".to_string());
+    let limit = p.limit.unwrap_or(20).to_string();
+    let result = http_get_tool(
+        &client,
+        "/v1/quote/industry/rank",
+        &[
+            ("market", p.market.as_str()),
+            ("indicator", indicator.as_str()),
+            ("sort_type", sort_type.as_str()),
+            ("limit", limit.as_str()),
+        ],
+    )
+    .await?;
+    let text = result
+        .content
+        .first()
+        .and_then(|c| c.as_text())
+        .map(|t| t.text.clone())
+        .unwrap_or_default();
+    let mut value: serde_json::Value =
+        serde_json::from_str(&text).map_err(crate::error::Error::Serialize)?;
+    convert_bk_counter_ids(&mut value);
+    let out = serde_json::to_string(&value).map_err(crate::error::Error::Serialize)?;
+    let structured = serde_json::from_str::<serde_json::Value>(&out).ok();
+    let mut res = rmcp::model::CallToolResult::success(vec![rmcp::model::Content::text(out)]);
+    res.structured_content = structured;
+    Ok(res)
+}
+
+fn convert_bk_counter_ids(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(map) => {
+            if let Some(cid) = map.get("counter_id").and_then(|v| v.as_str()) {
+                let sym = bk_counter_to_symbol(cid);
+                if !sym.is_empty() {
+                    map.insert("symbol".to_string(), serde_json::Value::String(sym));
+                }
+            }
+            for v in map.values_mut() {
+                convert_bk_counter_ids(v);
+            }
+        }
+        serde_json::Value::Array(arr) => {
+            for v in arr.iter_mut() {
+                convert_bk_counter_ids(v);
+            }
+        }
+        _ => {}
+    }
 }

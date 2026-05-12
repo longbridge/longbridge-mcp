@@ -50,6 +50,26 @@ pub fn symbol_to_counter_id(symbol: &str) -> String {
     }
 }
 
+/// Convert an industry index symbol (e.g. `IN00270.US`) to a BK counter_id (e.g. `BK/US/IN00270`).
+pub fn bk_symbol_to_counter(symbol: &str) -> String {
+    if let Some((code, market)) = symbol.rsplit_once('.') {
+        format!("BK/{}/{}", market.to_uppercase(), code.to_uppercase())
+    } else {
+        symbol.to_string()
+    }
+}
+
+/// Convert a BK counter_id (e.g. `BK/US/IN00270`) to an industry index symbol (e.g. `IN00270.US`).
+/// Returns an empty string if input is not a BK counter_id.
+pub fn bk_counter_to_symbol(counter_id: &str) -> String {
+    let parts: Vec<&str> = counter_id.splitn(3, '/').collect();
+    if parts.len() == 3 && parts[0] == "BK" {
+        format!("{}.{}", parts[2], parts[1])
+    } else {
+        String::new()
+    }
+}
+
 /// Alias kept for call-site compatibility; delegates to `symbol_to_counter_id`.
 pub fn index_symbol_to_counter_id(symbol: &str) -> String {
     symbol_to_counter_id(symbol)

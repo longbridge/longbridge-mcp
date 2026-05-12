@@ -2317,6 +2317,108 @@ impl Longbridge {
         let mctx = extract_context(&ctx)?;
         measured_tool_call("ipo_profit_loss", || ipo::ipo_profit_loss(&mctx, p)).await
     }
+
+    /// Get current-period business segment revenue breakdown.
+    #[tool(
+        title = "Business Segments",
+        annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
+        description = "Get current-period business segment revenue breakdown for a symbol (name, percent, total, currency)"
+    )]
+    async fn business_segments(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<fundamental::BusinessSegmentsParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("business_segments", || {
+            fundamental::business_segments(&mctx, p)
+        })
+        .await
+    }
+
+    /// Get historical business segment revenue trends.
+    #[tool(
+        title = "Business Segments History",
+        annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
+        description = "Get historical business segment revenue trends (by period and category). Returns historical[].{date, total, currency, business[{name,percent,value}], regionals[{name,percent,value}]}"
+    )]
+    async fn business_segments_history(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<fundamental::BusinessSegmentsHistoryParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("business_segments_history", || {
+            fundamental::business_segments_history(&mctx, p)
+        })
+        .await
+    }
+
+    /// Get monthly institutional rating distribution timeline.
+    #[tool(
+        title = "Institutional Views",
+        annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
+        description = "Get monthly institutional rating distribution timeline (buy/outperform/hold/underperform/sell counts per month)"
+    )]
+    async fn institutional_views(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<fundamental::SymbolParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("institutional_views", || {
+            fundamental::institutional_views(&mctx, p)
+        })
+        .await
+    }
+
+    /// Get industry ranking list by market and indicator.
+    #[tool(
+        title = "Industry Rank",
+        annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
+        description = "Get industry ranking list by market and indicator. Returns items[]{symbol(IN00xxx.US), name, chg, lists[]{symbol, name, chg, value_name, value_data}}. Use symbol with industry_peers tool."
+    )]
+    async fn industry_rank(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<market::IndustryRankParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("industry_rank", || market::industry_rank(&mctx, p)).await
+    }
+
+    /// Get hierarchical industry peer group tree for an industry index symbol.
+    #[tool(
+        title = "Industry Peers",
+        annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
+        description = "Get hierarchical industry peer group tree for an industry index (IN00xxx.US format). Use industry_rank to find symbols. Returns chain{name,counter_id,stock_num,chg,ytd_chg,next[]} and top{name,market}."
+    )]
+    async fn industry_peers(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<fundamental::IndustryPeersParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("industry_peers", || fundamental::industry_peers(&mctx, p)).await
+    }
+
+    /// Get AI earnings summary and peer company earnings dates.
+    #[tool(
+        title = "Financial Report Snapshot",
+        annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
+        description = "Get AI earnings summary (ai_summary), beat/miss analysis on revenue/EBIT/net-asset-value vs consensus (forecast_data), and peer company upcoming earnings dates (peer_companies[]{ticker,name,report_date})"
+    )]
+    async fn financial_report_snapshot(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<fundamental::FinancialReportSnapshotParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("financial_report_snapshot", || {
+            fundamental::financial_report_snapshot(&mctx, p)
+        })
+        .await
+    }
 }
 
 #[tool_handler(

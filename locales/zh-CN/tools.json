@@ -981,6 +981,30 @@
         "page": "页码（默认 1）",
         "size": "每页条数（默认 20）"
       }
+    },
+    "business_segments": {
+      "title": "主营业务分部",
+      "description": "获取当期主营业务分部营收占比快照（各分部名称、占比、总营收、货币单位）。"
+    },
+    "business_segments_history": {
+      "title": "主营业务分部历史",
+      "description": "获取主营业务分部营收历史趋势，含地区维度。report：qf（季报）、saf（中报）、af（年报）。"
+    },
+    "institutional_views": {
+      "title": "机构观点月度时序",
+      "description": "获取机构评级月度分布时序（每月买入/跑赢/持有/跑输/卖出家数）。"
+    },
+    "industry_rank": {
+      "title": "行业排行榜",
+      "description": "按市场和指标获取行业排行列表，返回 IN00xxx.US 格式 symbol，可用于 industry_peers 工具。indicator：0=领涨 1=今日走势 2=人气 3=市值 4=营收 5=营收增长率 6=净利润 7=净利润增长率。"
+    },
+    "industry_peers": {
+      "title": "行业同业分组树",
+      "description": "获取行业指数的层级同业树（IN00xxx.US 格式，可由 industry_rank 获取）。返回 chain{name,stock_num,chg,ytd_chg,next[]} 和 top{name,market}。"
+    },
+    "financial_report_snapshot": {
+      "title": "财报快照",
+      "description": "获取 AI 财报总结（ai_summary）、营收/EBIT/净资产预期对比（forecast_data）及同业公司财报日期列表（peer_companies[]{ticker,name,report_date}）。"
     }
   }
 }
