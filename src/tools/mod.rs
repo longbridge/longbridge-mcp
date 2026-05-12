@@ -62,7 +62,9 @@ fn tool_result(json: String) -> CallToolResult {
     // MCP spec §tool-result: a tool that declares an `outputSchema` MUST
     // return `structuredContent`. We populate it for every response so the
     // invariant holds regardless of which tools gain a schema in the future.
-    let structured = serde_json::from_str::<serde_json::Value>(&json).ok();
+    let structured = serde_json::from_str::<serde_json::Value>(&json)
+        .ok()
+        .filter(serde_json::Value::is_object);
     let mut result = CallToolResult::success(vec![Content::text(json)]);
     result.structured_content = structured;
     result
