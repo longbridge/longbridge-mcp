@@ -233,7 +233,7 @@ pub async fn constituent(
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct IndustryRankParam {
-    /// Market: "US" | "HK" | "CN" | "SG"
+    /// Market: "US" | "HK" | "SG" | "CN"
     pub market: String,
     /// Ranking indicator (default: 0):
     ///   0 = 领涨行业 (leading-gainer)
