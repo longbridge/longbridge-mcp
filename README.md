@@ -192,8 +192,11 @@ src/
     mod.rs             MCP tool definitions and ServerHandler impl
     quote.rs           Quote tools (SDK QuoteContext)
     trade.rs           Trade tools (SDK TradeContext)
-    fundamental.rs     Fundamental data (HTTP API)
-    market.rs          Market data extensions (HTTP API)
+    fundamental.rs     Fundamental data, business segments, industry peers (HTTP API)
+    market.rs          Market data, industry rank, broker holdings, anomalies (HTTP API)
+    ipo.rs             IPO subscriptions, calendar, orders, profit/loss (HTTP API)
+    search.rs          News and topic search (HTTP API)
+    atm.rs             Bank cards, withdrawals, deposits (HTTP API)
     calendar.rs        Finance calendar (HTTP API)
     portfolio.rs       Portfolio analytics (HTTP API)
     dca.rs             Dollar-cost averaging / recurring investment (HTTP API)
@@ -204,7 +207,7 @@ src/
     http_client.rs     Shared HTTP client helpers
     parse.rs           Parameter parsing helpers
   serialize/           JSON transformation (snake_case, timestamps, counter_id -> symbol)
-  counter.rs           Symbol <-> counter_id bidirectional conversion
+  counter.rs           Symbol <-> counter_id bidirectional conversion (ST/ETF/IX/BK)
   metrics.rs           Prometheus metric definitions and /metrics handler
   error.rs             Unified error type (thiserror)
 ```
