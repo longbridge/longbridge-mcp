@@ -2427,11 +2427,11 @@ impl Longbridge {
         measured_tool_call("industry_peers", || fundamental::industry_peers(&mctx, p)).await
     }
 
-    /// Get AI earnings summary and peer company earnings dates.
+    /// Get financial report snapshot with actual vs forecast comparison.
     #[tool(
         title = "Financial Report Snapshot",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get AI earnings summary (ai_summary), beat/miss analysis on revenue/EBIT/net-asset-value vs consensus (forecast_data), and peer company upcoming earnings dates (peer_companies[]{ticker,name,report_date})"
+        description = "Get financial report snapshot: report_desc (text summary), fo_revenue/fo_ebit/fo_eps (actual vs forecast with yoy/cmp), fr_* financial ratios (ROE, margins, assets, cash flow). report: qf/saf/af."
     )]
     async fn financial_report_snapshot(
         &self,

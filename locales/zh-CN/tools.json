@@ -1004,7 +1004,7 @@
     },
     "financial_report_snapshot": {
       "title": "财报快照",
-      "description": "获取 AI 财报总结（ai_summary）、营收/EBIT/净资产预期对比（forecast_data）及同业公司财报日期列表（peer_companies[]{ticker,name,report_date}）。"
+      "description": "获取财报快照：report_desc（文字摘要）、fo_revenue/fo_ebit/fo_eps（实际 vs 预期，含同比/超预期描述）、fr_* 财务比率（ROE、利润率、资产负债、现金流）。report：qf/saf/af。"
     }
   }
 }
