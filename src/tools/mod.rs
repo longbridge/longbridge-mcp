@@ -2401,7 +2401,7 @@ impl Longbridge {
     #[tool(
         title = "Industry Rank",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get industry ranking list by market and indicator (0=领涨 1=今日走势 2=人气 3=市值 4=营收 5=营收增长率 6=净利润 7=净利润增长率). Returns items[]{symbol(IN00xxx.US), name, chg, lists[]{symbol,name,chg,value_name,value_data}}."
+        description = "Get industry ranking list by market. sort_by: e.g. \"change_rate\" (涨跌幅). Returns items[]{symbol(IN00xxx.US), name, chg, lists[]{symbol,name,chg,value_name,value_data}}. Use symbol with industry_peers."
     )]
     async fn industry_rank(
         &self,

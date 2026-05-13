@@ -235,20 +235,14 @@ pub async fn constituent(
 pub struct IndustryRankParam {
     /// Market: "US" | "HK" | "SG" | "CN"
     pub market: String,
-    /// Ranking indicator (default: 0):
-    ///   0 = 领涨行业 (leading-gainer)
-    ///   1 = 今日走势 (today-trend)
-    ///   2 = 行业人气 (popularity)
-    ///   3 = 市值 (market-cap)
-    ///   4 = 营收 (revenue)
-    ///   5 = 营收增长率 (revenue-growth)
-    ///   6 = 净利润 (net-profit)
-    ///   7 = 净利润增长率 (net-profit-growth)
-    pub indicator: Option<u32>,
+    /// Sort field, e.g. "change_rate" (涨跌幅, default)
+    pub sort_by: Option<String>,
     /// Sort direction: "desc" (default) | "asc"
-    pub sort_type: Option<String>,
-    /// Number of results (default: 20)
-    pub limit: Option<u32>,
+    pub order: Option<String>,
+    /// Page number (default: 1)
+    pub page: Option<u32>,
+    /// Page size (default: 20)
+    pub size: Option<u32>,
 }
 
 pub async fn industry_rank(
@@ -256,20 +250,20 @@ pub async fn industry_rank(
     p: IndustryRankParam,
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
-    let indicator = p.indicator.unwrap_or(0).to_string();
-    let sort_type = p.sort_type.unwrap_or_else(|| "desc".to_string());
-    let limit = p.limit.unwrap_or(20).to_string();
-    let result = http_get_tool(
-        &client,
-        "/v1/quote/industry/rank",
-        &[
-            ("market", p.market.as_str()),
-            ("indicator", indicator.as_str()),
-            ("sort_type", sort_type.as_str()),
-            ("limit", limit.as_str()),
-        ],
-    )
-    .await?;
+    let order = p.order.unwrap_or_else(|| "desc".to_string());
+    let page = p.page.unwrap_or(1).to_string();
+    let size = p.size.unwrap_or(20).to_string();
+    let mut params: Vec<(&str, &str)> = vec![
+        ("market", p.market.as_str()),
+        ("order", order.as_str()),
+        ("page", page.as_str()),
+        ("size", size.as_str()),
+    ];
+    let sort_by = p.sort_by.unwrap_or_default();
+    if !sort_by.is_empty() {
+        params.push(("sort_by", sort_by.as_str()));
+    }
+    let result = http_get_tool(&client, "/v1/quote/industry/rank", &params).await?;
     let text = result
         .content
         .first()
