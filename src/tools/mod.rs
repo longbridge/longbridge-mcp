@@ -177,11 +177,36 @@ fn base64url_decode(input: &str) -> Option<Vec<u8>> {
     Some(out)
 }
 
+/// Headers that must not be forwarded to upstream Longbridge services.
+/// These are either hop-by-hop headers or MCP/HTTP-level headers that only
+/// make sense for the client↔MCP-server leg, not the MCP-server↔upstream leg.
+const SKIP_FORWARD_HEADERS: &[&str] = &[
+    "host",
+    "content-length",
+    "transfer-encoding",
+    "connection",
+    "te",
+    "trailer",
+    "upgrade",
+    "keep-alive",
+    "proxy-authorization",
+    "proxy-authenticate",
+    "content-type",
+    "accept",
+    "accept-encoding",
+    "mcp-session-id",
+    "authorization",
+];
+
 fn collect_headers(headers: &axum::http::HeaderMap) -> Vec<(String, String)> {
     headers
         .iter()
         .filter_map(|(name, value)| {
-            Some((name.as_str().to_string(), value.to_str().ok()?.to_string()))
+            let key = name.as_str().to_lowercase();
+            if SKIP_FORWARD_HEADERS.contains(&key.as_str()) {
+                return None;
+            }
+            Some((key, value.to_str().ok()?.to_string()))
         })
         .collect()
 }
