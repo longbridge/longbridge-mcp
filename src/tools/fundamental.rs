@@ -533,10 +533,11 @@ pub async fn institutional_views(
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
     let cid = symbol_to_counter_id(&p.symbol);
-    http_get_tool(
+    http_get_tool_unix(
         &client,
         "/v1/quote/ratings/institutional",
         &[("counter_id", cid.as_str())],
+        &["elist.*.date"],
     )
     .await
 }
