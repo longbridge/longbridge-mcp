@@ -1595,6 +1595,8 @@ dependencies = [
  "axum-server",
  "clap",
  "longbridge",
+ "phf",
+ "phf_codegen",
  "prometheus",
  "reqwest 0.12.28",
  "rmcp",

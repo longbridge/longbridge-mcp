@@ -1,52 +1,58 @@
-use std::collections::HashSet;
-use std::sync::OnceLock;
+include!(concat!(env!("OUT_DIR"), "/special_counter_ids.rs"));
 
-static US_ETF_SET: OnceLock<HashSet<&'static str>> = OnceLock::new();
-
-fn us_etf_set() -> &'static HashSet<&'static str> {
-    US_ETF_SET.get_or_init(|| {
-        include_str!("US-ETF.csv")
-            .lines()
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .collect()
-    })
-}
-
-/// Convert a `counter_id` (e.g. `ST/US/TSLA`, `ETF/US/SPY`) back to a display
-/// symbol (e.g. `TSLA.US`, `SPY.US`).
+/// Convert a `counter_id` (e.g. `ST/US/TSLA`, `ETF/US/SPY`, `IX/US/DJI`, `ST/HK/700`) back to
+/// a display symbol (e.g. `TSLA.US`, `SPY.US`, `.DJI.US`, `700.HK`).
+///
+/// US index `counter_ids` (`IX/US/...`) map to leading-dot symbols (e.g. `.DJI.US`).
 pub fn counter_id_to_symbol(counter_id: &str) -> String {
     let parts: Vec<&str> = counter_id.splitn(3, '/').collect();
     if parts.len() == 3 {
-        format!("{}.{}", parts[2], parts[1])
+        let (prefix, market, code) = (parts[0], parts[1], parts[2]);
+        if prefix == "IX" && market == "US" {
+            format!(".{code}.{market}")
+        } else {
+            format!("{code}.{market}")
+        }
     } else {
         counter_id.to_string()
     }
 }
 
-/// Convert a symbol (e.g. `TSLA.US`) to a counter_id (e.g. `ST/US/TSLA`).
-/// US ETFs are detected via embedded list.
+/// Convert a user-supplied symbol (e.g. `TSLA.US`, `700.HK`, `.DJI.US`, `HSI.HK`) to a
+/// `counter_id` (e.g. `ST/US/TSLA`, `ST/HK/700`, `IX/US/DJI`, `IX/HK/HSI`).
+///
+/// Leading-dot symbols (e.g. `.DJI.US`) are US market indexes and always map to `IX/`.
+/// All other symbols are checked against the embedded ETF + IX + WT set; a matching
+/// entry is returned as-is.  Unmatched symbols default to `ST/`.
 pub fn symbol_to_counter_id(symbol: &str) -> String {
     if let Some((code, market)) = symbol.rsplit_once('.') {
         let market = market.to_uppercase();
-        let etf_candidate = format!("ETF/{market}/{code}");
-        if us_etf_set().contains(etf_candidate.as_str()) {
-            etf_candidate
-        } else {
-            format!("ST/{market}/{code}")
+        // Leading-dot symbols are US market indexes (e.g. `.DJI.US` → `IX/US/DJI`)
+        if let Some(ix_code) = code.strip_prefix('.') {
+            return format!("IX/{market}/{ix_code}");
         }
+        // Strip leading zeros from numeric codes (e.g. `00700` → `700`)
+        let code = if code.chars().all(|c| c.is_ascii_digit()) {
+            code.trim_start_matches('0')
+        } else {
+            code
+        };
+        // Check special counter_ids set (ETF, IX, and WT entries)
+        for prefix in &["ETF", "IX", "WT"] {
+            let candidate = format!("{prefix}/{market}/{code}");
+            if SPECIAL_COUNTER_IDS.contains(candidate.as_str()) {
+                return candidate;
+            }
+        }
+        format!("ST/{market}/{code}")
     } else {
         symbol.to_string()
     }
 }
 
-/// Convert an index symbol (e.g. `HSI.HK`) to counter_id (e.g. `IX/HK/HSI`).
+/// Alias kept for call-site compatibility; delegates to `symbol_to_counter_id`.
 pub fn index_symbol_to_counter_id(symbol: &str) -> String {
-    if let Some((code, market)) = symbol.rsplit_once('.') {
-        format!("IX/{}/{code}", market.to_uppercase())
-    } else {
-        symbol.to_string()
-    }
+    symbol_to_counter_id(symbol)
 }
 
 #[cfg(test)]
@@ -69,7 +75,22 @@ mod tests {
     }
 
     #[test]
-    fn index() {
+    fn ix_hk_via_set() {
+        assert_eq!(symbol_to_counter_id("HSI.HK"), "IX/HK/HSI");
+    }
+
+    #[test]
+    fn ix_us_leading_dot() {
+        assert_eq!(symbol_to_counter_id(".DJI.US"), "IX/US/DJI");
+    }
+
+    #[test]
+    fn wt_hk_via_set() {
+        assert_eq!(symbol_to_counter_id("10005.HK"), "WT/HK/10005");
+    }
+
+    #[test]
+    fn index_alias() {
         assert_eq!(index_symbol_to_counter_id("HSI.HK"), "IX/HK/HSI");
     }
 

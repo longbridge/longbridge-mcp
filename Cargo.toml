@@ -3,7 +3,11 @@ name = "longbridge-mcp"
 version = "0.2.3"
 edition = "2024"
 
+[build-dependencies]
+phf_codegen = "0.11"
+
 [dependencies]
+phf = "0.11"
 longbridge = { git = "https://github.com/longbridge/openapi.git" }
 rmcp = { version = "1.4", features = [
     "server",
