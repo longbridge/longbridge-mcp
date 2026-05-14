@@ -11,11 +11,11 @@
   <a href="https://longbridge.com"><img alt="Longbridge" src="https://img.shields.io/badge/brokerage-Longbridge-ffe000?labelColor=000"></a>
 </p>
 
-Official MCP server for the [Longbridge](https://longbridge.com) brokerage. **127 tools** across real-time quotes, options, order routing, fundamentals, analyst ratings, calendars, IPO, price alerts, DCA plans, portfolio analytics and community sharelists — covering **US and HK markets**. Built with Rust using [rmcp](https://github.com/anthropics/rmcp) and [axum](https://github.com/tokio-rs/axum).
+Official MCP server for the [Longbridge](https://longbridge.com) brokerage. **133 tools** across real-time quotes, options, order routing, fundamentals, analyst ratings, calendars, IPO, price alerts, DCA plans, portfolio analytics and community sharelists — covering **US and HK markets**. Built with Rust using [rmcp](https://github.com/anthropics/rmcp) and [axum](https://github.com/tokio-rs/axum).
 
 ## Features
 
-- **127 MCP tools** across 12 categories: quotes, trading, fundamentals, market data, calendars, IPO, portfolio, alerts, content, account statements, DCA, and community sharelists
+- **133 MCP tools** across 12 categories: quotes, trading, fundamentals, market data, calendars, IPO, portfolio, alerts, content, account statements, DCA, and community sharelists
 - **Stateless architecture** -- each request carries a Bearer token forwarded directly to the Longbridge SDK; no server-side sessions or database
 - **OAuth 2.1 resource metadata** compliant with RFC 9728, pointing clients to Longbridge OAuth for authorization
 - **JSON response transformation** -- field names normalized to snake_case, timestamps converted to RFC 3339, internal counter_id values mapped to human-readable symbols
@@ -157,8 +157,8 @@ On the first tool invocation, Claude Code reads the `WWW-Authenticate` challenge
 |----------|-------|-------------|
 | **Quote** | 32 | Real-time and historical quotes, candlesticks, depth, brokers, options, warrants, watchlists, capital flow, market temperature, short positions, option volume |
 | **Trade** | 14 | Order submission/cancellation/replacement, positions, balance, executions, cash flow, margin |
-| **Fundamental** | 16 | Financial statements, latest report, valuation rank, dividends, EPS forecasts, valuations, company info, shareholders, corporate actions |
-| **Market** | 9 | Market status, broker holdings, A/H premium, trade statistics, anomalies, index constituents |
+| **Fundamental** | 19 | Financial statements, business segments, institutional views, industry peers, earnings snapshot, latest report, valuation rank, dividends, EPS forecasts, valuations, company info, shareholders, corporate actions |
+| **Market** | 10 | Market status, industry rank, broker holdings, A/H premium, trade statistics, anomalies, index constituents |
 | **IPO** | 8 | IPO subscriptions, calendar, listed stocks, order detail, profit/loss analysis |
 | **Content** | 8 | News, discussion topics, filing details |
 | **DCA** | 9 | Dollar-cost averaging plan create/update/pause/resume/stop, execution history, statistics, and support check |

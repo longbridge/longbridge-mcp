@@ -1,7 +1,7 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-09-29/server.schema.json",
   "name": "com.longbridge/mcp",
-  "description": "US/HK markets — 127 tools: quotes, options, orders, fundamentals, IPO, alerts, DCA & portfolio",
+  "description": "US/HK markets — 133 tools: quotes, options, orders, fundamentals, IPO, alerts, DCA & portfolio",
   "version": "0.2.3",
   "repository": {
     "url": "https://github.com/longbridge/longbridge-mcp",
@@ -92,9 +92,9 @@
         }
       },
       "localizedDescriptions": {
-        "en": "Longbridge — official MCP server for the Longbridge brokerage. 127 tools across real-time quotes, options, order routing, fundamentals, IPO, calendars, alerts, DCA and portfolio analytics for US / HK markets.",
-        "zh-CN": "长桥证券官方 MCP 服务：127 个工具覆盖美股 / 港股的实时行情、期权、下单路由、基本面、IPO 打新、财报日历、价格预警、定投计划与组合分析。",
-        "zh-HK": "長橋證券官方 MCP 伺服器：127 個工具覆蓋美股 / 港股的即時行情、期權、下單路由、基本面、IPO 打新、財報日曆、價格警示、定投計劃與組合分析。"
+        "en": "Longbridge — official MCP server for the Longbridge brokerage. 133 tools across real-time quotes, options, order routing, fundamentals, IPO, calendars, alerts, DCA and portfolio analytics for US / HK markets.",
+        "zh-CN": "长桥证券官方 MCP 服务：133 个工具覆盖美股 / 港股的实时行情、期权、下单路由、基本面、IPO 打新、财报日历、价格预警、定投计划与组合分析。",
+        "zh-HK": "長橋證券官方 MCP 伺服器：133 個工具覆蓋美股 / 港股的即時行情、期權、下單路由、基本面、IPO 打新、財報日曆、價格警示、定投計劃與組合分析。"
       },
       "icons": [
         {
@@ -138,12 +138,12 @@
           "name": "Hong Kong"
         }
       ],
-      "toolCount": 127,
+      "toolCount": 133,
       "toolCategories": {
         "quote": 32,
-        "fundamental": 16,
+        "fundamental": 19,
         "trade": 14,
-        "market": 9,
+        "market": 10,
         "dca": 9,
         "ipo": 8,
         "content": 8,

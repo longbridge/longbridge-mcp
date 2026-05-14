@@ -230,3 +230,37 @@ pub async fn constituent(
     )
     .await
 }
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct IndustryRankParam {
+    /// Market: "US" | "HK" | "SG" | "CN"
+    pub market: String,
+    /// Ranking indicator (default "0"):
+    ///   "0" = leading-gainer, "1" = today-trend, "2" = popularity,
+    ///   "3" = market-cap, "4" = revenue, "5" = revenue-growth,
+    ///   "6" = net-profit, "7" = net-profit-growth
+    pub indicator: Option<String>,
+    /// Maximum number of results to return
+    pub limit: Option<String>,
+    /// Sort type: "0" = single-level (default), "1" = multi-level
+    pub sort_type: Option<String>,
+}
+
+pub async fn industry_rank(
+    mctx: &crate::tools::McpContext,
+    p: IndustryRankParam,
+) -> Result<CallToolResult, McpError> {
+    let client = mctx.create_http_client();
+    let indicator = p.indicator.unwrap_or_else(|| "0".to_string());
+    let sort_type = p.sort_type.unwrap_or_else(|| "0".to_string());
+    let mut params: Vec<(&str, &str)> = vec![
+        ("market", p.market.as_str()),
+        ("indicator", indicator.as_str()),
+        ("sort_type", sort_type.as_str()),
+    ];
+    let limit = p.limit.unwrap_or_default();
+    if !limit.is_empty() {
+        params.push(("limit", limit.as_str()));
+    }
+    http_get_tool(&client, "/v1/quote/industry/rank", &params).await
+}
