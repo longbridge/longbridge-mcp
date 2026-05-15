@@ -278,17 +278,20 @@ pub async fn industry_rank(
     Ok(res)
 }
 
-/// Walk the response and add a `symbol` field (IN00xxx.MARKET) alongside every BK `counter_id`.
-/// The original `counter_id` is preserved so callers can pass it directly to `industry_peers`.
+/// Walk the response and restore `counter_id` (BK/MARKET/CODE) for industry symbols.
+/// `transform_json` renames `counter_id` → `symbol` and converts values, so the raw
+/// BK counter_id is lost. We detect industry symbols (IN-prefix) and reconstruct the
+/// BK counter_id so callers can pass it directly to `industry_peers`.
 fn convert_bk_counter_ids(value: &mut serde_json::Value) {
     match value {
         serde_json::Value::Object(map) => {
-            if let Some(cid) = map.get("counter_id").and_then(|v| v.as_str()) {
-                // BK/US/IN00258 → IN00258.US
-                let parts: Vec<&str> = cid.splitn(3, '/').collect();
-                if parts.len() == 3 && parts[0] == "BK" {
-                    let sym = format!("{}.{}", parts[2], parts[1]);
-                    map.insert("symbol".to_string(), serde_json::Value::String(sym));
+            if let Some(sym) = map.get("symbol").and_then(|v| v.as_str()) {
+                // IN00258.US → counter_id = BK/US/IN00258
+                if let Some((code, market)) = sym.rsplit_once('.') {
+                    if code.to_uppercase().starts_with("IN") {
+                        let cid = format!("BK/{}/{}", market.to_uppercase(), code.to_uppercase());
+                        map.insert("counter_id".to_string(), serde_json::Value::String(cid));
+                    }
                 }
             }
             for v in map.values_mut() {
