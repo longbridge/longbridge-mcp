@@ -2069,7 +2069,7 @@ impl Longbridge {
     #[tool(
         title = "News Search",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Search news articles by keyword. Returns id, title, time, source and URL."
+        description = "Search news articles by keyword. Returns news_list[]{id, title, description, source_name, publish_at (RFC3339), score}. Paginate with score+publish_at_timestamp+id cursors."
     )]
     async fn news_search(
         &self,
