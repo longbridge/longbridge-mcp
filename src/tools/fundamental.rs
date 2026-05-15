@@ -566,9 +566,17 @@ pub async fn industry_peers(
             .map(|(_, m)| m.to_uppercase())
             .unwrap_or_else(|| "US".to_string())
     };
-    // Accept BK counter_ids directly; otherwise convert symbol → counter_id
+    // Accept BK counter_ids directly (contain '/').
+    // Industry symbols from industry_rank are transformed to IN00xxx.US by transform_json;
+    // detect them by the leading "IN" prefix and map back to BK/<market>/<code>.
     let cid = if p.symbol.contains('/') {
         p.symbol.clone()
+    } else if let Some((code, market)) = p.symbol.rsplit_once('.') {
+        if code.to_uppercase().starts_with("IN") {
+            format!("BK/{}/{}", market.to_uppercase(), code.to_uppercase())
+        } else {
+            symbol_to_counter_id(&p.symbol)
+        }
     } else {
         symbol_to_counter_id(&p.symbol)
     };
