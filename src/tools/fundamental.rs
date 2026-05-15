@@ -473,3 +473,152 @@ pub async fn institution_rating_industry_rank(
     result.structured_content = structured;
     Ok(result)
 }
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct BusinessSegmentsParam {
+    /// Security symbol, e.g. "AAPL.US"
+    pub symbol: String,
+}
+
+pub async fn business_segments(
+    mctx: &crate::tools::McpContext,
+    p: BusinessSegmentsParam,
+) -> Result<CallToolResult, McpError> {
+    let client = mctx.create_http_client();
+    let cid = symbol_to_counter_id(&p.symbol);
+    http_get_tool(
+        &client,
+        "/v1/quote/fundamentals/business-segments",
+        &[("counter_id", cid.as_str())],
+    )
+    .await
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct BusinessSegmentsHistoryParam {
+    /// Security symbol, e.g. "AAPL.US"
+    pub symbol: String,
+    /// Report period: "qf" (quarterly), "saf" (semi-annual), "af" (annual)
+    pub report: Option<String>,
+    /// Segment category filter
+    pub cate: Option<String>,
+}
+
+pub async fn business_segments_history(
+    mctx: &crate::tools::McpContext,
+    p: BusinessSegmentsHistoryParam,
+) -> Result<CallToolResult, McpError> {
+    let client = mctx.create_http_client();
+    let cid = symbol_to_counter_id(&p.symbol);
+    let mut params: Vec<(&str, &str)> = vec![("counter_id", cid.as_str())];
+    let report = p.report.unwrap_or_default();
+    let cate = p.cate.unwrap_or_default();
+    if !report.is_empty() {
+        params.push(("report", report.as_str()));
+    }
+    if !cate.is_empty() {
+        params.push(("cate", cate.as_str()));
+    }
+    http_get_tool(
+        &client,
+        "/v1/quote/fundamentals/business-segments/history",
+        &params,
+    )
+    .await
+}
+
+pub async fn institutional_views(
+    mctx: &crate::tools::McpContext,
+    p: SymbolParam,
+) -> Result<CallToolResult, McpError> {
+    let client = mctx.create_http_client();
+    let cid = symbol_to_counter_id(&p.symbol);
+    http_get_tool_unix(
+        &client,
+        "/v1/quote/ratings/institutional",
+        &[("counter_id", cid.as_str())],
+        &["elist.*.date"],
+    )
+    .await
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct IndustryPeersParam {
+    /// BK counter_id from `industry_rank`, e.g. "BK/US/IN00258".
+    pub symbol: String,
+}
+
+pub async fn industry_peers(
+    mctx: &crate::tools::McpContext,
+    p: IndustryPeersParam,
+) -> Result<CallToolResult, McpError> {
+    let client = mctx.create_http_client();
+    let mkt = if p.symbol.contains('/') {
+        // BK counter_id: BK/US/IN00258 → market = "US"
+        p.symbol.split('/').nth(1).unwrap_or("US").to_uppercase()
+    } else {
+        p.symbol
+            .rsplit_once('.')
+            .map(|(_, m)| m.to_uppercase())
+            .unwrap_or_else(|| "US".to_string())
+    };
+    // Accept BK counter_ids directly (contain '/').
+    // Industry symbols from industry_rank are transformed to IN00xxx.US by transform_json;
+    // detect them by the leading "IN" prefix and map back to BK/<market>/<code>.
+    let cid = if p.symbol.contains('/') {
+        p.symbol.clone()
+    } else if let Some((code, market)) = p.symbol.rsplit_once('.') {
+        if code.to_uppercase().starts_with("IN") {
+            format!("BK/{}/{}", market.to_uppercase(), code.to_uppercase())
+        } else {
+            symbol_to_counter_id(&p.symbol)
+        }
+    } else {
+        symbol_to_counter_id(&p.symbol)
+    };
+    http_get_tool(
+        &client,
+        "/v1/quote/industries/peers",
+        &[
+            ("type", "1"),
+            ("market", mkt.as_str()),
+            ("industry_id", ""),
+            ("counter_id", cid.as_str()),
+        ],
+    )
+    .await
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct FinancialReportSnapshotParam {
+    /// Security symbol, e.g. "AAPL.US"
+    pub symbol: String,
+    /// Report type: "qf" (quarterly), "saf" (semi-annual), "af" (annual)
+    pub report: Option<String>,
+    /// Fiscal year, e.g. 2024
+    pub fiscal_year: Option<u32>,
+    /// Fiscal period, e.g. "1" "2" "3" "4"
+    pub fiscal_period: Option<String>,
+}
+
+pub async fn financial_report_snapshot(
+    mctx: &crate::tools::McpContext,
+    p: FinancialReportSnapshotParam,
+) -> Result<CallToolResult, McpError> {
+    let client = mctx.create_http_client();
+    let cid = symbol_to_counter_id(&p.symbol);
+    let fiscal_year = p.fiscal_year.map(|y| y.to_string());
+    let mut params: Vec<(&str, &str)> = vec![("counter_id", cid.as_str())];
+    let report = p.report.unwrap_or_default();
+    let period = p.fiscal_period.unwrap_or_default();
+    if !report.is_empty() {
+        params.push(("report", report.as_str()));
+    }
+    if let Some(ref y) = fiscal_year {
+        params.push(("fiscal_year", y.as_str()));
+    }
+    if !period.is_empty() {
+        params.push(("fiscal_period", period.as_str()));
+    }
+    http_get_tool(&client, "/v1/quote/financials/earnings-snapshot", &params).await
+}

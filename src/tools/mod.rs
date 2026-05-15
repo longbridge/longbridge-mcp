@@ -177,11 +177,36 @@ fn base64url_decode(input: &str) -> Option<Vec<u8>> {
     Some(out)
 }
 
+/// Headers that must not be forwarded to upstream Longbridge services.
+/// These are either hop-by-hop headers or MCP/HTTP-level headers that only
+/// make sense for the client↔MCP-server leg, not the MCP-server↔upstream leg.
+const SKIP_FORWARD_HEADERS: &[&str] = &[
+    "host",
+    "content-length",
+    "transfer-encoding",
+    "connection",
+    "te",
+    "trailer",
+    "upgrade",
+    "keep-alive",
+    "proxy-authorization",
+    "proxy-authenticate",
+    "content-type",
+    "accept",
+    "accept-encoding",
+    "mcp-session-id",
+    "authorization",
+];
+
 fn collect_headers(headers: &axum::http::HeaderMap) -> Vec<(String, String)> {
     headers
         .iter()
         .filter_map(|(name, value)| {
-            Some((name.as_str().to_string(), value.to_str().ok()?.to_string()))
+            let key = name.as_str().to_lowercase();
+            if SKIP_FORWARD_HEADERS.contains(&key.as_str()) {
+                return None;
+            }
+            Some((key, value.to_str().ok()?.to_string()))
         })
         .collect()
 }
@@ -2316,6 +2341,108 @@ impl Longbridge {
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
         measured_tool_call("ipo_profit_loss", || ipo::ipo_profit_loss(&mctx, p)).await
+    }
+
+    /// Get current-period business segment revenue breakdown.
+    #[tool(
+        title = "Business Segments",
+        annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
+        description = "Get current-period business segment revenue breakdown for a symbol (name, percent, total, currency)"
+    )]
+    async fn business_segments(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<fundamental::BusinessSegmentsParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("business_segments", || {
+            fundamental::business_segments(&mctx, p)
+        })
+        .await
+    }
+
+    /// Get historical business segment revenue trends.
+    #[tool(
+        title = "Business Segments History",
+        annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
+        description = "Get historical business segment revenue trends (by period and category). Returns historical[].{date, total, currency, business[{name,percent,value}], regionals[{name,percent,value}]}"
+    )]
+    async fn business_segments_history(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<fundamental::BusinessSegmentsHistoryParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("business_segments_history", || {
+            fundamental::business_segments_history(&mctx, p)
+        })
+        .await
+    }
+
+    /// Get monthly institutional rating distribution timeline.
+    #[tool(
+        title = "Institutional Views",
+        annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
+        description = "Get monthly institutional rating distribution timeline (buy/outperform/hold/underperform/sell counts per month)"
+    )]
+    async fn institutional_views(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<fundamental::SymbolParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("institutional_views", || {
+            fundamental::institutional_views(&mctx, p)
+        })
+        .await
+    }
+
+    /// Get industry ranking list by market and indicator.
+    #[tool(
+        title = "Industry Rank",
+        annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
+        description = "Industry ranking list by market (US/HK/CN/SG) and indicator (0=领涨/1=今日走势/2=人气/3=市值/4=营收/5=营收增长率/6=净利润/7=净利润增长率). sort_type: 0=单级 1=多层. Returns items[]{counter_id(BK/US/IN00258), name, chg, lists[]}. Pass counter_id directly to industry_peers."
+    )]
+    async fn industry_rank(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<market::IndustryRankParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("industry_rank", || market::industry_rank(&mctx, p)).await
+    }
+
+    /// Get hierarchical industry peer group tree for an industry index symbol.
+    #[tool(
+        title = "Industry Peers",
+        annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
+        description = "Hierarchical sub-sector tree for an industry group. Accepts BK counter_id from industry_rank (e.g. BK/US/IN00258). Returns chain{name,counter_id,stock_num,chg,ytd_chg,next[{...}]} and top{name,market}. Each node shows stock count, daily change, and YTD change."
+    )]
+    async fn industry_peers(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<fundamental::IndustryPeersParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("industry_peers", || fundamental::industry_peers(&mctx, p)).await
+    }
+
+    /// Get financial report snapshot with actual vs forecast comparison.
+    #[tool(
+        title = "Financial Report Snapshot",
+        annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
+        description = "Get financial report snapshot: report_desc (text summary), fo_revenue/fo_ebit/fo_eps (actual vs forecast with yoy/cmp), fr_* financial ratios (ROE, margins, assets, cash flow). report: qf/saf/af."
+    )]
+    async fn financial_report_snapshot(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<fundamental::FinancialReportSnapshotParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("financial_report_snapshot", || {
+            fundamental::financial_report_snapshot(&mctx, p)
+        })
+        .await
     }
 }
 

@@ -230,3 +230,53 @@ pub async fn constituent(
     )
     .await
 }
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct IndustryRankParam {
+    /// Market: "US" | "HK" | "SG" | "CN"
+    pub market: String,
+    /// Ranking indicator (default: "0"):
+    ///   "0" = 领涨行业, "1" = 今日走势, "2" = 行业人气, "3" = 市值,
+    ///   "4" = 营收, "5" = 营收增长率, "6" = 净利润, "7" = 净利润增长率
+    pub indicator: Option<String>,
+    /// Number of results to return (default: returns all)
+    pub limit: Option<String>,
+    /// Sort type: "0" = 单级 (default) | "1" = 多层
+    pub sort_type: Option<String>,
+}
+
+pub async fn industry_rank(
+    mctx: &crate::tools::McpContext,
+    p: IndustryRankParam,
+) -> Result<CallToolResult, McpError> {
+    let client = mctx.create_http_client();
+    let indicator = p.indicator.unwrap_or_else(|| "0".to_string());
+    let sort_type = p.sort_type.unwrap_or_else(|| "0".to_string());
+    let mut params: Vec<(&str, &str)> = vec![
+        ("market", p.market.as_str()),
+        ("indicator", indicator.as_str()),
+        ("sort_type", sort_type.as_str()),
+    ];
+    let limit = p.limit.unwrap_or_default();
+    if !limit.is_empty() {
+        params.push(("limit", limit.as_str()));
+    }
+    // Use the raw HTTP response to preserve BK counter_ids as-is.
+    // http_get_tool applies transform_json which renames counter_id → symbol,
+    // losing the BK format needed by industry_peers.
+    use reqwest::Method;
+    let raw: String = client
+        .request(Method::GET, "/v1/quote/industry/rank")
+        .query_params(params)
+        .response::<String>()
+        .send()
+        .await
+        .map_err(|e| crate::error::Error::Other(e.to_string()))?;
+    let data: serde_json::Value =
+        serde_json::from_str(&raw).map_err(crate::error::Error::Serialize)?;
+    let out = serde_json::to_string(&data).map_err(crate::error::Error::Serialize)?;
+    let structured = serde_json::from_str::<serde_json::Value>(&out).ok();
+    let mut res = rmcp::model::CallToolResult::success(vec![rmcp::model::Content::text(out)]);
+    res.structured_content = structured;
+    Ok(res)
+}
