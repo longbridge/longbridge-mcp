@@ -257,7 +257,7 @@ impl Longbridge {
     #[tool(
         title = "Current Time",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get current UTC time"
+        description = "Get current UTC time as an RFC3339 string (e.g. \"2025-01-15T08:30:00Z\"). Use to determine current date/time before making date-based queries."
     )]
     async fn now(&self) -> String {
         time::OffsetDateTime::now_utc()
@@ -269,7 +269,7 @@ impl Longbridge {
     #[tool(
         title = "Security Static Info",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get basic information of securities (name_cn, name_en, exchange, type, lot_size)"
+        description = "Get static info for securities. Returns per symbol: symbol, name_cn, name_en, exchange (e.g. NASDAQ), type (e.g. US_Stock), lot_size, listed_date, delisted (bool)."
     )]
     async fn static_info(
         &self,
@@ -284,7 +284,7 @@ impl Longbridge {
     #[tool(
         title = "Quote",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get latest price quotes (last_done, open, high, low, volume, turnover)"
+        description = "Get latest price quotes. Returns per symbol: last_done, prev_close, open, high, low, volume, turnover, change_rate, change_value, trade_status, timestamp."
     )]
     async fn quote(
         &self,
@@ -299,7 +299,7 @@ impl Longbridge {
     #[tool(
         title = "Option Quote",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get option quotes (max 500 symbols)"
+        description = "Get option quotes (max 500 symbols). Returns last_done, prev_close, open, high, low, volume, turnover, implied_volatility, delta, gamma, theta, vega, rho, open_interest per symbol."
     )]
     async fn option_quote(
         &self,
@@ -314,7 +314,7 @@ impl Longbridge {
     #[tool(
         title = "Warrant Quote",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get warrant quotes"
+        description = "Get warrant quotes. Returns last_done, prev_close, open, high, low, volume, turnover, implied_volatility, delta, leverage_ratio, effective_leverage per symbol."
     )]
     async fn warrant_quote(
         &self,
@@ -330,7 +330,7 @@ impl Longbridge {
         title = "Order Book Depth",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
         output_schema = schema_for::<output::DepthResponse>(),
-        description = "Get order book depth (asks/bids arrays with price, volume, order_count)"
+        description = "Get order book depth for a symbol. Returns {bids[]{position, price, volume, order_num}, asks[]{position, price, volume, order_num}}. Up to 10 price levels."
     )]
     async fn depth(
         &self,
@@ -346,7 +346,7 @@ impl Longbridge {
         title = "Broker Queue",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
         output_schema = schema_for::<output::BrokersResponse>(),
-        description = "Get broker queue data"
+        description = "Get broker queue (HK only). Returns bid_brokers/ask_brokers arrays, each with position (1-based) and broker_ids. Map broker IDs to names via participants."
     )]
     async fn brokers(
         &self,
@@ -361,7 +361,7 @@ impl Longbridge {
     #[tool(
         title = "Market Participants",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get market participant broker information"
+        description = "Get HK market participant broker information. Returns participants[]{broker_ids[], name_en, name_cn, name_hk}. Use broker_ids to interpret broker queue data."
     )]
     async fn participants(
         &self,
@@ -375,7 +375,7 @@ impl Longbridge {
     #[tool(
         title = "Recent Trades",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get recent trades (max 1000)"
+        description = "Get recent trades (max 1000). Returns trades[]{price, volume, timestamp, trade_type, direction} for the symbol."
     )]
     async fn trades(
         &self,
@@ -457,7 +457,7 @@ impl Longbridge {
         title = "Trading Days",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
         output_schema = schema_for::<output::TradingDaysResponse>(),
-        description = "Get trading days for a market between dates"
+        description = "Get trading days for a market between dates. Returns trading_days[] and half_trading_days[] as \"yyyy-mm-dd\" strings. market: HK/US/CN/SG."
     )]
     async fn trading_days(
         &self,
@@ -472,7 +472,7 @@ impl Longbridge {
     #[tool(
         title = "Option Expiry Dates",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get option chain expiry dates for a symbol"
+        description = "Get option chain expiry dates for a symbol (e.g. AAPL.US). Returns expiry_dates[] as \"yyyy-mm-dd\" strings. Use with option_chain_info_by_date to get strikes and Greeks."
     )]
     async fn option_chain_expiry_date_list(
         &self,
@@ -490,7 +490,7 @@ impl Longbridge {
     #[tool(
         title = "Option Chain by Date",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get option chain strike prices and Greeks for an expiry date"
+        description = "Get option chain for an expiry date. Returns strikePrices[]{strike_price, call{symbol, last_done, iv, delta, gamma}, put{symbol, last_done, iv, delta, gamma}}."
     )]
     async fn option_chain_info_by_date(
         &self,
@@ -508,7 +508,7 @@ impl Longbridge {
     #[tool(
         title = "Capital Flow",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get capital inflow/outflow time series"
+        description = "Get capital inflow/outflow time series. Returns items[]{timestamp, inflow, outflow, net_flow} for the symbol (same-day data)."
     )]
     async fn capital_flow(
         &self,
@@ -524,7 +524,7 @@ impl Longbridge {
         title = "Capital Distribution",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
         output_schema = schema_for::<output::CapitalDistributionResponse>(),
-        description = "Get capital distribution (large/medium/small holder flows)"
+        description = "Get capital distribution for a symbol. Returns {timestamp, capital_in{large, medium, small}, capital_out{large, medium, small}} (decimal strings in settlement currency)."
     )]
     async fn capital_distribution(
         &self,
@@ -542,7 +542,7 @@ impl Longbridge {
     #[tool(
         title = "Trading Sessions",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get trading session schedule for all markets"
+        description = "Get trading session schedule for all markets. Returns market_sessions[]{market, trade_sessions[]{beg_time, end_time, trade_session_type}}."
     )]
     async fn trading_session(
         &self,
@@ -557,7 +557,7 @@ impl Longbridge {
         title = "Market Temperature",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
         output_schema = schema_for::<output::MarketTemperatureResponse>(),
-        description = "Get current market sentiment temperature (0-100)"
+        description = "Get current market sentiment temperature. Returns {temperature (0-100), description, valuation (0-100), sentiment (0-100), timestamp}. market: HK/US/CN/SG."
     )]
     async fn market_temperature(
         &self,
@@ -573,7 +573,7 @@ impl Longbridge {
         title = "Historical Market Temperature",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
         output_schema = schema_for::<output::HistoryMarketTemperatureResponse>(),
-        description = "Get historical market temperature time series"
+        description = "Get historical market temperature time series. Returns {type, list[]{temperature, description, valuation, sentiment, timestamp}} for the given market and date range."
     )]
     async fn history_market_temperature(
         &self,
@@ -591,7 +591,7 @@ impl Longbridge {
     #[tool(
         title = "Watchlist",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get all watchlist groups and their securities"
+        description = "Get all watchlist groups and their securities. Returns groups[]{id, name, securities[]{symbol, market, name, watched_price, watched_at}}."
     )]
     async fn watchlist(&self, ctx: RequestContext<RoleServer>) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
@@ -602,7 +602,7 @@ impl Longbridge {
     #[tool(
         title = "Filings",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get regulatory filings (8-K, 10-Q, 10-K, etc.)"
+        description = "Get regulatory filings (8-K, 10-Q, 10-K, etc.). Returns items[]{id, title, type, language, filing_date, url} for the symbol."
     )]
     async fn filings(
         &self,
@@ -617,7 +617,7 @@ impl Longbridge {
     #[tool(
         title = "Warrant Issuers",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get warrant issuer information"
+        description = "Get HK warrant issuer information. Returns issuers[]{id, name_en, name_cn}. Use id in warrant_list issuer filter."
     )]
     async fn warrant_issuers(
         &self,
@@ -631,7 +631,7 @@ impl Longbridge {
     #[tool(
         title = "Warrant List",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get filtered warrant list for an underlying symbol"
+        description = "Get filtered warrant list for an underlying symbol. Returns warrants[]{symbol, name, last_done, change_rate, implied_volatility, expiry_date, strike_price, leverage_ratio, outstanding_ratio}."
     )]
     async fn warrant_list(
         &self,
@@ -646,7 +646,7 @@ impl Longbridge {
     #[tool(
         title = "Calc Indexes",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Calculate financial indexes (PE, PB, dividend ratio, etc.) for symbols"
+        description = "Calculate financial indexes for symbols. Pass symbols and indexes (e.g. [\"PeTtmRatio\",\"PbRatio\",\"LastDone\",\"TurnoverRate\"]). Returns per-symbol index values."
     )]
     async fn calc_indexes(
         &self,
@@ -666,7 +666,7 @@ impl Longbridge {
             idempotent_hint = false,
             open_world_hint = true
         ),
-        description = "Create a new watchlist group with optional initial securities"
+        description = "Create a new watchlist group. Returns the created group {id, name}. Optionally pass securities (e.g. [\"AAPL.US\", \"700.HK\"]) to pre-populate."
     )]
     async fn create_watchlist_group(
         &self,
@@ -689,7 +689,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Delete a watchlist group by id"
+        description = "Delete a watchlist group by id (numeric). Set purge=true to also remove its securities from all other groups. Returns upstream API response."
     )]
     async fn delete_watchlist_group(
         &self,
@@ -712,7 +712,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Update a watchlist group (rename or add/remove/replace securities)"
+        description = "Update a watchlist group by id. Can rename (name param) or modify securities (securities + mode: add/remove/replace). Returns upstream API response."
     )]
     async fn update_watchlist_group(
         &self,
@@ -745,7 +745,7 @@ impl Longbridge {
     #[tool(
         title = "Account Balance",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get account cash balance and asset summary. Pass currency (e.g. \"USD\", \"HKD\") to filter; omit to return all currencies."
+        description = "Get account cash balance and asset summary. Returns balances[]{currency, total_cash, max_finance_amount, remaining_finance_amount, risk_level, margin_call}. Filter by currency (e.g. \"USD\", \"HKD\")."
     )]
     async fn account_balance(
         &self,
@@ -761,7 +761,7 @@ impl Longbridge {
         title = "Stock Positions",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
         output_schema = schema_for::<output::StockPositionsResponse>(),
-        description = "Get current stock positions across all channels"
+        description = "Get current stock positions across all channels. Returns list[].stock_info[]{symbol, symbol_name, quantity, available_quantity, currency, cost_price, market}."
     )]
     async fn stock_positions(
         &self,
@@ -776,7 +776,7 @@ impl Longbridge {
         title = "Fund Positions",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
         output_schema = schema_for::<output::FundPositionsResponse>(),
-        description = "Get current fund positions"
+        description = "Get current fund positions. Returns list[].fund_info[]{symbol, symbol_name, currency, holding_units, current_net_asset_value, cost_net_asset_value, net_asset_value_day}."
     )]
     async fn fund_positions(
         &self,
@@ -791,7 +791,7 @@ impl Longbridge {
         title = "Margin Ratio",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
         output_schema = schema_for::<output::MarginRatioResponse>(),
-        description = "Get margin ratio (initial/maintenance/forced liquidation)"
+        description = "Get margin ratio for a symbol. Returns {im_factor (initial margin), mm_factor (maintenance margin), fm_factor (forced liquidation)} as decimal strings."
     )]
     async fn margin_ratio(
         &self,
@@ -806,7 +806,7 @@ impl Longbridge {
     #[tool(
         title = "Today's Orders",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get orders placed today. Pass symbol to filter; omit to return all."
+        description = "Get orders placed today. Returns orders[]{order_id, symbol, side, order_type, status, quantity, price, submitted_at, executed_quantity, executed_price}. Pass symbol to filter."
     )]
     async fn today_orders(
         &self,
@@ -822,7 +822,7 @@ impl Longbridge {
         title = "Order Detail",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
         output_schema = schema_for::<output::OrderDetailResponse>(),
-        description = "Get detailed information about a specific order"
+        description = "Get detailed information about a specific order. Returns {order_id, symbol, status, side, order_type, quantity, price, executed_quantity, executed_price, submitted_at, time_in_force, msg}."
     )]
     async fn order_detail(
         &self,
@@ -842,7 +842,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Cancel an open order by order_id"
+        description = "Cancel an open order by order_id. Returns plain text \"order cancelled\" on success; errors if the order is already filled or cancelled."
     )]
     async fn cancel_order(
         &self,
@@ -857,7 +857,7 @@ impl Longbridge {
     #[tool(
         title = "Today's Executions",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get today's trade executions (fills). Pass symbol or order_id to filter; omit both to return all."
+        description = "Get today's trade executions (fills). Returns executions[]{order_id, symbol, side, quantity, price, trade_done_at}. Pass symbol or order_id to filter."
     )]
     async fn today_executions(
         &self,
@@ -872,7 +872,7 @@ impl Longbridge {
     #[tool(
         title = "Historical Orders",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get historical orders between dates (excludes today)"
+        description = "Get historical orders between dates (excludes today). Returns orders[]{order_id, symbol, side, status, quantity, price, submitted_at}. start_at/end_at in RFC3339."
     )]
     async fn history_orders(
         &self,
@@ -887,7 +887,7 @@ impl Longbridge {
     #[tool(
         title = "Historical Executions",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get historical trade executions between dates"
+        description = "Get historical trade executions between dates. Returns executions[]{order_id, symbol, side, quantity, price, trade_done_at}. start_at/end_at in RFC3339."
     )]
     async fn history_executions(
         &self,
@@ -902,7 +902,7 @@ impl Longbridge {
     #[tool(
         title = "Cash Flow",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get cash flow records (deposits, withdrawals, dividends)"
+        description = "Get cash flow records (deposits, withdrawals, dividends). Returns items[]{transaction_type, amount, currency, balance, created_at, remark}. start_at/end_at in RFC3339."
     )]
     async fn cash_flow(
         &self,
@@ -943,7 +943,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Replace/modify an existing order"
+        description = "Modify an open order's quantity, price, trigger_price, or trailing params. Returns \"order replaced\" on success. Only open/pending orders can be modified."
     )]
     async fn replace_order(
         &self,
@@ -959,7 +959,7 @@ impl Longbridge {
         title = "Estimate Max Purchase Quantity",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
         output_schema = schema_for::<output::EstimateMaxQtyResponse>(),
-        description = "Estimate maximum buy/sell quantity for a symbol"
+        description = "Estimate maximum buy/sell quantity for a symbol. Returns {cash_max_qty, margin_max_qty} (decimal strings). Requires symbol, side (Buy/Sell), order_type, and optionally price."
     )]
     async fn estimate_max_purchase_quantity(
         &self,
@@ -977,7 +977,7 @@ impl Longbridge {
     #[tool(
         title = "Financial Report",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get financial reports for a symbol. report_type: annual or quarterly"
+        description = "Get financial reports (income statement, balance sheet, cash flow). kind: IS/BS/CF/ALL. report_type: af (annual), saf (semi-annual), q1/q2/q3, qf (quarterly full)."
     )]
     async fn financial_report(
         &self,
@@ -995,7 +995,7 @@ impl Longbridge {
     #[tool(
         title = "Institution Rating",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get institution rating summary with analyst consensus and target price"
+        description = "Get institution rating summary. Returns analyst{buy, outperform, hold, underperform, sell counts, target_price, consensus_rating} and instratings list."
     )]
     async fn institution_rating(
         &self,
@@ -1013,7 +1013,7 @@ impl Longbridge {
     #[tool(
         title = "Institution Rating Detail",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get detailed historical institution ratings and target price history"
+        description = "Get detailed historical institution ratings and target price history. Returns target.list[]{analyst, firm, rating, target_price, timestamp} per institution."
     )]
     async fn institution_rating_detail(
         &self,
@@ -1031,7 +1031,7 @@ impl Longbridge {
     #[tool(
         title = "Dividend",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get dividend history for a symbol"
+        description = "Get dividend history. Returns items[]{ex_date, pay_date, record_date, dividend_type, amount, currency, status} for the symbol."
     )]
     async fn dividend(
         &self,
@@ -1046,7 +1046,7 @@ impl Longbridge {
     #[tool(
         title = "Dividend Detail",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get detailed dividend distribution scheme"
+        description = "Get detailed dividend distribution scheme. Returns details[]{period, cash_dividend, stock_dividend, record_date, ex_date, pay_date, currency}."
     )]
     async fn dividend_detail(
         &self,
@@ -1061,7 +1061,7 @@ impl Longbridge {
     #[tool(
         title = "Forecast EPS",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get EPS forecast and analyst estimate history"
+        description = "Get EPS forecast and analyst estimate history. Returns items[]{forecast_start_date, forecast_end_date, eps_estimate, eps_actual, surprise_pct, analyst_count}."
     )]
     async fn forecast_eps(
         &self,
@@ -1076,7 +1076,7 @@ impl Longbridge {
     #[tool(
         title = "Analyst Consensus",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get financial consensus estimates (revenue, EPS, net income)"
+        description = "Get financial consensus estimates. Returns items[]{period, revenue_estimate, eps_estimate, net_income_estimate, analyst_count, last_updated} for upcoming periods."
     )]
     async fn consensus(
         &self,
@@ -1091,7 +1091,7 @@ impl Longbridge {
     #[tool(
         title = "Valuation",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get valuation overview with peer comparison"
+        description = "Get valuation overview with peer comparison. Returns metrics.pe/pb/ps/dividend_yield{current, industry_avg, 5yr_avg, percentile} and peer comparison list."
     )]
     async fn valuation(
         &self,
@@ -1106,7 +1106,7 @@ impl Longbridge {
     #[tool(
         title = "Valuation History",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get detailed valuation history time series"
+        description = "Get detailed valuation history time series. Returns history.metrics{pe/pb/ps/dividend_yield}[]{timestamp, value} for long-term percentile analysis."
     )]
     async fn valuation_history(
         &self,
@@ -1124,7 +1124,7 @@ impl Longbridge {
     #[tool(
         title = "Industry Valuation",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get industry valuation comparison for peers"
+        description = "Get industry valuation comparison for peers. Returns list[]{symbol, name, pe, pb, ps, dividend_yield, history[]{date, pe, pb}} for peers in the same industry."
     )]
     async fn industry_valuation(
         &self,
@@ -1142,7 +1142,7 @@ impl Longbridge {
     #[tool(
         title = "Industry Valuation Distribution",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get industry PE/PB/PS valuation distribution"
+        description = "Get industry PE/PB/PS valuation distribution. Returns distributions{pe/pb/ps}{min, p25, median, p75, max, current_percentile} to see where the stock sits in its sector."
     )]
     async fn industry_valuation_dist(
         &self,
@@ -1160,7 +1160,7 @@ impl Longbridge {
     #[tool(
         title = "Company Profile",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get company overview (name, CEO, employees, profile)"
+        description = "Get company overview. Returns name, description, employees, CEO, founded_year, website, exchange, industry, market_cap, and business profile summary."
     )]
     async fn company(
         &self,
@@ -1175,7 +1175,7 @@ impl Longbridge {
     #[tool(
         title = "Executive",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get company executive and board member information"
+        description = "Get company executive and board member information. Returns members[]{name, title, appointed_date, age, biography, compensation}."
     )]
     async fn executive(
         &self,
@@ -1190,7 +1190,7 @@ impl Longbridge {
     #[tool(
         title = "Shareholders",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get institutional shareholders for a symbol"
+        description = "Get institutional shareholders for a symbol. Returns shareholders[]{institution, shares, ratio, change, change_type, reported_at}."
     )]
     async fn shareholder(
         &self,
@@ -1205,7 +1205,7 @@ impl Longbridge {
     #[tool(
         title = "Fund Holders",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get funds and ETFs that hold a given symbol"
+        description = "Get funds and ETFs that hold a given symbol. Returns fund_holders[]{fund_name, fund_symbol, shares, ratio, change, reported_at}."
     )]
     async fn fund_holder(
         &self,
@@ -1220,7 +1220,7 @@ impl Longbridge {
     #[tool(
         title = "Corporate Actions",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get corporate actions (splits, buybacks, name changes)"
+        description = "Get corporate actions (splits, buybacks, name changes). Returns items[]{action_type, effective_date, ratio, description} for the symbol."
     )]
     async fn corp_action(
         &self,
@@ -1235,7 +1235,7 @@ impl Longbridge {
     #[tool(
         title = "Investor Relations",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get investor relations events and announcements"
+        description = "Get investor relations events and announcements. Returns items[]{title, event_type, event_date, url, description} for the symbol."
     )]
     async fn invest_relation(
         &self,
@@ -1250,7 +1250,7 @@ impl Longbridge {
     #[tool(
         title = "Operating Performance",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get company operating metrics. Only supports HK stocks."
+        description = "Get company operating metrics (HK stocks only). Returns items[]{period, metric_name, value, unit} such as passenger traffic, cargo volumes, or store counts."
     )]
     async fn operating(
         &self,
@@ -1265,7 +1265,7 @@ impl Longbridge {
     #[tool(
         title = "Market Status",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get current market trading status for all markets"
+        description = "Get current market trading status for all markets. Returns market_time[]{market, trade_status (Pre-Open/Trading/Lunch Break/Post-Trading/Closed/Pre-Market/Post-Market), timestamp}."
     )]
     async fn market_status(
         &self,
@@ -1279,7 +1279,7 @@ impl Longbridge {
     #[tool(
         title = "Broker Holding",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get top broker holding data for a symbol"
+        description = "Get top broker holding data for a symbol. Returns items[]{broker_name, holding_quantity, holding_change, holding_ratio} for the given period (rct_1/rct_5/rct_20/rct_60)."
     )]
     async fn broker_holding(
         &self,
@@ -1294,7 +1294,7 @@ impl Longbridge {
     #[tool(
         title = "Broker Holding Detail",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get full broker holding detail list"
+        description = "Get full broker holding detail list for a symbol. Returns items[]{broker_id, broker_name, holding_quantity, holding_ratio, holding_change, date}."
     )]
     async fn broker_holding_detail(
         &self,
@@ -1312,7 +1312,7 @@ impl Longbridge {
     #[tool(
         title = "Broker Holding (Daily)",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get daily holding history for a specific broker"
+        description = "Get daily holding history for a specific broker (by broker_id) in a symbol. Returns items[]{date, holding_quantity, holding_change, holding_ratio}."
     )]
     async fn broker_holding_daily(
         &self,
@@ -1330,7 +1330,7 @@ impl Longbridge {
     #[tool(
         title = "A/H Premium",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get A/H share premium historical K-line data"
+        description = "Get A/H share premium historical K-line data. Returns items[]{timestamp, open, high, low, close} representing the premium percentage over the given period."
     )]
     async fn ah_premium(
         &self,
@@ -1345,7 +1345,7 @@ impl Longbridge {
     #[tool(
         title = "A/H Premium (Intraday)",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get A/H share premium intraday time-share data"
+        description = "Get A/H share premium intraday time-share data. Returns items[]{timestamp, premium_rate} showing the intraday A/H premium percentage minute by minute."
     )]
     async fn ah_premium_intraday(
         &self,
@@ -1363,7 +1363,7 @@ impl Longbridge {
     #[tool(
         title = "Trade Statistics",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get trade statistics (buy/sell/neutral volume distribution)"
+        description = "Get trade statistics (buy/sell/neutral volume distribution). Returns items[]{price_range, buy_volume, sell_volume, neutral_volume} for price-volume profile."
     )]
     async fn trade_stats(
         &self,
@@ -1378,7 +1378,7 @@ impl Longbridge {
     #[tool(
         title = "Market Anomaly",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get market anomaly alerts (unusual price/volume changes)"
+        description = "Get market anomaly alerts (unusual price/volume changes). Returns items[]{symbol, name, anomaly_type, change_rate, volume, timestamp} for the given market."
     )]
     async fn anomaly(
         &self,
@@ -1393,7 +1393,7 @@ impl Longbridge {
     #[tool(
         title = "Index Constituents",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get constituent stocks of an index (e.g. HSI.HK)"
+        description = "Get constituent stocks of an index (e.g. HSI.HK, .DJI.US). Returns constituents[]{symbol, name, last_done, change_rate, market_cap, weight}."
     )]
     async fn constituent(
         &self,
@@ -1423,7 +1423,7 @@ impl Longbridge {
     #[tool(
         title = "Exchange Rate",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get exchange rates for all supported currencies"
+        description = "Get exchange rates for all supported currencies. Returns list[]{from_currency, to_currency, rate, timestamp} covering USD, HKD, CNY, SGD and others."
     )]
     async fn exchange_rate(
         &self,
@@ -1470,7 +1470,7 @@ impl Longbridge {
     #[tool(
         title = "List Price Alerts",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get all configured price alerts"
+        description = "Get all configured price alerts. Returns lists[]{counter_id, indicators[]{id, indicator_id, condition, price, frequency, enabled, triggered_at}}."
     )]
     async fn alert_list(
         &self,
@@ -1489,7 +1489,7 @@ impl Longbridge {
             idempotent_hint = false,
             open_world_hint = true
         ),
-        description = "Add a price alert. condition: price_rise/price_fall/percent_rise/percent_fall"
+        description = "Add a price alert. condition: price_rise/price_fall (absolute price) or percent_rise/percent_fall (relative %). frequency: once/daily/every. Returns created alert object."
     )]
     async fn alert_add(
         &self,
@@ -1509,7 +1509,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Delete a price alert by alert_id"
+        description = "Delete a price alert by alert_id (numeric string from alert_list). Returns upstream API response on success; errors if alert_id is invalid."
     )]
     async fn alert_delete(
         &self,
@@ -1529,7 +1529,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Enable a price alert by alert_id"
+        description = "Enable a price alert by alert_id. Returns {alert_id, enabled: true} on success. Use alert_list to find the numeric alert_id."
     )]
     async fn alert_enable(
         &self,
@@ -1549,7 +1549,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Disable a price alert by alert_id"
+        description = "Disable a price alert by alert_id. Returns {alert_id, enabled: false} on success. Use alert_list to find the numeric alert_id."
     )]
     async fn alert_disable(
         &self,
@@ -1564,7 +1564,7 @@ impl Longbridge {
     #[tool(
         title = "News",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get latest news articles for a symbol"
+        description = "Get latest news articles for a symbol. Returns items[]{id, title, source, publish_time, summary, url, related_symbols[]}."
     )]
     async fn news(
         &self,
@@ -1579,7 +1579,7 @@ impl Longbridge {
     #[tool(
         title = "Topic List",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get discussion topics for a symbol"
+        description = "Get discussion topics for a symbol. Returns items[]{id, title, author, created_at, like_count, comment_count, content_summary}."
     )]
     async fn topic(
         &self,
@@ -1594,7 +1594,7 @@ impl Longbridge {
     #[tool(
         title = "Topic Detail",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get discussion topic detail by topic_id"
+        description = "Get discussion topic detail by topic_id. Returns {id, title, content, author, created_at, like_count, comment_count, symbols[]}."
     )]
     async fn topic_detail(
         &self,
@@ -1667,7 +1667,7 @@ impl Longbridge {
     #[tool(
         title = "Statement List",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "List available account statements (daily/monthly)"
+        description = "List available account statements (daily/monthly). Returns list[]{id, type (daily/monthly), date, status}. Use the id with statement_export to download."
     )]
     async fn statement_list(
         &self,
@@ -1713,7 +1713,7 @@ impl Longbridge {
     #[tool(
         title = "Option Volume",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get real-time option call/put volume and put/call ratio for a US stock"
+        description = "Get real-time option call/put volume stats for a US stock. Returns {call_volume, put_volume, put_call_ratio, call_oi, put_oi} and top active contracts."
     )]
     async fn option_volume(
         &self,
@@ -1728,7 +1728,7 @@ impl Longbridge {
     #[tool(
         title = "Option Volume (Daily)",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get daily historical option call/put volume, open interest, and put/call ratios for a US stock"
+        description = "Get daily historical option stats for a US stock. Returns items[]{date, call_volume, put_volume, put_call_vol_ratio, call_oi, put_oi, put_call_oi_ratio}."
     )]
     async fn option_volume_daily(
         &self,
@@ -1746,7 +1746,7 @@ impl Longbridge {
     #[tool(
         title = "List DCA Plans",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "List DCA recurring investment plans. Filter by status (Active/Suspended/Finished) or symbol."
+        description = "List DCA recurring investment plans. Returns plans[]{plan_id, symbol, amount, currency, frequency, status, next_execution_date}. Filter by status (Active/Suspended/Finished) or symbol."
     )]
     async fn dca_list(
         &self,
@@ -1786,7 +1786,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Update an existing DCA recurring investment plan by plan_id"
+        description = "Update an existing DCA plan by plan_id. Can change amount, frequency (Daily/Weekly/Monthly), day_of_week (Mon-Fri), or day_of_month (1-28). Returns updated plan."
     )]
     async fn dca_update(
         &self,
@@ -1806,7 +1806,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Pause (suspend) a DCA recurring investment plan by plan_id"
+        description = "Pause (suspend) a DCA plan by plan_id. The plan stops executing until resumed. Returns upstream API response. Use dca_resume to restart."
     )]
     async fn dca_pause(
         &self,
@@ -1826,7 +1826,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Resume a suspended DCA recurring investment plan by plan_id"
+        description = "Resume a suspended DCA plan by plan_id. Resumes automated execution on the configured schedule. Returns upstream API response."
     )]
     async fn dca_resume(
         &self,
@@ -1846,7 +1846,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Permanently stop a DCA recurring investment plan by plan_id"
+        description = "Permanently stop a DCA plan by plan_id. This cannot be undone. To temporarily pause, use dca_pause instead. Returns upstream API response."
     )]
     async fn dca_stop(
         &self,
@@ -1861,7 +1861,7 @@ impl Longbridge {
     #[tool(
         title = "DCA Execution History",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get execution history records for a DCA plan by plan_id"
+        description = "Get execution history records for a DCA plan by plan_id. Returns executions[]{date, quantity, amount, price, status, order_id}."
     )]
     async fn dca_history(
         &self,
@@ -1876,7 +1876,7 @@ impl Longbridge {
     #[tool(
         title = "DCA Statistics",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get DCA investment statistics summary. Optionally filter by symbol."
+        description = "Get DCA investment statistics. Returns {total_invested, total_value, total_return, return_rate, plan_count, items[]{symbol, invested, value, return_rate}}."
     )]
     async fn dca_stats(
         &self,
@@ -1891,7 +1891,7 @@ impl Longbridge {
     #[tool(
         title = "Check DCA Support",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Check whether given symbols support DCA recurring investment"
+        description = "Check whether given symbols support DCA recurring investment. Returns items[]{symbol, support_dca (bool), reason} for each queried symbol."
     )]
     async fn dca_check(
         &self,
@@ -1906,7 +1906,7 @@ impl Longbridge {
     #[tool(
         title = "List Sharelists",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "List user's own and subscribed community sharelists"
+        description = "List user's own and subscribed community sharelists. Returns lists[]{id, name, description, symbol_count, is_owner, follower_count}."
     )]
     async fn sharelist_list(
         &self,
@@ -1921,7 +1921,7 @@ impl Longbridge {
     #[tool(
         title = "Sharelist Detail",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get community sharelist detail including constituent stocks and quotes by id"
+        description = "Get community sharelist detail by id. Returns {id, name, description, constituents[]{symbol, name, last_done, change_rate}, quote data, subscription status}."
     )]
     async fn sharelist_detail(
         &self,
@@ -1941,7 +1941,7 @@ impl Longbridge {
             idempotent_hint = false,
             open_world_hint = true
         ),
-        description = "Create a new community sharelist"
+        description = "Create a new community sharelist with a name and optional description. Returns the created sharelist object including its id, name, and description."
     )]
     async fn sharelist_create(
         &self,
@@ -1961,7 +1961,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Delete a community sharelist by id"
+        description = "Delete a community sharelist by id (own lists only; subscribed lists cannot be deleted). Returns upstream API response on success."
     )]
     async fn sharelist_delete(
         &self,
@@ -1981,7 +1981,7 @@ impl Longbridge {
             idempotent_hint = false,
             open_world_hint = true
         ),
-        description = "Add securities to a community sharelist"
+        description = "Add securities to a community sharelist by id. Provide symbols (e.g. [\"AAPL.US\", \"700.HK\"]) to add. Returns upstream API response."
     )]
     async fn sharelist_add(
         &self,
@@ -2001,7 +2001,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Remove securities from a community sharelist"
+        description = "Remove securities from a community sharelist by id. Provide symbols to remove. Returns upstream API response on success."
     )]
     async fn sharelist_remove(
         &self,
@@ -2021,7 +2021,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Reorder securities in a community sharelist (provide symbols in desired order)"
+        description = "Reorder securities in a community sharelist by id. Provide symbols in the desired new order. Returns upstream API response on success."
     )]
     async fn sharelist_sort(
         &self,
@@ -2036,7 +2036,7 @@ impl Longbridge {
     #[tool(
         title = "Popular Sharelists",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get popular/trending community sharelists"
+        description = "Get popular/trending community sharelists. Returns lists[]{id, name, description, symbol_count, follower_count, creator} sorted by popularity."
     )]
     async fn sharelist_popular(
         &self,
@@ -2069,7 +2069,7 @@ impl Longbridge {
     #[tool(
         title = "News Search",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Search news articles by keyword. Returns id, title, time, source and URL."
+        description = "Search news articles by keyword. Returns news_list[]{id, title, description, source_name, publish_at (RFC3339), score}. Paginate with score+publish_at_timestamp+id cursors."
     )]
     async fn news_search(
         &self,
@@ -2117,7 +2117,7 @@ impl Longbridge {
     #[tool(
         title = "Latest Financial Report",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get the latest financial report summary for a security including key metrics."
+        description = "Get the latest financial report summary for a security. Returns {period, revenue, net_income, eps, roe, gross_margin, report_date} and key financial highlights."
     )]
     async fn financial_report_latest(
         &self,
@@ -2150,7 +2150,7 @@ impl Longbridge {
     #[tool(
         title = "Institution Rating History",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get institution rating history (target price changes and rating changes) for a security."
+        description = "Get institution rating history. Returns target_history[]{firm, analyst, old_target, new_target, date} and evaluate_history[]{firm, old_rating, new_rating, date}."
     )]
     async fn institution_rating_history(
         &self,
@@ -2168,7 +2168,7 @@ impl Longbridge {
     #[tool(
         title = "Institution Rating Industry Rank",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get peers ranked by institution analyst ratings within the same industry as the given security."
+        description = "Get peers ranked by institution analyst ratings in the same industry. Returns list[]{symbol, name, buy_count, sell_count, consensus_rating, target_price}. Paginated."
     )]
     async fn institution_rating_industry_rank(
         &self,
@@ -2186,7 +2186,7 @@ impl Longbridge {
     #[tool(
         title = "Short Margin",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get short margin deposit details for the current account."
+        description = "Get short margin deposit details for the current account. Returns short positions with margin_amount, margin_rate, interest_rate, symbol, quantity per position."
     )]
     async fn short_margin(
         &self,
@@ -2200,7 +2200,7 @@ impl Longbridge {
     #[tool(
         title = "Bank Cards",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "List linked withdrawal bank cards for the current account."
+        description = "List linked withdrawal bank cards for the current account. Returns cards[]{id, bank_name, account_number (masked), currency, status}."
     )]
     async fn bank_cards(
         &self,
@@ -2214,7 +2214,7 @@ impl Longbridge {
     #[tool(
         title = "Withdrawals",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "List withdrawal history for the current account."
+        description = "List withdrawal history for the current account. Returns items[]{id, amount, currency, status, created_at, bank_name, account_number (masked)}."
     )]
     async fn withdrawals(
         &self,
@@ -2229,7 +2229,7 @@ impl Longbridge {
     #[tool(
         title = "Deposits",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "List deposit history for the current account. states: comma-separated deposit states. currencies: comma-separated currency codes."
+        description = "List deposit history for the current account. Returns items[]{id, amount, currency, status, created_at, updated_at}. states: comma-separated (Pending/Finished/Failed). currencies: comma-separated codes."
     )]
     async fn deposits(
         &self,
@@ -2244,7 +2244,7 @@ impl Longbridge {
     #[tool(
         title = "IPO Subscriptions",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "List IPO stocks currently in subscription or pre-filing stage (HK and US combined)."
+        description = "List IPO stocks in subscription/pre-filing stage (HK+US). Returns items[]{symbol, name, market, sub_start_date, sub_end_date, listing_date, issue_price, min_lot_size}."
     )]
     async fn ipo_subscriptions(
         &self,
@@ -2258,7 +2258,7 @@ impl Longbridge {
     #[tool(
         title = "IPO Calendar",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Show the IPO calendar with all upcoming and recent IPOs including subscription dates and listing dates."
+        description = "Show the IPO calendar. Returns items[]{symbol, name, market, sub_start_date, sub_end_date, listing_date, status} for upcoming and recent IPOs."
     )]
     async fn ipo_calendar(
         &self,
@@ -2272,7 +2272,7 @@ impl Longbridge {
     #[tool(
         title = "IPO Listed",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "List recently listed IPO stocks (HK and US) with issue price, first-day performance, and trading volume."
+        description = "List recently listed IPO stocks (HK+US). Returns items[]{symbol, name, listing_date, issue_price, first_day_close, first_day_return, volume, market}."
     )]
     async fn ipo_listed(
         &self,
@@ -2287,7 +2287,7 @@ impl Longbridge {
     #[tool(
         title = "IPO Detail",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Show IPO detail including profile (prospectus summary), timeline, and subscription eligibility for a symbol."
+        description = "Show IPO detail for a symbol. Returns profile (business overview), timeline[]{event, date}, subscription eligibility, pricing_range, lot_size, allotment_rules."
     )]
     async fn ipo_detail(
         &self,
@@ -2302,7 +2302,7 @@ impl Longbridge {
     #[tool(
         title = "IPO Orders",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "List IPO orders (active + history) for the current account. Optionally filter by symbol, market, or status."
+        description = "List IPO orders (active+history). Returns orders[]{order_id, symbol, market, quantity, total_amount, status, submitted_at}. Filter by symbol, market, or status."
     )]
     async fn ipo_orders(
         &self,
@@ -2317,7 +2317,7 @@ impl Longbridge {
     #[tool(
         title = "IPO Order Detail",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Show detailed information for a specific IPO order by its order ID."
+        description = "Show detailed information for a specific IPO order by order_id. Returns {order_id, symbol, market, quantity, allotted_quantity, total_amount, status, submitted_at}."
     )]
     async fn ipo_order_detail(
         &self,
@@ -2332,7 +2332,7 @@ impl Longbridge {
     #[tool(
         title = "IPO Profit / Loss",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Show IPO profit/loss summary and per-stock breakdown for the current account. period: all (default), ytd, 1y, 3y."
+        description = "Show IPO profit/loss summary and per-stock breakdown. Returns {total_cost, total_value, total_return, items[]{symbol, cost, current_value, return_rate}}. period: all/ytd/1y/3y."
     )]
     async fn ipo_profit_loss(
         &self,
@@ -2383,7 +2383,7 @@ impl Longbridge {
     #[tool(
         title = "Institutional Views",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get monthly institutional rating distribution timeline (buy/outperform/hold/underperform/sell counts per month)"
+        description = "Get monthly institutional rating distribution timeline. Returns months[]{date, buy, outperform, hold, underperform, sell, total} for trend analysis."
     )]
     async fn institutional_views(
         &self,
