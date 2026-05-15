@@ -261,49 +261,22 @@ pub async fn industry_rank(
     if !limit.is_empty() {
         params.push(("limit", limit.as_str()));
     }
-    let result = http_get_tool(&client, "/v1/quote/industry/rank", &params).await?;
-    let text = result
-        .content
-        .first()
-        .and_then(|c| c.as_text())
-        .map(|t| t.text.clone())
-        .unwrap_or_default();
-    let mut value: serde_json::Value =
-        serde_json::from_str(&text).map_err(crate::error::Error::Serialize)?;
-    convert_bk_counter_ids(&mut value);
-    let out = serde_json::to_string(&value).map_err(crate::error::Error::Serialize)?;
+    // Use the raw HTTP response to preserve BK counter_ids as-is.
+    // http_get_tool applies transform_json which renames counter_id → symbol,
+    // losing the BK format needed by industry_peers.
+    use reqwest::Method;
+    let raw: String = client
+        .request(Method::GET, "/v1/quote/industry/rank")
+        .query_params(params)
+        .response::<String>()
+        .send()
+        .await
+        .map_err(|e| crate::error::Error::Other(e.to_string()))?;
+    let data: serde_json::Value =
+        serde_json::from_str(&raw).map_err(crate::error::Error::Serialize)?;
+    let out = serde_json::to_string(&data).map_err(crate::error::Error::Serialize)?;
     let structured = serde_json::from_str::<serde_json::Value>(&out).ok();
     let mut res = rmcp::model::CallToolResult::success(vec![rmcp::model::Content::text(out)]);
     res.structured_content = structured;
     Ok(res)
-}
-
-/// Walk the response and restore `counter_id` (BK/MARKET/CODE) for industry symbols.
-/// `transform_json` renames `counter_id` → `symbol` and converts values, so the raw
-/// BK counter_id is lost. We detect industry symbols (IN-prefix) and reconstruct the
-/// BK counter_id so callers can pass it directly to `industry_peers`.
-fn convert_bk_counter_ids(value: &mut serde_json::Value) {
-    match value {
-        serde_json::Value::Object(map) => {
-            if let Some(sym) = map.get("symbol").and_then(|v| v.as_str()) {
-                // IN00258.US → counter_id = BK/US/IN00258
-                if let Some((code, market)) = sym.rsplit_once('.') {
-                    if code.to_uppercase().starts_with("IN") {
-                        let cid = format!("BK/{}/{}", market.to_uppercase(), code.to_uppercase());
-                        map.insert("counter_id".to_string(), serde_json::Value::String(cid));
-                        map.remove("symbol");
-                    }
-                }
-            }
-            for v in map.values_mut() {
-                convert_bk_counter_ids(v);
-            }
-        }
-        serde_json::Value::Array(arr) => {
-            for v in arr.iter_mut() {
-                convert_bk_counter_ids(v);
-            }
-        }
-        _ => {}
-    }
 }
