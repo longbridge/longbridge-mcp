@@ -3,7 +3,7 @@ use rmcp::model::CallToolResult;
 use rmcp::schemars::JsonSchema;
 use rmcp::serde::Deserialize;
 
-use crate::counter::{bk_symbol_to_counter, counter_id_to_symbol, symbol_to_counter_id};
+use crate::counter::{counter_id_to_symbol, symbol_to_counter_id};
 use crate::serialize::convert_unix_paths;
 use crate::tools::support::http_client::{http_get_tool, http_get_tool_unix};
 
@@ -544,8 +544,8 @@ pub async fn institutional_views(
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct IndustryPeersParam {
-    /// Industry index symbol in IN<code>.<MARKET> format, e.g. "IN00446.US".
-    /// Use the `industry_rank` tool to discover available symbols.
+    /// BK counter_id from `industry_rank` (e.g. "BK/US/IN00258") or industry index symbol
+    /// (e.g. "IN00446.US"). BK counter_ids are accepted directly; symbols are converted.
     pub symbol: String,
 }
 
@@ -554,12 +554,25 @@ pub async fn industry_peers(
     p: IndustryPeersParam,
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
-    let mkt = p
-        .symbol
-        .rsplit_once('.')
-        .map(|(_, m)| m.to_uppercase())
-        .unwrap_or_else(|| "US".to_string());
-    let cid = bk_symbol_to_counter(&p.symbol);
+    let mkt = if p.symbol.contains('/') {
+        // BK counter_id: BK/US/IN00258 → market = "US"
+        p.symbol
+            .splitn(3, '/')
+            .nth(1)
+            .unwrap_or("US")
+            .to_uppercase()
+    } else {
+        p.symbol
+            .rsplit_once('.')
+            .map(|(_, m)| m.to_uppercase())
+            .unwrap_or_else(|| "US".to_string())
+    };
+    // Accept BK counter_ids directly; otherwise convert symbol → counter_id
+    let cid = if p.symbol.contains('/') {
+        p.symbol.clone()
+    } else {
+        symbol_to_counter_id(&p.symbol)
+    };
     http_get_tool(
         &client,
         "/v1/quote/industries/peers",

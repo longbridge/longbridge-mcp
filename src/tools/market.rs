@@ -4,7 +4,7 @@ use rmcp::model::CallToolResult;
 use rmcp::schemars::JsonSchema;
 use rmcp::serde::Deserialize;
 
-use crate::counter::{bk_counter_to_symbol, index_symbol_to_counter_id, symbol_to_counter_id};
+use crate::counter::{index_symbol_to_counter_id, symbol_to_counter_id};
 use crate::error::Error;
 use crate::serialize::convert_unix_paths;
 use crate::tools::support::http_client::{http_get_tool, http_get_tool_unix};
@@ -278,12 +278,16 @@ pub async fn industry_rank(
     Ok(res)
 }
 
+/// Walk the response and add a `symbol` field (IN00xxx.MARKET) alongside every BK `counter_id`.
+/// The original `counter_id` is preserved so callers can pass it directly to `industry_peers`.
 fn convert_bk_counter_ids(value: &mut serde_json::Value) {
     match value {
         serde_json::Value::Object(map) => {
             if let Some(cid) = map.get("counter_id").and_then(|v| v.as_str()) {
-                let sym = bk_counter_to_symbol(cid);
-                if !sym.is_empty() {
+                // BK/US/IN00258 → IN00258.US
+                let parts: Vec<&str> = cid.splitn(3, '/').collect();
+                if parts.len() == 3 && parts[0] == "BK" {
+                    let sym = format!("{}.{}", parts[2], parts[1]);
                     map.insert("symbol".to_string(), serde_json::Value::String(sym));
                 }
             }

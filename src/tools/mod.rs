@@ -2416,7 +2416,7 @@ impl Longbridge {
     #[tool(
         title = "Industry Peers",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get hierarchical industry peer group tree for an industry index (IN00xxx.US format). Use industry_rank to find symbols. Returns chain{name,counter_id,stock_num,chg,ytd_chg,next[]} and top{name,market}."
+        description = "Get hierarchical industry peer group tree. Accepts BK counter_id from industry_rank (e.g. BK/US/IN00258) or symbol (e.g. IN00446.US). Returns chain{name,counter_id,stock_num,chg,ytd_chg,next[]} and top{name,market}."
     )]
     async fn industry_peers(
         &self,
