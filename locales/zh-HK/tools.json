@@ -981,6 +981,30 @@
         "page": "頁碼（預設 1）",
         "size": "每頁條數（預設 20）"
       }
+    },
+    "business_segments": {
+      "title": "主營業務分部",
+      "description": "取得當期主營業務分部營收佔比快照（各分部名稱、佔比、總營收、貨幣單位）。"
+    },
+    "business_segments_history": {
+      "title": "主營業務分部歷史",
+      "description": "取得主營業務分部營收歷史趨勢，含地區維度。report：qf（季報）、saf（中報）、af（年報）。"
+    },
+    "institutional_views": {
+      "title": "機構觀點月度時序",
+      "description": "取得機構評級月度分佈時序（每月買入/跑贏/持有/跑輸/賣出家數）。"
+    },
+    "industry_rank": {
+      "title": "行業排行榜",
+      "description": "按市場（US/HK/CN/SG）和指標排列行業。indicator：0=領漲 1=今日走勢 2=人氣 3=市值 4=營收 5=營收增長率 6=淨利潤 7=淨利潤增長率。sort_type：0=單級 1=多層。返回 items[]{counter_id(BK/US/IN00258), name, chg, lists[]}，counter_id 可直接傳入 industry_peers。"
+    },
+    "industry_peers": {
+      "title": "行業同業分組樹",
+      "description": "行業分組的層級同業樹。接受來自 industry_rank 的 BK counter_id（如 BK/US/IN00258）。返回 chain{name,counter_id,stock_num,chg,ytd_chg,next[{...}]} 和 top{name,market}，每個節點包含成分股數量、日漲跌幅和年初至今漲跌幅。"
+    },
+    "financial_report_snapshot": {
+      "title": "財報快照",
+      "description": "取得財報快照：report_desc（文字摘要）、fo_revenue/fo_ebit/fo_eps（實際 vs 預期，含同比/超預期描述）、fr_* 財務比率（ROE、利潤率、資產負債、現金流）。report：qf/saf/af。"
     }
   }
 }
