@@ -555,11 +555,7 @@ pub async fn industry_peers(
     let client = mctx.create_http_client();
     let mkt = if p.symbol.contains('/') {
         // BK counter_id: BK/US/IN00258 → market = "US"
-        p.symbol
-            .splitn(3, '/')
-            .nth(1)
-            .unwrap_or("US")
-            .to_uppercase()
+        p.symbol.split('/').nth(1).unwrap_or("US").to_uppercase()
     } else {
         p.symbol
             .rsplit_once('.')
