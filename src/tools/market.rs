@@ -291,6 +291,7 @@ fn convert_bk_counter_ids(value: &mut serde_json::Value) {
                     if code.to_uppercase().starts_with("IN") {
                         let cid = format!("BK/{}/{}", market.to_uppercase(), code.to_uppercase());
                         map.insert("counter_id".to_string(), serde_json::Value::String(cid));
+                        map.remove("symbol");
                     }
                 }
             }
