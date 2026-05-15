@@ -2401,7 +2401,7 @@ impl Longbridge {
     #[tool(
         title = "Industry Rank",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Industry ranking list by market (US/HK/CN/SG) and indicator (0=领涨/1=今日走势/2=人气/3=市值/4=营收/5=营收增长率/6=净利润/7=净利润增长率). sort_type: 0=单级 1=多层. Returns items[]{counter_id(BK/US/IN00258), symbol(IN00xxx.US), name, chg, lists[]}. Pass counter_id directly to industry_peers."
+        description = "Industry ranking list by market (US/HK/CN/SG) and indicator (0=领涨/1=今日走势/2=人气/3=市值/4=营收/5=营收增长率/6=净利润/7=净利润增长率). sort_type: 0=单级 1=多层. Returns items[]{counter_id(BK/US/IN00258), name, chg, lists[]}. Pass counter_id directly to industry_peers."
     )]
     async fn industry_rank(
         &self,
@@ -2416,7 +2416,7 @@ impl Longbridge {
     #[tool(
         title = "Industry Peers",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Hierarchical sub-sector tree for an industry group. Accepts BK counter_id from industry_rank (e.g. BK/US/IN00258) or symbol (e.g. IN00446.US). Returns chain{name,counter_id,stock_num,chg,ytd_chg,next[{...}]} and top{name,market}. Each node shows stock count, daily change, and YTD change."
+        description = "Hierarchical sub-sector tree for an industry group. Accepts BK counter_id from industry_rank (e.g. BK/US/IN00258). Returns chain{name,counter_id,stock_num,chg,ytd_chg,next[{...}]} and top{name,market}. Each node shows stock count, daily change, and YTD change."
     )]
     async fn industry_peers(
         &self,

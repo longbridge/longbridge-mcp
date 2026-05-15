@@ -544,8 +544,7 @@ pub async fn institutional_views(
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct IndustryPeersParam {
-    /// BK counter_id from `industry_rank` (e.g. "BK/US/IN00258") or industry index symbol
-    /// (e.g. "IN00446.US"). BK counter_ids are accepted directly; symbols are converted.
+    /// BK counter_id from `industry_rank`, e.g. "BK/US/IN00258".
     pub symbol: String,
 }
 

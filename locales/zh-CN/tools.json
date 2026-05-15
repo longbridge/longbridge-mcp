@@ -996,11 +996,11 @@
     },
     "industry_rank": {
       "title": "行业排行榜",
-      "description": "按市场（US/HK/CN/SG）和指标排列行业。indicator：0=领涨 1=今日走势 2=人气 3=市值 4=营收 5=营收增长率 6=净利润 7=净利润增长率。sort_type：0=单级 1=多层。返回 items[]{counter_id(BK/US/IN00258), symbol(IN00xxx.US), name, chg, lists[]}，counter_id 可直接传入 industry_peers。"
+      "description": "按市场（US/HK/CN/SG）和指标排列行业。indicator：0=领涨 1=今日走势 2=人气 3=市值 4=营收 5=营收增长率 6=净利润 7=净利润增长率。sort_type：0=单级 1=多层。返回 items[]{counter_id(BK/US/IN00258), name, chg, lists[]}，counter_id 可直接传入 industry_peers。"
     },
     "industry_peers": {
       "title": "行业同业分组树",
-      "description": "行业分组的层级同业树。接受来自 industry_rank 的 BK counter_id（如 BK/US/IN00258）或 symbol（如 IN00446.US）。返回 chain{name,counter_id,stock_num,chg,ytd_chg,next[{...}]} 和 top{name,market}，每个节点包含成分股数量、日涨跌幅和年初至今涨跌幅。"
+      "description": "行业分组的层级同业树。接受来自 industry_rank 的 BK counter_id（如 BK/US/IN00258）。返回 chain{name,counter_id,stock_num,chg,ytd_chg,next[{...}]} 和 top{name,market}，每个节点包含成分股数量、日涨跌幅和年初至今涨跌幅。"
     },
     "financial_report_snapshot": {
       "title": "财报快照",
