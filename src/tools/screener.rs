@@ -7,23 +7,20 @@ use rmcp::serde::Deserialize;
 
 use crate::tools::support::http_client::{http_get_tool, http_post_tool};
 
-#[derive(Debug, Deserialize, JsonSchema)]
-pub struct ScreenerStrategiesParam {
-    /// Strategy scope: "recommend" (default) | "mine" | "all"
-    pub scope: Option<String>,
-}
-
-pub async fn screener_strategies(
+/// Platform-recommended screener strategies (no params required).
+pub async fn screener_recommend_strategies(
     mctx: &crate::tools::McpContext,
-    p: ScreenerStrategiesParam,
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
-    let path = match p.scope.as_deref().unwrap_or("recommend") {
-        "mine" => "/v1/quote/screener/strategies/mine",
-        "all" => "/v1/quote/screener/strategies",
-        _ => "/v1/quote/screener/strategies/recommend",
-    };
-    http_get_tool(&client, path, &[]).await
+    http_get_tool(&client, "/v1/quote/screener/strategies/recommend", &[]).await
+}
+
+/// User's own saved screener strategies (no params required).
+pub async fn screener_user_strategies(
+    mctx: &crate::tools::McpContext,
+) -> Result<CallToolResult, McpError> {
+    let client = mctx.create_http_client();
+    http_get_tool(&client, "/v1/quote/screener/strategies/mine", &[]).await
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]

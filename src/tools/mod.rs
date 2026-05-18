@@ -2560,20 +2560,36 @@ impl Longbridge {
         measured_tool_call("stock_events", || market::stock_events(&mctx, p)).await
     }
 
-    /// List stock screener strategies.
+    /// List platform-recommended stock screener strategies.
     #[tool(
-        title = "Screener Strategies",
+        title = "Screener Recommend Strategies",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "List stock screener strategies. scope: \"recommend\" (default, platform picks), \"mine\" (user-saved), \"all\" (everything). Returns screeners[]{id, name, type, average_day_chg, stocks[], groups[]}. Use id with screener_search or screener_strategy."
+        description = "List platform-recommended screener strategies. Returns screeners[]{id, name, average_day_chg, stocks[], groups[]}. Use id with screener_search or screener_strategy."
     )]
-    async fn screener_strategies(
+    async fn screener_recommend_strategies(
         &self,
         ctx: RequestContext<RoleServer>,
-        Parameters(p): Parameters<screener::ScreenerStrategiesParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("screener_strategies", || {
-            screener::screener_strategies(&mctx, p)
+        measured_tool_call("screener_recommend_strategies", || {
+            screener::screener_recommend_strategies(&mctx)
+        })
+        .await
+    }
+
+    /// List user's own saved stock screener strategies.
+    #[tool(
+        title = "Screener User Strategies",
+        annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
+        description = "List the current user's saved screener strategies. Returns screeners[]{id, name, average_day_chg, stocks[], groups[]}. Use id with screener_search or screener_strategy."
+    )]
+    async fn screener_user_strategies(
+        &self,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("screener_user_strategies", || {
+            screener::screener_user_strategies(&mctx)
         })
         .await
     }
@@ -2582,7 +2598,7 @@ impl Longbridge {
     #[tool(
         title = "Screener Strategy",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get single screener strategy detail by id. Returns id, name, groups[]{group_name, group_type, indicators[]{id, key, name, value}}. Use id from screener_strategies."
+        description = "Get single screener strategy detail by id. Returns id, name, groups[]{group_name, group_type, indicators[]{id, key, name, value}}. Use id from screener_recommend_strategies or screener_user_strategies."
     )]
     async fn screener_strategy(
         &self,
@@ -2600,7 +2616,7 @@ impl Longbridge {
     #[tool(
         title = "Screener Search",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Execute stock screener search. market: US/HK/CN/SG. id: strategy ID from screener_strategies (omit for market-wide). Returns total (int) and stocks[]{symbol, name, values[]} matching all strategy conditions."
+        description = "Execute stock screener search. market: US/HK/CN/SG. id: strategy ID from screener_recommend_strategies or screener_user_strategies (omit for market-wide). Returns total (int) and stocks[]{symbol, name, values[]} matching all strategy conditions."
     )]
     async fn screener_search(
         &self,
