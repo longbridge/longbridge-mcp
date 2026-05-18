@@ -1037,7 +1037,7 @@
       "description": "按 object_id 查詢單個股東持倉歷史與逐筆交易。返回 owner_source、holding_summary[]{period, accum_buy, accum_sell}、tradings[]{period, trading_details[]{date, shares, price, type}}。"
     },
     "valuation_comparison": {
-      "title": "多股估值對比",
+      "title": "多股股票對比",
       "description": "橫向對比最多 5 只股票的 PE/PB/PS 及歷史時序。currency: USD/HKD/CNY。comparison_symbols: 逗號分隔最多 4 只。返回 list[]{symbol, name, pe, pb, ps, price_close, market_value, history[]{date, pe, pb, ps}}。"
     },
     "hk_short_positions": {

@@ -2481,7 +2481,7 @@ impl Longbridge {
 
     /// Compare valuation metrics across multiple stocks in the same industry.
     #[tool(
-        title = "Valuation Comparison",
+        title = "Stock Comparison",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
         description = "Compare PE/PB/PS valuation and price across up to 5 stocks. currency: USD/HKD/CNY. comparison_symbols: comma-separated, max 4 (e.g. \"MSFT.US,GOOGL.US\"). Returns list[]{symbol, name, market_value, price_close, pe, pb, ps, history[]{date, pe, pb, ps}}."
     )]
