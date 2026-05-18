@@ -1,0 +1,81 @@
+//! Stock screener tools — strategy lists, strategy detail, search, and indicator metadata.
+
+use rmcp::ErrorData as McpError;
+use rmcp::model::CallToolResult;
+use rmcp::schemars::JsonSchema;
+use rmcp::serde::Deserialize;
+
+use crate::tools::support::http_client::{http_get_tool, http_post_tool};
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ScreenerStrategiesParam {
+    /// Strategy scope: "recommend" (default) | "mine" | "all"
+    pub scope: Option<String>,
+}
+
+pub async fn screener_strategies(
+    mctx: &crate::tools::McpContext,
+    p: ScreenerStrategiesParam,
+) -> Result<CallToolResult, McpError> {
+    let client = mctx.create_http_client();
+    let path = match p.scope.as_deref().unwrap_or("recommend") {
+        "mine" => "/v1/quote/screener/strategies/mine",
+        "all" => "/v1/quote/screener/strategies",
+        _ => "/v1/quote/screener/strategies/recommend",
+    };
+    http_get_tool(&client, path, &[]).await
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ScreenerStrategyParam {
+    /// Strategy ID from screener_strategies
+    pub id: String,
+}
+
+pub async fn screener_strategy(
+    mctx: &crate::tools::McpContext,
+    p: ScreenerStrategyParam,
+) -> Result<CallToolResult, McpError> {
+    let client = mctx.create_http_client();
+    http_get_tool(
+        &client,
+        "/v1/quote/screener/strategy",
+        &[("id", p.id.as_str())],
+    )
+    .await
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ScreenerSearchParam {
+    /// Market: "US" | "HK" | "CN" | "SG"
+    pub market: String,
+    /// Strategy ID from screener_strategies (optional if using custom indicators)
+    pub id: Option<String>,
+    /// Page number (default: 1)
+    pub page: Option<u32>,
+    /// Page size (default: 20)
+    pub size: Option<u32>,
+}
+
+pub async fn screener_search(
+    mctx: &crate::tools::McpContext,
+    p: ScreenerSearchParam,
+) -> Result<CallToolResult, McpError> {
+    let client = mctx.create_http_client();
+    let mut body = serde_json::json!({
+        "market": p.market,
+        "page": p.page.unwrap_or(1),
+        "size": p.size.unwrap_or(20),
+    });
+    if let Some(id) = p.id {
+        body["id"] = serde_json::Value::String(id);
+    }
+    http_post_tool(&client, "/v1/quote/screener/search", body).await
+}
+
+pub async fn screener_indicators(
+    mctx: &crate::tools::McpContext,
+) -> Result<CallToolResult, McpError> {
+    let client = mctx.create_http_client();
+    http_get_tool(&client, "/v1/quote/screener/indicators", &[]).await
+}

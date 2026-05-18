@@ -280,3 +280,137 @@ pub async fn industry_rank(
     res.structured_content = structured;
     Ok(res)
 }
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct HkShortPositionsParam {
+    /// HK security symbol, e.g. "700.HK"
+    pub symbol: String,
+    /// Query cutoff timestamp in seconds (pass current timestamp for latest data)
+    pub last_timestamp: String,
+    /// Page size: 1–100 (default: 20)
+    pub page_size: Option<String>,
+}
+
+pub async fn hk_short_positions(
+    mctx: &crate::tools::McpContext,
+    p: HkShortPositionsParam,
+) -> Result<CallToolResult, McpError> {
+    let client = mctx.create_http_client();
+    let cid = symbol_to_counter_id(&p.symbol);
+    let page_size = p.page_size.unwrap_or_else(|| "20".to_string());
+    http_get_tool_unix(
+        &client,
+        "/v1/quote/short-positions/hk",
+        &[
+            ("counter_id", cid.as_str()),
+            ("last_timestamp", p.last_timestamp.as_str()),
+            ("page_size", page_size.as_str()),
+        ],
+        &["data.*.timestamp", "update_timestamp"],
+    )
+    .await
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct HkShortTradesParam {
+    /// HK security symbol, e.g. "700.HK"
+    pub symbol: String,
+    /// Query cutoff timestamp in seconds
+    pub last_timestamp: String,
+    /// Page size: 1–100 (default: 20)
+    pub page_size: Option<String>,
+}
+
+pub async fn hk_short_trades(
+    mctx: &crate::tools::McpContext,
+    p: HkShortTradesParam,
+) -> Result<CallToolResult, McpError> {
+    let client = mctx.create_http_client();
+    let cid = symbol_to_counter_id(&p.symbol);
+    let page_size = p.page_size.unwrap_or_else(|| "20".to_string());
+    http_get_tool_unix(
+        &client,
+        "/v1/quote/short-trades/hk",
+        &[
+            ("counter_id", cid.as_str()),
+            ("last_timestamp", p.last_timestamp.as_str()),
+            ("page_size", page_size.as_str()),
+        ],
+        &["data.*.timestamp"],
+    )
+    .await
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct UsShortTradesParam {
+    /// US security symbol, e.g. "AAPL.US"
+    pub symbol: String,
+    /// Query cutoff timestamp in seconds
+    pub last_timestamp: String,
+    /// Page size: 1–100 (default: 20)
+    pub page_size: Option<String>,
+}
+
+pub async fn us_short_trades(
+    mctx: &crate::tools::McpContext,
+    p: UsShortTradesParam,
+) -> Result<CallToolResult, McpError> {
+    let client = mctx.create_http_client();
+    let cid = symbol_to_counter_id(&p.symbol);
+    let page_size = p.page_size.unwrap_or_else(|| "20".to_string());
+    http_get_tool_unix(
+        &client,
+        "/v1/quote/short-trades/us",
+        &[
+            ("counter_id", cid.as_str()),
+            ("last_timestamp", p.last_timestamp.as_str()),
+            ("page_size", page_size.as_str()),
+        ],
+        &["data.*.timestamp"],
+    )
+    .await
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct StockEventsParam {
+    /// Markets filter: comma-separated "HK,US,CN,SG" (omit for all)
+    pub markets: Option<String>,
+    /// Sort: "0" = by time, "1" = by change, "2" = by popularity (default: "2")
+    pub sort: Option<String>,
+    /// Date filter: "YYYY-MM-DD" (omit for today)
+    pub date: Option<String>,
+    /// Number of events to return (default: 20)
+    pub limit: Option<u32>,
+}
+
+pub async fn stock_events(
+    mctx: &crate::tools::McpContext,
+    p: StockEventsParam,
+) -> Result<CallToolResult, McpError> {
+    let client = mctx.create_http_client();
+    let limit = p.limit.unwrap_or(20);
+    let sort: u32 = p.sort.as_deref().unwrap_or("2").parse().unwrap_or(2);
+    let markets: Vec<serde_json::Value> = p
+        .markets
+        .as_deref()
+        .unwrap_or("")
+        .split(',')
+        .filter(|s| !s.is_empty())
+        .map(|s| serde_json::Value::String(s.trim().to_uppercase()))
+        .collect();
+    let mut body = serde_json::json!({
+        "limit": limit,
+        "sort": sort,
+        "markets": markets,
+        "next_params": null,
+    });
+    if let Some(ref d) = p.date {
+        body["date"] = serde_json::Value::String(d.clone());
+    }
+    crate::tools::support::http_client::http_post_tool(
+        &client,
+        "/v1/quote/market/stock-events",
+        body,
+    )
+    .await
+}

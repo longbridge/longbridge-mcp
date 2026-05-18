@@ -622,3 +622,84 @@ pub async fn financial_report_snapshot(
     }
     http_get_tool(&client, "/v1/quote/financials/earnings-snapshot", &params).await
 }
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ShareholderTopParam {
+    /// Security symbol, e.g. "AAPL.US"
+    pub symbol: String,
+}
+
+pub async fn shareholder_top(
+    mctx: &crate::tools::McpContext,
+    p: ShareholderTopParam,
+) -> Result<CallToolResult, McpError> {
+    let client = mctx.create_http_client();
+    let cid = symbol_to_counter_id(&p.symbol);
+    http_get_tool(
+        &client,
+        "/v1/quote/shareholders/top",
+        &[("counter_id", cid.as_str())],
+    )
+    .await
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ShareholderDetailParam {
+    /// Security symbol, e.g. "AAPL.US"
+    pub symbol: String,
+    /// Shareholder object_id from shareholder_top tool
+    pub object_id: i64,
+}
+
+pub async fn shareholder_detail(
+    mctx: &crate::tools::McpContext,
+    p: ShareholderDetailParam,
+) -> Result<CallToolResult, McpError> {
+    let client = mctx.create_http_client();
+    let cid = symbol_to_counter_id(&p.symbol);
+    let oid = p.object_id.to_string();
+    http_get_tool(
+        &client,
+        "/v1/quote/shareholders/holding",
+        &[("counter_id", cid.as_str()), ("object_id", oid.as_str())],
+    )
+    .await
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ValuationComparisonParam {
+    /// Primary security symbol, e.g. "AAPL.US"
+    pub symbol: String,
+    /// Currency: "USD" | "HKD" | "CNY"
+    pub currency: String,
+    /// Comparison symbols, comma-separated, max 4, e.g. "MSFT.US,GOOGL.US"
+    pub comparison_symbols: Option<String>,
+}
+
+pub async fn valuation_comparison(
+    mctx: &crate::tools::McpContext,
+    p: ValuationComparisonParam,
+) -> Result<CallToolResult, McpError> {
+    let client = mctx.create_http_client();
+    let cid = symbol_to_counter_id(&p.symbol);
+    let mut params: Vec<(&str, &str)> = vec![
+        ("counter_id", cid.as_str()),
+        ("currency", p.currency.as_str()),
+    ];
+    let comp_cids: String;
+    if let Some(ref syms) = p.comparison_symbols {
+        let cids: Vec<String> = syms
+            .split(',')
+            .map(|s| symbol_to_counter_id(s.trim()))
+            .collect();
+        comp_cids = cids.join(",");
+        params.push(("comparison_counter_ids", comp_cids.as_str()));
+    }
+    http_get_tool_unix(
+        &client,
+        "/v1/quote/compare/valuation",
+        &params,
+        &["list.*.history.*.date"],
+    )
+    .await
+}

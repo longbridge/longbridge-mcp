@@ -38,6 +38,7 @@ mod output;
 mod portfolio;
 mod quant;
 mod quote;
+mod screener;
 mod search;
 mod sharelist;
 mod statement;
@@ -2441,6 +2442,188 @@ impl Longbridge {
         let mctx = extract_context(&ctx)?;
         measured_tool_call("financial_report_snapshot", || {
             fundamental::financial_report_snapshot(&mctx, p)
+        })
+        .await
+    }
+
+    /// Get Top 20 major shareholders with multi-period holdings.
+    #[tool(
+        title = "Top 20 Shareholders",
+        annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
+        description = "Get Top 20 major shareholders (institutions, individuals, insiders) with multi-period holdings. Returns periods[], info[]{period, share_holders[]{object_id, name, title, shares_held, percent_shares_held, shares_changed, filing_date}}. Use object_id with shareholder_detail."
+    )]
+    async fn shareholder_top(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<fundamental::ShareholderTopParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("shareholder_top", || fundamental::shareholder_top(&mctx, p)).await
+    }
+
+    /// Get single shareholder's holding history and trade details by object_id.
+    #[tool(
+        title = "Shareholder Detail",
+        annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
+        description = "Get single shareholder holding history and trade details. Requires object_id from shareholder_top. Returns owner_source (Company/Institution/Person/Insider), holding_summary[]{period, accum_buy, accum_sell, stock_price}, tradings[]{period, trading_details[]{trading_date, trading_shares, trading_price, trading_type}}."
+    )]
+    async fn shareholder_detail(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<fundamental::ShareholderDetailParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("shareholder_detail", || {
+            fundamental::shareholder_detail(&mctx, p)
+        })
+        .await
+    }
+
+    /// Compare valuation metrics across multiple stocks in the same industry.
+    #[tool(
+        title = "Valuation Comparison",
+        annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
+        description = "Compare PE/PB/PS valuation and price across up to 5 stocks. currency: USD/HKD/CNY. comparison_symbols: comma-separated, max 4 (e.g. \"MSFT.US,GOOGL.US\"). Returns list[]{symbol, name, market_value, price_close, pe, pb, ps, history[]{date, pe, pb, ps}}."
+    )]
+    async fn valuation_comparison(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<fundamental::ValuationComparisonParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("valuation_comparison", || {
+            fundamental::valuation_comparison(&mctx, p)
+        })
+        .await
+    }
+
+    /// Get HK stock short position (outstanding short) history.
+    #[tool(
+        title = "HK Short Positions",
+        annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
+        description = "Get HK stock short position history. last_timestamp: unix seconds (use current time for latest). page_size: 1–100 (default 20). Returns update_timestamp and data[]{timestamp (RFC3339), amount (shares), balance (value), rate (short ratio)}."
+    )]
+    async fn hk_short_positions(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<market::HkShortPositionsParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("hk_short_positions", || {
+            market::hk_short_positions(&mctx, p)
+        })
+        .await
+    }
+
+    /// Get HK stock daily short-sale (short trade volume) history.
+    #[tool(
+        title = "HK Short Trades",
+        annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
+        description = "Get HK stock daily short-sale volume history. last_timestamp: unix seconds. page_size: 1–100. Returns data[]{timestamp (RFC3339), amount (short shares), balance (short value), close, rate (short % of total volume), total_amount}."
+    )]
+    async fn hk_short_trades(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<market::HkShortTradesParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("hk_short_trades", || market::hk_short_trades(&mctx, p)).await
+    }
+
+    /// Get US stock daily short-sale volume from NASDAQ and NYSE.
+    #[tool(
+        title = "US Short Trades",
+        annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
+        description = "Get US stock daily short-sale volume (NASDAQ + NYSE). last_timestamp: unix seconds. page_size: 1–100. Returns counter_id, sources (0=all/1=NASDAQ/2=NYSE), data[]{timestamp (RFC3339), nus_amount (NASDAQ short), ny_amount (NYSE short), total_amount, close, rate}."
+    )]
+    async fn us_short_trades(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<market::UsShortTradesParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("us_short_trades", || market::us_short_trades(&mctx, p)).await
+    }
+
+    /// Get hot stock movement events with alert reasons and news.
+    #[tool(
+        title = "Stock Events",
+        annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
+        description = "Get hot stock movement events with alert reasons. markets: comma-separated HK/US/CN/SG (omit=all). sort: 0=time 1=change 2=popularity (default). Returns events[]{stock{symbol,name,change,labels[]}, timestamp, alert_reason, alert_type, post{title,url}}."
+    )]
+    async fn stock_events(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<market::StockEventsParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("stock_events", || market::stock_events(&mctx, p)).await
+    }
+
+    /// List stock screener strategies.
+    #[tool(
+        title = "Screener Strategies",
+        annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
+        description = "List stock screener strategies. scope: \"recommend\" (default, platform picks), \"mine\" (user-saved), \"all\" (everything). Returns screeners[]{id, name, type, average_day_chg, stocks[], groups[]}. Use id with screener_search or screener_strategy."
+    )]
+    async fn screener_strategies(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<screener::ScreenerStrategiesParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("screener_strategies", || {
+            screener::screener_strategies(&mctx, p)
+        })
+        .await
+    }
+
+    /// Get single screener strategy detail by id.
+    #[tool(
+        title = "Screener Strategy",
+        annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
+        description = "Get single screener strategy detail by id. Returns id, name, groups[]{group_name, group_type, indicators[]{id, key, name, value}}. Use id from screener_strategies."
+    )]
+    async fn screener_strategy(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<screener::ScreenerStrategyParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("screener_strategy", || {
+            screener::screener_strategy(&mctx, p)
+        })
+        .await
+    }
+
+    /// Execute a stock screener search by strategy or custom conditions.
+    #[tool(
+        title = "Screener Search",
+        annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
+        description = "Execute stock screener search. market: US/HK/CN/SG. id: strategy ID from screener_strategies (omit for market-wide). Returns total (int) and stocks[]{symbol, name, values[]} matching all strategy conditions."
+    )]
+    async fn screener_search(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<screener::ScreenerSearchParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("screener_search", || screener::screener_search(&mctx, p)).await
+    }
+
+    /// Get all available stock screener indicator metadata.
+    #[tool(
+        title = "Screener Indicators",
+        annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
+        description = "Get all available screener indicator metadata. Returns groups[]{group_name, indicators[]{id, key, name, unit, description, default_range{min,max}, value_ranges[], places, default_selected}}. Use with screener_search for custom filters."
+    )]
+    async fn screener_indicators(
+        &self,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("screener_indicators", || {
+            screener::screener_indicators(&mctx)
         })
         .await
     }
