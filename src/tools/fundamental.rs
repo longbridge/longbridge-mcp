@@ -687,14 +687,17 @@ pub async fn valuation_comparison(
         ("counter_id", cid.as_str()),
         ("currency", p.currency.as_str()),
     ];
-    let comp_cids: String;
+    // Convert comparison symbols to counter_ids as individual repeated params
+    // e.g. comparison_counter_ids=ST/HK/700&comparison_counter_ids=ST/HK/80700
+    let comp_cids: Vec<String>;
     if let Some(ref syms) = p.comparison_symbols {
-        let cids: Vec<String> = syms
+        comp_cids = syms
             .split(',')
             .map(|s| symbol_to_counter_id(s.trim()))
             .collect();
-        comp_cids = cids.join(",");
-        params.push(("comparison_counter_ids", comp_cids.as_str()));
+        for cid in &comp_cids {
+            params.push(("comparison_counter_ids", cid.as_str()));
+        }
     }
     http_get_tool_unix(
         &client,
