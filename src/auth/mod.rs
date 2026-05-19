@@ -54,8 +54,9 @@ async fn tools_json() -> axum::Json<&'static serde_json::Value> {
             "tools".to_string(),
             serde_json::to_value(tools::list_tools()).expect("tool list must be JSON-serialisable"),
         );
-        let scopes: serde_json::Value = serde_json::from_str(include_str!("../../scopes.json"))
-            .expect("scopes.json must be valid JSON");
+        let scopes: serde_json::Value =
+            serde_json::from_str(include_str!("../../data/scopes.json"))
+                .expect("scopes.json must be valid JSON");
         if let serde_json::Value::Object(scopes_map) = scopes {
             for (k, v) in scopes_map {
                 // Live tool list always wins over any `tools` in scopes.json.
@@ -74,7 +75,7 @@ async fn tools_json() -> axum::Json<&'static serde_json::Value> {
 async fn scopes_json() -> axum::Json<&'static serde_json::Value> {
     static SCOPES_JSON: std::sync::LazyLock<serde_json::Value> = std::sync::LazyLock::new(|| {
         let mut out: serde_json::Map<String, serde_json::Value> =
-            match serde_json::from_str(include_str!("../../scopes.json")) {
+            match serde_json::from_str(include_str!("../../data/scopes.json")) {
                 Ok(serde_json::Value::Object(m)) => m,
                 _ => panic!("scopes.json must be a JSON object"),
             };
@@ -221,7 +222,8 @@ mod tests {
     #[test]
     fn scope_locales_match_scopes_json() {
         let scopes: serde_json::Value =
-            serde_json::from_str(include_str!("../../scopes.json")).expect("scopes.json valid");
+            serde_json::from_str(include_str!("../../data/scopes.json"))
+                .expect("scopes.json valid");
         let real_names: HashSet<String> = scopes
             .get("scopes")
             .and_then(|v| v.as_array())
