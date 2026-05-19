@@ -15,6 +15,10 @@
     "Trade Execution": {
       "name": "交易下單",
       "description": "執行交易，下單，撤單等功能，以及定投下單。"
+    },
+    "General": {
+      "name": "通用",
+      "description": "通用工具，覆蓋市場數據、行情、基本面、提醒、定投、股單、IPO 及社區內容。"
     }
   }
 }
