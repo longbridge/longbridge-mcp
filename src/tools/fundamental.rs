@@ -687,17 +687,16 @@ pub async fn valuation_comparison(
         ("counter_id", cid.as_str()),
         ("currency", p.currency.as_str()),
     ];
-    // Convert comparison symbols to counter_ids as individual repeated params
-    // e.g. comparison_counter_ids=ST/HK/700&comparison_counter_ids=ST/HK/80700
-    let comp_cids: Vec<String>;
+    // iOS serializes comparison_counter_ids as a JSON array string
+    // e.g. comparison_counter_ids=["ST/HK/700","ST/HK/80700"]
+    let comp_json: String;
     if let Some(ref syms) = p.comparison_symbols {
-        comp_cids = syms
+        let cids: Vec<String> = syms
             .split(',')
             .map(|s| symbol_to_counter_id(s.trim()))
             .collect();
-        for cid in &comp_cids {
-            params.push(("comparison_counter_ids", cid.as_str()));
-        }
+        comp_json = serde_json::to_string(&cids).unwrap_or_default();
+        params.push(("comparison_counter_ids", comp_json.as_str()));
     }
     http_get_tool_unix(
         &client,
