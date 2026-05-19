@@ -373,13 +373,18 @@ pub async fn us_short_trades(
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct StockEventsParam {
-    /// Markets filter: comma-separated "HK,US,CN,SG" (omit for all)
+    /// Market filter: comma-separated list of markets to include.
+    /// Supported values: "HK", "US", "CN", "SG". Omit to return all markets.
+    /// Example: "HK,US"
     pub markets: Option<String>,
-    /// Sort: "0" = by time, "1" = by change, "2" = by popularity (default: "2")
+    /// Sort order (default: "2"):
+    ///   "0" = by time (most recent first)
+    ///   "1" = by price change magnitude (largest move first)
+    ///   "2" = by popularity (most-viewed first)
     pub sort: Option<String>,
-    /// Date filter: "YYYY-MM-DD" (omit for today)
+    /// Date to query in "YYYY-MM-DD" format. Omit for today's movers.
     pub date: Option<String>,
-    /// Number of events to return (default: 20)
+    /// Number of events to return (default: 20, max: 100)
     pub limit: Option<u32>,
 }
 
