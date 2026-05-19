@@ -2564,7 +2564,7 @@ impl Longbridge {
     #[tool(
         title = "Rank Categories",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get rank tab category configurations (key + name + markets) for the popularity leaderboard. Returns categories[]{key, name, market[]}. Pass key to rank_list to fetch the ranked stock list."
+        description = "Get rank tab category configurations for the popularity leaderboard. Returns first_tags[]{key, name, second_tags[]{key, name, market}}. Pass a second_tags key (e.g. `ib_hot_all-us`) to rank_list."
     )]
     async fn rank_categories(
         &self,
