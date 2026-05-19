@@ -384,8 +384,12 @@ pub struct StockEventsParam {
     pub sort: Option<String>,
     /// Date to query in "YYYY-MM-DD" format. Omit for today's movers.
     pub date: Option<String>,
-    /// Number of events to return (default: 20, max: 100)
+    /// Number of events to return per page (default: 20, max: 100)
     pub limit: Option<u32>,
+    /// Pagination cursor from previous response next_params field.
+    /// Pass the entire next_params object returned by the previous call to get the next page.
+    /// Omit for the first page.
+    pub next_params: Option<serde_json::Value>,
 }
 
 pub async fn top_movers(
@@ -407,7 +411,7 @@ pub async fn top_movers(
         "limit": limit,
         "sort": sort,
         "markets": markets,
-        "next_params": null,
+        "next_params": p.next_params.unwrap_or(serde_json::Value::Null),
     });
     if let Some(ref d) = p.date {
         body["date"] = serde_json::Value::String(d.clone());

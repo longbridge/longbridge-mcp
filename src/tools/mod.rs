@@ -2549,7 +2549,7 @@ impl Longbridge {
     #[tool(
         title = "Top Movers",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get stocks whose price fluctuation exceeds the 20-trading-day standard deviation. System correlates related news to explain each abnormal move. markets: comma-separated HK/US/CN/SG (omit=all). sort: 0=time 1=change 2=popularity (default). Returns events[]{stock{symbol,name,change,labels[]}, timestamp, alert_reason, alert_type, post}."
+        description = "Get stocks whose price fluctuation exceeds the 20-trading-day standard deviation. System correlates related news to explain each abnormal move. markets: comma-separated HK/US/CN/SG (omit=all). sort: 0=time 1=change 2=popularity (default). Returns events[]{stock{symbol,name,change,labels[]}, timestamp, alert_reason, alert_type, post} and next_params (pass to next call for pagination)."
     )]
     async fn top_movers(
         &self,
