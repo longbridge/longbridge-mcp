@@ -1058,7 +1058,7 @@
     },
     "screener_search": {
       "title": "策略选股",
-      "description": "执行选股查询。market: US/HK/CN/SG（必填）。模式A（策略）：传 id（来自 screener_recommend_strategies/screener_user_strategies 的 screeners[].id）。模式B（自定义）：传 indicators[]{id（来自 screener_indicators groups[].indicators[].id）, op（gt/lt/between/eq）, value（between 时传 [min,max] 数组）}。返回 total 和 stocks[]{symbol, name, values[]}。"
+      "description": "执行选股查询。需要 filters[] 和 returns[]，从 screener_strategy 或 screener_indicators 构建。每个 filter：{key（来自 groups[].indicators[].key）, min, max, tech_values:{}}。策略流程：先调 screener_strategy 获取 groups，将非市场指标映射为 filters/returns，再 POST 此接口。返回 items[]{symbol, name, indicators[]{value, unit}}。"
     },
     "screener_indicators": {
       "title": "选股指标配置",

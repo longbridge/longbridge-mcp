@@ -2645,7 +2645,7 @@ impl Longbridge {
     #[tool(
         title = "Screener Search",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Execute stock screener search. market: US/HK/CN/SG (required). Mode A (strategy): pass id from screener_recommend_strategies/screener_user_strategies screeners[].id. Mode B (custom): pass indicators[]{id (from screener_indicators groups[].indicators[].id), op (gt/lt/between/eq), value (scalar or [min,max] for between)}. Returns total and stocks[]{symbol, name, values[]}."
+        description = "Execute stock screener search. Requires filters[] and returns[] built from screener_strategy or screener_indicators. Each filter: {key, min, max, tech_values:{}}. key comes from groups[].indicators[].key. Strategy workflow: call screener_strategy to get groups, map non-market indicators to filters/returns, POST here. Returns items[]{symbol, name, indicators[]{value, unit}}."
     )]
     async fn screener_search(
         &self,

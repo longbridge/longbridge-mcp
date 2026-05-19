@@ -25,7 +25,7 @@ pub async fn screener_user_strategies(
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ScreenerStrategyParam {
-    /// Strategy ID from screener_strategies
+    /// Strategy ID from screener_recommend_strategies or screener_user_strategies screeners[].id
     pub id: String,
 }
 
@@ -44,15 +44,23 @@ pub async fn screener_strategy(
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ScreenerSearchParam {
-    /// Market (required): "US" | "HK" | "CN" | "SG"
+    /// Market (required): "US" | "HK" | "CN" | "SG".
+    /// When using a strategy, the market embedded in the strategy overrides this value.
     pub market: String,
-    /// Mode A — Strategy ID from screener_recommend_strategies or screener_user_strategies
-    /// screeners[].id. Omit when using Mode B (custom indicators).
-    pub id: Option<String>,
-    /// Mode B — Custom filter conditions. Each item: id (from screener_indicators
-    /// groups[].indicators[].id), op ("gt"/"lt"/"between"/"eq"), value (scalar for gt/lt/eq,
-    /// or [min, max] array for "between"). Omit when using Mode A (strategy id).
-    pub indicators: Option<serde_json::Value>,
+    /// filters: array of filter conditions to apply.
+    /// Each item: {"key": "filter_balance", "min": "100", "max": "", "tech_values": {}}.
+    /// Keys come from screener_strategy groups[].indicators[].key or screener_indicators.
+    /// For Mode A (strategy): build from screener_strategy groups[].indicators[] —
+    ///   skip indicators with id=-1 (market selector), use key/min/max from each indicator.
+    /// For Mode B (custom): build manually using keys from screener_indicators.
+    pub filters: Option<serde_json::Value>,
+    /// returns: list of indicator keys to include in the response for each stock.
+    /// Should match the keys in filters. Example: ["filter_balance", "filter_marketcap"]
+    pub returns: Option<serde_json::Value>,
+    /// Sort field index (default: 0 = first indicator in returns)
+    pub sort_by: Option<u32>,
+    /// Sort order: 0=ascending, 1=descending (default: 1)
+    pub sort_order: Option<u32>,
     /// Page number (default: 1)
     pub page: Option<u32>,
     /// Page size (default: 20)
@@ -64,17 +72,16 @@ pub async fn screener_search(
     p: ScreenerSearchParam,
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
-    let mut body = serde_json::json!({
+    let body = serde_json::json!({
         "market": p.market,
+        "filters": p.filters.unwrap_or(serde_json::Value::Array(vec![])),
+        "returns": p.returns.unwrap_or(serde_json::Value::Array(vec![])),
+        "sort_by": p.sort_by.unwrap_or(0),
+        "sort_order": p.sort_order.unwrap_or(1),
+        "industries": [],
         "page": p.page.unwrap_or(1),
         "size": p.size.unwrap_or(20),
     });
-    if let Some(id) = p.id {
-        body["id"] = serde_json::Value::String(id);
-    }
-    if let Some(indicators) = p.indicators {
-        body["indicators"] = indicators;
-    }
     http_post_tool(&client, "/v1/quote/screener/search", body).await
 }
 
