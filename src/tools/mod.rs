@@ -2549,7 +2549,7 @@ impl Longbridge {
     #[tool(
         title = "Top Movers",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get stocks whose price fluctuation exceeds the 20-trading-day standard deviation. System correlates related news to explain each abnormal move. markets: comma-separated HK/US/CN/SG (omit=all). sort: 0=time 1=change 2=popularity (default). Returns events[]{stock{symbol,name,change,labels[]}, timestamp, alert_reason, alert_type, post} and next_params (pass to next call for pagination)."
+        description = "Get stocks whose price fluctuation exceeds the 20-trading-day standard deviation. System correlates related news to explain each abnormal move. markets: comma-separated HK/US/CN/SG (omit=all). sort: 0=time 1=change 2=popularity (default). next_params: pass the next_params object from the previous response to paginate. Returns events[]{stock{symbol,name,change,labels[]}, timestamp, alert_reason, alert_type, post} and next_params for next page."
     )]
     async fn top_movers(
         &self,
@@ -2578,7 +2578,7 @@ impl Longbridge {
     #[tool(
         title = "Rank List",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get ranked stock list by leaderboard tab key from rank_categories. key: e.g. \"hotness\" (total heat), \"rising\" (heat rising), \"trading\" (hot trades), \"discussion\" (most discussed), \"watchlist\" (most watched). Returns lists[]{symbol, name, last_done, chg, inflow, market_cap, pre_post_price, pre_post_chg}."
+        description = "Get ranked stock list by leaderboard tab key from rank_categories. key: e.g. `ib_hot_all-us` (US total heat), `ib_hot_up-hk` (HK rising heat), `ib_hot_trade-us` (US hot trades). Pass second_tags[].key from rank_categories. Returns lists[]{symbol, name, last_done, chg, inflow, market_cap, pre_post_price, pre_post_chg}."
     )]
     async fn rank_list(
         &self,
