@@ -1038,7 +1038,7 @@
     },
     "valuation_comparison": {
       "title": "多股股票對比",
-      "description": "橫向對比最多 5 只股票的 PE/PB/PS 及歷史時序。currency: USD/HKD/CNY。comparison_symbols: 逗號分隔最多 4 只。返回 list[]{symbol, name, pe, pb, ps, price_close, market_value, history[]{date, pe, pb, ps}}。"
+      "description": "獲取股票與同行業對標股的 PE/PB/PS 估值對比。服務端自動選擇對比股，無需指定。currency: USD/HKD/CNY。返回 list[]{symbol, name, market_value, price_close, pe, pb, ps, history[]{date, pe, pb, ps}}。"
     },
     "hk_short_positions": {
       "title": "港股做空持倉",
