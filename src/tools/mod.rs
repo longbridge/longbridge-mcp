@@ -2545,19 +2545,19 @@ impl Longbridge {
         measured_tool_call("us_short_trades", || market::us_short_trades(&mctx, p)).await
     }
 
-    /// Get hot stock movers with alert reasons and news.
+    /// Get top movers — stocks whose price exceeds the 20-day standard deviation.
     #[tool(
-        title = "Market Movers",
+        title = "Top Movers",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get hot stock movers with alert reasons. markets: comma-separated HK/US/CN/SG (omit=all). sort: 0=time 1=change 2=popularity (default). Returns events[]{stock{symbol,name,change,labels[]}, timestamp, alert_reason, alert_type, post{title,url}}."
+        description = "Get stocks whose price fluctuation exceeds the 20-trading-day standard deviation. System correlates related news to explain each abnormal move. markets: comma-separated HK/US/CN/SG (omit=all). sort: 0=time 1=change 2=popularity (default). Returns events[]{stock{symbol,name,change,labels[]}, timestamp, alert_reason, alert_type, post}."
     )]
-    async fn market_movers(
+    async fn top_movers(
         &self,
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<market::StockEventsParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("market_movers", || market::market_movers(&mctx, p)).await
+        measured_tool_call("top_movers", || market::top_movers(&mctx, p)).await
     }
 
     /// List platform-recommended stock screener strategies.

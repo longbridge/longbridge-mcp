@@ -383,7 +383,7 @@ pub struct StockEventsParam {
     pub limit: Option<u32>,
 }
 
-pub async fn market_movers(
+pub async fn top_movers(
     mctx: &crate::tools::McpContext,
     p: StockEventsParam,
 ) -> Result<CallToolResult, McpError> {

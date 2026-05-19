@@ -1072,9 +1072,9 @@
       "title": "我的選股策略",
       "description": "獲取當前用戶已儲存的選股策略列表。返回 screeners[]{id, name, average_day_chg, stocks[], groups[]}。id 可傳入 screener_search 或 screener_strategy。"
     },
-    "market_movers": {
+    "top_movers": {
       "title": "熱股異動",
-      "description": "獲取熱股異動事件含異動原因。markets: 逗號分隔 HK/US/CN/SG（空=全部）。sort: 0=時間 1=幅度 2=熱門(默認)。返回 events[]{stock{symbol,name,change,labels[]}, timestamp, alert_reason, alert_type, post}。"
+      "description": "獲取股價波動超過近 20 個交易日標準差的異動股票，系統自動關聯相關新聞解釋異動原因。markets：逗號分隔 HK/US/CN/SG（空=全部）。sort：0=時間 1=幅度 2=熱門(預設)。返回 events[]{stock{symbol,name,change,labels[]}, timestamp, alert_reason, alert_type, post}。"
     }
   }
 }
