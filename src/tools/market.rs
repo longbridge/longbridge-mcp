@@ -383,7 +383,7 @@ pub struct StockEventsParam {
     pub limit: Option<u32>,
 }
 
-pub async fn stock_events(
+pub async fn market_movers(
     mctx: &crate::tools::McpContext,
     p: StockEventsParam,
 ) -> Result<CallToolResult, McpError> {
@@ -407,10 +407,6 @@ pub async fn stock_events(
     if let Some(ref d) = p.date {
         body["date"] = serde_json::Value::String(d.clone());
     }
-    crate::tools::support::http_client::http_post_tool(
-        &client,
-        "/v1/quote/market/stock-events",
-        body,
-    )
-    .await
+    crate::tools::support::http_client::http_post_tool(&client, "/v1/quote/market/movers", body)
+        .await
 }

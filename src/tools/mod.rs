@@ -2545,19 +2545,19 @@ impl Longbridge {
         measured_tool_call("us_short_trades", || market::us_short_trades(&mctx, p)).await
     }
 
-    /// Get hot stock movement events with alert reasons and news.
+    /// Get hot stock movers with alert reasons and news.
     #[tool(
-        title = "Stock Events",
+        title = "Market Movers",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get hot stock movement events with alert reasons. markets: comma-separated HK/US/CN/SG (omit=all). sort: 0=time 1=change 2=popularity (default). Returns events[]{stock{symbol,name,change,labels[]}, timestamp, alert_reason, alert_type, post{title,url}}."
+        description = "Get hot stock movers with alert reasons. markets: comma-separated HK/US/CN/SG (omit=all). sort: 0=time 1=change 2=popularity (default). Returns events[]{stock{symbol,name,change,labels[]}, timestamp, alert_reason, alert_type, post{title,url}}."
     )]
-    async fn stock_events(
+    async fn market_movers(
         &self,
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<market::StockEventsParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("stock_events", || market::stock_events(&mctx, p)).await
+        measured_tool_call("market_movers", || market::market_movers(&mctx, p)).await
     }
 
     /// List platform-recommended stock screener strategies.

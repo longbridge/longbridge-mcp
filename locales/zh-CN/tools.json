@@ -1064,10 +1064,6 @@
       "title": "选股指标配置",
       "description": "获取全部选股指标元数据。返回 groups[]{group_name, indicators[]{id, key, name, unit, description, default_range{min,max}, value_ranges[], places, default_selected}}。"
     },
-    "stock_events": {
-      "title": "热股异动事件",
-      "description": "获取热股异动事件含异动原因。markets: 逗号分隔 HK/US/CN/SG（空=全部）。sort: 0=时间 1=幅度 2=热门(默认)。返回 events[]{stock{symbol,name,change,labels[]}, timestamp, alert_reason, alert_type, post}。"
-    },
     "screener_recommend_strategies": {
       "title": "平台推荐选股策略",
       "description": "获取平台推荐的选股策略列表。返回 screeners[]{id, name, average_day_chg, stocks[], groups[]}。id 可传入 screener_search 或 screener_strategy。"
@@ -1075,6 +1071,10 @@
     "screener_user_strategies": {
       "title": "我的选股策略",
       "description": "获取当前用户已保存的选股策略列表。返回 screeners[]{id, name, average_day_chg, stocks[], groups[]}。id 可传入 screener_search 或 screener_strategy。"
+    },
+    "market_movers": {
+      "title": "热股异动",
+      "description": "获取热股异动事件含异动原因。markets: 逗号分隔 HK/US/CN/SG（空=全部）。sort: 0=时间 1=幅度 2=热门(默认)。返回 events[]{stock{symbol,name,change,labels[]}, timestamp, alert_reason, alert_type, post}。"
     }
   }
 }

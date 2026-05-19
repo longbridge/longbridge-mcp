@@ -1064,10 +1064,6 @@
       "title": "選股指標配置",
       "description": "獲取全部選股指標元數據。返回 groups[]{group_name, indicators[]{id, key, name, unit, description, default_range{min,max}, value_ranges[], places, default_selected}}。"
     },
-    "stock_events": {
-      "title": "熱股異動事件",
-      "description": "獲取熱股異動事件含異動原因。markets: 逗號分隔 HK/US/CN/SG（空=全部）。sort: 0=時間 1=幅度 2=熱門(默認)。返回 events[]{stock{symbol,name,change,labels[]}, timestamp, alert_reason, alert_type, post}。"
-    },
     "screener_recommend_strategies": {
       "title": "平台推薦選股策略",
       "description": "獲取平台推薦的選股策略列表。返回 screeners[]{id, name, average_day_chg, stocks[], groups[]}。id 可傳入 screener_search 或 screener_strategy。"
@@ -1075,6 +1071,10 @@
     "screener_user_strategies": {
       "title": "我的選股策略",
       "description": "獲取當前用戶已儲存的選股策略列表。返回 screeners[]{id, name, average_day_chg, stocks[], groups[]}。id 可傳入 screener_search 或 screener_strategy。"
+    },
+    "market_movers": {
+      "title": "熱股異動",
+      "description": "獲取熱股異動事件含異動原因。markets: 逗號分隔 HK/US/CN/SG（空=全部）。sort: 0=時間 1=幅度 2=熱門(默認)。返回 events[]{stock{symbol,name,change,labels[]}, timestamp, alert_reason, alert_type, post}。"
     }
   }
 }
