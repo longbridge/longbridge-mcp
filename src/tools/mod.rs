@@ -2560,6 +2560,35 @@ impl Longbridge {
         measured_tool_call("top_movers", || market::top_movers(&mctx, p)).await
     }
 
+    /// Get rank tab category configurations for the popularity leaderboard.
+    #[tool(
+        title = "Rank Categories",
+        annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
+        description = "Get rank tab category configurations (key + name + markets) for the popularity leaderboard. Returns categories[]{key, name, market[]}. Pass key to rank_list to fetch the ranked stock list."
+    )]
+    async fn rank_categories(
+        &self,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("rank_categories", || market::rank_categories(&mctx)).await
+    }
+
+    /// Get ranked stock list by leaderboard tab key.
+    #[tool(
+        title = "Rank List",
+        annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
+        description = "Get ranked stock list by leaderboard tab key from rank_categories. key: e.g. \"hotness\" (total heat), \"rising\" (heat rising), \"trading\" (hot trades), \"discussion\" (most discussed), \"watchlist\" (most watched). Returns lists[]{symbol, name, last_done, chg, inflow, market_cap, pre_post_price, pre_post_chg}."
+    )]
+    async fn rank_list(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<market::RankListParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("rank_list", || market::rank_list(&mctx, p)).await
+    }
+
     /// List platform-recommended stock screener strategies.
     #[tool(
         title = "Screener Recommend Strategies",

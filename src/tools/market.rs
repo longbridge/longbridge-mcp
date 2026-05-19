@@ -419,3 +419,36 @@ pub async fn top_movers(
     )
     .await
 }
+
+/// Get available rank tab category configurations.
+pub async fn rank_categories(mctx: &crate::tools::McpContext) -> Result<CallToolResult, McpError> {
+    let client = mctx.create_http_client();
+    http_get_tool(&client, "/v1/quote/market/rank/categories", &[]).await
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct RankListParam {
+    /// Tab key from rank_categories, e.g. "hotness" (total heat), "rising" (heat rising),
+    /// "trading" (hot trades), "discussion" (hot discussion), "watchlist" (most watched)
+    pub key: String,
+    /// Whether to include related news articles (default: false)
+    pub need_article: Option<bool>,
+}
+
+pub async fn rank_list(
+    mctx: &crate::tools::McpContext,
+    p: RankListParam,
+) -> Result<CallToolResult, McpError> {
+    let client = mctx.create_http_client();
+    let need_article = p.need_article.unwrap_or(false).to_string();
+    http_get_tool(
+        &client,
+        "/v1/quote/market/rank/list",
+        &[
+            ("key", p.key.as_str()),
+            ("delay_bmp", "false"),
+            ("need_article", need_article.as_str()),
+        ],
+    )
+    .await
+}

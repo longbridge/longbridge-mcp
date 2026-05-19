@@ -1075,6 +1075,14 @@
     "top_movers": {
       "title": "热股异动",
       "description": "获取股价波动超过近 20 个交易日标准差的异动股票，系统自动关联相关新闻解释异动原因。markets：逗号分隔 HK/US/CN/SG（空=全部）。sort：0=时间 1=幅度 2=热门(默认)。返回 events[]{stock{symbol,name,change,labels[]}, timestamp, alert_reason, alert_type, post}。"
+    },
+    "rank_categories": {
+      "title": "热度榜分类配置",
+      "description": "获取热度排行榜的 Tab 分类配置（key + 名称 + 支持市场）。返回 categories[]{key, name, market[]}。将 key 传入 rank_list 获取对应榜单。"
+    },
+    "rank_list": {
+      "title": "热度榜股票列表",
+      "description": "按 Tab key 获取热度排行榜股票列表。key 来自 rank_categories，如 hotness（总热度）、rising（热度上升）、trading（热门交易）、discussion（热议）、watchlist（最多关注）。返回 lists[]{symbol, name, last_done, chg, inflow, market_cap, pre_post_price, pre_post_chg}。"
     }
   }
 }
