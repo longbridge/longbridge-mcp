@@ -86,7 +86,7 @@
     },
     {
       "name": "watchlist",
-      "app_id": null
+      "app_id": 17
     },
     {
       "name": "filings",
@@ -122,59 +122,59 @@
     },
     {
       "name": "account_balance",
-      "app_id": null
+      "app_id": 5
     },
     {
       "name": "stock_positions",
-      "app_id": null
+      "app_id": 4
     },
     {
       "name": "fund_positions",
-      "app_id": null
+      "app_id": 3
     },
     {
       "name": "margin_ratio",
-      "app_id": null
+      "app_id": 19
     },
     {
       "name": "today_orders",
-      "app_id": null
+      "app_id": 13
     },
     {
       "name": "order_detail",
-      "app_id": null
+      "app_id": 29
     },
     {
       "name": "cancel_order",
-      "app_id": null
+      "app_id": 12
     },
     {
       "name": "today_executions",
-      "app_id": null
+      "app_id": 15
     },
     {
       "name": "history_orders",
-      "app_id": null
+      "app_id": 14
     },
     {
       "name": "history_executions",
-      "app_id": null
+      "app_id": 16
     },
     {
       "name": "cash_flow",
-      "app_id": null
+      "app_id": 6
     },
     {
       "name": "submit_order",
-      "app_id": null
+      "app_id": 10
     },
     {
       "name": "replace_order",
-      "app_id": null
+      "app_id": 11
     },
     {
       "name": "estimate_max_purchase_quantity",
-      "app_id": null
+      "app_id": 30
     },
     {
       "name": "short_margin",
@@ -370,35 +370,35 @@
     },
     {
       "name": "news",
-      "app_id": null
+      "app_id": 222
     },
     {
       "name": "topic",
-      "app_id": null
+      "app_id": 223
     },
     {
       "name": "topic_detail",
-      "app_id": null
+      "app_id": 226
     },
     {
       "name": "topic_replies",
-      "app_id": null
+      "app_id": 227
     },
     {
       "name": "topic_create",
-      "app_id": null
+      "app_id": 225
     },
     {
       "name": "topic_create_reply",
-      "app_id": null
+      "app_id": 228
     },
     {
       "name": "statement_list",
-      "app_id": null
+      "app_id": 229
     },
     {
       "name": "statement_export",
-      "app_id": null
+      "app_id": 230
     },
     {
       "name": "short_positions",
