@@ -1058,7 +1058,7 @@
     },
     "screener_search": {
       "title": "策略選股",
-      "description": "執行選股查詢。market: US/HK/CN/SG。id: 策略 ID（可選，來自 screener_strategies）。返回 total 和 stocks[]{symbol, name, values[]}。"
+      "description": "執行選股查詢。market: US/HK/CN/SG（必填）。模式A（策略）：傳 id（來自 screener_recommend_strategies/screener_user_strategies 的 screeners[].id）。模式B（自定義）：傳 indicators[]{id（來自 screener_indicators groups[].indicators[].id）, op（gt/lt/between/eq）, value（between 時傳 [min,max] 陣列）}。返回 total 和 stocks[]{symbol, name, values[]}。"
     },
     "screener_indicators": {
       "title": "選股指標配置",

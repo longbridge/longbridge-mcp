@@ -44,10 +44,15 @@ pub async fn screener_strategy(
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ScreenerSearchParam {
-    /// Market: "US" | "HK" | "CN" | "SG"
+    /// Market (required): "US" | "HK" | "CN" | "SG"
     pub market: String,
-    /// Strategy ID from screener_strategies (optional if using custom indicators)
+    /// Mode A — Strategy ID from screener_recommend_strategies or screener_user_strategies
+    /// screeners[].id. Omit when using Mode B (custom indicators).
     pub id: Option<String>,
+    /// Mode B — Custom filter conditions. Each item: id (from screener_indicators
+    /// groups[].indicators[].id), op ("gt"/"lt"/"between"/"eq"), value (scalar for gt/lt/eq,
+    /// or [min, max] array for "between"). Omit when using Mode A (strategy id).
+    pub indicators: Option<serde_json::Value>,
     /// Page number (default: 1)
     pub page: Option<u32>,
     /// Page size (default: 20)
@@ -66,6 +71,9 @@ pub async fn screener_search(
     });
     if let Some(id) = p.id {
         body["id"] = serde_json::Value::String(id);
+    }
+    if let Some(indicators) = p.indicators {
+        body["indicators"] = indicators;
     }
     http_post_tool(&client, "/v1/quote/screener/search", body).await
 }
