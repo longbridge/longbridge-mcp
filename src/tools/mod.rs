@@ -2483,7 +2483,7 @@ impl Longbridge {
     #[tool(
         title = "Stock Comparison",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get PE/PB/PS valuation comparison for a stock against its industry peers. Server automatically selects peer companies. currency: USD/HKD/CNY. Returns list[]{symbol, name, market_value, price_close, pe, pb, ps, history[]{date, pe, pb, ps}}."
+        description = "Stock valuation comparison. Mode A (single): pass only symbol — server returns stock + auto-selected industry peers. Mode B (multi): pass symbol as primary + comparison_symbols (comma-separated, e.g. 'MSFT.US,GOOGL.US') for explicit peer comparison. currency: USD/HKD/CNY. Returns list[]{symbol, name, market_value, price_close, pe, pb, ps, history[]{date, pe, pb, ps}}."
     )]
     async fn valuation_comparison(
         &self,

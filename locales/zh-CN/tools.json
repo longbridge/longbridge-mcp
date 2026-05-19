@@ -1038,7 +1038,7 @@
     },
     "valuation_comparison": {
       "title": "多股股票对比",
-      "description": "获取股票与同行业对标股的 PE/PB/PS 估值对比。服务端自动选择对比股，无需指定。currency: USD/HKD/CNY。返回 list[]{symbol, name, market_value, price_close, pe, pb, ps, history[]{date, pe, pb, ps}}。"
+      "description": "股票估值对比。模式A（单股）：只传 symbol，服务端自动返回该股票及同行业推荐对标股。模式B（多股）：传 symbol 作为主股 + comparison_symbols（逗号分隔，如 'MSFT.US,GOOGL.US'）进行指定股票对比。currency: USD/HKD/CNY。返回 list[]{symbol, name, market_value, price_close, pe, pb, ps, history[]{date, pe, pb, ps}}。"
     },
     "hk_short_positions": {
       "title": "港股做空持仓",
