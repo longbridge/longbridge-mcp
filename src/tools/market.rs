@@ -407,6 +407,10 @@ pub async fn market_movers(
     if let Some(ref d) = p.date {
         body["date"] = serde_json::Value::String(d.clone());
     }
-    crate::tools::support::http_client::http_post_tool(&client, "/v1/quote/market/movers", body)
-        .await
+    crate::tools::support::http_client::http_post_tool(
+        &client,
+        "/v1/quote/market/stock-events",
+        body,
+    )
+    .await
 }
