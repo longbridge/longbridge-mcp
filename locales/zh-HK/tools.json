@@ -1058,7 +1058,7 @@
     },
     "screener_search": {
       "title": "策略選股",
-      "description": "執行選股查詢。需要 filters[] 和 returns[]，從 screener_strategy 或 screener_indicators 構建。每個 filter：{key（來自 groups[].indicators[].key）, min, max, tech_values:{}}。策略流程：先調 screener_strategy 獲取 groups，將非市場指標映射為 filters/returns，再 POST 此接口。返回 items[]{symbol, name, indicators[]{value, unit}}。"
+      "description": "執行選股查詢。market: US/HK/CN/SG（必填）。模式A（策略）：調 screener_strategy 獲取 groups，將非市場指標（跳過 id=-1）映射為 filters[]{key,min,max,tech_values:{}} 和 returns[]。模式B（自定義）：調 screener_indicators 選擇指標 key，手動構建 filters/returns。sort_by：returns[] 的排序欄位索引（默認0）。sort_order：0=升序 1=降序（默認1）。返回 items[]{symbol,name,indicators[]{value,unit}}。"
     },
     "screener_indicators": {
       "title": "選股指標配置",
