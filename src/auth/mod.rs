@@ -74,12 +74,11 @@ async fn tools_json() -> axum::Json<&'static serde_json::Value> {
                 .expect("tool list must be JSON-serialisable");
             if let serde_json::Value::Array(ref mut arr) = list {
                 for tool in arr.iter_mut() {
-                    if let serde_json::Value::Object(map) = tool {
-                        if let Some(name) = map.get("name").and_then(|v| v.as_str()) {
-                            if let Some(app_id) = app_id_map.get(name) {
-                                map.insert("app_id".to_string(), app_id.clone());
-                            }
-                        }
+                    if let serde_json::Value::Object(map) = tool
+                        && let Some(name) = map.get("name").and_then(|v| v.as_str())
+                        && let Some(app_id) = app_id_map.get(name)
+                    {
+                        map.insert("app_id".to_string(), app_id.clone());
                     }
                 }
             }
