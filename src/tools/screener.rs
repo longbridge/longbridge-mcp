@@ -85,9 +85,22 @@ pub async fn screener_search(
     http_post_tool(&client, "/v1/quote/screener/search", body).await
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ScreenerIndicatorsParam {
+    /// Optional security symbol to filter indicators for a specific stock, e.g. "AAPL.US"
+    pub symbol: Option<String>,
+}
+
 pub async fn screener_indicators(
     mctx: &crate::tools::McpContext,
+    p: ScreenerIndicatorsParam,
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
-    http_get_tool(&client, "/v1/quote/screener/indicators", &[]).await
+    let mut params: Vec<(&str, &str)> = vec![];
+    let cid;
+    if let Some(ref sym) = p.symbol {
+        cid = crate::counter::symbol_to_counter_id(sym);
+        params.push(("counter_id", cid.as_str()));
+    }
+    http_get_tool(&client, "/v1/quote/screener/indicators", &params).await
 }

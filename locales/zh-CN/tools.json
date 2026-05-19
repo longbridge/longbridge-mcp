@@ -1062,7 +1062,7 @@
     },
     "screener_indicators": {
       "title": "选股指标配置",
-      "description": "获取全部选股指标元数据。返回 groups[]{group_name, indicators[]{id, key, name, unit, description, default_range{min,max}, value_ranges[], places, default_selected}}。"
+      "description": "获取选股指标元数据。可选 symbol（如 AAPL.US）过滤特定股票的指标。返回 groups[]{group_name, indicators[]{id, key, name, unit, default_range{min,max}, value_ranges[]}}。key 用于 screener_search 的 filters[] 和 returns[]。"
     },
     "screener_recommend_strategies": {
       "title": "平台推荐选股策略",

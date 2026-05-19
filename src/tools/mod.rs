@@ -2645,7 +2645,7 @@ impl Longbridge {
     #[tool(
         title = "Screener Search",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Execute stock screener search. Requires filters[] and returns[] built from screener_strategy or screener_indicators. Each filter: {key, min, max, tech_values:{}}. key comes from groups[].indicators[].key. Strategy workflow: call screener_strategy to get groups, map non-market indicators to filters/returns, POST here. Returns items[]{symbol, name, indicators[]{value, unit}}."
+        description = "Execute stock screener search. market required. filters[]: [{key, min, max, tech_values:{}}] — keys from screener_strategy groups[].indicators[].key or screener_indicators. returns[]: same keys as filters. Strategy workflow: screener_strategy groups → map non-market indicators → build filters/returns. Returns items[]{symbol, name, indicators[]{value, unit}}."
     )]
     async fn screener_search(
         &self,
@@ -2660,15 +2660,16 @@ impl Longbridge {
     #[tool(
         title = "Screener Indicators",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get all available screener indicator metadata. Returns groups[]{group_name, indicators[]{id, key, name, unit, description, default_range{min,max}, value_ranges[], places, default_selected}}. Use with screener_search for custom filters."
+        description = "Get screener indicator metadata. Optional symbol (e.g. AAPL.US) filters to stock-specific indicators. Returns groups[]{group_name, indicators[]{id, key, name, unit, default_range{min,max}, value_ranges[]}}. Use keys with screener_search filters[]."
     )]
     async fn screener_indicators(
         &self,
         ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<screener::ScreenerIndicatorsParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
         measured_tool_call("screener_indicators", || {
-            screener::screener_indicators(&mctx)
+            screener::screener_indicators(&mctx, p)
         })
         .await
     }
