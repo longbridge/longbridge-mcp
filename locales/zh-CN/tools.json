@@ -20,10 +20,12 @@
     },
     "security_list": {
       "title": "证券列表",
-      "description": "获取指定市场的证券列表。`category` 当前必须为 `\"Overnight\"`，其他取值或留空都会报错；并且目前仅支持 `market=\"US\"`，其他市场同样会返回错误",
+      "description": "获取指定市场的证券列表。支持市场：US、HK、CN、SG。category 当前仅支持 \"Overnight\"（默认）。page：页码（从1开始，默认1）。count：每页条数（默认50）。返回 {total, page, count, items[]{symbol, name_en, name_cn}}。",
       "properties": {
-        "market": "市场代码：HK、US、CN、SG",
-        "category": "类别筛选。当前仅支持 `\"Overnight\"`，传入其他值或不传都会触发 `param_error`；并且 `\"Overnight\"` 类别目前仅支持 `US` 市场，其他市场同样会返回 `param_error`"
+        "market": "市场代码：US、HK、CN、SG",
+        "category": "类别筛选，当前仅支持 \"Overnight\"（默认）",
+        "page": "页码，从1开始，默认1",
+        "count": "每页返回条数，默认50"
       }
     },
     "update_watchlist_group": {
@@ -1038,23 +1040,23 @@
     },
     "screener_strategy": {
       "title": "策略详情",
-      "description": "按 id 获取单个选股策略详情。返回 id, name, groups[]{group_name, indicators[]{id, key, name, value}}。id 来自 screener_strategies。"
+      "description": "运行前查看策略的过滤条件详情。返回 id, name, groups[]{group_name, indicators[]{key, name, min, max}}。id 来自 screener_recommend_strategies 或 screener_user_strategies。如需直接执行策略，使用 screener_search 的 strategy_id 参数。"
     },
     "screener_search": {
       "title": "策略选股",
-      "description": "执行选股查询。market: US/HK/CN/SG（必填）。模式A：传 strategy_id（来自 screener_recommend_strategies/screener_user_strategies 的 screeners[].id），工具自动获取策略并构建过滤条件。模式B：传 filters[]{key,min,max,tech_values:{}} 和 returns[]（key 来自 screener_indicators）。sort_by：排序字段索引（默认0）。sort_order：0=升序 1=降序（默认1）。返回 items[]{symbol,name,indicators[]{value,unit}}。"
+      "description": "执行选股查询。market: US/HK/CN/SG（必填）。模式A：传 strategy_id（来自 screener_recommend_strategies 的 screeners[].id），工具自动获取策略并构建过滤条件。模式B：传 conditions=[\"KEY:MIN:MAX\",...] —— filter_ 前缀自动补全，留空某一端表示开区间（\"roe:15:\" 表示 ROE≥15%）。 extra_returns=[\"key\",...] 追加仅展示、不参与过滤的指标列。 sort_by_key=\"key\" 指定排序字段（默认第一个条件），sort_order: asc|desc（默认 desc）。注意：指标 key 和单位由平台动态维护，如不确定或结果为空，先调 screener_indicators 确认当前有效 key。常见 key（仅供参考）：pettm(市盈率) pb ps roe roa grossmargin netmargin netprofitgrowthrate revenuegrowthrate marketcap balance divyld currentratio debtassetratio eps。返回 {total, items[]{symbol, name, indicators[]{key, value, unit}}}。"
     },
     "screener_indicators": {
       "title": "选股指标配置",
-      "description": "获取选股指标元数据。可选 symbol（如 AAPL.US）过滤特定股票的指标。返回 groups[]{group_name, indicators[]{id, key, name, unit, default_range{min,max}, value_ranges[]}}。key 用于 screener_search 的 filters[] 和 returns[]。"
+      "description": "获取选股指标元数据，用于发现可用 key 及其单位。可选 symbol（如 AAPL.US）过滤特定股票的指标。返回 groups[]{group_name, indicators[]{id, key, name, unit, default_range{min,max}}}。key 用于 screener_search 的 conditions[] 参数。"
     },
     "screener_recommend_strategies": {
       "title": "平台推荐选股策略",
-      "description": "获取平台推荐的选股策略列表。返回 screeners[]{id, name, average_day_chg, stocks[], groups[]}。id 可传入 screener_search 或 screener_strategy。"
+      "description": "获取平台推荐的选股策略列表。返回 screeners[]{id, name, average_day_chg}。将 id 传入 screener_search 的 strategy_id 可直接运行该策略；传入 screener_strategy 可查看策略的过滤条件。"
     },
     "screener_user_strategies": {
       "title": "我的选股策略",
-      "description": "获取当前用户已保存的选股策略列表。返回 screeners[]{id, name, average_day_chg, stocks[], groups[]}。id 可传入 screener_search 或 screener_strategy。"
+      "description": "获取当前用户已保存的选股策略列表。返回 screeners[]{id, name, average_day_chg}。将 id 传入 screener_search 的 strategy_id 可直接运行该策略；传入 screener_strategy 可查看策略的过滤条件。"
     },
     "top_movers": {
       "title": "热股异动",
