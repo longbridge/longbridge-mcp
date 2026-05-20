@@ -2560,7 +2560,7 @@ impl Longbridge {
     #[tool(
         title = "Screener Recommend Strategies",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "List platform-recommended screener strategies. Returns screeners[]{id, name, average_day_chg, stocks[], groups[]}. Use id with screener_search or screener_strategy."
+        description = "List platform-recommended screener strategies. Returns screeners[]{id, name, average_day_chg}. Pass id to screener_search strategy_id to run the strategy, or to screener_strategy to inspect its filter conditions."
     )]
     async fn screener_recommend_strategies(
         &self,
@@ -2577,7 +2577,7 @@ impl Longbridge {
     #[tool(
         title = "Screener User Strategies",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "List the current user's saved screener strategies. Returns screeners[]{id, name, average_day_chg, stocks[], groups[]}. Use id with screener_search or screener_strategy."
+        description = "List the current user's saved screener strategies. Returns screeners[]{id, name, average_day_chg}. Pass id to screener_search strategy_id to run, or screener_strategy to inspect conditions."
     )]
     async fn screener_user_strategies(
         &self,
@@ -2594,7 +2594,7 @@ impl Longbridge {
     #[tool(
         title = "Screener Strategy",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get single screener strategy detail by id. Returns id, name, groups[]{group_name, group_type, indicators[]{id, key, name, value}}. Use id from screener_recommend_strategies or screener_user_strategies."
+        description = "Inspect a screener strategy's filter conditions before running it. Returns id, name, groups[]{group_name, indicators[]{key, name, min, max}}. Use screener_search strategy_id to execute."
     )]
     async fn screener_strategy(
         &self,
@@ -2612,7 +2612,7 @@ impl Longbridge {
     #[tool(
         title = "Screener Search",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Execute stock screener search. market: US/HK/CN/SG. Mode A: pass strategy_id (from screener_recommend_strategies screeners[].id) — auto-fetches strategy and builds filters. Mode B: pass conditions=[\"KEY:MIN:MAX\",...] e.g. [\"pettm:10:50\",\"roe:5:\",\"marketcap:100:\"] — filter_ prefix added automatically, returns auto-built from condition keys. sort_by: index into conditions list (default 0). sort_order: 0=asc 1=desc (default 1). Returns items[]{symbol,name,indicators[]{value,unit}}."
+        description = "Screen stocks. market: US|HK|CN|SG. Mode A: strategy_id from screener_recommend_strategies — auto-runs saved strategy. Mode B: conditions=[\"KEY:MIN:MAX\",...], filter_ prefix auto-added, open bound = omit value (\"roe:15:\" means ROE≥15%). extra_returns=[\"key\",...] adds display-only columns not used as filters. sort_by_key=\"key\" sorts by that indicator (default: first condition). sort_order: asc|desc (default desc). Common keys: pettm(P/E) pb ps roe roa grossmargin netmargin netprofitgrowthrate revenuegrowthrate marketcap balance divyld currentratio debtassetratio eps — call screener_indicators for full list with units. Returns {total, items[]{symbol,name,indicators[]{key,value,unit}}}."
     )]
     async fn screener_search(
         &self,
@@ -2627,7 +2627,7 @@ impl Longbridge {
     #[tool(
         title = "Screener Indicators",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get screener indicator metadata. Optional symbol (e.g. AAPL.US) filters to stock-specific indicators. Returns groups[]{group_name, indicators[]{id, key, name, unit, default_range{min,max}, value_ranges[]}}. Use keys with screener_search filters[]."
+        description = "Get all available screener indicator keys with units and default value ranges. Use when you need to discover keys or check units before calling screener_search. Optional symbol (e.g. AAPL.US) narrows to stock-specific indicators. Returns groups[]{group_name, indicators[]{id, key, name, unit, default_range{min,max}}}."
     )]
     async fn screener_indicators(
         &self,

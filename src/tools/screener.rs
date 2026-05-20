@@ -48,21 +48,51 @@ pub async fn screener_strategy(
 pub struct ScreenerSearchParam {
     /// Market: "US" | "HK" | "CN" | "SG". Overridden by market embedded in the strategy (Mode A).
     pub market: String,
+
     /// Mode A — Strategy ID from screener_recommend_strategies screeners[].id.
     /// The tool auto-fetches the strategy and builds filters. Omit for Mode B.
     pub strategy_id: Option<String>,
+
     /// Mode B — Filter conditions as "KEY:MIN:MAX" strings. Omit when using Mode A.
-    /// KEY is the indicator key from screener_indicators (filter_ prefix added automatically).
-    /// Omit either bound to leave it open: "pettm:10:" = PE >= 10, "pettm::50" = PE <= 50.
-    /// Example: ["pettm:10:50", "roe:5:", "marketcap:100:"]
+    /// The filter_ prefix is added automatically; omit either bound to leave it open.
+    ///   "pettm:10:50"   → 10 ≤ P/E ≤ 50
+    ///   "roe:15:"       → ROE ≥ 15 %
+    ///   "marketcap::500" → market-cap ≤ 500 (unit per screener_indicators)
+    ///
+    /// Common keys (call screener_indicators for the full list and units):
+    ///   pettm          P/E (TTM)                dimensionless
+    ///   pb             P/B                       dimensionless
+    ///   ps             P/S                       dimensionless
+    ///   roe            Return on equity          %
+    ///   roa            Return on assets          %
+    ///   grossmargin    Gross margin              %
+    ///   netmargin      Net margin                %
+    ///   netprofitgrowthrate  Net-profit growth YoY  %
+    ///   revenuegrowthrate    Revenue growth YoY     %
+    ///   marketcap      Market capitalisation     see screener_indicators for unit
+    ///   balance        Daily turnover            see screener_indicators for unit
+    ///   divyld         Dividend yield            %
+    ///   currentratio   Current ratio             dimensionless
+    ///   debtassetratio Debt / assets             %
+    ///   eps            EPS (TTM)                 currency
     pub conditions: Option<Vec<String>>,
-    /// Sort field index into the conditions list (default: 0 = first condition)
-    pub sort_by: Option<u32>,
-    /// Sort order: 0=ascending, 1=descending (default: 1)
-    pub sort_order: Option<u32>,
+
+    /// Keys whose values should appear in every result row even when not used as a filter.
+    /// Useful for "show market-cap and price alongside the filtered indicators".
+    /// Uses the same key naming as conditions (filter_ prefix added automatically).
+    /// Example: ["marketcap", "close", "eps"]
+    pub extra_returns: Option<Vec<String>>,
+
+    /// Key name to sort results by (e.g. "marketcap", "roe"). Defaults to the first condition key.
+    /// Must be one of the condition keys or an extra_returns key.
+    pub sort_by_key: Option<String>,
+
+    /// Sort order: "asc" | "desc" (default: "desc")
+    pub sort_order: Option<String>,
+
     /// Page number (default: 1)
     pub page: Option<u32>,
-    /// Page size (default: 20)
+    /// Page size (default: 20, max: 100)
     pub size: Option<u32>,
 }
 
@@ -178,12 +208,51 @@ pub async fn screener_search(
         )
     };
 
+    // Append extra_returns (display-only columns, not filter conditions).
+    let returns = {
+        let mut all: Vec<serde_json::Value> = returns
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        for raw in p.extra_returns.as_deref().unwrap_or(&[]) {
+            let key = if raw.starts_with("filter_") {
+                raw.to_string()
+            } else {
+                format!("filter_{raw}")
+            };
+            if !all.contains(&serde_json::Value::String(key.clone())) {
+                all.push(serde_json::Value::String(key));
+            }
+        }
+        serde_json::Value::Array(all)
+    };
+
+    // Resolve sort_by_key → index into returns[].
+    let sort_by: u32 = p.sort_by_key.as_deref().map_or(0, |raw_key| {
+        let key = if raw_key.starts_with("filter_") {
+            raw_key.to_string()
+        } else {
+            format!("filter_{raw_key}")
+        };
+        returns
+            .as_array()
+            .and_then(|arr| {
+                arr.iter().position(|v| v.as_str() == Some(key.as_str()))
+            })
+            .unwrap_or(0) as u32
+    });
+
+    let sort_order: u32 = match p.sort_order.as_deref().unwrap_or("desc") {
+        "asc" => 0,
+        _ => 1,
+    };
+
     let body = serde_json::json!({
         "market": market,
         "filters": filters,
         "returns": returns,
-        "sort_by": p.sort_by.unwrap_or(0),
-        "sort_order": p.sort_order.unwrap_or(1),
+        "sort_by": sort_by,
+        "sort_order": sort_order,
         "industries": [],
         "page": p.page.unwrap_or(1),
         "size": p.size.unwrap_or(20),
