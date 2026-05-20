@@ -9,6 +9,7 @@ phf_codegen = "0.11"
 [dependencies]
 phf = "0.11"
 longbridge = { git = "https://github.com/longbridge/openapi.git" }
+rust_decimal = "1"
 rmcp = { version = "1.4", features = [
     "server",
     "transport-streamable-http-server",
