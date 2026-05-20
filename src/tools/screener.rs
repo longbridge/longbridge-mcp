@@ -46,21 +46,23 @@ pub async fn screener_strategy(
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ScreenerSearchParam {
-    /// Market (required): "US" | "HK" | "CN" | "SG".
-    /// Overridden by the market embedded in the strategy when strategy_id is used.
+    /// Market: "US" | "HK" | "CN" | "SG". Overridden by market embedded in strategy (Mode A).
     pub market: String,
-    /// Mode A — Strategy ID from screener_recommend_strategies or screener_user_strategies
-    /// screeners[].id. The tool automatically fetches and applies the strategy filters.
-    /// Omit when using Mode B.
+    /// Mode A — Strategy ID from screener_recommend_strategies or screener_user_strategies.
+    /// The tool auto-fetches the strategy and builds filters. Omit for Mode B.
     pub strategy_id: Option<String>,
-    /// Mode B — Custom filter conditions.
-    /// Each item: {"key": "<key from screener_indicators>", "min": "100", "max": "", "tech_values": {}}.
-    /// Omit when using Mode A.
+    /// Mode B (simple) — Filter conditions as "KEY:MIN:MAX" strings.
+    /// KEY is the indicator key from screener_indicators (the filter_ prefix is added automatically).
+    /// Omit either bound to leave it open: "pettm:10:" means PE >= 10, "pettm::50" means PE <= 50.
+    /// Example: ["pettm:10:50", "roe:5:", "marketcap:100:"]
+    /// Returns[] is auto-built from condition keys. Omit when using Mode A or advanced filters.
+    pub conditions: Option<Vec<String>>,
+    /// Mode B (advanced) — Full filter array. Each item: {"key":"filter_pettm","min":"10","max":"50","tech_values":{}}.
+    /// Use only when conditions[] is insufficient. Requires returns[] to also be set.
     pub filters: Option<serde_json::Value>,
-    /// Mode B — Indicator keys to return per stock (same keys as filters).
-    /// Example: ["filter_balance", "filter_marketcap"]. Omit when using Mode A.
+    /// Mode B (advanced) — Indicator keys to include per result stock, matching keys in filters[].
     pub returns: Option<serde_json::Value>,
-    /// Sort field index into returns[] (default: 0 = first indicator)
+    /// Sort field index into returns[] (default: 0)
     pub sort_by: Option<u32>,
     /// Sort order: 0=ascending, 1=descending (default: 1)
     pub sort_order: Option<u32>,
@@ -150,8 +152,38 @@ pub async fn screener_search(
             serde_json::Value::Array(filters),
             serde_json::Value::Array(returns.into_iter().map(serde_json::Value::String).collect()),
         )
+    } else if let Some(ref conditions) = p.conditions {
+        // Mode B simple: build filters+returns from "KEY:MIN:MAX" conditions
+        let mut filters: Vec<serde_json::Value> = Vec::new();
+        let mut returns: Vec<String> = Vec::new();
+        for cond in conditions {
+            let parts: Vec<&str> = cond.splitn(3, ':').collect();
+            let raw_key = parts.first().copied().unwrap_or("");
+            if raw_key.is_empty() {
+                continue;
+            }
+            let key = if raw_key.starts_with("filter_") {
+                raw_key.to_string()
+            } else {
+                format!("filter_{raw_key}")
+            };
+            let min = parts.get(1).copied().unwrap_or("").to_string();
+            let max = parts.get(2).copied().unwrap_or("").to_string();
+            filters.push(serde_json::json!({
+                "key": key,
+                "min": min,
+                "max": max,
+                "tech_values": {}
+            }));
+            returns.push(key);
+        }
+        (
+            p.market.to_uppercase(),
+            serde_json::Value::Array(filters),
+            serde_json::Value::Array(returns.into_iter().map(serde_json::Value::String).collect()),
+        )
     } else {
-        // Mode B: use caller-supplied filters/returns
+        // Mode B advanced: use caller-supplied filters/returns
         (
             p.market.to_uppercase(),
             p.filters.unwrap_or(serde_json::Value::Array(vec![])),
