@@ -713,12 +713,8 @@
       }
     },
     "short_positions": {
-      "title": "空头持仓",
-      "description": "获取美股做空数据（空头比率、空头股数、回补天数等），仅支持美股市场",
-      "properties": {
-        "symbol": "证券代码（仅美股），例如 `\"AAPL.US\"`",
-        "count": "返回条数（1-100，默认 20）"
-      }
+      "title": "做空持仓",
+      "description": "查询港股或美股的做空持仓历史。根据 symbol 后缀自动路由（.HK=港股，.US=美股）。港股返回 data[]{timestamp, amount, balance, rate}；美股返回做空比率、空头股数、回补天数。count: 1-100（默认20）。"
     },
     "static_info": {
       "title": "证券基础信息",
@@ -1040,18 +1036,6 @@
       "title": "多股股票对比",
       "description": "股票估值对比。模式A（单股）：只传 symbol，服务端自动返回该股票及同行业推荐对标股。模式B（多股）：传 symbol 作为主股 + comparison_symbols（逗号分隔，如 'MSFT.US,GOOGL.US'）进行指定股票对比。currency: USD/HKD/CNY。返回 list[]{symbol, name, market_value, price_close, pe, pb, ps, history[]{date, pe, pb, ps}}。"
     },
-    "hk_short_positions": {
-      "title": "港股做空持仓",
-      "description": "查询港股未平仓（做空持仓）历史。last_timestamp: 秒级时间戳，传当前时间获取最新。page_size: 1–100。返回 data[]{timestamp, amount(股数), balance(金额), rate(空仓比例)}。"
-    },
-    "hk_short_trades": {
-      "title": "港股做空成交",
-      "description": "查询港股每日卖空成交历史。last_timestamp: 秒级时间戳。page_size: 1–100。返回 data[]{timestamp, amount(卖空股数), balance(金额), close(收盘价), rate(占总成交比), total_amount}。"
-    },
-    "us_short_trades": {
-      "title": "美股做空成交",
-      "description": "查询美股每日卖空成交（纳斯达克 + 纽交所）。last_timestamp: 秒级时间戳。page_size: 1–100。返回 data[]{timestamp, nus_amount(纳斯达克), ny_amount(纽交所), total_amount, close, rate}。"
-    },
     "screener_strategy": {
       "title": "策略详情",
       "description": "按 id 获取单个选股策略详情。返回 id, name, groups[]{group_name, indicators[]{id, key, name, value}}。id 来自 screener_strategies。"
@@ -1083,6 +1067,10 @@
     "rank_list": {
       "title": "热度榜股票列表",
       "description": "按 Tab key 获取热度排行榜股票列表。key 来自 rank_categories，如 hotness（总热度）、rising（热度上升）、trading（热门交易）、discussion（热议）、watchlist（最多关注）。返回 lists[]{symbol, name, last_done, chg, inflow, market_cap, pre_post_price, pre_post_chg}。"
+    },
+    "short_trades": {
+      "title": "做空成交",
+      "description": "查询港股或美股的每日卖空成交历史。根据 symbol 后缀自动路由（.HK=港股，.US=美股）。港股返回 data[]{timestamp, amount, balance, close, rate, total_amount}；美股返回 data[]{timestamp, nus_amount, ny_amount, total_amount, close, rate}。page_size: 1-100（默认20）。"
     }
   }
 }

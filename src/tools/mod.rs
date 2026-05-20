@@ -1695,11 +1695,11 @@ impl Longbridge {
         measured_tool_call("statement_export", || statement::statement_export(&mctx, p)).await
     }
 
-    /// Get short position data for a US stock.
+    /// Get short position (outstanding short) data for HK or US stocks.
     #[tool(
         title = "Short Positions",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get short interest data for a US stock (short ratio, short shares, days to cover). Only US market is supported."
+        description = "Get short position history for HK or US stocks. Market inferred from symbol suffix (.HK or .US). HK: returns data[]{timestamp, amount, balance, rate}. US: returns short ratio, short shares, days to cover. count: 1-100 (default 20)."
     )]
     async fn short_positions(
         &self,
@@ -2497,52 +2497,19 @@ impl Longbridge {
         .await
     }
 
-    /// Get HK stock short position (outstanding short) history.
+    /// Get short-sale trade volume history for HK or US stocks.
     #[tool(
-        title = "HK Short Positions",
+        title = "Short Trades",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get HK stock short position history. last_timestamp: unix seconds (use current time for latest). page_size: 1–100 (default 20). Returns update_timestamp and data[]{timestamp (RFC3339), amount (shares), balance (value), rate (short ratio)}."
+        description = "Get daily short-sale volume history for HK or US stocks. Market inferred from symbol suffix (.HK or .US). last_timestamp: unix seconds. page_size: 1–100 (default 20). HK returns data[]{timestamp, amount, balance, close, rate, total_amount}. US returns data[]{timestamp, nus_amount, ny_amount, total_amount, close, rate}."
     )]
-    async fn hk_short_positions(
+    async fn short_trades(
         &self,
         ctx: RequestContext<RoleServer>,
-        Parameters(p): Parameters<market::HkShortPositionsParam>,
+        Parameters(p): Parameters<market::ShortTradesParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("hk_short_positions", || {
-            market::hk_short_positions(&mctx, p)
-        })
-        .await
-    }
-
-    /// Get HK stock daily short-sale (short trade volume) history.
-    #[tool(
-        title = "HK Short Trades",
-        annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get HK stock daily short-sale volume history. last_timestamp: unix seconds. page_size: 1–100. Returns data[]{timestamp (RFC3339), amount (short shares), balance (short value), close, rate (short % of total volume), total_amount}."
-    )]
-    async fn hk_short_trades(
-        &self,
-        ctx: RequestContext<RoleServer>,
-        Parameters(p): Parameters<market::HkShortTradesParam>,
-    ) -> Result<CallToolResult, McpError> {
-        let mctx = extract_context(&ctx)?;
-        measured_tool_call("hk_short_trades", || market::hk_short_trades(&mctx, p)).await
-    }
-
-    /// Get US stock daily short-sale volume from NASDAQ and NYSE.
-    #[tool(
-        title = "US Short Trades",
-        annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get US stock daily short-sale volume (NASDAQ + NYSE). last_timestamp: unix seconds. page_size: 1–100. Returns counter_id, sources (0=all/1=NASDAQ/2=NYSE), data[]{timestamp (RFC3339), nus_amount (NASDAQ short), ny_amount (NYSE short), total_amount, close, rate}."
-    )]
-    async fn us_short_trades(
-        &self,
-        ctx: RequestContext<RoleServer>,
-        Parameters(p): Parameters<market::UsShortTradesParam>,
-    ) -> Result<CallToolResult, McpError> {
-        let mctx = extract_context(&ctx)?;
-        measured_tool_call("us_short_trades", || market::us_short_trades(&mctx, p)).await
+        measured_tool_call("short_trades", || market::short_trades(&mctx, p)).await
     }
 
     /// Get top movers — stocks whose price exceeds the 20-day standard deviation.

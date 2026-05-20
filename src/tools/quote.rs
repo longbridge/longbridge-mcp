@@ -636,7 +636,7 @@ pub async fn security_list(
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ShortPositionsParam {
-    /// Security symbol (US market only), e.g. "AAPL.US"
+    /// Security symbol, e.g. "AAPL.US" (US) or "700.HK" (HK). Market is inferred from suffix.
     pub symbol: String,
     /// Number of records to return (1-100, default 20)
     #[serde(default, deserialize_with = "tolerant_option_usize")]
@@ -676,13 +676,19 @@ pub async fn short_positions(
         ("last_timestamp", now.as_str()),
         ("page_size", page_size.as_str()),
     ];
-    http_get_tool_unix(
-        &client,
-        "/v1/quote/short-positions/us",
-        &params,
-        &["data.*.timestamp"],
-    )
-    .await
+    // Route to HK or US endpoint based on symbol suffix
+    let is_hk = p.symbol.to_uppercase().ends_with(".HK");
+    let path = if is_hk {
+        "/v1/quote/short-positions/hk"
+    } else {
+        "/v1/quote/short-positions/us"
+    };
+    let unix_paths: &[&str] = if is_hk {
+        &["data.*.timestamp", "update_timestamp"]
+    } else {
+        &["data.*.timestamp"]
+    };
+    http_get_tool_unix(&client, path, &params, unix_paths).await
 }
 
 pub async fn option_volume(

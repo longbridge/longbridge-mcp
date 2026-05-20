@@ -282,8 +282,8 @@ pub async fn industry_rank(
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
-pub struct HkShortPositionsParam {
-    /// HK security symbol, e.g. "700.HK"
+pub struct ShortTradesParam {
+    /// Security symbol, e.g. "AAPL.US" (US) or "700.HK" (HK). Market is inferred from suffix.
     pub symbol: String,
     /// Query cutoff timestamp in seconds (pass current timestamp for latest data)
     pub last_timestamp: String,
@@ -291,76 +291,22 @@ pub struct HkShortPositionsParam {
     pub page_size: Option<String>,
 }
 
-pub async fn hk_short_positions(
+pub async fn short_trades(
     mctx: &crate::tools::McpContext,
-    p: HkShortPositionsParam,
+    p: ShortTradesParam,
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
     let cid = symbol_to_counter_id(&p.symbol);
     let page_size = p.page_size.unwrap_or_else(|| "20".to_string());
+    let is_hk = p.symbol.to_uppercase().ends_with(".HK");
+    let path = if is_hk {
+        "/v1/quote/short-trades/hk"
+    } else {
+        "/v1/quote/short-trades/us"
+    };
     http_get_tool_unix(
         &client,
-        "/v1/quote/short-positions/hk",
-        &[
-            ("counter_id", cid.as_str()),
-            ("last_timestamp", p.last_timestamp.as_str()),
-            ("page_size", page_size.as_str()),
-        ],
-        &["data.*.timestamp", "update_timestamp"],
-    )
-    .await
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-pub struct HkShortTradesParam {
-    /// HK security symbol, e.g. "700.HK"
-    pub symbol: String,
-    /// Query cutoff timestamp in seconds
-    pub last_timestamp: String,
-    /// Page size: 1–100 (default: 20)
-    pub page_size: Option<String>,
-}
-
-pub async fn hk_short_trades(
-    mctx: &crate::tools::McpContext,
-    p: HkShortTradesParam,
-) -> Result<CallToolResult, McpError> {
-    let client = mctx.create_http_client();
-    let cid = symbol_to_counter_id(&p.symbol);
-    let page_size = p.page_size.unwrap_or_else(|| "20".to_string());
-    http_get_tool_unix(
-        &client,
-        "/v1/quote/short-trades/hk",
-        &[
-            ("counter_id", cid.as_str()),
-            ("last_timestamp", p.last_timestamp.as_str()),
-            ("page_size", page_size.as_str()),
-        ],
-        &["data.*.timestamp"],
-    )
-    .await
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-pub struct UsShortTradesParam {
-    /// US security symbol, e.g. "AAPL.US"
-    pub symbol: String,
-    /// Query cutoff timestamp in seconds
-    pub last_timestamp: String,
-    /// Page size: 1–100 (default: 20)
-    pub page_size: Option<String>,
-}
-
-pub async fn us_short_trades(
-    mctx: &crate::tools::McpContext,
-    p: UsShortTradesParam,
-) -> Result<CallToolResult, McpError> {
-    let client = mctx.create_http_client();
-    let cid = symbol_to_counter_id(&p.symbol);
-    let page_size = p.page_size.unwrap_or_else(|| "20".to_string());
-    http_get_tool_unix(
-        &client,
-        "/v1/quote/short-trades/us",
+        path,
         &[
             ("counter_id", cid.as_str()),
             ("last_timestamp", p.last_timestamp.as_str()),
