@@ -557,10 +557,27 @@ pub async fn calc_indexes(
         .map(|s| parse::parse_calc_index(s))
         .collect::<Result<_, _>>()?;
     let (ctx, _) = QuoteContext::new(mctx.create_config());
-    let result = ctx
+    let mut result = ctx
         .calc_indexes(p.symbols, indexes)
         .await
         .map_err(Error::longbridge)?;
+
+    // Normalize Greeks to match Longbridge app display values:
+    // - theta: API returns annualized value (×252), divide by 252 for per-trading-day
+    // - vega:  API returns per-1%-IV-change value scaled by 100, divide by 100
+    // - rho:   API returns per-1%-rate-change value scaled by 100, divide by 100
+    for r in &mut result {
+        if let Some(v) = r.theta.as_mut() {
+            *v /= rust_decimal::Decimal::from(252u32);
+        }
+        if let Some(v) = r.vega.as_mut() {
+            *v /= rust_decimal::Decimal::ONE_HUNDRED;
+        }
+        if let Some(v) = r.rho.as_mut() {
+            *v /= rust_decimal::Decimal::ONE_HUNDRED;
+        }
+    }
+
     tool_json(&result)
 }
 
