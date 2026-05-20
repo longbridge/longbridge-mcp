@@ -210,10 +210,7 @@ pub async fn screener_search(
 
     // Append extra_returns (display-only columns, not filter conditions).
     let returns = {
-        let mut all: Vec<serde_json::Value> = returns
-            .as_array()
-            .cloned()
-            .unwrap_or_default();
+        let mut all: Vec<serde_json::Value> = returns.as_array().cloned().unwrap_or_default();
         for raw in p.extra_returns.as_deref().unwrap_or(&[]) {
             let key = if raw.starts_with("filter_") {
                 raw.to_string()
@@ -236,9 +233,7 @@ pub async fn screener_search(
         };
         returns
             .as_array()
-            .and_then(|arr| {
-                arr.iter().position(|v| v.as_str() == Some(key.as_str()))
-            })
+            .and_then(|arr| arr.iter().position(|v| v.as_str() == Some(key.as_str())))
             .unwrap_or(0) as u32
     });
 
