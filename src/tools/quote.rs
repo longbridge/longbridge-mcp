@@ -194,10 +194,16 @@ pub struct UpdateWatchlistGroupParam {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct SecurityListParam {
-    /// Market code: HK, US, CN, SG
+    /// Market code: US, HK, CN, SG
     pub market: String,
-    /// Category filter. Currently only "Overnight" is supported; passing any other value or omitting this field will result in a param_error. Note: only "US" market is currently supported for the "Overnight" category; other markets will also return a param_error.
+    /// Category filter. Currently only "Overnight" is supported; omitting defaults to Overnight.
     pub category: Option<String>,
+    /// Page number, 1-based (default: 1)
+    #[serde(default, deserialize_with = "tolerant_option_usize")]
+    pub page: Option<usize>,
+    /// Records per page (default: 50)
+    #[serde(default, deserialize_with = "tolerant_option_usize")]
+    pub count: Option<usize>,
 }
 
 pub async fn static_info(
@@ -627,11 +633,22 @@ pub async fn security_list(
         None => None,
     };
     let (ctx, _) = QuoteContext::new(mctx.create_config());
-    let result = ctx
+    let all = ctx
         .security_list(market, category)
         .await
         .map_err(Error::longbridge)?;
-    tool_json(&result)
+
+    let page = p.page.unwrap_or(1).max(1);
+    let count = p.count.unwrap_or(50).max(1);
+    let total = all.len();
+    let start = (page - 1) * count;
+    let items: Vec<_> = all.into_iter().skip(start).take(count).collect();
+    tool_json(&serde_json::json!({
+        "total": total,
+        "page": page,
+        "count": count,
+        "items": items,
+    }))
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]

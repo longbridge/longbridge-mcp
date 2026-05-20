@@ -731,7 +731,7 @@ impl Longbridge {
     #[tool(
         title = "Security List",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get security list for a market. category must be \"Overnight\"; other values or omitting it will cause an error. Currently only market=\"US\" is supported; other markets will also return an error"
+        description = "Get security list for a market. Supports market: US, HK, CN, SG. category: \"Overnight\" (default). page: 1-based page number (default 1). count: records per page (default 50). Returns {total, page, count, items[]{symbol, name_en, name_cn}}."
     )]
     async fn security_list(
         &self,
