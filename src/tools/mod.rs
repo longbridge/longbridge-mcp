@@ -2545,7 +2545,7 @@ impl Longbridge {
     #[tool(
         title = "Rank List",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get ranked stock list by leaderboard tab key from rank_categories. key: e.g. `ib_hot_all-us` (US total heat), `ib_hot_up-hk` (HK rising heat), `ib_hot_trade-us` (US hot trades). Pass second_tags[].key from rank_categories. Returns lists[]{symbol, name, last_done, chg, inflow, market_cap, pre_post_price, pre_post_chg}."
+        description = "Get ranked stock list by leaderboard tab key from rank_categories. key: e.g. `ib_hot_all-us` (US total heat), `ib_hot_up-hk` (HK rising heat), `ib_hot_trade-us` (US hot trades). Pass second_tags[].key from rank_categories. market: inferred from key suffix (e.g. -us/-hk) or pass explicitly. size: number of results (default 20). Returns lists[]{symbol, name, last_done, chg, inflow, market_cap, pre_post_price, pre_post_chg}."
     )]
     async fn rank_list(
         &self,

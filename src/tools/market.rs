@@ -357,7 +357,7 @@ pub async fn top_movers(
         "limit": limit,
         "sort": sort,
         "markets": markets,
-        "next_params": p.next_params.unwrap_or(serde_json::Value::Null),
+        "next_params": p.next_params.unwrap_or_else(|| serde_json::json!({})),
     });
     if let Some(ref d) = p.date {
         body["date"] = serde_json::Value::String(d.clone());
@@ -378,9 +378,14 @@ pub async fn rank_categories(mctx: &crate::tools::McpContext) -> Result<CallTool
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct RankListParam {
-    /// Tab key from rank_categories, e.g. "hotness" (total heat), "rising" (heat rising),
-    /// "trading" (hot trades), "discussion" (hot discussion), "watchlist" (most watched)
+    /// Tab key from rank_categories second_tags[].key, e.g. "ib_hot_all-us" (US total heat),
+    /// "ib_hot_up-hk" (HK rising heat), "ib_hot_trade-us" (US hot trades).
     pub key: String,
+    /// Market override: "US" | "HK" | "CN" | "SG".
+    /// Defaults to the market suffix in the key (e.g. "ib_hot_all-hk" → HK), then "US".
+    pub market: Option<String>,
+    /// Number of results to return (default: 20)
+    pub size: Option<u32>,
     /// Whether to include related news articles (default: false)
     pub need_article: Option<bool>,
 }
@@ -391,6 +396,15 @@ pub async fn rank_list(
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
     let need_article = p.need_article.unwrap_or(false).to_string();
+    // Infer market from key suffix (e.g. "ib_hot_all-hk" → "HK"), fall back to param or "US".
+    let key_market = p
+        .key
+        .rsplit_once('-')
+        .map(|(_, m)| m.to_uppercase())
+        .filter(|m| matches!(m.as_str(), "US" | "HK" | "CN" | "SG"))
+        .or_else(|| p.market.as_deref().map(|m| m.to_uppercase()))
+        .unwrap_or_else(|| "US".to_string());
+    let size = p.size.unwrap_or(20).to_string();
     http_get_tool(
         &client,
         "/v1/quote/market/rank/list",
@@ -398,6 +412,8 @@ pub async fn rank_list(
             ("key", p.key.as_str()),
             ("delay_bmp", "false"),
             ("need_article", need_article.as_str()),
+            ("market", key_market.as_str()),
+            ("size", size.as_str()),
         ],
     )
     .await

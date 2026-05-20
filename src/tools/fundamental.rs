@@ -254,7 +254,7 @@ pub async fn shareholder(
     http_get_tool(
         &client,
         "/v1/quote/shareholders",
-        &[("counter_id", cid.as_str())],
+        &[("counter_id", cid.as_str()), ("position", "detail")],
     )
     .await
 }
