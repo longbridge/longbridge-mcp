@@ -378,11 +378,11 @@
     },
     {
       "name": "rank_categories",
-      "app_id": null
+      "app_id": 399
     },
     {
       "name": "rank_list",
-      "app_id": null
+      "app_id": 400
     },
     {
       "name": "replace_order",
@@ -390,23 +390,23 @@
     },
     {
       "name": "screener_indicators",
-      "app_id": null
+      "app_id": 391
     },
     {
       "name": "screener_recommend_strategies",
-      "app_id": null
+      "app_id": 387
     },
     {
       "name": "screener_search",
-      "app_id": null
+      "app_id": 390
     },
     {
       "name": "screener_strategy",
-      "app_id": null
+      "app_id": 389
     },
     {
       "name": "screener_user_strategies",
-      "app_id": null
+      "app_id": 386
     },
     {
       "name": "security_list",
@@ -418,11 +418,11 @@
     },
     {
       "name": "shareholder_detail",
-      "app_id": null
+      "app_id": 398
     },
     {
       "name": "shareholder_top",
-      "app_id": null
+      "app_id": 397
     },
     {
       "name": "sharelist_add",
@@ -466,7 +466,7 @@
     },
     {
       "name": "short_trades",
-      "app_id": null
+      "app_id": 393
     },
     {
       "name": "statement_export",
@@ -498,7 +498,7 @@
     },
     {
       "name": "top_movers",
-      "app_id": null
+      "app_id": 396
     },
     {
       "name": "topic",
@@ -550,7 +550,7 @@
     },
     {
       "name": "valuation_comparison",
-      "app_id": null
+      "app_id": 392
     },
     {
       "name": "valuation_history",
