@@ -2612,7 +2612,7 @@ impl Longbridge {
     #[tool(
         title = "Screener Search",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Execute stock screener search. market: US/HK/CN/SG. Mode A: pass strategy_id (from screener_recommend_strategies screeners[].id) — auto-fetches and applies strategy filters. Mode B simple: pass conditions=[\"KEY:MIN:MAX\",...] e.g. [\"pettm:10:50\",\"roe:5:\",\"marketcap:100:\"] — filter_ prefix added automatically, returns auto-built. Mode B advanced: pass filters[]{key,min,max,tech_values:{}}+returns[] for full control. sort_by: index into returns[] (default 0). sort_order: 0=asc 1=desc (default 1). Returns items[]{symbol,name,indicators[]{value,unit}}."
+        description = "Execute stock screener search. market: US/HK/CN/SG. Mode A: pass strategy_id (from screener_recommend_strategies screeners[].id) — auto-fetches strategy and builds filters. Mode B: pass conditions=[\"KEY:MIN:MAX\",...] e.g. [\"pettm:10:50\",\"roe:5:\",\"marketcap:100:\"] — filter_ prefix added automatically, returns auto-built from condition keys. sort_by: index into conditions list (default 0). sort_order: 0=asc 1=desc (default 1). Returns items[]{symbol,name,indicators[]{value,unit}}."
     )]
     async fn screener_search(
         &self,
