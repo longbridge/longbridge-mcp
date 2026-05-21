@@ -362,10 +362,11 @@ pub async fn top_movers(
     if let Some(ref d) = p.date {
         body["date"] = serde_json::Value::String(d.clone());
     }
-    crate::tools::support::http_client::http_post_tool(
+    crate::tools::support::http_client::http_post_tool_unix(
         &client,
         "/v1/quote/market/stock-events",
         body,
+        &["events.*.timestamp"],
     )
     .await
 }

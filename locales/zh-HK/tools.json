@@ -1028,11 +1028,11 @@
     },
     "shareholder_top": {
       "title": "Top20 大股東",
-      "description": "獲取公司 Top20 大股東多期持倉快照，含個人/機構/內部人。返回 periods[] 和 info[]{period, share_holders[]{object_id, name, shares_held, percent, shares_changed, filing_date}}。object_id 可傳入 shareholder_detail。"
+      "description": "獲取前20大股東（機構、個人、內部人士）的多期持倉資訊。返回 info[]{period, share_holders[]{object_id, name, title, shares_held, percent_shares_held, shares_changed, filing_date}}。用 object_id 傳入 shareholder_detail 查看該股東的完整交易記錄。"
     },
     "shareholder_detail": {
       "title": "股東持倉詳情",
-      "description": "按 object_id 查詢單個股東持倉歷史與逐筆交易。返回 owner_source、holding_summary[]{period, accum_buy, accum_sell}、tradings[]{period, trading_details[]{date, shares, price, type}}。"
+      "description": "獲取指定股東的持倉歷史與交易明細。需要來自 shareholder_top 的 object_id。返回 name, owner_source（Company/Institution/Person/Insider）, tradings[]{period, accum_buy, accum_sell, net_buy, trading_details[]{trading_date, trading_type, trading_shares, trading_price, security_type, filing_date}}, holding_summary, holding_periods, trading_periods。"
     },
     "valuation_comparison": {
       "title": "多股股票對比",
@@ -1044,7 +1044,7 @@
     },
     "screener_search": {
       "title": "策略選股",
-      "description": "執行選股查詢。模式A：傳 strategy_id（來自 screener_recommend_strategies 的 screeners[].id），工具自動獲取策略並構建篩選條件，market 可不傳。模式B：傳 conditions=[\"KEY:MIN:MAX\",...] —— filter_ 前綴自動補全，留空某一端表示開區間（\"roe:15:\" 表示 ROE≥15%）。 extra_returns=[\"key\",...] 追加僅展示不參與篩選的指標欄。 sort_by_key 指定排序欄位，sort_order: asc|desc（預設 desc）。返回 {total, items[]{symbol, counter_id, name, indicators[]{key, name, value, unit}}}。已驗證的 key（不帶 filter_ 前綴）：pettm(本益比TTM) pbmrq(市淨率MRQ) psttm(市銷率TTM) roe roa netmargin(淨利率%) salesgrowthyoy(營收增速%) netincomegrowthyoy(淨利增速%) marketcap(市值，A股/港股單位為億) prevclose(前收價) divyld(股息率%) la(資產負債率%) epsttm(每股盈利) netincome(淨利潤億) sales(營收億) turnover_rate(換手率%) group_balance(成交額)。注意：key 由平台動態維護，key 不確定或結果為空時先調 screener_indicators 確認。",
+      "description": "執行選股查詢。模式A：傳 strategy_id（來自 screener_recommend_strategies 的 screeners[].id），工具自動獲取策略並構建篩選條件，market 可不傳。模式B：傳 conditions=[\"KEY:MIN:MAX\",...] —— filter_ 前綴自動補全，留空某一端表示開區間（\"roe:15:\" 表示 ROE≥15%）。 extra_returns=[\"key\",...] 追加僅展示不參與篩選的指標欄。 sort_by_key 指定排序欄位，sort_order: asc|desc（預設 desc）。返回 {total, items[]{symbol, name, indicators[]{key, name, value, unit}}}。已驗證的 key（不帶 filter_ 前綴）：pettm(本益比TTM) pbmrq(市淨率MRQ) psttm(市銷率TTM) roe roa netmargin(淨利率%) salesgrowthyoy(營收增速%) netincomegrowthyoy(淨利增速%) marketcap(市值，A股/港股單位為億) prevclose(前收價) divyld(股息率%) la(資產負債率%) epsttm(每股盈利) netincome(淨利潤億) sales(營收億) turnover_rate(換手率%) group_balance(成交額)。注意：key 由平台動態維護，key 不確定或結果為空時先調 screener_indicators 確認。",
       "properties": {
         "market": "市場：US/HK/CN/SG。模式B必填；模式A可不傳（策略已內建市場）"
       }
@@ -1063,7 +1063,7 @@
     },
     "top_movers": {
       "title": "熱股異動",
-      "description": "獲取股價波動超過近 20 個交易日標準差的異動股票，系統自動關聯相關新聞解釋異動原因。markets：逗號分隔 HK/US/CN/SG（空=全部）。sort：0=時間 1=幅度 2=熱門(預設)。返回 events[]{stock{symbol,name,change,labels[]}, timestamp, alert_reason, alert_type, post}。"
+      "description": "獲取價格波動超過近20日標準差的異動股票及關聯新聞原因。markets: 逗號分隔的 HK/US/CN/SG（不傳 = 全市場）。sort: 0=時間 1=漲跌幅 2=熱度（預設）。limit: 每頁數量（預設20）。next_params: 分頁游標，傳上一次返回的 next_params 物件。返回 events[]{timestamp(RFC3339), alert_reason, alert_type, stock{symbol, name, change(小數如0.0445=+4.45%), last_done, labels[], intro}}, updated_at, next_params。"
     },
     "rank_categories": {
       "title": "熱度榜分類配置",
@@ -1071,11 +1071,11 @@
     },
     "rank_list": {
       "title": "熱度榜股票列表",
-      "description": "按 Tab key 獲取熱度排行榜股票列表。key 來自 rank_categories，如 hotness（總熱度）、rising（熱度上升）、trading（熱門交易）、discussion（熱議）、watchlist（最多關注）。返回 lists[]{symbol, name, last_done, chg, inflow, market_cap, pre_post_price, pre_post_chg}。"
+      "description": "按熱度排行榜 key 獲取股票排名列表。key: 來自 rank_categories 的 second_tags[].key（如 ib_hot_all-us 美股總熱度，ib_hot_up-hk 港股熱度上升，ib_hot_trade-us 美股交易熱度）。market: 從 key 後綴推斷或顯式傳入。size: 返回數量（預設20）。返回 lists[]{symbol, name, last_done, chg(小數), inflow, market_cap, pre_post_price, pre_post_chg, amplitude, turnover_rate, volume_rate, five_day_chg, ten_day_chg, twenty_day_chg, this_year_chg, industry, intro}, updated_at。"
     },
     "short_trades": {
       "title": "做空成交",
-      "description": "查詢港股或美股的每日賣空成交歷史。根據 symbol 後綴自動路由（.HK=港股，.US=美股）。港股返回 data[]{timestamp, amount, balance, close, rate, total_amount}；美股返回 data[]{timestamp, nus_amount, ny_amount, total_amount, close, rate}。page_size: 1-100（預設20）。"
+      "description": "獲取港股或美股的每日賣空成交量歷史。市場由 symbol 後綴（.HK/.US）自動判斷。last_timestamp: Unix 秒（不傳則取最新）。page_size: 1–100（預設20）。rate 為小數比率（如 0.4173 = 41.73% 的總成交量為賣空）。港股返回 data[]{timestamp(RFC3339), amount(賣空股數), balance(HKD 未平倉), close, rate, total_amount}。美股返回 data[]{timestamp(RFC3339), nus_amount(納斯達克), ny_amount(紐交所), total_amount, close, rate}。"
     }
   }
 }

@@ -2450,7 +2450,7 @@ impl Longbridge {
     #[tool(
         title = "Top 20 Shareholders",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get Top 20 major shareholders (institutions, individuals, insiders) with multi-period holdings. Returns periods[], info[]{period, share_holders[]{object_id, name, title, shares_held, percent_shares_held, shares_changed, filing_date}}. Use object_id with shareholder_detail."
+        description = "Get Top 20 major shareholders (institutions, individuals, insiders) across reporting periods. Returns info[]{period, share_holders[]{object_id, name, title, shares_held, percent_shares_held, shares_changed, filing_date}}. Use object_id with shareholder_detail to drill into a holder's full trade history."
     )]
     async fn shareholder_top(
         &self,
@@ -2465,7 +2465,7 @@ impl Longbridge {
     #[tool(
         title = "Shareholder Detail",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get single shareholder holding history and trade details. Requires object_id from shareholder_top. Returns owner_source (Company/Institution/Person/Insider), holding_summary[]{period, accum_buy, accum_sell, stock_price}, tradings[]{period, trading_details[]{trading_date, trading_shares, trading_price, trading_type}}."
+        description = "Get a single shareholder's holding and trade history. Requires object_id from shareholder_top. Returns name, owner_source (Company/Institution/Person/Insider), tradings[]{period, accum_buy, accum_sell, net_buy, trading_details[]{trading_date, trading_type, trading_shares, trading_price, security_type, filing_date}}, holding_summary, holding_periods, trading_periods."
     )]
     async fn shareholder_detail(
         &self,
@@ -2501,7 +2501,7 @@ impl Longbridge {
     #[tool(
         title = "Short Trades",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get daily short-sale volume history for HK or US stocks. Market inferred from symbol suffix (.HK or .US). last_timestamp: unix seconds. page_size: 1–100 (default 20). HK returns data[]{timestamp, amount, balance, close, rate, total_amount}. US returns data[]{timestamp, nus_amount, ny_amount, total_amount, close, rate}."
+        description = "Get daily short-sale volume history for HK or US stocks. Market inferred from symbol suffix (.HK or .US). last_timestamp: unix seconds (omit for latest). page_size: 1–100 (default 20). rate is a decimal ratio (e.g. 0.4173 = 41.73% of total volume). HK: data[]{timestamp(RFC3339), amount(short shares), balance(HKD outstanding), close, rate, total_amount}. US: data[]{timestamp(RFC3339), nus_amount(NASDAQ), ny_amount(NYSE), total_amount, close, rate}."
     )]
     async fn short_trades(
         &self,
@@ -2516,7 +2516,7 @@ impl Longbridge {
     #[tool(
         title = "Top Movers",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get stocks whose price fluctuation exceeds the 20-trading-day standard deviation. System correlates related news to explain each abnormal move. markets: comma-separated HK/US/CN/SG (omit=all). sort: 0=time 1=change 2=popularity (default). next_params: pass the next_params object from the previous response to paginate. Returns events[]{stock{symbol,name,change,labels[]}, timestamp, alert_reason, alert_type, post} and next_params for next page."
+        description = "Get stocks whose price fluctuation exceeds the 20-trading-day standard deviation, with correlated news reasons. markets: comma-separated HK/US/CN/SG (omit=all). sort: 0=time 1=change-magnitude 2=popularity/heat (default). limit: results per page (default 20). next_params: pass next_params from previous response to paginate. Returns events[]{timestamp(RFC3339), alert_reason, alert_type, stock{symbol, name, change(decimal ratio e.g. 0.0445=+4.45%), last_done, labels[], intro}}, updated_at, next_params."
     )]
     async fn top_movers(
         &self,
@@ -2545,7 +2545,7 @@ impl Longbridge {
     #[tool(
         title = "Rank List",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get ranked stock list by leaderboard tab key from rank_categories. key: e.g. `ib_hot_all-us` (US total heat), `ib_hot_up-hk` (HK rising heat), `ib_hot_trade-us` (US hot trades). Pass second_tags[].key from rank_categories. market: inferred from key suffix (e.g. -us/-hk) or pass explicitly. size: number of results (default 20). Returns lists[]{symbol, name, last_done, chg, inflow, market_cap, pre_post_price, pre_post_chg}."
+        description = "Get ranked stock list by leaderboard tab key. key: from rank_categories second_tags[].key (e.g. ib_hot_all-us, ib_hot_up-hk, ib_hot_trade-us). market: inferred from key suffix or pass explicitly. size: results (default 20). Returns lists[]{symbol, name, last_done, chg(decimal), inflow, market_cap, pre_post_price, pre_post_chg, amplitude, turnover_rate, volume_rate, five_day_chg, ten_day_chg, twenty_day_chg, this_year_chg, industry, intro}, updated_at."
     )]
     async fn rank_list(
         &self,
@@ -2612,7 +2612,7 @@ impl Longbridge {
     #[tool(
         title = "Screener Search",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Screen stocks. market: US|HK|CN|SG (Mode B required; Mode A uses strategy's market). Mode A: strategy_id from screener_recommend_strategies — auto-runs saved strategy. Mode B: conditions=[\"KEY:MIN:MAX\",...], filter_ prefix auto-added, open bound = omit value (\"roe:15:\" means ROE≥15%). extra_returns=[\"key\",...] adds display-only columns. sort_by_key sorts by key name; sort_order: asc|desc (default desc). Returns {total, items[]{symbol,counter_id,name,indicators[]{key,name,value,unit}}}. Verified keys (use without filter_ prefix): pettm pbmrq psttm roe roa netmargin salesgrowthyoy netincomegrowthyoy marketcap(unit=亿 for A/HK) prevclose divyld la(debt/assets%) epsttm netincome sales turnover_rate group_balance. IMPORTANT: keys are platform-managed — call screener_indicators to verify before using an unfamiliar key or when results are unexpectedly empty."
+        description = "Screen stocks. market: US|HK|CN|SG (Mode B required; Mode A uses strategy's market). Mode A: strategy_id from screener_recommend_strategies — auto-runs saved strategy. Mode B: conditions=[\"KEY:MIN:MAX\",...], filter_ prefix auto-added, open bound = omit value (\"roe:15:\" means ROE≥15%). extra_returns=[\"key\",...] adds display-only columns. sort_by_key sorts by key name; sort_order: asc|desc (default desc). Returns {total, items[]{symbol, name, indicators[]{key, name, value, unit}}}. Verified keys (use without filter_ prefix): pettm pbmrq psttm roe roa netmargin salesgrowthyoy netincomegrowthyoy marketcap(unit=亿 for A/HK) prevclose divyld la(debt/assets%) epsttm netincome sales turnover_rate group_balance. IMPORTANT: keys are platform-managed — call screener_indicators to verify before using an unfamiliar key or when results are unexpectedly empty."
     )]
     async fn screener_search(
         &self,

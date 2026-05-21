@@ -267,32 +267,10 @@ pub async fn screener_search(
         .map_err(|e| Error::Other(e.to_string()))?;
 
     let json = crate::serialize::transform_json(resp.as_bytes()).map_err(Error::Serialize)?;
-
-    // Inject human-readable `symbol` (e.g. "1810.HK") alongside each item's counter_id.
-    let json = inject_symbols(json);
-
+    // Note: transform_json already renames counter_id → symbol in every item.
     Ok(rmcp::model::CallToolResult::success(vec![
         rmcp::model::Content::text(json),
     ]))
-}
-
-/// Post-process screener_search results: add a `symbol` field (e.g. "1810.HK") to each item
-/// derived from the raw `counter_id` returned by the API (e.g. "ST/HK/81810").
-fn inject_symbols(json: String) -> String {
-    let Ok(mut data) = serde_json::from_str::<serde_json::Value>(&json) else {
-        return json;
-    };
-    if let Some(items) = data["items"].as_array_mut() {
-        for item in items.iter_mut() {
-            if let Some(cid) = item["counter_id"].as_str() {
-                let sym = crate::counter::counter_id_to_symbol(cid);
-                if let Some(obj) = item.as_object_mut() {
-                    obj.insert("symbol".to_string(), serde_json::Value::String(sym));
-                }
-            }
-        }
-    }
-    serde_json::to_string(&data).unwrap_or(json)
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
