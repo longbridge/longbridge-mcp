@@ -2465,7 +2465,7 @@ impl Longbridge {
     #[tool(
         title = "Shareholder Detail",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get a single shareholder's holding and trade history. Requires object_id from shareholder_top. Returns name, owner_source (Company/Institution/Person/Insider), tradings[]{period, accum_buy, accum_sell, net_buy, trading_details[]{trading_date, trading_type, trading_shares, trading_price, security_type, filing_date}}, holding_summary, holding_periods, trading_periods."
+        description = "Get a single shareholder's holding and trade history. Requires object_id from shareholder_top. Returns name, owner_source (Company/Institution/Person/Insider), tradings[]{period, accum_buy, accum_sell, net_buy, trading_details[]{trading_date, trading_type, trading_shares, trading_price, security_type, filing_date}}, holding_summary, holding_periods, trading_periods. Note: trading_details[] is empty for institutional (13F) holders — it is only populated for insider/individual filers (Form 4)."
     )]
     async fn shareholder_detail(
         &self,
