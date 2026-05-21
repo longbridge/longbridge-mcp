@@ -50,6 +50,22 @@ Restart Claude Desktop. On first tool invocation it will open a browser to compl
 claude mcp add --transport http longbridge https://openapi.longbridge.com/mcp
 ```
 
+### Zed
+
+Add to your Zed `settings.json` (open with `zed: open settings`):
+
+```json
+{
+  "context_servers": {
+    "longbridge": {
+      "url": "https://openapi.longbridge.com/mcp"
+    }
+  }
+}
+```
+
+On first use, Zed will open a browser to complete the Longbridge OAuth flow.
+
 ### Cursor / Cline / Windsurf / other MCP clients
 
 Point the client at `https://openapi.longbridge.com/mcp` using transport `streamable-http`. OAuth is auto-discovered via RFC 9728; no manual token required.

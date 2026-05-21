@@ -254,7 +254,7 @@ pub async fn shareholder(
     http_get_tool(
         &client,
         "/v1/quote/shareholders",
-        &[("counter_id", cid.as_str())],
+        &[("counter_id", cid.as_str()), ("position", "detail")],
     )
     .await
 }
@@ -621,4 +621,88 @@ pub async fn financial_report_snapshot(
         params.push(("fiscal_period", period.as_str()));
     }
     http_get_tool(&client, "/v1/quote/financials/earnings-snapshot", &params).await
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ShareholderTopParam {
+    /// Security symbol, e.g. "AAPL.US"
+    pub symbol: String,
+}
+
+pub async fn shareholder_top(
+    mctx: &crate::tools::McpContext,
+    p: ShareholderTopParam,
+) -> Result<CallToolResult, McpError> {
+    let client = mctx.create_http_client();
+    let cid = symbol_to_counter_id(&p.symbol);
+    http_get_tool(
+        &client,
+        "/v1/quote/shareholders/top",
+        &[("counter_id", cid.as_str())],
+    )
+    .await
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ShareholderDetailParam {
+    /// Security symbol, e.g. "AAPL.US"
+    pub symbol: String,
+    /// Shareholder object_id from shareholder_top tool
+    pub object_id: i64,
+}
+
+pub async fn shareholder_detail(
+    mctx: &crate::tools::McpContext,
+    p: ShareholderDetailParam,
+) -> Result<CallToolResult, McpError> {
+    let client = mctx.create_http_client();
+    let cid = symbol_to_counter_id(&p.symbol);
+    let oid = p.object_id.to_string();
+    http_get_tool(
+        &client,
+        "/v1/quote/shareholders/holding",
+        &[("counter_id", cid.as_str()), ("object_id", oid.as_str())],
+    )
+    .await
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ValuationComparisonParam {
+    /// Security symbol to compare, e.g. "AAPL.US"
+    pub symbol: String,
+    /// Currency: "USD" | "HKD" | "CNY"
+    pub currency: String,
+    /// Comparison symbols, comma-separated, max 4, e.g. "MSFT.US,GOOGL.US".
+    /// Note: pending backend support — currently server auto-selects industry peers.
+    pub comparison_symbols: Option<String>,
+}
+
+pub async fn valuation_comparison(
+    mctx: &crate::tools::McpContext,
+    p: ValuationComparisonParam,
+) -> Result<CallToolResult, McpError> {
+    let client = mctx.create_http_client();
+    let cid = symbol_to_counter_id(&p.symbol);
+    let mut params: Vec<(&str, &str)> = vec![
+        ("counter_id", cid.as_str()),
+        ("currency", p.currency.as_str()),
+    ];
+    // iOS serializes comparison_counter_ids as a JSON array string
+    // e.g. comparison_counter_ids=["ST/HK/700","ST/HK/80700"]
+    let comp_json: String;
+    if let Some(ref syms) = p.comparison_symbols {
+        let cids: Vec<String> = syms
+            .split(',')
+            .map(|s| symbol_to_counter_id(s.trim()))
+            .collect();
+        comp_json = serde_json::to_string(&cids).unwrap_or_default();
+        params.push(("comparison_counter_ids", comp_json.as_str()));
+    }
+    http_get_tool_unix(
+        &client,
+        "/v1/quote/compare/valuation",
+        &params,
+        &["list.*.history.*.date"],
+    )
+    .await
 }
