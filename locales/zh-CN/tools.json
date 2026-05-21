@@ -1044,7 +1044,10 @@
     },
     "screener_search": {
       "title": "策略选股",
-      "description": "执行选股查询。market: US/HK/CN/SG（必填）。模式A：传 strategy_id（来自 screener_recommend_strategies 的 screeners[].id），工具自动获取策略并构建过滤条件。模式B：传 conditions=[\"KEY:MIN:MAX\",...] —— filter_ 前缀自动补全，留空某一端表示开区间（\"roe:15:\" 表示 ROE≥15%）。 extra_returns=[\"key\",...] 追加仅展示、不参与过滤的指标列。 sort_by_key=\"key\" 指定排序字段（默认第一个条件），sort_order: asc|desc（默认 desc）。注意：指标 key 和单位由平台动态维护，如不确定或结果为空，先调 screener_indicators 确认当前有效 key。常见 key（仅供参考）：pettm(市盈率) pb ps roe roa grossmargin netmargin netprofitgrowthrate revenuegrowthrate marketcap balance divyld currentratio debtassetratio eps。返回 {total, items[]{symbol, name, indicators[]{key, value, unit}}}。"
+      "description": "执行选股查询。模式A：传 strategy_id（来自 screener_recommend_strategies 的 screeners[].id），工具自动获取策略并构建过滤条件，market 可不传。模式B：传 conditions=[\"KEY:MIN:MAX\",...] —— filter_ 前缀自动补全，留空某一端表示开区间（\"roe:15:\" 表示 ROE≥15%）。 extra_returns=[\"key\",...] 追加仅展示不参与过滤的指标列。 sort_by_key 指定排序字段，sort_order: asc|desc（默认 desc）。返回 {total, items[]{symbol, counter_id, name, indicators[]{key, name, value, unit}}}。已验证的 key（不带 filter_ 前缀）：pettm(市盈率TTM) pbmrq(市净率MRQ) psttm(市销率TTM) roe roa netmargin(净利率%) salesgrowthyoy(营收增速%) netincomegrowthyoy(净利增速%) marketcap(市值，A股/港股单位为亿) prevclose(前收价) divyld(股息率%) la(资产负债率%) epsttm(每股收益) netincome(净利润亿) sales(营收亿) turnover_rate(换手率%) group_balance(成交额)。注意：key 由平台动态维护，key 不确定或结果为空时先调 screener_indicators 确认。",
+      "properties": {
+        "market": "市场：US/HK/CN/SG。模式B必填；模式A可不传（策略已内置市场）"
+      }
     },
     "screener_indicators": {
       "title": "选股指标配置",

@@ -46,8 +46,10 @@ pub async fn screener_strategy(
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ScreenerSearchParam {
-    /// Market: "US" | "HK" | "CN" | "SG". Overridden by market embedded in the strategy (Mode A).
-    pub market: String,
+    /// Market: "US" | "HK" | "CN" | "SG".
+    /// Mode A: overridden by the market embedded in the strategy; pass any value or omit.
+    /// Mode B: required — determines which market to screen.
+    pub market: Option<String>,
 
     /// Mode A — Strategy ID from screener_recommend_strategies screeners[].id.
     /// The tool auto-fetches the strategy and builds filters. Omit for Mode B.
@@ -55,36 +57,39 @@ pub struct ScreenerSearchParam {
 
     /// Mode B — Filter conditions as "KEY:MIN:MAX" strings. Omit when using Mode A.
     /// The filter_ prefix is added automatically; omit either bound to leave it open.
-    ///   "pettm:10:50"   → 10 ≤ P/E ≤ 50
-    ///   "roe:15:"       → ROE ≥ 15 %
-    ///   "marketcap::500" → market-cap ≤ 500 (unit per screener_indicators)
+    ///   "pettm:10:50"      → 10 ≤ P/E TTM ≤ 50
+    ///   "roe:15:"          → ROE ≥ 15 %
+    ///   "marketcap:100:"   → market-cap ≥ 100 亿 (A/HK); units vary by market — check screener_indicators
     ///
-    /// Common keys (call screener_indicators for the full list and units):
-    ///   pettm          P/E (TTM)                dimensionless
-    ///   pb             P/B                       dimensionless
-    ///   ps             P/S                       dimensionless
-    ///   roe            Return on equity          %
-    ///   roa            Return on assets          %
-    ///   grossmargin    Gross margin              %
-    ///   netmargin      Net margin                %
-    ///   netprofitgrowthrate  Net-profit growth YoY  %
-    ///   revenuegrowthrate    Revenue growth YoY     %
-    ///   marketcap      Market capitalisation     see screener_indicators for unit
-    ///   balance        Daily turnover            see screener_indicators for unit
-    ///   divyld         Dividend yield            %
-    ///   currentratio   Current ratio             dimensionless
-    ///   debtassetratio Debt / assets             %
-    ///   eps            EPS (TTM)                 currency
+    /// Verified keys (strip filter_ prefix when passing here):
+    ///   pettm              P/E TTM                     (dimensionless)
+    ///   pbmrq              P/B MRQ                     (dimensionless)
+    ///   psttm              P/S TTM                     (dimensionless)
+    ///   roe                Return on equity TTM        (%)
+    ///   roa                Return on assets TTM        (%)
+    ///   netmargin          Net profit margin           (%)
+    ///   salesgrowthyoy     Revenue growth YoY TTM      (%)
+    ///   netincomegrowthyoy Net income growth YoY TTM   (%)
+    ///   marketcap          Market cap                  (亿 for A/HK; see screener_indicators for US)
+    ///   prevclose          Previous close price        (currency)
+    ///   divyld             Dividend yield TTM          (%)
+    ///   la                 Debt / assets ratio         (%)
+    ///   epsttm             EPS TTM                     (currency)
+    ///   netincome          Net income TTM              (亿)
+    ///   sales              Revenue TTM                 (亿)
+    ///   turnover_rate      Turnover rate               (%)
+    ///   group_balance      Daily turnover amount       (dimensionless)
+    ///
+    /// When uncertain about a key or getting empty results, call screener_indicators first.
     pub conditions: Option<Vec<String>>,
 
-    /// Keys whose values should appear in every result row even when not used as a filter.
-    /// Useful for "show market-cap and price alongside the filtered indicators".
-    /// Uses the same key naming as conditions (filter_ prefix added automatically).
-    /// Example: ["marketcap", "close", "eps"]
+    /// Extra indicator keys to include in each result row (display-only, not used as filters).
+    /// Same key naming as conditions (filter_ prefix added automatically).
+    /// Example: ["marketcap", "prevclose", "epsttm"]
     pub extra_returns: Option<Vec<String>>,
 
-    /// Key name to sort results by (e.g. "marketcap", "roe"). Defaults to the first condition key.
-    /// Must be one of the condition keys or an extra_returns key.
+    /// Indicator key to sort results by (e.g. "marketcap", "roe").
+    /// Defaults to the first condition key. Must be one of the condition or extra_returns keys.
     pub sort_by_key: Option<String>,
 
     /// Sort order: "asc" | "desc" (default: "desc")
@@ -114,7 +119,7 @@ pub async fn screener_search(
 
         let strategy: serde_json::Value = serde_json::from_str(&raw).map_err(Error::Serialize)?;
 
-        let mut mkt = p.market.to_uppercase();
+        let mut mkt = p.market.as_deref().unwrap_or("US").to_uppercase();
         let mut filters: Vec<serde_json::Value> = Vec::new();
         let mut returns: Vec<String> = Vec::new();
 
@@ -202,7 +207,7 @@ pub async fn screener_search(
             returns.push(key);
         }
         (
-            p.market.to_uppercase(),
+            p.market.as_deref().unwrap_or("US").to_uppercase(),
             serde_json::Value::Array(filters),
             serde_json::Value::Array(returns.into_iter().map(serde_json::Value::String).collect()),
         )
@@ -262,9 +267,32 @@ pub async fn screener_search(
         .map_err(|e| Error::Other(e.to_string()))?;
 
     let json = crate::serialize::transform_json(resp.as_bytes()).map_err(Error::Serialize)?;
+
+    // Inject human-readable `symbol` (e.g. "1810.HK") alongside each item's counter_id.
+    let json = inject_symbols(json);
+
     Ok(rmcp::model::CallToolResult::success(vec![
         rmcp::model::Content::text(json),
     ]))
+}
+
+/// Post-process screener_search results: add a `symbol` field (e.g. "1810.HK") to each item
+/// derived from the raw `counter_id` returned by the API (e.g. "ST/HK/81810").
+fn inject_symbols(json: String) -> String {
+    let Ok(mut data) = serde_json::from_str::<serde_json::Value>(&json) else {
+        return json;
+    };
+    if let Some(items) = data["items"].as_array_mut() {
+        for item in items.iter_mut() {
+            if let Some(cid) = item["counter_id"].as_str() {
+                let sym = crate::counter::counter_id_to_symbol(cid);
+                if let Some(obj) = item.as_object_mut() {
+                    obj.insert("symbol".to_string(), serde_json::Value::String(sym));
+                }
+            }
+        }
+    }
+    serde_json::to_string(&data).unwrap_or(json)
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]

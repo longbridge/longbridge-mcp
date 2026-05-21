@@ -1044,7 +1044,10 @@
     },
     "screener_search": {
       "title": "策略選股",
-      "description": "執行選股查詢。market: US/HK/CN/SG（必填）。模式A：傳 strategy_id（來自 screener_recommend_strategies 的 screeners[].id），工具自動獲取策略並構建篩選條件。模式B：傳 conditions=[\"KEY:MIN:MAX\",...] —— filter_ 前綴自動補全，留空某一端表示開區間（\"roe:15:\" 表示 ROE≥15%）。 extra_returns=[\"key\",...] 追加僅展示、不參與篩選的指標欄。 sort_by_key=\"key\" 指定排序欄位（預設第一個條件），sort_order: asc|desc（預設 desc）。注意：指標 key 和單位由平台動態維護，如不確定或結果為空，先調 screener_indicators 確認當前有效 key。常見 key（僅供參考）：pettm(本益比) pb ps roe roa grossmargin netmargin netprofitgrowthrate revenuegrowthrate marketcap balance divyld currentratio debtassetratio eps。返回 {total, items[]{symbol, name, indicators[]{key, value, unit}}}。"
+      "description": "執行選股查詢。模式A：傳 strategy_id（來自 screener_recommend_strategies 的 screeners[].id），工具自動獲取策略並構建篩選條件，market 可不傳。模式B：傳 conditions=[\"KEY:MIN:MAX\",...] —— filter_ 前綴自動補全，留空某一端表示開區間（\"roe:15:\" 表示 ROE≥15%）。 extra_returns=[\"key\",...] 追加僅展示不參與篩選的指標欄。 sort_by_key 指定排序欄位，sort_order: asc|desc（預設 desc）。返回 {total, items[]{symbol, counter_id, name, indicators[]{key, name, value, unit}}}。已驗證的 key（不帶 filter_ 前綴）：pettm(本益比TTM) pbmrq(市淨率MRQ) psttm(市銷率TTM) roe roa netmargin(淨利率%) salesgrowthyoy(營收增速%) netincomegrowthyoy(淨利增速%) marketcap(市值，A股/港股單位為億) prevclose(前收價) divyld(股息率%) la(資產負債率%) epsttm(每股盈利) netincome(淨利潤億) sales(營收億) turnover_rate(換手率%) group_balance(成交額)。注意：key 由平台動態維護，key 不確定或結果為空時先調 screener_indicators 確認。",
+      "properties": {
+        "market": "市場：US/HK/CN/SG。模式B必填；模式A可不傳（策略已內建市場）"
+      }
     },
     "screener_indicators": {
       "title": "選股指標配置",
