@@ -1699,7 +1699,7 @@ impl Longbridge {
     #[tool(
         title = "Short Positions",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get short position history for HK or US stocks. Market inferred from symbol suffix (.HK or .US). HK: returns data[]{timestamp, amount, balance, rate}. US: returns short ratio, short shares, days to cover. count: 1-100 (default 20)."
+        description = "Get short interest history (open short positions) for HK or US stocks. Market inferred from symbol suffix. count: 1–100 (default 20). Unified data[]{timestamp(RFC3339), short_shares(open short position in shares), rate(decimal ratio e.g. 0.009=0.9%), close}. US-only: avg_daily_vol, days_to_cover. HK-only: balance(outstanding short position in HKD). US source: FINRA bi-weekly. HK source: HKEX daily."
     )]
     async fn short_positions(
         &self,
@@ -2501,7 +2501,7 @@ impl Longbridge {
     #[tool(
         title = "Short Trades",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get daily short-sale volume history for HK or US stocks. Market inferred from symbol suffix (.HK or .US). last_timestamp: unix seconds (omit for latest). page_size: 1–100 (default 20). rate is a decimal ratio (e.g. 0.4173 = 41.73% of total volume). HK: data[]{timestamp(RFC3339), amount(short shares), balance(HKD outstanding), close, rate, total_amount}. US: data[]{timestamp(RFC3339), nus_amount(NASDAQ), ny_amount(NYSE), total_amount, close, rate}."
+        description = "Get daily short-sale volume history for HK or US stocks. Market inferred from symbol suffix. last_timestamp: unix seconds (omit for latest). page_size: 1–100 (default 20). Unified data[]{timestamp(RFC3339), short_vol(daily short volume in shares), rate(decimal ratio e.g. 0.36=36%), close}. US-only: nasdaq_vol(NASDAQ short), nyse_vol(NYSE short). HK-only: balance(HKD), market_vol(total market volume that day). US source: FINRA/NASDAQ daily. HK source: HKEX daily."
     )]
     async fn short_trades(
         &self,

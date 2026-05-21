@@ -716,7 +716,7 @@
     },
     "short_positions": {
       "title": "做空持仓",
-      "description": "查询港股或美股的做空持仓历史。根据 symbol 后缀自动路由（.HK=港股，.US=美股）。港股返回 data[]{timestamp, amount, balance, rate}；美股返回做空比率、空头股数、回补天数。count: 1-100（默认20）。"
+      "description": "获取港股或美股的卖空持仓历史（未平仓空头头寸）。市场由 symbol 后缀自动判断。count: 1–100（默认20）。统一返回 data[]{timestamp(RFC3339), short_shares(空头持仓股数), rate(小数比率 如0.009=0.9%), close}。仅美股：avg_daily_vol(日均成交量), days_to_cover(回补天数)。仅港股：balance(港元空头余额)。美股来源：FINRA 双周报。港股来源：HKEX 每日。"
     },
     "static_info": {
       "title": "证券基础信息",
@@ -1075,7 +1075,7 @@
     },
     "short_trades": {
       "title": "做空成交",
-      "description": "获取港股或美股的每日卖空成交量历史。市场由 symbol 后缀（.HK/.US）自动判断。last_timestamp: Unix 秒（不传则取最新）。page_size: 1–100（默认20）。rate 为小数比率（如 0.4173 = 41.73% 的总成交量为卖空）。港股返回 data[]{timestamp(RFC3339), amount(卖空股数), balance(HKD 未平仓), close, rate, total_amount}。美股返回 data[]{timestamp(RFC3339), nus_amount(纳斯达克), ny_amount(纽交所), total_amount, close, rate}。"
+      "description": "获取港股或美股的每日卖空成交量历史。市场由 symbol 后缀自动判断。last_timestamp: Unix 秒（不传则取最新）。page_size: 1–100（默认20）。统一返回 data[]{timestamp(RFC3339), short_vol(当日卖空股数), rate(小数比率 如0.36=36%), close}。仅美股：nasdaq_vol(纳斯达克卖空量), nyse_vol(纽交所卖空量)。仅港股：balance(港元), market_vol(当日市场总成交量)。美股来源：FINRA/NASDAQ。港股来源：HKEX。"
     }
   }
 }

@@ -304,7 +304,7 @@ pub async fn short_trades(
     } else {
         "/v1/quote/short-trades/us"
     };
-    http_get_tool_unix(
+    let result = http_get_tool_unix(
         &client,
         path,
         &[
@@ -314,7 +314,72 @@ pub async fn short_trades(
         ],
         &["data.*.timestamp"],
     )
-    .await
+    .await?;
+    Ok(normalize_short_trades(result, is_hk))
+}
+
+/// Normalize short_trades response to a unified schema regardless of market.
+///
+/// Unified data[] item fields:
+///   timestamp     RFC3339
+///   short_vol     daily short-sale volume (US: total_amount across all venues; HK: amount)
+///   rate          decimal ratio (e.g. 0.36 = 36% of total volume was short)
+///   close         close price
+///   nasdaq_vol    US only — NASDAQ short volume (nus_amount)
+///   nyse_vol      US only — NYSE short volume (ny_amount)
+///   balance       HK only — outstanding short balance (HKD)
+///   market_vol    HK only — total market trading volume for the day (total_amount)
+fn normalize_short_trades(
+    result: rmcp::model::CallToolResult,
+    is_hk: bool,
+) -> rmcp::model::CallToolResult {
+    let Some(text) = result
+        .content
+        .first()
+        .and_then(|c| c.as_text())
+        .map(|t| t.text.as_str())
+    else {
+        return result;
+    };
+    let Ok(mut d) = serde_json::from_str::<serde_json::Value>(text) else {
+        return result;
+    };
+
+    if let Some(items) = d.get_mut("data").and_then(|v| v.as_array_mut()) {
+        for item in items.iter_mut() {
+            let Some(obj) = item.as_object_mut() else {
+                continue;
+            };
+            if is_hk {
+                // amount → short_vol
+                if let Some(v) = obj.remove("amount") {
+                    obj.insert("short_vol".to_string(), v);
+                }
+                // total_amount → market_vol (HK: this is total market volume, not short volume)
+                if let Some(v) = obj.remove("total_amount") {
+                    obj.insert("market_vol".to_string(), v);
+                }
+            } else {
+                // total_amount → short_vol (US: total short volume across all venues)
+                if let Some(v) = obj.remove("total_amount") {
+                    obj.insert("short_vol".to_string(), v);
+                }
+                // nus_amount → nasdaq_vol
+                if let Some(v) = obj.remove("nus_amount") {
+                    obj.insert("nasdaq_vol".to_string(), v);
+                }
+                // ny_amount → nyse_vol
+                if let Some(v) = obj.remove("ny_amount") {
+                    obj.insert("nyse_vol".to_string(), v);
+                }
+            }
+        }
+    }
+
+    let Ok(json) = serde_json::to_string(&d) else {
+        return result;
+    };
+    rmcp::model::CallToolResult::success(vec![rmcp::model::Content::text(json)])
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]

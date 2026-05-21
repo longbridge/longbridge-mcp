@@ -705,7 +705,69 @@ pub async fn short_positions(
     } else {
         &["data.*.timestamp"]
     };
-    http_get_tool_unix(&client, path, &params, unix_paths).await
+    let result = http_get_tool_unix(&client, path, &params, unix_paths).await?;
+    Ok(normalize_short_positions(result, is_hk))
+}
+
+/// Normalize short_positions response to a unified schema regardless of market.
+///
+/// Unified data[] item fields:
+///   timestamp   RFC3339
+///   short_shares  number of open short shares (US: current_shares_short; HK: amount)
+///   rate          decimal ratio (e.g. 0.0092 = 0.92%)
+///   close         previous close price (US: close; HK: cost → renamed)
+///   days_to_cover US only
+///   avg_daily_vol US only (from avg_daily_share_volume)
+///   balance       HK only — outstanding short position value (HKD)
+fn normalize_short_positions(result: CallToolResult, is_hk: bool) -> CallToolResult {
+    let Some(text) = result
+        .content
+        .first()
+        .and_then(|c| c.as_text())
+        .map(|t| t.text.as_str())
+    else {
+        return result;
+    };
+    let Ok(mut d) = serde_json::from_str::<serde_json::Value>(text) else {
+        return result;
+    };
+
+    // Remove top-level update_timestamp (redundant with data[].timestamp)
+    if let Some(obj) = d.as_object_mut() {
+        obj.remove("update_timestamp");
+    }
+
+    if let Some(items) = d.get_mut("data").and_then(|v| v.as_array_mut()) {
+        for item in items.iter_mut() {
+            let Some(obj) = item.as_object_mut() else {
+                continue;
+            };
+            if is_hk {
+                // amount → short_shares
+                if let Some(v) = obj.remove("amount") {
+                    obj.insert("short_shares".to_string(), v);
+                }
+                // cost → close
+                if let Some(v) = obj.remove("cost") {
+                    obj.insert("close".to_string(), v);
+                }
+            } else {
+                // current_shares_short → short_shares
+                if let Some(v) = obj.remove("current_shares_short") {
+                    obj.insert("short_shares".to_string(), v);
+                }
+                // avg_daily_share_volume → avg_daily_vol
+                if let Some(v) = obj.remove("avg_daily_share_volume") {
+                    obj.insert("avg_daily_vol".to_string(), v);
+                }
+            }
+        }
+    }
+
+    let Ok(json) = serde_json::to_string(&d) else {
+        return result;
+    };
+    CallToolResult::success(vec![rmcp::model::Content::text(json)])
 }
 
 pub async fn option_volume(
