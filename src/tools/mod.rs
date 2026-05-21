@@ -34,6 +34,7 @@ mod dca;
 mod fundamental;
 mod ipo;
 mod market;
+mod meta;
 mod output;
 mod portfolio;
 mod quant;
@@ -263,6 +264,45 @@ impl Longbridge {
         time::OffsetDateTime::now_utc()
             .format(&time::format_description::well_known::Rfc3339)
             .expect("failed to format current time")
+    }
+
+    /// Browse available MCP tools, optionally filtered by keyword.
+    #[tool(
+        title = "List Tools",
+        annotations(read_only_hint = true, idempotent_hint = true),
+        description = "Browse available MCP tools with one-line summaries. Pass category to filter by keyword (case-insensitive, matched against tool name and description). Examples: category=\"quote\", \"trade\", \"alert\", \"ipo\", \"fundamental\". Use tools_describe(name) for full parameter details."
+    )]
+    async fn tools_list(
+        &self,
+        Parameters(p): Parameters<meta::ToolsListParam>,
+    ) -> Result<CallToolResult, McpError> {
+        meta::tools_list(p)
+    }
+
+    /// Search for MCP tools by keyword across names and descriptions.
+    #[tool(
+        title = "Search Tools",
+        annotations(read_only_hint = true, idempotent_hint = true),
+        description = "Search MCP tools by keyword (case-insensitive, matches tool name and description). Returns matching tools with description and parameter list. Use tools_describe(name) to get full parameter details."
+    )]
+    async fn tools_search(
+        &self,
+        Parameters(p): Parameters<meta::ToolsSearchParam>,
+    ) -> Result<CallToolResult, McpError> {
+        meta::tools_search(p)
+    }
+
+    /// Get full parameter documentation for a specific MCP tool.
+    #[tool(
+        title = "Describe Tool",
+        annotations(read_only_hint = true, idempotent_hint = true),
+        description = "Get full documentation for a specific MCP tool: description, all input parameters (name, type, required flag, description). Use tools_list() to browse all tools or tools_search(query) to find tools by keyword."
+    )]
+    async fn tools_describe(
+        &self,
+        Parameters(p): Parameters<meta::ToolsDescribeParam>,
+    ) -> Result<CallToolResult, McpError> {
+        meta::tools_describe(p)
     }
 
     /// Get basic information of securities.

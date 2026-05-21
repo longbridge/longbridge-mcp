@@ -1027,6 +1027,28 @@
         "symbol": "證券代碼，例如 `\"AAPL.US\"`",
         "report": "報告期：`qf`（季報）、`saf`（半年報）、`af`（年報）"
       }
+    },
+    "tools_list": {
+      "title": "列出工具",
+      "description": "瀏覽可用的 MCP 工具，返回工具名稱和一行摘要。可選 category 關鍵詞過濾（大小寫不敏感，匹配工具名稱和描述）。示例：category=\"quote\"、\"trade\"、\"alert\"。用 tools_describe 查看完整參數",
+      "properties": {
+        "category": "關鍵詞過濾，例如 `\"quote\"`、`\"trade\"`、`\"alert\"`、`\"ipo\"`（可選）"
+      }
+    },
+    "tools_search": {
+      "title": "搜尋工具",
+      "description": "按關鍵詞搜尋 MCP 工具（大小寫不敏感，匹配工具名稱和描述），返回匹配工具的描述和參數列表。用 tools_describe(name) 查看完整參數",
+      "properties": {
+        "query": "搜尋關鍵詞，例如 `\"order\"`、`\"candlestick\"`、`\"watchlist\"`",
+        "limit": "最多返回結果數（預設 20）"
+      }
+    },
+    "tools_describe": {
+      "title": "工具詳情",
+      "description": "獲取指定 MCP 工具的完整文檔：描述、全部輸入參數（名稱、類型、是否必填、說明）。用 tools_list() 瀏覽所有工具，用 tools_search(query) 按關鍵詞查找工具名",
+      "properties": {
+        "name": "工具名稱，例如 `\"quote\"`、`\"depth\"`、`\"submit_order\"`"
+      }
     }
   }
 }
