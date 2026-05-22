@@ -31,6 +31,52 @@ pub struct ScreenerUserStrategiesParam {
     pub market: Option<String>,
 }
 
+/// Strip "filter_" prefix from every `key` field inside strategy `filter.filters[]`.
+/// Consistent with screener_indicators: keys are returned without prefix so callers
+/// can pass them directly; screener_search Mode A re-adds the prefix before the API call.
+fn strip_filter_prefix_from_strategy(v: &mut serde_json::Value) {
+    if let Some(filters) = v
+        .get_mut("filter")
+        .and_then(|f| f.get_mut("filters"))
+        .and_then(|f| f.as_array_mut())
+    {
+        for item in filters.iter_mut() {
+            if let Some(k) = item.get("key").and_then(|k| k.as_str()) {
+                let stripped = k.strip_prefix("filter_").unwrap_or(k).to_string();
+                if let Some(obj) = item.as_object_mut() {
+                    obj.insert("key".to_string(), serde_json::Value::String(stripped));
+                }
+            }
+        }
+    }
+}
+
+fn strip_strategy_keys(result: rmcp::model::CallToolResult) -> rmcp::model::CallToolResult {
+    let Some(text) = result
+        .content
+        .first()
+        .and_then(|c| c.as_text())
+        .map(|t| t.text.as_str())
+    else {
+        return result;
+    };
+    let Ok(mut d) = serde_json::from_str::<serde_json::Value>(text) else {
+        return result;
+    };
+    // single strategy object
+    strip_filter_prefix_from_strategy(&mut d);
+    // strategy list (strategys[])
+    if let Some(list) = d.get_mut("strategys").and_then(|v| v.as_array_mut()) {
+        for s in list.iter_mut() {
+            strip_filter_prefix_from_strategy(s);
+        }
+    }
+    let Ok(json) = serde_json::to_string(&d) else {
+        return result;
+    };
+    rmcp::model::CallToolResult::success(vec![rmcp::model::Content::text(json)])
+}
+
 /// Platform-recommended screener strategies.
 pub async fn screener_recommend_strategies(
     mctx: &crate::tools::McpContext,
@@ -38,12 +84,13 @@ pub async fn screener_recommend_strategies(
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
     let market = p.market.unwrap_or_else(|| "US".to_string());
-    http_get_tool(
+    let result = http_get_tool(
         &client,
         "/v1/quote/ai/screener/strategies/recommend",
         &[("market", market.as_str())],
     )
-    .await
+    .await?;
+    Ok(strip_strategy_keys(result))
 }
 
 /// User's own saved screener strategies.
@@ -53,12 +100,13 @@ pub async fn screener_user_strategies(
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
     let market = p.market.unwrap_or_else(|| "US".to_string());
-    http_get_tool(
+    let result = http_get_tool(
         &client,
         "/v1/quote/ai/screener/strategies/mine",
         &[("market", market.as_str())],
     )
-    .await
+    .await?;
+    Ok(strip_strategy_keys(result))
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -73,7 +121,8 @@ pub async fn screener_strategy(
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
     let path = format!("/v1/quote/ai/screener/strategy/{}", p.id);
-    http_get_tool(&client, &path, &[]).await
+    let result = http_get_tool(&client, &path, &[]).await?;
+    Ok(strip_strategy_keys(result))
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -157,14 +206,20 @@ pub async fn screener_search(
             .and_then(|v| v.as_array())
         {
             for ind in f {
-                let key = ind
+                let raw_key = ind
                     .get("key")
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string();
-                if key.is_empty() || key == "-" {
+                if raw_key.is_empty() || raw_key == "-" {
                     continue;
                 }
+                // Re-add filter_ prefix (stripped in strategy display, required by search API)
+                let key = if raw_key.starts_with("filter_") {
+                    raw_key
+                } else {
+                    format!("filter_{raw_key}")
+                };
                 let min = ind
                     .get("min")
                     .and_then(|v| v.as_str())
