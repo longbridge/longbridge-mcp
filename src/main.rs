@@ -2,6 +2,7 @@ mod auth;
 mod counter;
 mod error;
 mod metrics;
+mod prompts;
 mod serialize;
 mod tools;
 
