@@ -1044,7 +1044,7 @@
     },
     "screener_search": {
       "title": "策略选股",
-      "description": "执行选股查询。模式A：传 strategy_id（来自 screener_recommend_strategies 的 screeners[].id），工具自动获取策略并构建过滤条件，market 可不传。模式B：传 conditions=[\"KEY:MIN:MAX\",...] —— filter_ 前缀自动补全，留空某一端表示开区间（\"roe:15:\" 表示 ROE≥15%）。 extra_returns=[\"key\",...] 追加仅展示不参与过滤的指标列。 sort_by_key 指定排序字段，sort_order: asc|desc（默认 desc）。返回 {total, items[]{symbol, name, indicators[]{key, name, value, unit}}}。已验证的 key（不带 filter_ 前缀）：pettm(市盈率TTM) pbmrq(市净率MRQ) psttm(市销率TTM) roe roa netmargin(净利率%) salesgrowthyoy(营收增速%) netincomegrowthyoy(净利增速%) marketcap(市值，A股/港股单位为亿) prevclose(前收价) divyld(股息率%) la(资产负债率%) epsttm(每股收益) netincome(净利润亿) sales(营收亿) turnover_rate(换手率%) group_balance(成交额)。注意：key 由平台动态维护，key 不确定或结果为空时先调 screener_indicators 确认。",
+      "description": "执行选股查询。market: US|HK|CN|SG（模式B必填；模式A使用策略内置市场）。模式A：传 strategy_id（来自 screener_recommend_strategies）自动运行策略。模式B：conditions=[\"KEY:MIN:MAX\",...] —— filter_ 前缀自动补全，留空某一端表示开区间（\"roe:15:\" 表示 ROE≥15%）。 extra_returns 追加展示列；sort_by_key 指定排序字段；sort_order: asc|desc（默认 desc）；page: 从0开始（默认0）。返回 {total, items[]{symbol, name, indicators[]{key, name, value, unit}}}。基本面 key：pettm pbmrq roe roa netmargin salesgrowthyoy netincomegrowthyoy marketcap(亿) circulating_marketcap(亿) prevclose prevchg(%) divyld la epsttm netincome sales turnover_rate balance。技术 key（tech_values 见 screener_indicators）：macd_day macd_week rsi_day rsi_week kdj_day kdj_week boll_day boll_week。注意：key 由平台动态维护，不确定时先调 screener_indicators 确认。",
       "properties": {
         "market": "市场：US/HK/CN/SG。模式B必填；模式A可不传（策略已内置市场）"
       }
@@ -1055,11 +1055,11 @@
     },
     "screener_recommend_strategies": {
       "title": "平台预设选股策略",
-      "description": "获取平台预设的选股策略列表。market: US|HK|CN|SG（默认 US）。返回 screeners[]{id, name, average_day_chg}。将 id 传入 screener_search 的 strategy_id 可直接运行该策略；传入 screener_strategy 可查看策略的过滤条件。"
+      "description": "获取平台预设的选股策略列表。market: US|HK|CN|SG（默认 US）。返回 strategys[]{id, name, description, market, three_months_chg, risk}。将 id 传入 screener_search 的 strategy_id 可直接运行该策略；传入 screener_strategy 可查看策略的过滤条件。"
     },
     "screener_user_strategies": {
       "title": "我的选股策略",
-      "description": "获取当前用户已保存的选股策略列表。market: US|HK|CN|SG（默认 US）。返回 screeners[]{id, name, average_day_chg}。将 id 传入 screener_search 的 strategy_id 可直接运行该策略；传入 screener_strategy 可查看策略的过滤条件。"
+      "description": "获取当前用户已保存的选股策略列表。market: US|HK|CN|SG（默认 US）。返回 strategys[]{id, name, description, market, three_months_chg, risk}。将 id 传入 screener_search 的 strategy_id 可直接运行该策略；传入 screener_strategy 可查看策略的过滤条件。"
     },
     "top_movers": {
       "title": "热股异动",

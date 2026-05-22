@@ -2560,7 +2560,7 @@ impl Longbridge {
     #[tool(
         title = "Screener Recommend Strategies",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "List platform-preset screener strategies. market: US|HK|CN|SG (default: US). Returns screeners[]{id, name, average_day_chg}. Pass id to screener_search strategy_id to run the strategy, or to screener_strategy to inspect its filter conditions."
+        description = "List platform-preset screener strategies. market: US|HK|CN|SG (default: US). Returns strategys[]{id, name, description, market, three_months_chg, risk}. Pass id to screener_search strategy_id to run, or screener_strategy to inspect filter conditions."
     )]
     async fn screener_recommend_strategies(
         &self,
@@ -2578,7 +2578,7 @@ impl Longbridge {
     #[tool(
         title = "Screener User Strategies",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "List the current user's saved screener strategies. market: US|HK|CN|SG (default: US). Returns screeners[]{id, name, average_day_chg}. Pass id to screener_search strategy_id to run, or screener_strategy to inspect conditions."
+        description = "List the current user's saved screener strategies. market: US|HK|CN|SG (default: US). Returns strategys[]{id, name, description, market, three_months_chg, risk}. Pass id to screener_search strategy_id to run, or screener_strategy to inspect conditions."
     )]
     async fn screener_user_strategies(
         &self,
@@ -2614,7 +2614,7 @@ impl Longbridge {
     #[tool(
         title = "Screener Search",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Screen stocks. market: US|HK|CN|SG (Mode B required; Mode A uses strategy's market). Mode A: strategy_id from screener_recommend_strategies — auto-runs saved strategy. Mode B: conditions=[\"KEY:MIN:MAX\",...], filter_ prefix auto-added, open bound = omit value (\"roe:15:\" means ROE≥15%). extra_returns=[\"key\",...] adds display-only columns. sort_by_key sorts by key name; sort_order: asc|desc (default desc). Returns {total, items[]{symbol, name, indicators[]{key, name, value, unit}}}. Verified keys (use without filter_ prefix): pettm pbmrq psttm roe roa netmargin salesgrowthyoy netincomegrowthyoy marketcap(unit=亿 for A/HK) prevclose divyld la(debt/assets%) epsttm netincome sales turnover_rate group_balance. IMPORTANT: keys are platform-managed — call screener_indicators to verify before using an unfamiliar key or when results are unexpectedly empty."
+        description = "Screen stocks. market: US|HK|CN|SG (Mode B required; Mode A uses strategy's market). Mode A: strategy_id from screener_recommend_strategies — auto-runs saved strategy. Mode B: conditions=[\"KEY:MIN:MAX\",...], filter_ prefix auto-added, open bound = omit (\"roe:15:\" means ROE≥15%). extra_returns=[\"key\",...] adds display-only columns. sort_by_key sorts by key name; sort_order: asc|desc (default desc). page: 0-based (default 0). Returns {total, items[]{symbol, name, indicators[]{key, name, value, unit}}}. Fundamental keys: pettm pbmrq roe roa netmargin salesgrowthyoy netincomegrowthyoy marketcap(亿) circulating_marketcap(亿) prevclose prevchg(%) divyld la epsttm netincome sales turnover_rate balance. Technical keys (use screener_indicators for tech_values options): macd_day macd_week rsi_day rsi_week kdj_day kdj_week boll_day boll_week. IMPORTANT: keys are platform-managed — call screener_indicators to verify."
     )]
     async fn screener_search(
         &self,

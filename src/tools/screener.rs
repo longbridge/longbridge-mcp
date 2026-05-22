@@ -83,24 +83,31 @@ pub struct ScreenerSearchParam {
     ///   "roe:15:"          → ROE ≥ 15 %
     ///   "marketcap:100:"   → market-cap ≥ 100 亿 (A/HK); units vary by market — check screener_indicators
     ///
-    /// Verified keys (strip filter_ prefix when passing here):
+    /// Fundamental keys (strip filter_ prefix):
     ///   pettm              P/E TTM                     (dimensionless)
     ///   pbmrq              P/B MRQ                     (dimensionless)
-    ///   psttm              P/S TTM                     (dimensionless)
     ///   roe                Return on equity TTM        (%)
     ///   roa                Return on assets TTM        (%)
     ///   netmargin          Net profit margin           (%)
     ///   salesgrowthyoy     Revenue growth YoY TTM      (%)
     ///   netincomegrowthyoy Net income growth YoY TTM   (%)
-    ///   marketcap          Market cap                  (亿 for A/HK; see screener_indicators for US)
+    ///   marketcap          Market cap                  (亿 for A/HK)
+    ///   circulating_marketcap  Float market cap        (亿 for A/HK)
     ///   prevclose          Previous close price        (currency)
+    ///   prevchg            Latest price change         (%)
     ///   divyld             Dividend yield TTM          (%)
     ///   la                 Debt / assets ratio         (%)
     ///   epsttm             EPS TTM                     (currency)
     ///   netincome          Net income TTM              (亿)
     ///   sales              Revenue TTM                 (亿)
     ///   turnover_rate      Turnover rate               (%)
-    ///   group_balance      Daily turnover amount       (dimensionless)
+    ///   balance            Latest turnover amount      (万)
+    ///
+    /// Technical indicator keys (use screener_indicators to see valid tech_values options):
+    ///   macd_day / macd_week   MACD (日线/周线)
+    ///   rsi_day  / rsi_week    RSI  (日线/周线)
+    ///   kdj_day  / kdj_week    KDJ  (日线/周线)
+    ///   boll_day / boll_week   BOLL (日线/周线)
     ///
     /// When uncertain about a key or getting empty results, call screener_indicators first.
     pub conditions: Option<Vec<String>>,
