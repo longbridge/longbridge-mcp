@@ -77,11 +77,15 @@ pub struct ScreenerSearchParam {
     /// The tool auto-fetches the strategy and builds filters. Omit for Mode B.
     pub strategy_id: Option<String>,
 
-    /// Mode B — Filter conditions as "KEY:MIN:MAX" strings. Omit when using Mode A.
+    /// Mode B — Filter conditions. Two formats:
+    ///   "KEY:MIN:MAX"            — numeric range filter
+    ///   "KEY:MIN:MAX:k=v,k=v"   — technical indicator with tech_values
     /// The filter_ prefix is added automatically; omit either bound to leave it open.
-    ///   "pettm:10:50"      → 10 ≤ P/E TTM ≤ 50
-    ///   "roe:15:"          → ROE ≥ 15 %
-    ///   "marketcap:100:"   → market-cap ≥ 100 亿 (A/HK); units vary by market — check screener_indicators
+    ///   "pettm:10:50"                          → 10 ≤ P/E TTM ≤ 50
+    ///   "roe:15:"                               → ROE ≥ 15 %
+    ///   "marketcap:100:"                        → market-cap ≥ 100 亿 (A/HK)
+    ///   "macd_day:::category=deadcross,period=day" → MACD death cross (daily)
+    ///   "rsi_day:::value_type=oversold"         → RSI oversold (daily)
     ///
     /// Fundamental keys (strip filter_ prefix):
     ///   pettm              P/E TTM                     (dimensionless)
@@ -204,11 +208,13 @@ pub async fn screener_search(
             serde_json::Value::Array(returns.into_iter().map(serde_json::Value::String).collect()),
         )
     } else {
-        // Mode B: build filters+returns from "KEY:MIN:MAX" conditions
+        // Mode B: build filters+returns from "KEY:MIN:MAX" or "KEY:MIN:MAX:k=v,k=v" conditions.
+        // The optional 4th segment encodes tech_values for technical indicators,
+        // e.g. "macd_day:::category=deadcross,period=day"
         let mut filters: Vec<serde_json::Value> = Vec::new();
         let mut returns: Vec<String> = Vec::new();
         for cond in p.conditions.as_deref().unwrap_or(&[]) {
-            let parts: Vec<&str> = cond.splitn(3, ':').collect();
+            let parts: Vec<&str> = cond.splitn(4, ':').collect();
             let raw_key = parts.first().copied().unwrap_or("");
             if raw_key.is_empty() {
                 continue;
@@ -220,11 +226,28 @@ pub async fn screener_search(
             };
             let min = parts.get(1).copied().unwrap_or("").to_string();
             let max = parts.get(2).copied().unwrap_or("").to_string();
+            // Parse optional "k=v,k=v" tech_values segment
+            let tech_values = parts
+                .get(3)
+                .filter(|s| !s.is_empty())
+                .map(|tv| {
+                    let mut map = serde_json::Map::new();
+                    for pair in tv.split(',') {
+                        if let Some((k, v)) = pair.split_once('=') {
+                            map.insert(
+                                k.trim().to_string(),
+                                serde_json::Value::String(v.trim().to_string()),
+                            );
+                        }
+                    }
+                    serde_json::Value::Object(map)
+                })
+                .unwrap_or_else(|| serde_json::json!({}));
             filters.push(serde_json::json!({
                 "key": key,
                 "min": min,
                 "max": max,
-                "tech_values": {}
+                "tech_values": tech_values
             }));
             returns.push(key);
         }
