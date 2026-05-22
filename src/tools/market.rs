@@ -462,9 +462,14 @@ pub async fn rank_list(
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
     let need_article = p.need_article.unwrap_or(false).to_string();
+    // Auto-prepend "ib_" if the key doesn't already start with it.
+    let key = if p.key.starts_with("ib_") {
+        p.key.clone()
+    } else {
+        format!("ib_{}", p.key)
+    };
     // Infer market from key suffix (e.g. "ib_hot_all-hk" → "HK"), fall back to param or "US".
-    let key_market = p
-        .key
+    let key_market = key
         .rsplit_once('-')
         .map(|(_, m)| m.to_uppercase())
         .filter(|m| matches!(m.as_str(), "US" | "HK" | "CN" | "SG"))
@@ -475,7 +480,7 @@ pub async fn rank_list(
         &client,
         "/v1/quote/market/rank/list",
         &[
-            ("key", p.key.as_str()),
+            ("key", key.as_str()),
             ("delay_bmp", "false"),
             ("need_article", need_article.as_str()),
             ("market", key_market.as_str()),

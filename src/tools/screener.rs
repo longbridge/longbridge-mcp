@@ -77,20 +77,6 @@ pub struct ScreenerSearchParam {
     /// The tool auto-fetches the strategy and builds filters. Omit for Mode B.
     pub strategy_id: Option<String>,
 
-    /// Mode B — Simple "KEY:MIN:MAX" conditions for numeric range filters.
-    /// The filter_ prefix is added automatically; omit either bound to leave it open.
-    ///   "pettm:10:50"   → 10 ≤ P/E TTM ≤ 50
-    ///   "roe:15:"        → ROE ≥ 15 %
-    ///   "marketcap:100:" → market-cap ≥ 100 亿 (A/HK)
-    ///
-    /// Common keys (strip filter_ prefix):
-    ///   pettm  pbmrq  roe  roa  netmargin  salesgrowthyoy  netincomegrowthyoy
-    ///   marketcap(亿)  circulating_marketcap(亿)  prevclose  prevchg(%)
-    ///   divyld  la  epsttm  netincome(亿)  sales(亿)  turnover_rate  balance(万)
-    ///
-    /// For technical indicators (MACD/RSI/KDJ/BOLL) use `filters` instead.
-    pub conditions: Option<Vec<String>>,
-
     /// Mode B — Full filter objects, passed through directly to the API.
     /// Use this for technical indicators that require tech_values, or to mix
     /// technical and fundamental conditions alongside `conditions`.
@@ -200,12 +186,10 @@ pub async fn screener_search(
             serde_json::Value::Array(returns.into_iter().map(serde_json::Value::String).collect()),
         )
     } else {
-        // Mode B: merge `filters` (passthrough, tech_values preserved) and
-        // `conditions` (simple "KEY:MIN:MAX" shorthand, tech_values always {}).
+        // Mode B: passthrough filter objects — tech_values forwarded as-is.
         let mut filters: Vec<serde_json::Value> = Vec::new();
         let mut returns: Vec<String> = Vec::new();
 
-        // 1. Passthrough filter objects — tech_values forwarded as-is
         for f in p.filters.as_deref().unwrap_or(&[]) {
             if let Some(key) = f.get("key").and_then(|v| v.as_str()) {
                 if !key.is_empty() {
@@ -213,29 +197,6 @@ pub async fn screener_search(
                     filters.push(f.clone());
                 }
             }
-        }
-
-        // 2. Simple KEY:MIN:MAX conditions (numeric range, no tech_values)
-        for cond in p.conditions.as_deref().unwrap_or(&[]) {
-            let parts: Vec<&str> = cond.splitn(3, ':').collect();
-            let raw_key = parts.first().copied().unwrap_or("");
-            if raw_key.is_empty() {
-                continue;
-            }
-            let key = if raw_key.starts_with("filter_") {
-                raw_key.to_string()
-            } else {
-                format!("filter_{raw_key}")
-            };
-            let min = parts.get(1).copied().unwrap_or("").to_string();
-            let max = parts.get(2).copied().unwrap_or("").to_string();
-            filters.push(serde_json::json!({
-                "key": key,
-                "min": min,
-                "max": max,
-                "tech_values": {}
-            }));
-            returns.push(key);
         }
 
         (

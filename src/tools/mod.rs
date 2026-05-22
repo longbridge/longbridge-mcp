@@ -2545,7 +2545,7 @@ impl Longbridge {
     #[tool(
         title = "Rank List",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get ranked stock list by leaderboard tab key. key: from rank_categories second_tags[].key (e.g. ib_hot_all-us, ib_hot_up-hk, ib_hot_trade-us). market: inferred from key suffix or pass explicitly. size: results (default 20). Returns lists[]{symbol, name, last_done, chg(decimal), inflow, market_cap, pre_post_price, pre_post_chg, amplitude, turnover_rate, volume_rate, five_day_chg, ten_day_chg, twenty_day_chg, this_year_chg, industry, intro}, updated_at."
+        description = "Get ranked stock list by leaderboard tab key. key: from rank_categories second_tags[].key — the ib_ prefix is added automatically if omitted (e.g. pass \"hot_all-us\" or \"ib_hot_all-us\", both work). market: inferred from key suffix (-us/-hk) or pass explicitly. size: results (default 20). Returns lists[]{symbol, name, last_done, chg(decimal), inflow, market_cap, pre_post_price, pre_post_chg, amplitude, turnover_rate, volume_rate, five_day_chg, ten_day_chg, twenty_day_chg, this_year_chg, industry, intro}, updated_at."
     )]
     async fn rank_list(
         &self,
@@ -2614,7 +2614,7 @@ impl Longbridge {
     #[tool(
         title = "Screener Search",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Screen stocks. market: US|HK|CN|SG (Mode B required; Mode A uses strategy's market). Mode A: strategy_id from screener_recommend_strategies — auto-runs saved strategy. Mode B has two inputs: (1) conditions=[\"KEY:MIN:MAX\",...] for numeric range filters, filter_ prefix auto-added, open bound = omit (\"roe:15:\" = ROE≥15%); (2) filters=[{\"key\":\"filter_macd_day\",\"min\":\"\",\"max\":\"\",\"tech_values\":{\"category\":\"deadcross\",\"period\":\"day\"}},...] for technical indicators or any filter with explicit tech_values — passed through directly. Both can be combined. extra_returns=[\"key\",...] adds display-only columns. sort_by_key/sort_order: asc|desc (default desc). page: 0-based (default 0). Returns {total, items[]{symbol, name, indicators[]{key, name, value, unit}}}. Fundamental keys: pettm pbmrq roe roa netmargin salesgrowthyoy netincomegrowthyoy marketcap(亿) circulating_marketcap(亿) prevclose prevchg(%) divyld la epsttm netincome sales turnover_rate balance. Technical keys (call screener_indicators for tech_values schema): macd_day macd_week rsi_day rsi_week kdj_day kdj_week boll_day boll_week."
+        description = "Screen stocks. market: US|HK|CN|SG (Mode B required; Mode A uses strategy's market). Mode A: strategy_id from screener_recommend_strategies — auto-runs saved strategy. Mode B: filters=[{\"key\":\"filter_KEY\",\"min\":\"10\",\"max\":\"50\",\"tech_values\":{}},...] passed directly to API — tech_values preserved for technical indicators. extra_returns=[\"key\",...] adds display-only columns. sort_by_key/sort_order: asc|desc (default desc). page: 0-based (default 0). Returns {total, items[]{symbol, name, indicators[]{key, name, value, unit}}}. Fundamental keys (use with \"filter_\" prefix): pettm pbmrq roe roa netmargin salesgrowthyoy netincomegrowthyoy marketcap(亿) circulating_marketcap(亿) prevclose prevchg(%) divyld la epsttm netincome sales turnover_rate balance. Technical keys (call screener_indicators for tech_values schema): macd_day macd_week rsi_day rsi_week kdj_day kdj_week boll_day boll_week."
     )]
     async fn screener_search(
         &self,
