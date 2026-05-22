@@ -1,5 +1,15 @@
 //! Stock screener tools — strategy lists, strategy detail, search, and indicator metadata.
 
+const DEFAULT_RETURNS: &[&str] = &[
+    "filter_prevclose",
+    "filter_prevchg",
+    "filter_marketcap",
+    "filter_salesgrowthyoy",
+    "filter_pettm",
+    "filter_pbmrq",
+    "filter_industry",
+];
+
 use reqwest::Method;
 use rmcp::ErrorData as McpError;
 use rmcp::model::CallToolResult;
@@ -219,10 +229,17 @@ pub async fn screener_search(
         )
     };
 
-    // Append extra_returns (display-only columns, not filter conditions).
+    // Build final returns: condition keys + extra_returns + DEFAULT_RETURNS (deduplicated).
     let returns = {
         let mut all: Vec<serde_json::Value> = returns.as_array().cloned().unwrap_or_default();
-        for raw in p.extra_returns.as_deref().unwrap_or(&[]) {
+        let extend = p
+            .extra_returns
+            .as_deref()
+            .unwrap_or(&[])
+            .iter()
+            .map(|s| s.as_str())
+            .chain(DEFAULT_RETURNS.iter().copied());
+        for raw in extend {
             let key = if raw.starts_with("filter_") {
                 raw.to_string()
             } else {
