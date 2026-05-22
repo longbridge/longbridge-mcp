@@ -9,20 +9,46 @@ use rmcp::serde::Deserialize;
 use crate::error::Error;
 use crate::tools::support::http_client::http_get_tool;
 
-/// Platform-recommended screener strategies (no params required).
-pub async fn screener_recommend_strategies(
-    mctx: &crate::tools::McpContext,
-) -> Result<CallToolResult, McpError> {
-    let client = mctx.create_http_client();
-    http_get_tool(&client, "/v1/quote/screener/strategies/recommend", &[]).await
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ScreenerRecommendStrategiesParam {
+    /// Market filter: "US" | "HK" | "CN" | "SG" (default: "US")
+    pub market: Option<String>,
 }
 
-/// User's own saved screener strategies (no params required).
-pub async fn screener_user_strategies(
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ScreenerUserStrategiesParam {
+    /// Market filter: "US" | "HK" | "CN" | "SG" (default: "US")
+    pub market: Option<String>,
+}
+
+/// Platform-recommended screener strategies.
+pub async fn screener_recommend_strategies(
     mctx: &crate::tools::McpContext,
+    p: ScreenerRecommendStrategiesParam,
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
-    http_get_tool(&client, "/v1/quote/screener/strategies/mine", &[]).await
+    let market = p.market.unwrap_or_else(|| "US".to_string());
+    http_get_tool(
+        &client,
+        "/v1/quote/ai/screener/strategies/recommend",
+        &[("market", market.as_str())],
+    )
+    .await
+}
+
+/// User's own saved screener strategies.
+pub async fn screener_user_strategies(
+    mctx: &crate::tools::McpContext,
+    p: ScreenerUserStrategiesParam,
+) -> Result<CallToolResult, McpError> {
+    let client = mctx.create_http_client();
+    let market = p.market.unwrap_or_else(|| "US".to_string());
+    http_get_tool(
+        &client,
+        "/v1/quote/ai/screener/strategies/mine",
+        &[("market", market.as_str())],
+    )
+    .await
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -36,12 +62,8 @@ pub async fn screener_strategy(
     p: ScreenerStrategyParam,
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
-    http_get_tool(
-        &client,
-        "/v1/quote/screener/strategy",
-        &[("id", p.id.as_str())],
-    )
-    .await
+    let path = format!("/v1/quote/ai/screener/strategy/{}", p.id);
+    http_get_tool(&client, &path, &[]).await
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -109,9 +131,9 @@ pub async fn screener_search(
 
     let (market, filters, returns) = if let Some(ref sid) = p.strategy_id {
         // Mode A: fetch strategy and build filters/returns automatically
+        let strategy_path = format!("/v1/quote/ai/screener/strategy/{sid}");
         let raw: String = client
-            .request(Method::GET, "/v1/quote/screener/strategy")
-            .query_params(vec![("id", sid.as_str())])
+            .request(Method::GET, &strategy_path)
             .response::<String>()
             .send()
             .await
@@ -259,7 +281,7 @@ pub async fn screener_search(
     });
 
     let resp: String = client
-        .request(Method::POST, "/v1/quote/screener/search")
+        .request(Method::POST, "/v1/quote/ai/screener/search")
         .body(longbridge::httpclient::Json(body))
         .response::<String>()
         .send()
@@ -290,5 +312,5 @@ pub async fn screener_indicators(
         cid = crate::counter::symbol_to_counter_id(sym);
         params.push(("counter_id", cid.as_str()));
     }
-    http_get_tool(&client, "/v1/quote/screener/indicators", &params).await
+    http_get_tool(&client, "/v1/quote/ai/screener/indicators", &params).await
 }

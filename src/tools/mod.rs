@@ -2560,15 +2560,16 @@ impl Longbridge {
     #[tool(
         title = "Screener Recommend Strategies",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "List platform-recommended screener strategies. Returns screeners[]{id, name, average_day_chg}. Pass id to screener_search strategy_id to run the strategy, or to screener_strategy to inspect its filter conditions."
+        description = "List platform-recommended AI screener strategies. market: US|HK|CN|SG (default: US). Returns screeners[]{id, name, average_day_chg}. Pass id to screener_search strategy_id to run the strategy, or to screener_strategy to inspect its filter conditions."
     )]
     async fn screener_recommend_strategies(
         &self,
         ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<screener::ScreenerRecommendStrategiesParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
         measured_tool_call("screener_recommend_strategies", || {
-            screener::screener_recommend_strategies(&mctx)
+            screener::screener_recommend_strategies(&mctx, p)
         })
         .await
     }
@@ -2577,15 +2578,16 @@ impl Longbridge {
     #[tool(
         title = "Screener User Strategies",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "List the current user's saved screener strategies. Returns screeners[]{id, name, average_day_chg}. Pass id to screener_search strategy_id to run, or screener_strategy to inspect conditions."
+        description = "List the current user's saved AI screener strategies. market: US|HK|CN|SG (default: US). Returns screeners[]{id, name, average_day_chg}. Pass id to screener_search strategy_id to run, or screener_strategy to inspect conditions."
     )]
     async fn screener_user_strategies(
         &self,
         ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<screener::ScreenerUserStrategiesParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
         measured_tool_call("screener_user_strategies", || {
-            screener::screener_user_strategies(&mctx)
+            screener::screener_user_strategies(&mctx, p)
         })
         .await
     }
@@ -2594,7 +2596,7 @@ impl Longbridge {
     #[tool(
         title = "Screener Strategy",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Inspect a screener strategy's filter conditions before running it. Returns id, name, groups[]{group_name, indicators[]{key, name, min, max}}. Use screener_search strategy_id to execute."
+        description = "Inspect an AI screener strategy's filter conditions before running it (uses AI endpoint). Returns id, name, groups[]{group_name, indicators[]{key, name, min, max}}. Use screener_search strategy_id to execute."
     )]
     async fn screener_strategy(
         &self,
