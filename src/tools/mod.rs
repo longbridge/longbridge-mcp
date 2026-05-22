@@ -2531,7 +2531,7 @@ impl Longbridge {
     #[tool(
         title = "Rank Categories",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get rank tab category configurations for the popularity leaderboard. Returns first_tags[]{key, name, second_tags[]{key, name, market}}. Pass a second_tags key (e.g. `ib_hot_all-us`) to rank_list."
+        description = "Get rank tab category configurations for the popularity leaderboard. Returns first_tags[]{key, name, second_tags[]{key, name, market}}. Pass a second_tags key (e.g. `hot_all-us`) to rank_list — the ib_ prefix is stripped from keys here and re-added automatically by rank_list."
     )]
     async fn rank_categories(
         &self,
@@ -2545,7 +2545,7 @@ impl Longbridge {
     #[tool(
         title = "Rank List",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get ranked stock list by leaderboard tab key. key: from rank_categories second_tags[].key — the ib_ prefix is added automatically if omitted (e.g. pass \"hot_all-us\" or \"ib_hot_all-us\", both work). market: inferred from key suffix (-us/-hk) or pass explicitly. size: results (default 20). Returns lists[]{symbol, name, last_done, chg(decimal), inflow, market_cap, pre_post_price, pre_post_chg, amplitude, turnover_rate, volume_rate, five_day_chg, ten_day_chg, twenty_day_chg, this_year_chg, industry, intro}, updated_at."
+        description = "Get ranked stock list by leaderboard tab key. key: from rank_categories second_tags[].key (e.g. \"hot_all-us\", \"hot_up-hk\", \"trade_heat-us\") — ib_ prefix added automatically. market: inferred from key suffix (-us/-hk) or pass explicitly. size: results (default 20). Returns lists[]{symbol, name, last_done, chg(decimal), inflow, market_cap, pre_post_price, pre_post_chg, amplitude, turnover_rate, volume_rate, five_day_chg, ten_day_chg, twenty_day_chg, this_year_chg, industry, intro}, updated_at."
     )]
     async fn rank_list(
         &self,

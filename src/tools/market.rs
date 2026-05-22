@@ -439,13 +439,58 @@ pub async fn top_movers(
 /// Get available rank tab category configurations.
 pub async fn rank_categories(mctx: &crate::tools::McpContext) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
-    http_get_tool(&client, "/v1/quote/market/rank/categories", &[]).await
+    let result = http_get_tool(&client, "/v1/quote/market/rank/categories", &[]).await?;
+    Ok(strip_ib_prefix_from_rank_keys(result))
+}
+
+/// Strip the "ib_" prefix from all `key` fields inside rank category tags.
+/// rank_list auto-prepends "ib_" before sending to the API, so the prefix
+/// is an implementation detail that should not be exposed to callers.
+fn strip_ib_prefix_from_rank_keys(
+    result: rmcp::model::CallToolResult,
+) -> rmcp::model::CallToolResult {
+    let Some(text) = result
+        .content
+        .first()
+        .and_then(|c| c.as_text())
+        .map(|t| t.text.as_str())
+    else {
+        return result;
+    };
+    let Ok(mut d) = serde_json::from_str::<serde_json::Value>(text) else {
+        return result;
+    };
+    fn strip_key(v: &mut serde_json::Value) {
+        if let Some(k) = v.get("key").and_then(|k| k.as_str()) {
+            let stripped = k.strip_prefix("ib_").unwrap_or(k).to_string();
+            if let Some(obj) = v.as_object_mut() {
+                obj.insert("key".to_string(), serde_json::Value::String(stripped));
+            }
+        }
+        for field in ["second_tags"] {
+            if let Some(arr) = v.get_mut(field).and_then(|v| v.as_array_mut()) {
+                for item in arr.iter_mut() {
+                    strip_key(item);
+                }
+            }
+        }
+    }
+    if let Some(tags) = d.get_mut("first_tags").and_then(|v| v.as_array_mut()) {
+        for tag in tags.iter_mut() {
+            strip_key(tag);
+        }
+    }
+    let Ok(json) = serde_json::to_string(&d) else {
+        return result;
+    };
+    rmcp::model::CallToolResult::success(vec![rmcp::model::Content::text(json)])
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct RankListParam {
-    /// Tab key from rank_categories second_tags[].key, e.g. "ib_hot_all-us" (US total heat),
-    /// "ib_hot_up-hk" (HK rising heat), "ib_hot_trade-us" (US hot trades).
+    /// Tab key from rank_categories second_tags[].key, e.g. "hot_all-us" (US total heat),
+    /// "hot_up-hk" (HK rising heat), "trade_heat-us" (US hot trades).
+    /// The "ib_" prefix is stripped from rank_categories keys and added back automatically.
     pub key: String,
     /// Market override: "US" | "HK" | "CN" | "SG".
     /// Defaults to the market suffix in the key (e.g. "ib_hot_all-hk" → HK), then "US".
