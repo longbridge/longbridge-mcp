@@ -77,22 +77,22 @@ pub struct ScreenerSearchParam {
     /// The tool auto-fetches the strategy and builds filters. Omit for Mode B.
     pub strategy_id: Option<String>,
 
-    /// Mode B — Full filter objects, passed through directly to the API.
-    /// Use this for technical indicators that require tech_values, or to mix
-    /// technical and fundamental conditions alongside `conditions`.
+    /// Mode B — Filter conditions as objects, passed directly to the API.
+    /// Each item: {"key": "filter_KEY", "min": "10", "max": "50", "tech_values": {}}
     ///
-    /// Each object: {"key": "filter_macd_day", "min": "", "max": "", "tech_values": {...}}
+    /// Fundamental keys:
+    ///   filter_pettm  filter_pbmrq  filter_roe  filter_roa  filter_netmargin
+    ///   filter_salesgrowthyoy  filter_netincomegrowthyoy  filter_marketcap(亿)
+    ///   filter_circulating_marketcap(亿)  filter_prevclose  filter_prevchg(%)
+    ///   filter_divyld  filter_la  filter_epsttm  filter_netincome(亿)
+    ///   filter_sales(亿)  filter_turnover_rate  filter_balance(万)
     ///
-    /// Technical indicator keys and their tech_values — call screener_indicators for full list:
-    ///   filter_macd_day  / filter_macd_week  → tech_values: {"category":"goldenfork"|"deadcross", "period":"day"|"week"}
-    ///   filter_rsi_day   / filter_rsi_week   → tech_values: {"value_type":"overbought"|"oversold"}
-    ///   filter_kdj_day   / filter_kdj_week   → tech_values: {"category":"goldenfork"|"deadcross"}
-    ///   filter_boll_day  / filter_boll_week  → tech_values: {"category":"breakthrough_up"|"breakthrough_down"}
-    ///
-    /// Example (MACD death cross + PE < 20):
-    ///   filters: [{"key":"filter_macd_day","min":"","max":"","tech_values":{"category":"deadcross","period":"day"}}]
-    ///   conditions: ["pettm::20"]
-    pub filters: Option<Vec<serde_json::Value>>,
+    /// Technical indicator keys (tech_values required; call screener_indicators for schema):
+    ///   filter_macd_day/week  → {"category":"goldenfork"|"deadcross","period":"day"|"week"}
+    ///   filter_rsi_day/week   → {"value_type":"overbought"|"oversold"}
+    ///   filter_kdj_day/week   → {"category":"goldenfork"|"deadcross"}
+    ///   filter_boll_day/week  → {"category":"breakthrough_up"|"breakthrough_down"}
+    pub conditions: Option<Vec<serde_json::Value>>,
 
     /// Extra indicator keys to include in each result row (display-only, not used as filters).
     /// Same key naming as conditions (filter_ prefix added automatically).
@@ -186,15 +186,15 @@ pub async fn screener_search(
             serde_json::Value::Array(returns.into_iter().map(serde_json::Value::String).collect()),
         )
     } else {
-        // Mode B: passthrough filter objects — tech_values forwarded as-is.
+        // Mode B: each condition is a filter object, passed through as-is.
         let mut filters: Vec<serde_json::Value> = Vec::new();
         let mut returns: Vec<String> = Vec::new();
 
-        for f in p.filters.as_deref().unwrap_or(&[]) {
-            if let Some(key) = f.get("key").and_then(|v| v.as_str()) {
+        for item in p.conditions.as_deref().unwrap_or(&[]) {
+            if let Some(key) = item.get("key").and_then(|v| v.as_str()) {
                 if !key.is_empty() {
                     returns.push(key.to_string());
-                    filters.push(f.clone());
+                    filters.push(item.clone());
                 }
             }
         }
