@@ -1054,8 +1054,8 @@
       "description": "獲取選股指標元數據，用於發現可用 key 及其單位。可選 symbol（如 AAPL.US）過濾特定股票的指標。返回 groups[]{group_name, indicators[]{id, key, name, unit, default_range{min,max}}}。key 用於 screener_search 的 conditions[] 參數。"
     },
     "screener_recommend_strategies": {
-      "title": "平台推薦選股策略",
-      "description": "獲取平台推薦的 AI 選股策略列表。market: US|HK|CN|SG（預設 US）。返回 screeners[]{id, name, average_day_chg}。將 id 傳入 screener_search 的 strategy_id 可直接執行該策略；傳入 screener_strategy 可查看策略的篩選條件。"
+      "title": "平台預設選股策略",
+      "description": "獲取平台預設的 AI 選股策略列表。market: US|HK|CN|SG（預設 US）。返回 screeners[]{id, name, average_day_chg}。將 id 傳入 screener_search 的 strategy_id 可直接執行該策略；傳入 screener_strategy 可查看策略的篩選條件。"
     },
     "screener_user_strategies": {
       "title": "我的選股策略",

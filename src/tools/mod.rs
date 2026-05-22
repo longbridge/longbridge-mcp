@@ -2556,11 +2556,11 @@ impl Longbridge {
         measured_tool_call("rank_list", || market::rank_list(&mctx, p)).await
     }
 
-    /// List platform-recommended stock screener strategies.
+    /// List platform-preset stock screener strategies.
     #[tool(
         title = "Screener Recommend Strategies",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "List platform-recommended AI screener strategies. market: US|HK|CN|SG (default: US). Returns screeners[]{id, name, average_day_chg}. Pass id to screener_search strategy_id to run the strategy, or to screener_strategy to inspect its filter conditions."
+        description = "List platform-preset AI screener strategies. market: US|HK|CN|SG (default: US). Returns screeners[]{id, name, average_day_chg}. Pass id to screener_search strategy_id to run the strategy, or to screener_strategy to inspect its filter conditions."
     )]
     async fn screener_recommend_strategies(
         &self,
