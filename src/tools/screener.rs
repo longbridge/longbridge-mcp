@@ -117,7 +117,7 @@ pub struct ScreenerSearchParam {
     /// Sort order: "asc" | "desc" (default: "desc")
     pub sort_order: Option<String>,
 
-    /// Page number (default: 1)
+    /// Page number, 0-based (default: 0)
     pub page: Option<u32>,
     /// Page size (default: 20, max: 100)
     pub size: Option<u32>,
@@ -141,60 +141,53 @@ pub async fn screener_search(
 
         let strategy: serde_json::Value = serde_json::from_str(&raw).map_err(Error::Serialize)?;
 
-        let mut mkt = p.market.as_deref().unwrap_or("US").to_uppercase();
+        // AI endpoint: market is top-level; filters are under filter.filters[]
+        let mkt = strategy
+            .get("market")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty() && *s != "-")
+            .map(|s| s.to_uppercase())
+            .unwrap_or_else(|| p.market.as_deref().unwrap_or("US").to_uppercase());
+
         let mut filters: Vec<serde_json::Value> = Vec::new();
         let mut returns: Vec<String> = Vec::new();
 
-        if let Some(groups) = strategy
-            .get("data")
-            .and_then(|d| d.get("groups"))
-            .or_else(|| strategy.get("groups"))
-            .and_then(|g| g.as_array())
+        if let Some(f) = strategy
+            .get("filter")
+            .and_then(|f| f.get("filters"))
+            .and_then(|v| v.as_array())
         {
-            for group in groups {
-                if let Some(indicators) = group.get("indicators").and_then(|v| v.as_array()) {
-                    for ind in indicators {
-                        let key = ind
-                            .get("key")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("")
-                            .to_string();
-                        let id = ind.get("id").and_then(|v| v.as_i64()).unwrap_or(0);
-
-                        if id == -1 && key == "filter_market" {
-                            // Market selector — extract market value
-                            if let Some(v) = ind
-                                .get("value")
-                                .and_then(|v| v.as_str())
-                                .filter(|s| !s.is_empty() && *s != "-")
-                            {
-                                mkt = v.to_string();
-                            }
-                        } else {
-                            let min = ind
-                                .get("min")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("")
-                                .to_string();
-                            let max = ind
-                                .get("max")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("")
-                                .to_string();
-                            let has_range =
-                                (!min.is_empty() && min != "-") || (!max.is_empty() && max != "-");
-                            if has_range || id > 0 {
-                                filters.push(serde_json::json!({
-                                    "key": key,
-                                    "min": min,
-                                    "max": max,
-                                    "tech_values": {}
-                                }));
-                                returns.push(key);
-                            }
-                        }
-                    }
+            for ind in f {
+                let key = ind
+                    .get("key")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                if key.is_empty() || key == "-" {
+                    continue;
                 }
+                let min = ind
+                    .get("min")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let max = ind
+                    .get("max")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let tech_values = ind
+                    .get("tech_values")
+                    .cloned()
+                    .filter(|v| v.is_object())
+                    .unwrap_or_else(|| serde_json::json!({}));
+                filters.push(serde_json::json!({
+                    "key": key,
+                    "min": min,
+                    "max": max,
+                    "tech_values": tech_values
+                }));
+                returns.push(key);
             }
         }
 
@@ -276,7 +269,7 @@ pub async fn screener_search(
         "sort_by": sort_by,
         "sort_order": sort_order,
         "industries": [],
-        "page": p.page.unwrap_or(1),
+        "page": p.page.unwrap_or(0),
         "size": p.size.unwrap_or(20),
     });
 
