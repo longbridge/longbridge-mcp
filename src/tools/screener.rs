@@ -296,5 +296,43 @@ pub async fn screener_indicators(
         cid = crate::counter::symbol_to_counter_id(sym);
         params.push(("counter_id", cid.as_str()));
     }
-    http_get_tool(&client, "/v1/quote/ai/screener/indicators", &params).await
+    let result = http_get_tool(&client, "/v1/quote/ai/screener/indicators", &params).await?;
+    Ok(strip_filter_prefix_from_indicators(result))
+}
+
+/// Strip the "filter_" prefix from indicator key fields so that the keys
+/// returned by screener_indicators can be passed directly to screener_search
+/// conditions[].key without any transformation.
+fn strip_filter_prefix_from_indicators(
+    result: rmcp::model::CallToolResult,
+) -> rmcp::model::CallToolResult {
+    let Some(text) = result
+        .content
+        .first()
+        .and_then(|c| c.as_text())
+        .map(|t| t.text.as_str())
+    else {
+        return result;
+    };
+    let Ok(mut d) = serde_json::from_str::<serde_json::Value>(text) else {
+        return result;
+    };
+    if let Some(groups) = d.get_mut("groups").and_then(|v| v.as_array_mut()) {
+        for group in groups.iter_mut() {
+            if let Some(indicators) = group.get_mut("indicators").and_then(|v| v.as_array_mut()) {
+                for ind in indicators.iter_mut() {
+                    if let Some(k) = ind.get("key").and_then(|v| v.as_str()) {
+                        let stripped = k.strip_prefix("filter_").unwrap_or(k).to_string();
+                        if let Some(obj) = ind.as_object_mut() {
+                            obj.insert("key".to_string(), serde_json::Value::String(stripped));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let Ok(json) = serde_json::to_string(&d) else {
+        return result;
+    };
+    rmcp::model::CallToolResult::success(vec![rmcp::model::Content::text(json)])
 }

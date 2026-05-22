@@ -2629,7 +2629,7 @@ impl Longbridge {
     #[tool(
         title = "Screener Indicators",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get all available screener indicator keys with units and default value ranges. Use when you need to discover keys or check units before calling screener_search. Optional symbol (e.g. AAPL.US) narrows to stock-specific indicators. Returns groups[]{group_name, indicators[]{id, key, name, unit, default_range{min,max}}}."
+        description = "Get all available screener indicator keys with units and default value ranges. The filter_ prefix is stripped from keys — use the returned key directly in screener_search conditions[].key. Optional symbol (e.g. AAPL.US) narrows to stock-specific indicators. Returns groups[]{group_name, indicators[]{id, key, name, unit, default_range{min,max}}}."
     )]
     async fn screener_indicators(
         &self,
