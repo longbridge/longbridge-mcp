@@ -77,44 +77,36 @@ pub struct ScreenerSearchParam {
     /// The tool auto-fetches the strategy and builds filters. Omit for Mode B.
     pub strategy_id: Option<String>,
 
-    /// Mode B — Filter conditions. Two formats:
-    ///   "KEY:MIN:MAX"            — numeric range filter
-    ///   "KEY:MIN:MAX:k=v,k=v"   — technical indicator with tech_values
+    /// Mode B — Simple "KEY:MIN:MAX" conditions for numeric range filters.
     /// The filter_ prefix is added automatically; omit either bound to leave it open.
-    ///   "pettm:10:50"                          → 10 ≤ P/E TTM ≤ 50
-    ///   "roe:15:"                               → ROE ≥ 15 %
-    ///   "marketcap:100:"                        → market-cap ≥ 100 亿 (A/HK)
-    ///   "macd_day:::category=deadcross,period=day" → MACD death cross (daily)
-    ///   "rsi_day:::value_type=oversold"         → RSI oversold (daily)
+    ///   "pettm:10:50"   → 10 ≤ P/E TTM ≤ 50
+    ///   "roe:15:"        → ROE ≥ 15 %
+    ///   "marketcap:100:" → market-cap ≥ 100 亿 (A/HK)
     ///
-    /// Fundamental keys (strip filter_ prefix):
-    ///   pettm              P/E TTM                     (dimensionless)
-    ///   pbmrq              P/B MRQ                     (dimensionless)
-    ///   roe                Return on equity TTM        (%)
-    ///   roa                Return on assets TTM        (%)
-    ///   netmargin          Net profit margin           (%)
-    ///   salesgrowthyoy     Revenue growth YoY TTM      (%)
-    ///   netincomegrowthyoy Net income growth YoY TTM   (%)
-    ///   marketcap          Market cap                  (亿 for A/HK)
-    ///   circulating_marketcap  Float market cap        (亿 for A/HK)
-    ///   prevclose          Previous close price        (currency)
-    ///   prevchg            Latest price change         (%)
-    ///   divyld             Dividend yield TTM          (%)
-    ///   la                 Debt / assets ratio         (%)
-    ///   epsttm             EPS TTM                     (currency)
-    ///   netincome          Net income TTM              (亿)
-    ///   sales              Revenue TTM                 (亿)
-    ///   turnover_rate      Turnover rate               (%)
-    ///   balance            Latest turnover amount      (万)
+    /// Common keys (strip filter_ prefix):
+    ///   pettm  pbmrq  roe  roa  netmargin  salesgrowthyoy  netincomegrowthyoy
+    ///   marketcap(亿)  circulating_marketcap(亿)  prevclose  prevchg(%)
+    ///   divyld  la  epsttm  netincome(亿)  sales(亿)  turnover_rate  balance(万)
     ///
-    /// Technical indicator keys (use screener_indicators to see valid tech_values options):
-    ///   macd_day / macd_week   MACD (日线/周线)
-    ///   rsi_day  / rsi_week    RSI  (日线/周线)
-    ///   kdj_day  / kdj_week    KDJ  (日线/周线)
-    ///   boll_day / boll_week   BOLL (日线/周线)
-    ///
-    /// When uncertain about a key or getting empty results, call screener_indicators first.
+    /// For technical indicators (MACD/RSI/KDJ/BOLL) use `filters` instead.
     pub conditions: Option<Vec<String>>,
+
+    /// Mode B — Full filter objects, passed through directly to the API.
+    /// Use this for technical indicators that require tech_values, or to mix
+    /// technical and fundamental conditions alongside `conditions`.
+    ///
+    /// Each object: {"key": "filter_macd_day", "min": "", "max": "", "tech_values": {...}}
+    ///
+    /// Technical indicator keys and their tech_values — call screener_indicators for full list:
+    ///   filter_macd_day  / filter_macd_week  → tech_values: {"category":"goldenfork"|"deadcross", "period":"day"|"week"}
+    ///   filter_rsi_day   / filter_rsi_week   → tech_values: {"value_type":"overbought"|"oversold"}
+    ///   filter_kdj_day   / filter_kdj_week   → tech_values: {"category":"goldenfork"|"deadcross"}
+    ///   filter_boll_day  / filter_boll_week  → tech_values: {"category":"breakthrough_up"|"breakthrough_down"}
+    ///
+    /// Example (MACD death cross + PE < 20):
+    ///   filters: [{"key":"filter_macd_day","min":"","max":"","tech_values":{"category":"deadcross","period":"day"}}]
+    ///   conditions: ["pettm::20"]
+    pub filters: Option<Vec<serde_json::Value>>,
 
     /// Extra indicator keys to include in each result row (display-only, not used as filters).
     /// Same key naming as conditions (filter_ prefix added automatically).
@@ -208,13 +200,24 @@ pub async fn screener_search(
             serde_json::Value::Array(returns.into_iter().map(serde_json::Value::String).collect()),
         )
     } else {
-        // Mode B: build filters+returns from "KEY:MIN:MAX" or "KEY:MIN:MAX:k=v,k=v" conditions.
-        // The optional 4th segment encodes tech_values for technical indicators,
-        // e.g. "macd_day:::category=deadcross,period=day"
+        // Mode B: merge `filters` (passthrough, tech_values preserved) and
+        // `conditions` (simple "KEY:MIN:MAX" shorthand, tech_values always {}).
         let mut filters: Vec<serde_json::Value> = Vec::new();
         let mut returns: Vec<String> = Vec::new();
+
+        // 1. Passthrough filter objects — tech_values forwarded as-is
+        for f in p.filters.as_deref().unwrap_or(&[]) {
+            if let Some(key) = f.get("key").and_then(|v| v.as_str()) {
+                if !key.is_empty() {
+                    returns.push(key.to_string());
+                    filters.push(f.clone());
+                }
+            }
+        }
+
+        // 2. Simple KEY:MIN:MAX conditions (numeric range, no tech_values)
         for cond in p.conditions.as_deref().unwrap_or(&[]) {
-            let parts: Vec<&str> = cond.splitn(4, ':').collect();
+            let parts: Vec<&str> = cond.splitn(3, ':').collect();
             let raw_key = parts.first().copied().unwrap_or("");
             if raw_key.is_empty() {
                 continue;
@@ -226,31 +229,15 @@ pub async fn screener_search(
             };
             let min = parts.get(1).copied().unwrap_or("").to_string();
             let max = parts.get(2).copied().unwrap_or("").to_string();
-            // Parse optional "k=v,k=v" tech_values segment
-            let tech_values = parts
-                .get(3)
-                .filter(|s| !s.is_empty())
-                .map(|tv| {
-                    let mut map = serde_json::Map::new();
-                    for pair in tv.split(',') {
-                        if let Some((k, v)) = pair.split_once('=') {
-                            map.insert(
-                                k.trim().to_string(),
-                                serde_json::Value::String(v.trim().to_string()),
-                            );
-                        }
-                    }
-                    serde_json::Value::Object(map)
-                })
-                .unwrap_or_else(|| serde_json::json!({}));
             filters.push(serde_json::json!({
                 "key": key,
                 "min": min,
                 "max": max,
-                "tech_values": tech_values
+                "tech_values": {}
             }));
             returns.push(key);
         }
+
         (
             p.market.as_deref().unwrap_or("US").to_uppercase(),
             serde_json::Value::Array(filters),
