@@ -2531,7 +2531,7 @@ impl Longbridge {
     #[tool(
         title = "Rank Categories",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get rank tab category configurations for the popularity leaderboard. Returns first_tags[]{key, name, second_tags[]{key, name, market}}. Pass a second_tags key (e.g. `hot_all-us`) to rank_list — the ib_ prefix is stripped from keys here and re-added automatically by rank_list."
+        description = "Get rank tab category configurations for the popularity leaderboard. Returns first_tags[]{key, name, second_tags[]{key, name, market}}. Pass a second_tags key (e.g. `hot_all-us`) to rank_list."
     )]
     async fn rank_categories(
         &self,
@@ -2545,7 +2545,7 @@ impl Longbridge {
     #[tool(
         title = "Rank List",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get ranked stock list by leaderboard tab key. key: from rank_categories second_tags[].key (e.g. \"hot_all-us\", \"hot_up-hk\", \"trade_heat-us\") — ib_ prefix added automatically. market: inferred from key suffix (-us/-hk) or pass explicitly. size: results (default 20). Returns lists[]{symbol, name, last_done, chg(decimal), inflow, market_cap, pre_post_price, pre_post_chg, amplitude, turnover_rate, volume_rate, five_day_chg, ten_day_chg, twenty_day_chg, this_year_chg, industry, intro}, updated_at."
+        description = "Get ranked stock list by leaderboard tab key. key: from rank_categories second_tags[].key (e.g. \"hot_all-us\", \"hot_up-hk\", \"trade_heat-us\"). market: inferred from key suffix (-us/-hk) or pass explicitly. size: results (default 20). Returns lists[]{symbol, name, last_done, chg(decimal), inflow, market_cap, pre_post_price, pre_post_chg, amplitude, turnover_rate, volume_rate, five_day_chg, ten_day_chg, twenty_day_chg, this_year_chg, industry, intro}, updated_at."
     )]
     async fn rank_list(
         &self,
@@ -2614,7 +2614,7 @@ impl Longbridge {
     #[tool(
         title = "Screener Search",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Screen stocks. market: US|HK|CN|SG (Mode B required; Mode A uses strategy's market). Mode A: strategy_id from screener_recommend_strategies — auto-runs saved strategy. Mode B: conditions=[{\"key\":\"KEY\",\"min\":\"10\",\"max\":\"50\",\"tech_values\":{}},...] — filter_ prefix added automatically to key. extra_returns=[\"key\",...] adds display-only columns (filter_ also auto-added). sort_by_key: key name (filter_ auto-added); sort_order: asc|desc (default desc). page: 0-based (default 0). Returns {total, items[]{symbol, name, indicators[]{key, name, value, unit}}}. Fundamental keys: pettm pbmrq roe roa netmargin salesgrowthyoy netincomegrowthyoy marketcap(亿) circulating_marketcap(亿) prevclose prevchg(%) divyld la epsttm netincome(亿) sales(亿) turnover_rate balance(万). Technical keys (call screener_indicators for tech_values schema): macd_day/week rsi_day/week kdj_day/week boll_day/week."
+        description = "Screen stocks. market: US|HK|CN|SG (Mode B required; Mode A uses strategy's market). Mode A: strategy_id from screener_recommend_strategies — auto-runs saved strategy. Mode B: conditions=[{\"key\":\"KEY\",\"min\":\"10\",\"max\":\"50\",\"tech_values\":{}},...]. extra_returns=[\"key\",...] adds display-only columns. sort_by_key: key name to sort by; sort_order: asc|desc (default desc). page: 0-based (default 0). Returns {total, items[]{symbol, name, indicators[]{key, name, value, unit}}}. Fundamental keys: pettm pbmrq roe roa netmargin salesgrowthyoy netincomegrowthyoy marketcap(亿) circulating_marketcap(亿) prevclose prevchg(%) divyld la epsttm netincome(亿) sales(亿) turnover_rate balance(万). Technical keys (call screener_indicators for tech_values schema): macd_day/week rsi_day/week kdj_day/week boll_day/week."
     )]
     async fn screener_search(
         &self,
@@ -2629,7 +2629,7 @@ impl Longbridge {
     #[tool(
         title = "Screener Indicators",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get all available screener indicator keys with units and default value ranges. The filter_ prefix is stripped from keys — use the returned key directly in screener_search conditions[].key. Technical indicators include a tech_values field showing available options (e.g. macd_day: {category:[goldenfork,deadcross], period:[day,week]}). Optional symbol (e.g. AAPL.US) narrows to stock-specific indicators. Returns groups[]{group_name, indicators[]{id, key, name, unit, default_range{min,max}, tech_values?{key:[{value,label},...]}}}."
+        description = "Get all available screener indicator keys with units and default value ranges. Technical indicators include a tech_values field showing available options (e.g. macd_day: {category:[goldenfork,deadcross], period:[day,week]}). Optional symbol (e.g. AAPL.US) narrows to stock-specific indicators. Returns groups[]{group_name, indicators[]{id, key, name, unit, default_range{min,max}, tech_values?{key:[{value,label},...]}}}."
     )]
     async fn screener_indicators(
         &self,
