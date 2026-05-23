@@ -1051,7 +1051,7 @@
     },
     "screener_indicators": {
       "title": "选股指标配置",
-      "description": "获取选股指标元数据，用于发现可用 key 及其单位。可选 symbol（如 AAPL.US）过滤特定股票的指标。返回 groups[]{group_name, indicators[]{id, key, name, unit, default_range{min,max}}}。key 用于 screener_search 的 conditions[] 参数。"
+      "description": "获取全部可用选股指标的 key、单位和默认值域。返回的 key 已去掉 filter_ 前缀，可直接用于 screener_search 的 conditions[].key。技术指标（MACD/RSI/KDJ/BOLL）含 tech_values 字段，列出可选参数值（如 macd_day 的 category: goldenfork/deadcross/upzero）。可选 symbol（如 AAPL.US）过滤特定股票的指标。返回 groups[]{group_name, indicators[]{id, key, name, unit, default_range{min,max}, tech_values?{param:[{value,label},...]}}}。"
     },
     "screener_recommend_strategies": {
       "title": "平台预设选股策略",
@@ -1067,11 +1067,11 @@
     },
     "rank_categories": {
       "title": "热度榜分类配置",
-      "description": "获取热度排行榜的 Tab 分类配置（key + 名称 + 支持市场）。返回 categories[]{key, name, market[]}。将 key 传入 rank_list 获取对应榜单。"
+      "description": "获取热度排行榜的分类配置。返回的 key 已去掉 ib_ 前缀，将 second_tags[].key 直接传入 rank_list 即可（会自动补回 ib_）。返回 first_tags[]{key, name, second_tags[]{key, name, market}}。示例 key：hot_all-us（美股总热度）、hot_up-hk（港股热度上升）、trade_heat-us（美股交易热度）。"
     },
     "rank_list": {
       "title": "热度榜股票列表",
-      "description": "按热度排行榜 key 获取股票排名列表。key: 来自 rank_categories 的 second_tags[].key（如 ib_hot_all-us 美股总热度，ib_hot_up-hk 港股热度上升，ib_hot_trade-us 美股交易热度）。market: 从 key 后缀推断或显式传入。size: 返回数量（默认20）。返回 lists[]{symbol, name, last_done, chg(小数), inflow, market_cap, pre_post_price, pre_post_chg, amplitude, turnover_rate, volume_rate, five_day_chg, ten_day_chg, twenty_day_chg, this_year_chg, industry, intro}, updated_at。"
+      "description": "按热度榜 key 获取股票排名列表。key 来自 rank_categories 的 second_tags[].key（如 hot_all-us、hot_up-hk、trade_heat-us），ib_ 前缀会自动补全。market: 从 key 后缀推断（-us/-hk）或显式传入。size: 返回数量（默认 20）。返回 lists[]{symbol, name, last_done, chg(小数), inflow, market_cap, pre_post_price, pre_post_chg, amplitude, turnover_rate, volume_rate, five_day_chg, ten_day_chg, twenty_day_chg, this_year_chg, industry, intro}, updated_at。"
     },
     "short_trades": {
       "title": "做空成交",
