@@ -345,10 +345,34 @@ pub async fn screener_search(
         .map_err(|e| Error::Other(e.to_string()))?;
 
     let json = crate::serialize::transform_json(resp.as_bytes()).map_err(Error::Serialize)?;
-    // Note: transform_json already renames counter_id → symbol in every item.
+    // Strip filter_ prefix from indicators[].key so keys are consistent with
+    // screener_indicators and conditions input (no filter_ prefix anywhere).
+    let json = strip_filter_prefix_from_search_results(json);
     Ok(rmcp::model::CallToolResult::success(vec![
         rmcp::model::Content::text(json),
     ]))
+}
+
+/// Strip "filter_" prefix from `indicators[].key` in screener_search results.
+fn strip_filter_prefix_from_search_results(json: String) -> String {
+    let Ok(mut d) = serde_json::from_str::<serde_json::Value>(&json) else {
+        return json;
+    };
+    if let Some(items) = d.get_mut("items").and_then(|v| v.as_array_mut()) {
+        for item in items.iter_mut() {
+            if let Some(indicators) = item.get_mut("indicators").and_then(|v| v.as_array_mut()) {
+                for ind in indicators.iter_mut() {
+                    if let Some(k) = ind.get("key").and_then(|v| v.as_str()) {
+                        let stripped = k.strip_prefix("filter_").unwrap_or(k).to_string();
+                        if let Some(obj) = ind.as_object_mut() {
+                            obj.insert("key".to_string(), serde_json::Value::String(stripped));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    serde_json::to_string(&d).unwrap_or(json)
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -372,9 +396,12 @@ pub async fn screener_indicators(
     Ok(strip_filter_prefix_from_indicators(result))
 }
 
-/// Strip the "filter_" prefix from indicator key fields so that the keys
-/// returned by screener_indicators can be passed directly to screener_search
-/// conditions[].key without any transformation.
+/// Process screener_indicators response:
+/// 1. Strip "filter_" prefix from key fields (consistent with all other screener tools).
+/// 2. Build "tech_values" schema from "tech_indicators" so the AI knows what values to
+///    pass for technical indicators (MACD/RSI/KDJ/BOLL).
+///    tech_indicators[]{tech_key, tech_items[]{item_value, item_name}}
+///    → tech_values: {tech_key: [{value, label}, ...]}
 fn strip_filter_prefix_from_indicators(
     result: rmcp::model::CallToolResult,
 ) -> rmcp::model::CallToolResult {
@@ -393,10 +420,44 @@ fn strip_filter_prefix_from_indicators(
         for group in groups.iter_mut() {
             if let Some(indicators) = group.get_mut("indicators").and_then(|v| v.as_array_mut()) {
                 for ind in indicators.iter_mut() {
-                    if let Some(k) = ind.get("key").and_then(|v| v.as_str()) {
+                    let Some(obj) = ind.as_object_mut() else {
+                        continue;
+                    };
+                    // Strip filter_ from key
+                    if let Some(k) = obj.get("key").and_then(|v| v.as_str()) {
                         let stripped = k.strip_prefix("filter_").unwrap_or(k).to_string();
-                        if let Some(obj) = ind.as_object_mut() {
-                            obj.insert("key".to_string(), serde_json::Value::String(stripped));
+                        obj.insert("key".to_string(), serde_json::Value::String(stripped));
+                    }
+                    // Build tech_values schema from tech_indicators
+                    if let Some(tech_inds) = obj.get("tech_indicators").and_then(|v| v.as_array()) {
+                        let tv: serde_json::Map<String, serde_json::Value> = tech_inds
+                            .iter()
+                            .filter_map(|ti| {
+                                let key = ti.get("tech_key")?.as_str()?.to_string();
+                                let opts: Vec<serde_json::Value> = ti
+                                    .get("tech_items")
+                                    .and_then(|v| v.as_array())
+                                    .map(|items| {
+                                        items
+                                            .iter()
+                                            .map(|item| {
+                                                serde_json::json!({
+                                                    "value": item.get("item_value")
+                                                        .and_then(|v| v.as_str())
+                                                        .unwrap_or(""),
+                                                    "label": item.get("item_name")
+                                                        .and_then(|v| v.as_str())
+                                                        .unwrap_or(""),
+                                                })
+                                            })
+                                            .collect()
+                                    })
+                                    .unwrap_or_default();
+                                Some((key, serde_json::Value::Array(opts)))
+                            })
+                            .collect();
+                        if !tv.is_empty() {
+                            obj.insert("tech_values".to_string(), serde_json::Value::Object(tv));
                         }
                     }
                 }
