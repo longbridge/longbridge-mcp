@@ -389,6 +389,15 @@ pub struct TopMoversNextParams {
     pub visited: Vec<String>,
 }
 
+fn next_params_schema(_: &mut rmcp::schemars::SchemaGenerator) -> rmcp::schemars::Schema {
+    rmcp::schemars::json_schema!({
+        "description": "Pagination cursor from the previous response. Pass the entire next_params object back verbatim to fetch the next page.",
+        "type": "object",
+        "properties": {},
+        "additionalProperties": true
+    })
+}
+
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct StockEventsParam {
     /// Market filter: comma-separated list of markets to include.
@@ -407,6 +416,8 @@ pub struct StockEventsParam {
     /// Pagination cursor from previous response next_params field.
     /// Pass the entire next_params object returned by the previous call to get the next page.
     /// Omit for the first page.
+    #[serde(default)]
+    #[schemars(schema_with = "next_params_schema")]
     pub next_params: Option<TopMoversNextParams>,
 }
 
