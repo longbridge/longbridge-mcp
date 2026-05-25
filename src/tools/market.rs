@@ -2,7 +2,7 @@ use reqwest::Method;
 use rmcp::ErrorData as McpError;
 use rmcp::model::CallToolResult;
 use rmcp::schemars::JsonSchema;
-use rmcp::serde::Deserialize;
+use rmcp::serde::{Deserialize, Serialize};
 
 use crate::counter::{index_symbol_to_counter_id, symbol_to_counter_id};
 use crate::error::Error;
@@ -382,6 +382,13 @@ fn normalize_short_trades(
     rmcp::model::CallToolResult::success(vec![rmcp::model::Content::text(json)])
 }
 
+/// Pagination cursor returned by `top_movers`; pass it back verbatim to fetch the next page.
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct TopMoversNextParams {
+    /// Event IDs already seen in previous pages.
+    pub visited: Vec<String>,
+}
+
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct StockEventsParam {
     /// Market filter: comma-separated list of markets to include.
@@ -400,7 +407,7 @@ pub struct StockEventsParam {
     /// Pagination cursor from previous response next_params field.
     /// Pass the entire next_params object returned by the previous call to get the next page.
     /// Omit for the first page.
-    pub next_params: Option<serde_json::Value>,
+    pub next_params: Option<TopMoversNextParams>,
 }
 
 pub async fn top_movers(
@@ -422,7 +429,7 @@ pub async fn top_movers(
         "limit": limit,
         "sort": sort,
         "markets": markets,
-        "next_params": p.next_params.unwrap_or_else(|| serde_json::json!({})),
+        "next_params": p.next_params.map_or_else(|| serde_json::json!({}), |v| serde_json::to_value(v).unwrap_or_default()),
     });
     if let Some(ref d) = p.date {
         body["date"] = serde_json::Value::String(d.clone());
