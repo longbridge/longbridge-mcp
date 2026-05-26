@@ -261,18 +261,17 @@ pub fn list_tools() -> Vec<rmcp::model::Tool> {
 fn strip_null_from_type_arrays(value: &mut serde_json::Value) {
     match value {
         serde_json::Value::Object(map) => {
-            if let Some(type_val) = map.get_mut("type") {
-                if let serde_json::Value::Array(types) = type_val {
-                    let filtered: Vec<serde_json::Value> = types
-                        .iter()
-                        .filter(|t| t.as_str() != Some("null"))
-                        .cloned()
-                        .collect();
-                    if filtered.len() == 1 {
-                        *type_val = filtered.into_iter().next().unwrap();
-                    } else if filtered.len() < types.len() {
-                        *types = filtered;
-                    }
+            if let Some(serde_json::Value::Array(types)) = map.get_mut("type") {
+                let filtered: Vec<serde_json::Value> = types
+                    .iter()
+                    .filter(|t| t.as_str() != Some("null"))
+                    .cloned()
+                    .collect();
+                if filtered.len() == 1 {
+                    *map.get_mut("type").unwrap() =
+                        filtered.into_iter().next().unwrap();
+                } else if filtered.len() < types.len() {
+                    *types = filtered;
                 }
             }
             for v in map.values_mut() {

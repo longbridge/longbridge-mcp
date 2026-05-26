@@ -17,12 +17,6 @@ pub struct SymbolParam {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
-pub struct MarketParam {
-    /// Market code: HK, US, CN, SG
-    pub market: String,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
 pub struct AnomalyParam {
     /// Market code: HK, US, CN, SG
     pub market: String,
