@@ -318,9 +318,11 @@
     },
     "anomaly": {
       "title": "市場異動",
-      "description": "獲取市場異動提醒（價量異常變動），返回 items[]{symbol, name, anomaly_type, change_rate, volume, timestamp}",
+      "description": "獲取市場異動提醒（價量異常變動）。market: HK/US/CN/SG。symbol: 可選，篩選特定股票。count: 返回數量（預設 50，最多 100）。返回 changes[]{symbol, name, change_rate, volume, ...}, all_off。",
       "properties": {
-        "market": "市場代碼：HK、US、CN、SG"
+        "market": "市場代碼：HK、US、CN、SG",
+        "symbol": "可選證券代碼，如 AAPL.US 或 700.HK，篩選特定股票的異動",
+        "count": "返回數量，預設 50，最多 100"
       }
     },
     "broker_holding": {
