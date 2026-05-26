@@ -236,8 +236,56 @@ fn extract_context(ctx: &RequestContext<RoleServer>) -> Result<McpContext, McpEr
 }
 
 /// Returns all registered MCP tools sorted by name.
+///
+/// Input schemas are post-processed to remove `null` from `type` arrays so that
+/// optional parameters are represented as plain scalar types (e.g. `"type": "string"`
+/// instead of `"type": ["string", "null"]`).  Optionality is already expressed by
+/// the field being absent from the `required` array, which is the MCP convention.
 pub fn list_tools() -> Vec<rmcp::model::Tool> {
-    Longbridge::tool_router().list_all()
+    Longbridge::tool_router()
+        .list_all()
+        .into_iter()
+        .map(|mut tool| {
+            let mut schema = serde_json::Value::Object((*tool.input_schema).clone());
+            strip_null_from_type_arrays(&mut schema);
+            if let serde_json::Value::Object(obj) = schema {
+                tool.input_schema = std::sync::Arc::new(obj);
+            }
+            tool
+        })
+        .collect()
+}
+
+/// Recursively remove `"null"` from JSON Schema `type` arrays.
+/// When the array is left with a single element it is unwrapped to a plain string.
+fn strip_null_from_type_arrays(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(map) => {
+            if let Some(type_val) = map.get_mut("type") {
+                if let serde_json::Value::Array(types) = type_val {
+                    let filtered: Vec<serde_json::Value> = types
+                        .iter()
+                        .filter(|t| t.as_str() != Some("null"))
+                        .cloned()
+                        .collect();
+                    if filtered.len() == 1 {
+                        *type_val = filtered.into_iter().next().unwrap();
+                    } else if filtered.len() < types.len() {
+                        *types = filtered;
+                    }
+                }
+            }
+            for v in map.values_mut() {
+                strip_null_from_type_arrays(v);
+            }
+        }
+        serde_json::Value::Array(arr) => {
+            for v in arr.iter_mut() {
+                strip_null_from_type_arrays(v);
+            }
+        }
+        _ => {}
+    }
 }
 
 use crate::tools::quote::{
@@ -2648,7 +2696,18 @@ impl Longbridge {
     name = "longbridge-mcp",
     instructions = "Longbridge OpenAPI MCP Server - provides market data, trading, and financial analysis tools"
 )]
-impl ServerHandler for Longbridge {}
+impl ServerHandler for Longbridge {
+    async fn list_tools(
+        &self,
+        _request: Option<rmcp::model::PaginatedRequestParams>,
+        _context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> Result<rmcp::model::ListToolsResult, rmcp::ErrorData> {
+        Ok(rmcp::model::ListToolsResult {
+            tools: list_tools(),
+            ..Default::default()
+        })
+    }
+}
 
 #[cfg(test)]
 mod tests {
