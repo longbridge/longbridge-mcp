@@ -268,8 +268,7 @@ fn strip_null_from_type_arrays(value: &mut serde_json::Value) {
                     .cloned()
                     .collect();
                 if filtered.len() == 1 {
-                    *map.get_mut("type").unwrap() =
-                        filtered.into_iter().next().unwrap();
+                    *map.get_mut("type").unwrap() = filtered.into_iter().next().unwrap();
                 } else if filtered.len() < types.len() {
                     *types = filtered;
                 }
