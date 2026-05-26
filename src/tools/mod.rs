@@ -1379,12 +1379,12 @@ impl Longbridge {
     #[tool(
         title = "Market Anomaly",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get market anomaly alerts (unusual price/volume changes). Returns items[]{symbol, name, anomaly_type, change_rate, volume, timestamp} for the given market."
+        description = "Get market anomaly alerts (unusual price/volume changes). market: HK/US/CN/SG. symbol: optional, filter to a specific stock. count: results per page (default 50, max 100). Returns changes[]{symbol, name, change_rate, volume, ...}, all_off."
     )]
     async fn anomaly(
         &self,
         ctx: RequestContext<RoleServer>,
-        Parameters(p): Parameters<market::MarketParam>,
+        Parameters(p): Parameters<market::AnomalyParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
         measured_tool_call("anomaly", || market::anomaly(&mctx, p)).await

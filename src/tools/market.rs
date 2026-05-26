@@ -23,6 +23,16 @@ pub struct MarketParam {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct AnomalyParam {
+    /// Market code: HK, US, CN, SG
+    pub market: String,
+    /// Filter to a specific symbol, e.g. "700.HK" or "AAPL.US"
+    pub symbol: Option<String>,
+    /// Number of results to return (default: 50, max: 100)
+    pub count: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct BrokerHoldingDailyParam {
     /// Security symbol, e.g. "700.HK"
     pub symbol: String,
@@ -205,16 +215,22 @@ pub async fn trade_stats(
 
 pub async fn anomaly(
     mctx: &crate::tools::McpContext,
-    p: MarketParam,
+    p: AnomalyParam,
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
     let market_upper = p.market.to_uppercase();
-    http_get_tool(
-        &client,
-        "/v1/quote/changes",
-        &[("market", market_upper.as_str()), ("category", "0")],
-    )
-    .await
+    let count = p.count.unwrap_or(50).min(100).to_string();
+    let mut params: Vec<(&str, &str)> = vec![
+        ("category", "0"),
+        ("size", count.as_str()),
+        ("market", market_upper.as_str()),
+    ];
+    let cid;
+    if let Some(ref sym) = p.symbol {
+        cid = symbol_to_counter_id(sym);
+        params.push(("counter_id", cid.as_str()));
+    }
+    http_get_tool(&client, "/v1/quote/changes", &params).await
 }
 
 pub async fn constituent(
