@@ -1,6 +1,7 @@
 use std::sync::{Arc, LazyLock};
 
 use axum::extract::State;
+use axum::http::HeaderMap;
 use axum::response::Json;
 use serde::Serialize;
 
@@ -9,6 +10,26 @@ use crate::auth::AppState;
 fn longbridge_oauth_url() -> String {
     std::env::var("LONGBRIDGE_HTTP_URL")
         .unwrap_or_else(|_| "https://openapi.longbridge.com".to_string())
+}
+
+/// Derives `scheme://host` from the incoming request headers.
+///
+/// Uses `X-Forwarded-Proto` for the scheme (falling back to `https`) and the
+/// `Host` header for the host.  Falls back to `fallback` (the `--base-url`
+/// flag) when the `Host` header is absent, so local / bare-binary deployments
+/// continue to work without a reverse proxy.
+pub(crate) fn resource_url_from_headers(headers: &HeaderMap, fallback: &str) -> String {
+    let Some(host) = headers
+        .get(axum::http::header::HOST)
+        .and_then(|v| v.to_str().ok())
+    else {
+        return fallback.to_string();
+    };
+    let scheme = headers
+        .get("x-forwarded-proto")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("https");
+    format!("{scheme}://{host}")
 }
 
 #[derive(Serialize)]
@@ -20,9 +41,10 @@ pub(crate) struct ProtectedResourceMetadata {
 
 pub async fn protected_resource_metadata(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
 ) -> Json<ProtectedResourceMetadata> {
     Json(ProtectedResourceMetadata {
-        resource: state.base_url.clone(),
+        resource: resource_url_from_headers(&headers, &state.base_url),
         authorization_servers: vec![longbridge_oauth_url()],
         scopes_supported: vec!["openapi".to_string()],
     })
