@@ -14,13 +14,18 @@ fn longbridge_oauth_url() -> String {
 
 /// Derives `scheme://host` from the incoming request headers.
 ///
-/// Uses `X-Forwarded-Proto` for the scheme (falling back to `https`) and the
-/// `Host` header for the host.  Falls back to `fallback` (the `--base-url`
-/// flag) when the `Host` header is absent, so local / bare-binary deployments
-/// continue to work without a reverse proxy.
+/// Header priority for the host:
+///   1. `X-Forwarded-Host` — set by the reverse proxy to the external hostname
+///      (e.g. `openapi.longbridge.xyz` when the proxy rewrites the Host).
+///   2. `Host` — the hostname the client actually connected to (correct for
+///      direct connections; may be the internal backend host behind a proxy).
+///   3. Falls back to `fallback` (`--base-url`) when both are absent.
+///
+/// Scheme priority: `X-Forwarded-Proto` → scheme of `--base-url`.
 pub(crate) fn resource_url_from_headers(headers: &HeaderMap, fallback: &str) -> String {
     let Some(host) = headers
-        .get(axum::http::header::HOST)
+        .get("x-forwarded-host")
+        .or_else(|| headers.get(axum::http::header::HOST))
         .and_then(|v| v.to_str().ok())
     else {
         return fallback.to_string();
