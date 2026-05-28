@@ -3,6 +3,7 @@
     {
       "id": "0",
       "name": "General",
+      "key": "",
       "description": "General-purpose tools covering market data, quotes, fundamentals, alerts, DCA, sharelists, IPO, and content.",
       "tools": [
         "ah_premium",
@@ -117,6 +118,7 @@
     {
       "id": "4",
       "name": "Watchlist",
+      "key": "watchlist",
       "description": "Manage the user's watchlist groups (read/create/update/delete) and look up the securities each group contains.",
       "tools": [
         "create_watchlist_group",
@@ -129,6 +131,7 @@
     {
       "id": "6",
       "name": "Account & Positions",
+      "key": "account.read",
       "description": "Query account assets and cash flow — fund/stock holdings, account cash and equity, margin ratio, profit analysis and statements — for portfolio overviews, position display and account reconciliation.",
       "tools": [
         "account_balance",
@@ -152,6 +155,7 @@
     {
       "id": "10",
       "name": "Trade Order Lookup",
+      "key": "trade.read",
       "description": "Cover the post-submit order lifecycle and execution data: order detail, today/history orders, today/history executions, DCA plan reads, plus pre-trade max purchase quantity estimation.",
       "tools": [
         "dca_history",
@@ -168,6 +172,7 @@
     {
       "id": "11",
       "name": "Trade Execution",
+      "key": "trade.write",
       "description": "Place, replace and cancel orders, plus DCA plan create/update/pause/resume/stop.",
       "tools": [
         "cancel_order",
