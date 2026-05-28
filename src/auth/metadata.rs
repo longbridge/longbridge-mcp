@@ -25,10 +25,17 @@ pub(crate) fn resource_url_from_headers(headers: &HeaderMap, fallback: &str) -> 
     else {
         return fallback.to_string();
     };
+    // Prefer the proxy-set header; fall back to the scheme in --base-url so
+    // that local HTTP deployments without a reverse proxy still return "http".
+    let fallback_scheme = if fallback.starts_with("https://") {
+        "https"
+    } else {
+        "http"
+    };
     let scheme = headers
         .get("x-forwarded-proto")
         .and_then(|v| v.to_str().ok())
-        .unwrap_or("https");
+        .unwrap_or(fallback_scheme);
     format!("{scheme}://{host}")
 }
 
