@@ -126,24 +126,29 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route("/mcp/tools.json", axum::routing::get(tools_json))
         .route("/mcp/scopes.json", axum::routing::get(scopes_json));
 
-    let mcp_service = StreamableHttpService::new(
-        move || Ok(Longbridge),
-        Arc::new(NeverSessionManager::default()),
-        StreamableHttpServerConfig::default()
-            .with_stateful_mode(false)
-            .disable_allowed_hosts(),
-    );
+    // Build an auth-wrapped MCP service. Called twice so both /mcp and /
+    // (root) are served — allowing deployments where the gateway strips the
+    // /mcp prefix or routes directly to the domain root.
+    let make_mcp_with_auth = |base_url: String| {
+        let svc = StreamableHttpService::new(
+            move || Ok(Longbridge),
+            Arc::new(NeverSessionManager::default()),
+            StreamableHttpServerConfig::default()
+                .with_stateful_mode(false)
+                .disable_allowed_hosts(),
+        );
+        tower::ServiceBuilder::new()
+            .layer(axum::middleware::from_fn(
+                move |req: axum::extract::Request, next: axum::middleware::Next| {
+                    let base_url = base_url.clone();
+                    async move { middleware::mcp_auth_layer(req, next, &base_url).await }
+                },
+            ))
+            .service(svc)
+    };
 
-    // Auth middleware layer: extracts Bearer token into extensions
-    let base_url = state.base_url.clone();
-    let mcp_with_auth = tower::ServiceBuilder::new()
-        .layer(axum::middleware::from_fn(
-            move |req: axum::extract::Request, next: axum::middleware::Next| {
-                let base_url = base_url.clone();
-                async move { middleware::mcp_auth_layer(req, next, &base_url).await }
-            },
-        ))
-        .service(mcp_service);
+    let mcp_with_auth = make_mcp_with_auth(state.base_url.clone());
+    let mcp_with_auth_root = make_mcp_with_auth(state.base_url.clone());
 
     Router::new()
         .merge(metadata_routes)
@@ -152,6 +157,8 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .merge(metrics_route)
         .merge(tools_route)
         .nest_service("/mcp", mcp_with_auth)
+        // Also serve at root so deployments that omit the /mcp path prefix work.
+        .fallback_service(mcp_with_auth_root)
 }
 
 #[cfg(test)]
