@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use rmcp::ErrorData as McpError;
 use rmcp::model::{CallToolResult, Content};
 use rmcp::schemars::JsonSchema;
@@ -5,6 +7,9 @@ use rmcp::serde::Deserialize;
 
 use crate::error::Error;
 use crate::serialize::{convert_unix_paths, transform_json};
+
+/// Maximum pages to fetch per request (matches CLI behaviour).
+const MAX_PAGES: usize = 20;
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct FinanceCalendarParam {
@@ -25,24 +30,51 @@ pub struct FinanceCalendarParam {
     pub market: Option<String>,
 }
 
-/// Extract the `list` items and the optional `next_date` cursor from a raw
-/// API page response.
-fn extract_page(raw: &serde_json::Value) -> (Vec<serde_json::Value>, Option<String>) {
-    let list = raw["list"].as_array().cloned().unwrap_or_default();
-    let next_date = raw["next_date"]
+/// Extract the optional `next_date` cursor from a raw API page response.
+fn next_date_of(raw: &serde_json::Value) -> Option<String> {
+    raw["next_date"]
         .as_str()
         .filter(|s| !s.is_empty())
-        .map(str::to_string);
-    (list, next_date)
+        .map(str::to_string)
 }
 
-/// Merge list items from multiple raw API pages into a single `{ "list": [...] }` value.
+/// Merge list items from multiple raw API pages, deduplicating events by `id`
+/// within each date bucket (using `datetime+market` as fallback key for
+/// events without an id, e.g. market-close entries).
 fn merge_pages(pages: impl IntoIterator<Item = serde_json::Value>) -> serde_json::Value {
-    let merged: Vec<serde_json::Value> = pages
+    let empty = vec![];
+    // BTreeMap keeps date buckets sorted.
+    let mut groups: BTreeMap<String, indexmap::IndexMap<String, serde_json::Value>> =
+        BTreeMap::new();
+
+    for page in pages {
+        for bucket in page["list"].as_array().unwrap_or(&empty) {
+            let date = bucket["date"].as_str().unwrap_or("").to_string();
+            let slot = groups.entry(date).or_default();
+            for info in bucket["infos"].as_array().unwrap_or(&empty) {
+                let key = if let Some(id) = info["id"].as_str().filter(|s| !s.is_empty()) {
+                    id.to_string()
+                } else {
+                    format!(
+                        "{}_{}",
+                        info["datetime"].as_str().unwrap_or(""),
+                        info["market"].as_str().unwrap_or("")
+                    )
+                };
+                slot.insert(key, info.clone());
+            }
+        }
+    }
+
+    let list: Vec<serde_json::Value> = groups
         .into_iter()
-        .flat_map(|p| p["list"].as_array().cloned().unwrap_or_default())
+        .map(|(date, infos_map)| {
+            let infos: Vec<serde_json::Value> = infos_map.into_values().collect();
+            serde_json::json!({ "date": date, "infos": infos })
+        })
         .collect();
-    serde_json::json!({ "list": merged })
+
+    serde_json::json!({ "list": list })
 }
 
 pub async fn finance_calendar(
@@ -54,19 +86,21 @@ pub async fn finance_calendar(
     let mut pages: Vec<serde_json::Value> = Vec::new();
     let mut current_date = p.start.clone();
 
-    loop {
+    for _ in 0..MAX_PAGES {
         let mut params: Vec<(&str, &str)> = vec![
             ("date", current_date.as_str()),
             ("date_end", p.end.as_str()),
             ("types[]", p.category.as_str()),
+            ("next", "later"),
+            ("count", "100"),
+            ("offset", "0"),
         ];
         if let Some(ref m) = market_upper {
             params.push(("markets[]", m.as_str()));
         }
 
-        // Create a fresh client per page to avoid connection-reuse errors
-        // on multi-page requests (the upstream server closes the connection
-        // after the first response, causing SendRequest on subsequent reuse).
+        // Create a fresh client per page — the upstream server closes the
+        // connection after each response, causing SendRequest on reuse.
         let resp: String = mctx
             .create_http_client()
             .request(reqwest::Method::GET, "/v1/quote/finance_calendar")
@@ -77,7 +111,7 @@ pub async fn finance_calendar(
             .map_err(|e| Error::Other(e.to_string()))?;
 
         let raw: serde_json::Value = serde_json::from_str(&resp).map_err(Error::Serialize)?;
-        let (_, next_date) = extract_page(&raw);
+        let next_date = next_date_of(&raw);
         pages.push(raw);
 
         match next_date {
@@ -106,48 +140,41 @@ pub async fn finance_calendar(
 mod tests {
     use super::*;
 
+    // ── next_date_of ────────────────────────────────────────────────────────
+
     #[test]
-    fn extract_page_returns_list_and_next_date() {
-        let raw = serde_json::json!({
-            "list": [{"date": "2026-05-23", "infos": []}],
-            "next_date": "2026-05-27"
-        });
-        let (list, next) = extract_page(&raw);
-        assert_eq!(list.len(), 1);
-        assert_eq!(next.as_deref(), Some("2026-05-27"));
+    fn next_date_of_returns_value() {
+        let raw = serde_json::json!({"list": [], "next_date": "2026-05-27"});
+        assert_eq!(next_date_of(&raw).as_deref(), Some("2026-05-27"));
     }
 
     #[test]
-    fn extract_page_no_next_date_returns_none() {
-        let raw = serde_json::json!({"list": [{"date": "2026-05-28", "infos": []}]});
-        let (_, next) = extract_page(&raw);
-        assert!(next.is_none());
+    fn next_date_of_absent_returns_none() {
+        assert!(next_date_of(&serde_json::json!({"list": []})).is_none());
     }
 
     #[test]
-    fn extract_page_null_next_date_returns_none() {
-        let raw = serde_json::json!({"list": [], "next_date": null});
-        let (_, next) = extract_page(&raw);
-        assert!(next.is_none());
+    fn next_date_of_null_returns_none() {
+        assert!(next_date_of(&serde_json::json!({"next_date": null})).is_none());
     }
 
     #[test]
-    fn extract_page_empty_string_next_date_returns_none() {
-        let raw = serde_json::json!({"list": [], "next_date": ""});
-        let (_, next) = extract_page(&raw);
-        assert!(next.is_none());
+    fn next_date_of_empty_string_returns_none() {
+        assert!(next_date_of(&serde_json::json!({"next_date": ""})).is_none());
     }
 
+    // ── merge_pages ─────────────────────────────────────────────────────────
+
     #[test]
-    fn merge_pages_concatenates_lists() {
+    fn merge_pages_concatenates_distinct_dates() {
         let page1 = serde_json::json!({
-            "list": [{"date": "2026-05-23", "infos": [{"symbol": "AAPL.US"}]}],
+            "list": [{"date": "2026-05-23", "infos": [{"id": "1", "symbol": "AAPL.US", "datetime": "", "market": "US"}]}],
             "next_date": "2026-05-27"
         });
         let page2 = serde_json::json!({
             "list": [
-                {"date": "2026-05-27", "infos": [{"symbol": "CRM.US"}]},
-                {"date": "2026-05-28", "infos": [{"symbol": "PDD.US"}]}
+                {"date": "2026-05-27", "infos": [{"id": "2", "symbol": "CRM.US", "datetime": "", "market": "US"}]},
+                {"date": "2026-05-28", "infos": [{"id": "3", "symbol": "PDD.US", "datetime": "", "market": "US"}]}
             ]
         });
         let merged = merge_pages([page1, page2]);
@@ -159,6 +186,34 @@ mod tests {
     }
 
     #[test]
+    fn merge_pages_deduplicates_by_id() {
+        let dup_event =
+            serde_json::json!({"id": "42", "symbol": "TSLA.US", "datetime": "", "market": "US"});
+        let page1 = serde_json::json!({
+            "list": [{"date": "2026-05-27", "infos": [dup_event.clone()]}]
+        });
+        let page2 = serde_json::json!({
+            "list": [{"date": "2026-05-27", "infos": [dup_event]}]
+        });
+        let merged = merge_pages([page1, page2]);
+        let infos = &merged["list"][0]["infos"];
+        assert_eq!(
+            infos.as_array().unwrap().len(),
+            1,
+            "duplicate id should collapse"
+        );
+    }
+
+    #[test]
+    fn merge_pages_deduplicates_no_id_by_datetime_market() {
+        let event = serde_json::json!({"id": "", "symbol": "CLOSED", "datetime": "1748390400", "market": "US"});
+        let page1 = serde_json::json!({"list": [{"date": "2026-05-27", "infos": [event.clone()]}]});
+        let page2 = serde_json::json!({"list": [{"date": "2026-05-27", "infos": [event]}]});
+        let merged = merge_pages([page1, page2]);
+        assert_eq!(merged["list"][0]["infos"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
     fn merge_pages_single_page() {
         let page = serde_json::json!({"list": [{"date": "2026-05-23", "infos": []}]});
         let merged = merge_pages([page]);
@@ -166,18 +221,36 @@ mod tests {
     }
 
     #[test]
-    fn merge_pages_empty_list() {
+    fn merge_pages_empty() {
         let merged = merge_pages([serde_json::json!({"list": []})]);
         assert_eq!(merged["list"].as_array().unwrap().len(), 0);
     }
 
-    /// next_date past end → stop pagination.
+    #[test]
+    fn merge_pages_date_buckets_sorted() {
+        let page1 = serde_json::json!({"list": [{"date": "2026-05-28", "infos": []}]});
+        let page2 = serde_json::json!({"list": [{"date": "2026-05-23", "infos": []}]});
+        let merged = merge_pages([page1, page2]);
+        let dates: Vec<&str> = merged["list"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|b| b["date"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            dates,
+            vec!["2026-05-23", "2026-05-28"],
+            "dates must be sorted"
+        );
+    }
+
+    // ── pagination boundary ─────────────────────────────────────────────────
+
     #[test]
     fn next_date_after_end_stops() {
         assert!("2026-05-31" > "2026-05-30");
     }
 
-    /// next_date equal to end → still fetch (last page may land on end).
     #[test]
     fn next_date_equal_end_continues() {
         assert!("2026-05-30" <= "2026-05-30");
