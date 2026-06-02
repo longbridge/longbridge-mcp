@@ -49,26 +49,26 @@ pub async fn finance_calendar(
     mctx: &crate::tools::McpContext,
     p: FinanceCalendarParam,
 ) -> Result<CallToolResult, McpError> {
-    let client = mctx.create_http_client();
     let market_upper = p.market.as_deref().map(str::to_uppercase);
 
     let mut pages: Vec<serde_json::Value> = Vec::new();
-    let mut cursor: Option<String> = None;
+    let mut current_date = p.start.clone();
 
     loop {
         let mut params: Vec<(&str, &str)> = vec![
-            ("date", p.start.as_str()),
+            ("date", current_date.as_str()),
             ("date_end", p.end.as_str()),
             ("types[]", p.category.as_str()),
         ];
         if let Some(ref m) = market_upper {
             params.push(("markets[]", m.as_str()));
         }
-        if let Some(ref nd) = cursor {
-            params.push(("next_date", nd.as_str()));
-        }
 
-        let resp: String = client
+        // Create a fresh client per page to avoid connection-reuse errors
+        // on multi-page requests (the upstream server closes the connection
+        // after the first response, causing SendRequest on subsequent reuse).
+        let resp: String = mctx
+            .create_http_client()
             .request(reqwest::Method::GET, "/v1/quote/finance_calendar")
             .query_params(params)
             .response::<String>()
@@ -81,7 +81,9 @@ pub async fn finance_calendar(
         pages.push(raw);
 
         match next_date {
-            Some(nd) if nd.as_str() <= p.end.as_str() => cursor = Some(nd),
+            Some(nd) if nd.as_str() <= p.end.as_str() && nd != current_date => {
+                current_date = nd;
+            }
             _ => break,
         }
     }
