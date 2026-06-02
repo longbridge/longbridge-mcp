@@ -464,7 +464,7 @@
     },
     "finance_calendar": {
       "title": "财经日历",
-      "description": "获取财经日历事件。category：report（财报+业绩）/ dividend（除息日与派发日）/ split（拆股/反拆）/ ipo / macrodata（CPI、非农、议息等）/ closed（休市日）；market：HK/US/CN/SG/JP/UK/DE/AU",
+      "description": "获取财经日历事件。category：report（财报+业绩）/ dividend（除息日与派发日）/ split（拆股/反拆）/ ipo / macrodata（CPI、非农、议息等）/ closed（休市日）；market：HK/US/CN/SG/JP/UK/DE/AU。日期范围建议不超过 2 周；如需查询更长时间段，请拆分为多次调用以避免数据截断。",
       "properties": {
         "market": "市场代码：HK、US、CN、SG，省略则查询所有市场",
         "start": "起始日期（`yyyy-mm-dd`）",
