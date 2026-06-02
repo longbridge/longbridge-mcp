@@ -1594,7 +1594,6 @@ dependencies = [
  "axum",
  "axum-server",
  "clap",
- "indexmap",
  "longbridge",
  "phf",
  "phf_codegen",

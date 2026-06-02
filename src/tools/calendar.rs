@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use rmcp::ErrorData as McpError;
 use rmcp::model::{CallToolResult, Content};
@@ -44,8 +44,7 @@ fn next_date_of(raw: &serde_json::Value) -> Option<String> {
 fn merge_pages(pages: impl IntoIterator<Item = serde_json::Value>) -> serde_json::Value {
     let empty = vec![];
     // BTreeMap keeps date buckets sorted.
-    let mut groups: BTreeMap<String, indexmap::IndexMap<String, serde_json::Value>> =
-        BTreeMap::new();
+    let mut groups: BTreeMap<String, HashMap<String, serde_json::Value>> = BTreeMap::new();
 
     for page in pages {
         for bucket in page["list"].as_array().unwrap_or(&empty) {
