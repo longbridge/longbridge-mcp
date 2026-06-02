@@ -34,9 +34,8 @@ pub async fn finance_calendar(
     p: FinanceCalendarParam,
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
-    let date = p.next_date.as_deref().unwrap_or(p.start.as_str());
     let mut params: Vec<(&str, &str)> = vec![
-        ("date", date),
+        ("date", p.start.as_str()),
         ("date_end", p.end.as_str()),
         ("types[]", p.category.as_str()),
     ];
@@ -44,6 +43,9 @@ pub async fn finance_calendar(
     if let Some(ref m) = p.market {
         market_upper = m.to_uppercase();
         params.push(("markets[]", market_upper.as_str()));
+    }
+    if let Some(ref nd) = p.next_date {
+        params.push(("next_date", nd.as_str()));
     }
     http_get_tool_unix(
         &client,
@@ -58,9 +60,9 @@ pub async fn finance_calendar(
 mod tests {
     use super::*;
 
-    /// When `next_date` is absent the `date` query param must equal `start`.
+    /// `date` is always `start`; no `next_date` param when cursor is absent.
     #[test]
-    fn uses_start_when_no_next_date() {
+    fn date_param_is_always_start() {
         let p = FinanceCalendarParam {
             category: "report".into(),
             start: "2026-05-23".into(),
@@ -68,13 +70,14 @@ mod tests {
             market: None,
             next_date: None,
         };
-        let date = p.next_date.as_deref().unwrap_or(p.start.as_str());
-        assert_eq!(date, "2026-05-23");
+        // date is always start, next_date param is only appended when Some
+        assert_eq!(p.start.as_str(), "2026-05-23");
+        assert!(p.next_date.is_none());
     }
 
-    /// When `next_date` is provided it must override `start` as the `date` param.
+    /// `date` stays as `start` and `next_date` is appended as a separate param.
     #[test]
-    fn uses_next_date_when_provided() {
+    fn next_date_appended_as_separate_param() {
         let p = FinanceCalendarParam {
             category: "report".into(),
             start: "2026-05-23".into(),
@@ -82,7 +85,7 @@ mod tests {
             market: None,
             next_date: Some("2026-05-27".into()),
         };
-        let date = p.next_date.as_deref().unwrap_or(p.start.as_str());
-        assert_eq!(date, "2026-05-27");
+        assert_eq!(p.start.as_str(), "2026-05-23");
+        assert_eq!(p.next_date.as_deref(), Some("2026-05-27"));
     }
 }
