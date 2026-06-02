@@ -79,6 +79,27 @@ where
     Ok(tool_result(json))
 }
 
+/// Like [`tool_json`], but additionally rewrites `time`-crate default-serialized
+/// datetime arrays at the given `time_array_paths` into RFC3339 / ISO strings.
+///
+/// Use this for SDK types whose `time::{OffsetDateTime, Date, Time}` fields lack
+/// a `#[serde(with = "time::serde::rfc3339")]` attribute and would otherwise be
+/// emitted as integer-component arrays (e.g. `expiry_date`, `begin_time`).
+/// Paths use the post-transform (snake_case) output field names.
+fn tool_json_with_time_arrays<T>(
+    value: &T,
+    time_array_paths: &[&str],
+) -> Result<CallToolResult, McpError>
+where
+    T: serde::Serialize,
+{
+    let json = to_tool_json(value).map_err(Error::Serialize)?;
+    let mut v: serde_json::Value = serde_json::from_str(&json).map_err(Error::Serialize)?;
+    crate::serialize::convert_time_arrays(&mut v, time_array_paths);
+    let out = serde_json::to_string(&v).map_err(Error::Serialize)?;
+    Ok(tool_result(out))
+}
+
 /// Per-request context extracted from HTTP headers.
 pub struct McpContext {
     pub token: String,
@@ -117,7 +138,14 @@ impl McpContext {
         for (key, value) in &self.extra_headers {
             client = client.header(key.as_str(), value.as_str());
         }
-        client
+        // Identify MCP-originated upstream requests. Set last so it cannot be
+        // shadowed by a forwarded client User-Agent. Takes effect once the SDK
+        // honors a caller-provided User-Agent instead of always overriding it
+        // with its built-in default.
+        client.header(
+            "user-agent",
+            concat!("longbridge-mcp/", env!("CARGO_PKG_VERSION")),
+        )
     }
 
     /// Extracts `account_channel` from the JWT bearer token's `sub` claim.
@@ -197,6 +225,9 @@ const SKIP_FORWARD_HEADERS: &[&str] = &[
     "accept-encoding",
     "mcp-session-id",
     "authorization",
+    // The MCP server sets its own `user-agent` to identify itself upstream;
+    // never forward the MCP client's User-Agent in its place.
+    "user-agent",
 ];
 
 fn collect_headers(headers: &axum::http::HeaderMap) -> Vec<(String, String)> {

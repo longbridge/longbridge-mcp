@@ -14,7 +14,7 @@ use crate::tools::support::tolerant::{
     tolerant_bool, tolerant_i64, tolerant_option_usize, tolerant_option_vec_i32,
     tolerant_option_vec_string, tolerant_usize, tolerant_vec_string,
 };
-use crate::tools::tool_json;
+use crate::tools::{tool_json, tool_json_with_time_arrays};
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct SymbolsParam {
@@ -236,7 +236,7 @@ pub async fn option_quote(
         .option_quote(p.symbols)
         .await
         .map_err(Error::longbridge)?;
-    tool_json(&result)
+    tool_json_with_time_arrays(&result, &["*.expiry_date"])
 }
 
 pub async fn warrant_quote(
@@ -248,7 +248,7 @@ pub async fn warrant_quote(
         .warrant_quote(p.symbols)
         .await
         .map_err(Error::longbridge)?;
-    tool_json(&result)
+    tool_json_with_time_arrays(&result, &["*.expiry_date", "*.last_trade_date"])
 }
 
 pub async fn depth(
@@ -378,7 +378,7 @@ pub async fn trading_days(
         .trading_days(market, start, end)
         .await
         .map_err(Error::longbridge)?;
-    tool_json(&result)
+    tool_json_with_time_arrays(&result, &["trading_days.*", "half_trading_days.*"])
 }
 
 pub async fn option_chain_expiry_date_list(
@@ -422,7 +422,7 @@ pub async fn capital_flow(
         .capital_flow(p.symbol)
         .await
         .map_err(Error::longbridge)?;
-    tool_json(&result)
+    tool_json_with_time_arrays(&result, &["*.timestamp"])
 }
 
 pub async fn capital_distribution(
@@ -434,13 +434,19 @@ pub async fn capital_distribution(
         .capital_distribution(p.symbol)
         .await
         .map_err(Error::longbridge)?;
-    tool_json(&result)
+    tool_json_with_time_arrays(&result, &["timestamp"])
 }
 
 pub async fn trading_session(mctx: &crate::tools::McpContext) -> Result<CallToolResult, McpError> {
     let (ctx, _) = QuoteContext::new(mctx.create_config());
     let result = ctx.trading_session().await.map_err(Error::longbridge)?;
-    tool_json(&result)
+    tool_json_with_time_arrays(
+        &result,
+        &[
+            "*.trade_sessions.*.begin_time",
+            "*.trade_sessions.*.end_time",
+        ],
+    )
 }
 
 pub async fn market_temperature(
@@ -550,7 +556,7 @@ pub async fn warrant_list(
         )
         .await
         .map_err(Error::longbridge)?;
-    tool_json(&result)
+    tool_json_with_time_arrays(&result, &["*.expiry_date"])
 }
 
 pub async fn calc_indexes(
@@ -584,7 +590,7 @@ pub async fn calc_indexes(
         }
     }
 
-    tool_json(&result)
+    tool_json_with_time_arrays(&result, &["*.expiry_date"])
 }
 
 pub async fn create_watchlist_group(

@@ -125,19 +125,133 @@ pub(crate) fn try_parse_unix_string(s: &str) -> Option<i64> {
 /// `"-62135596800"`) are left untouched so the caller's "no value" semantics
 /// survive.
 pub fn convert_unix_paths(value: &mut serde_json::Value, paths: &[&str]) {
+    let convert = |v: &mut serde_json::Value| {
+        if let serde_json::Value::String(s) = v
+            && let Some(ts) = try_parse_unix_string(s)
+        {
+            *v = serde_json::Value::String(timestamp_to_rfc3339(ts));
+        }
+    };
     for path in paths {
         let segments: Vec<&str> = path.split('.').collect();
-        walk_convert(value, &segments);
+        walk_paths(value, &segments, &convert);
     }
 }
 
-fn walk_convert(value: &mut serde_json::Value, segments: &[&str]) {
-    if segments.is_empty() {
-        if let serde_json::Value::String(s) = value
-            && let Some(ts) = try_parse_unix_string(s)
+/// Walk a JSON value and convert `time`-crate default-serialized datetime
+/// arrays at the given paths into RFC3339 / ISO-8601 strings in place.
+///
+/// SDK struct fields whose type is a `time` type but which lack a
+/// `#[serde(with = "time::serde::rfc3339")]` attribute serialize as
+/// integer-component arrays rather than strings. This converts them:
+/// - `OffsetDateTime` `[year, ordinal, h, m, s, ns, off_h, off_m, off_s]`
+///   -> RFC3339 `"2023-11-14T22:13:20Z"`
+/// - `PrimitiveDateTime` `[year, ordinal, h, m, s, ns]` -> `"2023-11-14T22:13:20"`
+/// - `Date` `[year, ordinal]` -> `"2026-04-20"`
+/// - `Time` `[h, m, s, ns]` -> `"09:30:00"`
+///
+/// Path syntax matches [`convert_unix_paths`]. Arrays that do not decode into a
+/// valid datetime are left untouched, so it is safe to apply to a path that may
+/// hold a sentinel or already-converted value.
+pub fn convert_time_arrays(value: &mut serde_json::Value, paths: &[&str]) {
+    let convert = |v: &mut serde_json::Value| {
+        if let serde_json::Value::Array(arr) = v
+            && let Some(s) = time_array_to_string(arr)
         {
-            *value = serde_json::Value::String(timestamp_to_rfc3339(ts));
+            *v = serde_json::Value::String(s);
         }
+    };
+    for path in paths {
+        let segments: Vec<&str> = path.split('.').collect();
+        walk_paths(value, &segments, &convert);
+    }
+}
+
+/// Decode a `time`-crate default-serialized datetime component array into a
+/// string. Returns `None` if the array does not match a known datetime shape or
+/// holds out-of-range components.
+fn time_array_to_string(arr: &[serde_json::Value]) -> Option<String> {
+    use time::format_description::well_known::Rfc3339;
+    use time::{Date, PrimitiveDateTime, Time, UtcOffset};
+
+    let n: Vec<i64> = arr
+        .iter()
+        .map(serde_json::Value::as_i64)
+        .collect::<Option<Vec<_>>>()?;
+
+    let date = |year: i64, ordinal: i64| -> Option<Date> {
+        Date::from_ordinal_date(i32::try_from(year).ok()?, u16::try_from(ordinal).ok()?).ok()
+    };
+    let time = |h: i64, m: i64, s: i64, ns: i64| -> Option<Time> {
+        Time::from_hms_nano(
+            u8::try_from(h).ok()?,
+            u8::try_from(m).ok()?,
+            u8::try_from(s).ok()?,
+            u32::try_from(ns).ok()?,
+        )
+        .ok()
+    };
+
+    match n.len() {
+        // Date
+        2 => {
+            let d = date(n[0], n[1])?;
+            Some(format!(
+                "{:04}-{:02}-{:02}",
+                d.year(),
+                d.month() as u8,
+                d.day()
+            ))
+        }
+        // Time
+        4 => {
+            let t = time(n[0], n[1], n[2], n[3])?;
+            Some(format!(
+                "{:02}:{:02}:{:02}",
+                t.hour(),
+                t.minute(),
+                t.second()
+            ))
+        }
+        // PrimitiveDateTime (no offset)
+        6 => {
+            let d = date(n[0], n[1])?;
+            let t = time(n[2], n[3], n[4], n[5])?;
+            Some(format!(
+                "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}",
+                d.year(),
+                d.month() as u8,
+                d.day(),
+                t.hour(),
+                t.minute(),
+                t.second()
+            ))
+        }
+        // OffsetDateTime
+        9 => {
+            let d = date(n[0], n[1])?;
+            let t = time(n[2], n[3], n[4], n[5])?;
+            let offset = UtcOffset::from_hms(
+                i8::try_from(n[6]).ok()?,
+                i8::try_from(n[7]).ok()?,
+                i8::try_from(n[8]).ok()?,
+            )
+            .ok()?;
+            PrimitiveDateTime::new(d, t)
+                .assume_offset(offset)
+                .format(&Rfc3339)
+                .ok()
+        }
+        _ => None,
+    }
+}
+
+fn walk_paths<F>(value: &mut serde_json::Value, segments: &[&str], convert: &F)
+where
+    F: Fn(&mut serde_json::Value),
+{
+    if segments.is_empty() {
+        convert(value);
         return;
     }
     let (seg, rest) = (segments[0], &segments[1..]);
@@ -145,15 +259,15 @@ fn walk_convert(value: &mut serde_json::Value, segments: &[&str]) {
         serde_json::Value::Object(map) => {
             if seg == "*" {
                 for v in map.values_mut() {
-                    walk_convert(v, rest);
+                    walk_paths(v, rest, convert);
                 }
             } else if let Some(v) = map.get_mut(seg) {
-                walk_convert(v, rest);
+                walk_paths(v, rest, convert);
             }
         }
         serde_json::Value::Array(arr) if seg == "*" => {
             for v in arr.iter_mut() {
-                walk_convert(v, rest);
+                walk_paths(v, rest, convert);
             }
         }
         _ => {}
@@ -504,6 +618,88 @@ mod tests {
         let before = v.clone();
         convert_unix_paths(&mut v, &["missing", "a.b.c"]);
         assert_eq!(v, before);
+    }
+
+    #[test]
+    fn convert_time_arrays_offset_datetime() {
+        // OffsetDateTime [year, ordinal, h, m, s, ns, off_h, off_m, off_s] for 2023-11-14T22:13:20Z
+        let mut v: serde_json::Value =
+            serde_json::from_str(r#"{"timestamp":[2023,318,22,13,20,0,0,0,0]}"#).unwrap();
+        convert_time_arrays(&mut v, &["timestamp"]);
+        assert_eq!(v["timestamp"], "2023-11-14T22:13:20Z");
+    }
+
+    #[test]
+    fn convert_time_arrays_offset_datetime_with_offset() {
+        // 2023-11-14 22:13:20 +08:00 -> ordinal 318
+        let mut v: serde_json::Value =
+            serde_json::from_str(r#"{"timestamp":[2023,318,22,13,20,0,8,0,0]}"#).unwrap();
+        convert_time_arrays(&mut v, &["timestamp"]);
+        assert_eq!(v["timestamp"], "2023-11-14T22:13:20+08:00");
+    }
+
+    #[test]
+    fn convert_time_arrays_date() {
+        // Date [year, ordinal] for 2026-04-20 (ordinal 110)
+        let mut v: serde_json::Value =
+            serde_json::from_str(r#"{"expiry_date":[2026,110]}"#).unwrap();
+        convert_time_arrays(&mut v, &["expiry_date"]);
+        assert_eq!(v["expiry_date"], "2026-04-20");
+    }
+
+    #[test]
+    fn convert_time_arrays_time() {
+        // Time [h, m, s, ns]
+        let mut v: serde_json::Value =
+            serde_json::from_str(r#"{"begin_time":[9,30,0,0]}"#).unwrap();
+        convert_time_arrays(&mut v, &["begin_time"]);
+        assert_eq!(v["begin_time"], "09:30:00");
+    }
+
+    #[test]
+    fn convert_time_arrays_vec_of_dates() {
+        let mut v: serde_json::Value =
+            serde_json::from_str(r#"{"trading_days":[[2026,110],[2026,111]]}"#).unwrap();
+        convert_time_arrays(&mut v, &["trading_days.*"]);
+        assert_eq!(v["trading_days"][0], "2026-04-20");
+        assert_eq!(v["trading_days"][1], "2026-04-21");
+    }
+
+    #[test]
+    fn convert_time_arrays_nested_wildcard() {
+        let mut v: serde_json::Value = serde_json::from_str(
+            r#"[{"trade_sessions":[{"begin_time":[9,30,0,0],"end_time":[16,0,0,0]}]}]"#,
+        )
+        .unwrap();
+        convert_time_arrays(
+            &mut v,
+            &[
+                "*.trade_sessions.*.begin_time",
+                "*.trade_sessions.*.end_time",
+            ],
+        );
+        assert_eq!(v[0]["trade_sessions"][0]["begin_time"], "09:30:00");
+        assert_eq!(v[0]["trade_sessions"][0]["end_time"], "16:00:00");
+    }
+
+    #[test]
+    fn convert_time_arrays_array_root_wildcard() {
+        let mut v: serde_json::Value =
+            serde_json::from_str(r#"[{"expiry_date":[2026,110]},{"expiry_date":[2026,111]}]"#)
+                .unwrap();
+        convert_time_arrays(&mut v, &["*.expiry_date"]);
+        assert_eq!(v[0]["expiry_date"], "2026-04-20");
+        assert_eq!(v[1]["expiry_date"], "2026-04-21");
+    }
+
+    #[test]
+    fn convert_time_arrays_skips_non_time_values() {
+        // null (e.g. Option<Date> None) and unrelated arrays are left untouched.
+        let mut v: serde_json::Value =
+            serde_json::from_str(r#"{"expiry_date":null,"other":[1,2,3]}"#).unwrap();
+        convert_time_arrays(&mut v, &["expiry_date", "other"]);
+        assert_eq!(v["expiry_date"], serde_json::Value::Null);
+        assert_eq!(v["other"], serde_json::json!([1, 2, 3]));
     }
 
     #[test]
