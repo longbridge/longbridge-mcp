@@ -583,10 +583,22 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&output).unwrap();
         let pos = &v["list"][0]["fund_info"][0];
 
-        assert_eq!(pos["symbol_name"], "", "symbol_name should be empty string: {output}");
-        assert_eq!(pos["currency"], "", "currency should be empty string: {output}");
-        assert_eq!(pos["holding_units"], "0", "holding_units should be \"0\": {output}");
-        assert_eq!(pos["cost_net_asset_value"], "0", "cost_nav should be \"0\": {output}");
+        assert_eq!(
+            pos["symbol_name"], "",
+            "symbol_name should be empty string: {output}"
+        );
+        assert_eq!(
+            pos["currency"], "",
+            "currency should be empty string: {output}"
+        );
+        assert_eq!(
+            pos["holding_units"], "0",
+            "holding_units should be \"0\": {output}"
+        );
+        assert_eq!(
+            pos["cost_net_asset_value"], "0",
+            "cost_nav should be \"0\": {output}"
+        );
     }
 
     /// An account with no fund positions at all should produce `{"list": []}`.

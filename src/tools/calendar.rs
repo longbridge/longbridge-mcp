@@ -28,10 +28,7 @@ pub struct FinanceCalendarParam {
 /// Extract the `list` items and the optional `next_date` cursor from a raw
 /// API page response.
 fn extract_page(raw: &serde_json::Value) -> (Vec<serde_json::Value>, Option<String>) {
-    let list = raw["list"]
-        .as_array()
-        .cloned()
-        .unwrap_or_default();
+    let list = raw["list"].as_array().cloned().unwrap_or_default();
     let next_date = raw["next_date"]
         .as_str()
         .filter(|s| !s.is_empty())
@@ -76,8 +73,7 @@ pub async fn finance_calendar(
             .await
             .map_err(|e| Error::Other(e.to_string()))?;
 
-        let raw: serde_json::Value =
-            serde_json::from_str(&resp).map_err(Error::Serialize)?;
+        let raw: serde_json::Value = serde_json::from_str(&resp).map_err(Error::Serialize)?;
 
         let (_, next_date) = extract_page(&raw);
         pages.push(raw);
