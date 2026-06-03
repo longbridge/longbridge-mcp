@@ -16,8 +16,9 @@ pub struct BearerToken(pub String);
 /// On 401 responses, includes `resource_metadata` in the `WWW-Authenticate`
 /// header as required by the MCP OAuth 2.1 spec (RFC 9728).
 pub async fn mcp_auth_layer(mut req: Request, next: Next, base_url: &str) -> Response {
+    let resource = crate::auth::metadata::resource_url_from_headers(req.headers(), base_url);
     let www_authenticate =
-        format!("Bearer resource_metadata=\"{base_url}/.well-known/oauth-protected-resource\"");
+        format!("Bearer resource_metadata=\"{resource}/.well-known/oauth-protected-resource\"");
 
     let bearer_token = req
         .headers()

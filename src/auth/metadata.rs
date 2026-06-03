@@ -1,6 +1,7 @@
 use std::sync::{Arc, LazyLock};
 
 use axum::extract::State;
+use axum::http::HeaderMap;
 use axum::response::Json;
 use serde::Serialize;
 
@@ -9,6 +10,38 @@ use crate::auth::AppState;
 fn longbridge_oauth_url() -> String {
     std::env::var("LONGBRIDGE_HTTP_URL")
         .unwrap_or_else(|_| "https://openapi.longbridge.com".to_string())
+}
+
+/// Derives `scheme://host` from the incoming request headers.
+///
+/// Header priority for the host:
+///   1. `X-Forwarded-Host` — set by the reverse proxy to the external hostname
+///      (e.g. `openapi.longbridge.xyz` when the proxy rewrites the Host).
+///   2. `Host` — the hostname the client actually connected to (correct for
+///      direct connections; may be the internal backend host behind a proxy).
+///   3. Falls back to `fallback` (`--base-url`) when both are absent.
+///
+/// Scheme priority: `X-Forwarded-Proto` → scheme of `--base-url`.
+pub(crate) fn resource_url_from_headers(headers: &HeaderMap, fallback: &str) -> String {
+    let Some(host) = headers
+        .get("x-forwarded-host")
+        .or_else(|| headers.get(axum::http::header::HOST))
+        .and_then(|v| v.to_str().ok())
+    else {
+        return fallback.to_string();
+    };
+    // Prefer the proxy-set header; fall back to the scheme in --base-url so
+    // that local HTTP deployments without a reverse proxy still return "http".
+    let fallback_scheme = if fallback.starts_with("https://") {
+        "https"
+    } else {
+        "http"
+    };
+    let scheme = headers
+        .get("x-forwarded-proto")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or(fallback_scheme);
+    format!("{scheme}://{host}")
 }
 
 #[derive(Serialize)]
@@ -20,9 +53,10 @@ pub(crate) struct ProtectedResourceMetadata {
 
 pub async fn protected_resource_metadata(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
 ) -> Json<ProtectedResourceMetadata> {
     Json(ProtectedResourceMetadata {
-        resource: state.base_url.clone(),
+        resource: resource_url_from_headers(&headers, &state.base_url),
         authorization_servers: vec![longbridge_oauth_url()],
         scopes_supported: vec!["openapi".to_string()],
     })

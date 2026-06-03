@@ -13,11 +13,11 @@
   <a href="https://longbridge.com"><img alt="Longbridge" src="https://img.shields.io/badge/brokerage-Longbridge-ffe000?labelColor=000"></a>
 </p>
 
-Official MCP server for the [Longbridge](https://longbridge.com) brokerage. **133 tools** across real-time quotes, options, order routing, fundamentals, analyst ratings, calendars, IPO, price alerts, DCA plans, portfolio analytics and community sharelists — covering **US and HK markets**. Built with Rust using [rmcp](https://github.com/anthropics/rmcp) and [axum](https://github.com/tokio-rs/axum).
+Official MCP server for the [Longbridge](https://longbridge.com) brokerage. **145 tools** across real-time quotes, options, order routing, fundamentals, analyst ratings, calendars, IPO, price alerts, DCA plans, portfolio analytics and community sharelists — covering **US and HK markets**. Built with Rust using [rmcp](https://github.com/anthropics/rmcp) and [axum](https://github.com/tokio-rs/axum).
 
 ## Features
 
-- **133 MCP tools** across 12 categories: quotes, trading, fundamentals, market data, calendars, IPO, portfolio, alerts, content, account statements, DCA, and community sharelists
+- **145 MCP tools** across 13 categories: quotes, trading, fundamentals, screener, market data, calendars, IPO, portfolio, alerts, content, account statements, DCA, and community sharelists
 - **Stateless architecture** -- each request carries a Bearer token forwarded directly to the Longbridge SDK; no server-side sessions or database
 - **OAuth 2.1 resource metadata** compliant with RFC 9728, pointing clients to Longbridge OAuth for authorization
 - **JSON response transformation** -- field names normalized to snake_case, timestamps converted to RFC 3339, internal counter_id values mapped to human-readable symbols
@@ -49,6 +49,22 @@ Restart Claude Desktop. On first tool invocation it will open a browser to compl
 ```bash
 claude mcp add --transport http longbridge https://openapi.longbridge.com/mcp
 ```
+
+### Zed
+
+Add to your Zed `settings.json` (open with `zed: open settings`):
+
+```json
+{
+  "context_servers": {
+    "longbridge": {
+      "url": "https://openapi.longbridge.com/mcp"
+    }
+  }
+}
+```
+
+On first use, Zed will open a browser to complete the Longbridge OAuth flow.
 
 ### Cursor / Cline / Windsurf / other MCP clients
 

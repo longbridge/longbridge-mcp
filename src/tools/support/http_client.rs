@@ -79,6 +79,22 @@ pub async fn http_post_tool(
     result_from_raw_json(&resp)
 }
 
+pub async fn http_post_tool_unix(
+    client: &HttpClient,
+    path: &str,
+    body: serde_json::Value,
+    unix_paths: &[&str],
+) -> Result<CallToolResult, McpError> {
+    let resp: String = client
+        .request(Method::POST, path)
+        .body(Json(body))
+        .response::<String>()
+        .send()
+        .await
+        .map_err(|e| Error::Other(e.to_string()))?;
+    result_from_raw_json_with_unix_paths(&resp, unix_paths)
+}
+
 pub async fn http_delete_tool(
     client: &HttpClient,
     path: &str,

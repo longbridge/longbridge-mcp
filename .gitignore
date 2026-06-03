@@ -2,3 +2,6 @@
 .DS_Store
 docs/superpowers
 /tests
+/.claude
+/.agents
+skills-lock.json

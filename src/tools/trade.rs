@@ -467,3 +467,146 @@ pub async fn short_margin(mctx: &crate::tools::McpContext) -> Result<CallToolRes
     let client = mctx.create_http_client();
     http_get_tool(&client, "/v1/asset/cash/short-margin", &[]).await
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::serialize::to_tool_json;
+
+    /// Simulate the raw JSON that the Longbridge SDK's `FundPositionsResponse`
+    /// would produce after serde serialization, then verify that `to_tool_json`
+    /// transforms it correctly.
+    #[allow(clippy::too_many_arguments)]
+    fn sdk_fund_positions_json(
+        account_channel: &str,
+        symbol: &str,
+        symbol_name: &str,
+        currency: &str,
+        holding_units: &str,
+        current_nav: &str,
+        cost_nav: &str,
+        nav_day: &str,
+    ) -> serde_json::Value {
+        serde_json::json!({
+            "list": [{
+                "account_channel": account_channel,
+                "fund_info": [{
+                    "symbol": symbol,
+                    "symbol_name": symbol_name,
+                    "currency": currency,
+                    "holding_units": holding_units,
+                    "current_net_asset_value": current_nav,
+                    "cost_net_asset_value": cost_nav,
+                    "net_asset_value_day": nav_day
+                }]
+            }]
+        })
+    }
+
+    #[test]
+    fn fund_positions_all_fields_present() {
+        let input = sdk_fund_positions_json(
+            "lb",
+            "HK0000038064",
+            "高腾微金美元货币基金A",
+            "USD",
+            "1447.29",
+            "15.22",
+            "14.50",
+            "2026-05-29T00:00:00Z",
+        );
+        let output = to_tool_json(&input).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&output).unwrap();
+        let pos = &v["list"][0]["fund_info"][0];
+
+        assert_eq!(pos["symbol"], "HK0000038064", "symbol mismatch: {output}");
+        assert_eq!(
+            pos["symbol_name"], "高腾微金美元货币基金A",
+            "symbol_name mismatch: {output}"
+        );
+        assert_eq!(pos["currency"], "USD", "currency mismatch: {output}");
+        assert_eq!(
+            pos["holding_units"], "1447.29",
+            "holding_units mismatch: {output}"
+        );
+        assert_eq!(
+            pos["current_net_asset_value"], "15.22",
+            "current_net_asset_value mismatch: {output}"
+        );
+        assert_eq!(
+            pos["cost_net_asset_value"], "14.50",
+            "cost_net_asset_value mismatch: {output}"
+        );
+        assert_eq!(
+            pos["net_asset_value_day"], "2026-05-29T00:00:00Z",
+            "net_asset_value_day mismatch: {output}"
+        );
+    }
+
+    /// `account_channel` must be nulled by the transform regardless of the
+    /// value returned by the SDK (privacy requirement).
+    #[test]
+    fn fund_positions_account_channel_nulled() {
+        let input = sdk_fund_positions_json(
+            "lb",
+            "HK0000038064",
+            "高腾微金美元货币基金A",
+            "USD",
+            "1447.29",
+            "15.22",
+            "14.50",
+            "2026-05-29T00:00:00Z",
+        );
+        let output = to_tool_json(&input).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&output).unwrap();
+        assert!(
+            v["list"][0]["account_channel"].is_null(),
+            "account_channel should be null, got: {output}"
+        );
+    }
+
+    /// Regression: when the backend returns empty strings for `symbol_name` /
+    /// `currency` and "0" for numeric fields, the response must still be valid
+    /// JSON with those exact values preserved (not dropped or replaced).
+    #[test]
+    fn fund_positions_empty_fields_preserved() {
+        let input = sdk_fund_positions_json(
+            "lb",
+            "HK0000038064",
+            "",
+            "",
+            "0",
+            "15.22",
+            "0",
+            "2026-05-29T00:00:00Z",
+        );
+        let output = to_tool_json(&input).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&output).unwrap();
+        let pos = &v["list"][0]["fund_info"][0];
+
+        assert_eq!(
+            pos["symbol_name"], "",
+            "symbol_name should be empty string: {output}"
+        );
+        assert_eq!(
+            pos["currency"], "",
+            "currency should be empty string: {output}"
+        );
+        assert_eq!(
+            pos["holding_units"], "0",
+            "holding_units should be \"0\": {output}"
+        );
+        assert_eq!(
+            pos["cost_net_asset_value"], "0",
+            "cost_nav should be \"0\": {output}"
+        );
+    }
+
+    /// An account with no fund positions at all should produce `{"list": []}`.
+    #[test]
+    fn fund_positions_empty_list() {
+        let input = serde_json::json!({ "list": [] });
+        let output = to_tool_json(&input).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&output).unwrap();
+        assert_eq!(v["list"], serde_json::json!([]), "got: {output}");
+    }
+}

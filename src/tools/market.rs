@@ -2,7 +2,7 @@ use reqwest::Method;
 use rmcp::ErrorData as McpError;
 use rmcp::model::CallToolResult;
 use rmcp::schemars::JsonSchema;
-use rmcp::serde::Deserialize;
+use rmcp::serde::{Deserialize, Serialize};
 
 use crate::counter::{index_symbol_to_counter_id, symbol_to_counter_id};
 use crate::error::Error;
@@ -17,9 +17,13 @@ pub struct SymbolParam {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
-pub struct MarketParam {
+pub struct AnomalyParam {
     /// Market code: HK, US, CN, SG
     pub market: String,
+    /// Filter to a specific symbol, e.g. "700.HK" or "AAPL.US"
+    pub symbol: Option<String>,
+    /// Number of results to return (default: 50, max: 100)
+    pub count: Option<u32>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -205,16 +209,22 @@ pub async fn trade_stats(
 
 pub async fn anomaly(
     mctx: &crate::tools::McpContext,
-    p: MarketParam,
+    p: AnomalyParam,
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
     let market_upper = p.market.to_uppercase();
-    http_get_tool(
-        &client,
-        "/v1/quote/changes",
-        &[("market", market_upper.as_str()), ("category", "0")],
-    )
-    .await
+    let count = p.count.unwrap_or(50).min(100).to_string();
+    let mut params: Vec<(&str, &str)> = vec![
+        ("category", "0"),
+        ("size", count.as_str()),
+        ("market", market_upper.as_str()),
+    ];
+    let cid;
+    if let Some(ref sym) = p.symbol {
+        cid = symbol_to_counter_id(sym);
+        params.push(("counter_id", cid.as_str()));
+    }
+    http_get_tool(&client, "/v1/quote/changes", &params).await
 }
 
 pub async fn constituent(
@@ -279,4 +289,276 @@ pub async fn industry_rank(
     let mut res = rmcp::model::CallToolResult::success(vec![rmcp::model::Content::text(out)]);
     res.structured_content = structured;
     Ok(res)
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ShortTradesParam {
+    /// Security symbol, e.g. "AAPL.US" (US) or "700.HK" (HK). Market is inferred from suffix.
+    pub symbol: String,
+    /// Query cutoff timestamp in seconds (pass current timestamp for latest data)
+    pub last_timestamp: String,
+    /// Page size: 1–100 (default: 20)
+    pub page_size: Option<String>,
+}
+
+pub async fn short_trades(
+    mctx: &crate::tools::McpContext,
+    p: ShortTradesParam,
+) -> Result<CallToolResult, McpError> {
+    let client = mctx.create_http_client();
+    let cid = symbol_to_counter_id(&p.symbol);
+    let page_size = p.page_size.unwrap_or_else(|| "20".to_string());
+    let is_hk = p.symbol.to_uppercase().ends_with(".HK");
+    let path = if is_hk {
+        "/v1/quote/short-trades/hk"
+    } else {
+        "/v1/quote/short-trades/us"
+    };
+    let result = http_get_tool_unix(
+        &client,
+        path,
+        &[
+            ("counter_id", cid.as_str()),
+            ("last_timestamp", p.last_timestamp.as_str()),
+            ("page_size", page_size.as_str()),
+        ],
+        &["data.*.timestamp"],
+    )
+    .await?;
+    Ok(normalize_short_trades(result, is_hk))
+}
+
+/// Normalize short_trades response to a unified schema regardless of market.
+///
+/// Unified data[] item fields:
+///   timestamp     RFC3339
+///   short_vol     daily short-sale volume (US: total_amount across all venues; HK: amount)
+///   rate          decimal ratio (e.g. 0.36 = 36% of total volume was short)
+///   close         close price
+///   nasdaq_vol    US only — NASDAQ short volume (nus_amount)
+///   nyse_vol      US only — NYSE short volume (ny_amount)
+///   balance       HK only — outstanding short balance (HKD)
+///   market_vol    HK only — total market trading volume for the day (total_amount)
+fn normalize_short_trades(
+    result: rmcp::model::CallToolResult,
+    is_hk: bool,
+) -> rmcp::model::CallToolResult {
+    let Some(text) = result
+        .content
+        .first()
+        .and_then(|c| c.as_text())
+        .map(|t| t.text.as_str())
+    else {
+        return result;
+    };
+    let Ok(mut d) = serde_json::from_str::<serde_json::Value>(text) else {
+        return result;
+    };
+
+    if let Some(items) = d.get_mut("data").and_then(|v| v.as_array_mut()) {
+        for item in items.iter_mut() {
+            let Some(obj) = item.as_object_mut() else {
+                continue;
+            };
+            if is_hk {
+                // amount → short_vol
+                if let Some(v) = obj.remove("amount") {
+                    obj.insert("short_vol".to_string(), v);
+                }
+                // total_amount → market_vol (HK: this is total market volume, not short volume)
+                if let Some(v) = obj.remove("total_amount") {
+                    obj.insert("market_vol".to_string(), v);
+                }
+            } else {
+                // total_amount → short_vol (US: total short volume across all venues)
+                if let Some(v) = obj.remove("total_amount") {
+                    obj.insert("short_vol".to_string(), v);
+                }
+                // nus_amount → nasdaq_vol
+                if let Some(v) = obj.remove("nus_amount") {
+                    obj.insert("nasdaq_vol".to_string(), v);
+                }
+                // ny_amount → nyse_vol
+                if let Some(v) = obj.remove("ny_amount") {
+                    obj.insert("nyse_vol".to_string(), v);
+                }
+            }
+        }
+    }
+
+    let Ok(json) = serde_json::to_string(&d) else {
+        return result;
+    };
+    rmcp::model::CallToolResult::success(vec![rmcp::model::Content::text(json)])
+}
+
+/// Pagination cursor returned by `top_movers`; pass it back verbatim to fetch the next page.
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct TopMoversNextParams {
+    /// Event IDs already seen in previous pages.
+    pub visited: Vec<String>,
+}
+
+fn next_params_schema(_: &mut rmcp::schemars::SchemaGenerator) -> rmcp::schemars::Schema {
+    rmcp::schemars::json_schema!({
+        "description": "Pagination cursor from the previous response. Pass the entire next_params object back verbatim to fetch the next page.",
+        "type": "object",
+        "properties": {},
+        "additionalProperties": true
+    })
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct StockEventsParam {
+    /// Market filter: comma-separated list of markets to include.
+    /// Supported values: "HK", "US", "CN", "SG". Omit to return all markets.
+    /// Example: "HK,US"
+    pub markets: Option<String>,
+    /// Sort order (default: "2"):
+    ///   "0" = by time (most recent first)
+    ///   "1" = by price change magnitude (largest move first)
+    ///   "2" = by popularity (most-viewed first)
+    pub sort: Option<String>,
+    /// Date to query in "YYYY-MM-DD" format. Omit for today's movers.
+    pub date: Option<String>,
+    /// Number of events to return per page (default: 20, max: 100)
+    pub limit: Option<u32>,
+    /// Pagination cursor from previous response next_params field.
+    /// Pass the entire next_params object returned by the previous call to get the next page.
+    /// Omit for the first page.
+    #[serde(default)]
+    #[schemars(schema_with = "next_params_schema")]
+    pub next_params: Option<TopMoversNextParams>,
+}
+
+pub async fn top_movers(
+    mctx: &crate::tools::McpContext,
+    p: StockEventsParam,
+) -> Result<CallToolResult, McpError> {
+    let client = mctx.create_http_client();
+    let limit = p.limit.unwrap_or(20);
+    let sort: u32 = p.sort.as_deref().unwrap_or("2").parse().unwrap_or(2);
+    let markets: Vec<serde_json::Value> = p
+        .markets
+        .as_deref()
+        .unwrap_or("")
+        .split(',')
+        .filter(|s| !s.is_empty())
+        .map(|s| serde_json::Value::String(s.trim().to_uppercase()))
+        .collect();
+    let mut body = serde_json::json!({
+        "limit": limit,
+        "sort": sort,
+        "markets": markets,
+        "next_params": p.next_params.map_or_else(|| serde_json::json!({}), |v| serde_json::to_value(v).unwrap_or_default()),
+    });
+    if let Some(ref d) = p.date {
+        body["date"] = serde_json::Value::String(d.clone());
+    }
+    crate::tools::support::http_client::http_post_tool_unix(
+        &client,
+        "/v1/quote/market/stock-events",
+        body,
+        &["events.*.timestamp"],
+    )
+    .await
+}
+
+/// Get available rank tab category configurations.
+pub async fn rank_categories(mctx: &crate::tools::McpContext) -> Result<CallToolResult, McpError> {
+    let client = mctx.create_http_client();
+    let result = http_get_tool(&client, "/v1/quote/market/rank/categories", &[]).await?;
+    Ok(strip_ib_prefix_from_rank_keys(result))
+}
+
+/// Strip the "ib_" prefix from all `key` fields inside rank category tags.
+/// rank_list auto-prepends "ib_" before sending to the API, so the prefix
+/// is an implementation detail that should not be exposed to callers.
+fn strip_ib_prefix_from_rank_keys(
+    result: rmcp::model::CallToolResult,
+) -> rmcp::model::CallToolResult {
+    let Some(text) = result
+        .content
+        .first()
+        .and_then(|c| c.as_text())
+        .map(|t| t.text.as_str())
+    else {
+        return result;
+    };
+    let Ok(mut d) = serde_json::from_str::<serde_json::Value>(text) else {
+        return result;
+    };
+    fn strip_key(v: &mut serde_json::Value) {
+        if let Some(k) = v.get("key").and_then(|k| k.as_str()) {
+            let stripped = k.strip_prefix("ib_").unwrap_or(k).to_string();
+            if let Some(obj) = v.as_object_mut() {
+                obj.insert("key".to_string(), serde_json::Value::String(stripped));
+            }
+        }
+        for field in ["second_tags"] {
+            if let Some(arr) = v.get_mut(field).and_then(|v| v.as_array_mut()) {
+                for item in arr.iter_mut() {
+                    strip_key(item);
+                }
+            }
+        }
+    }
+    if let Some(tags) = d.get_mut("first_tags").and_then(|v| v.as_array_mut()) {
+        for tag in tags.iter_mut() {
+            strip_key(tag);
+        }
+    }
+    let Ok(json) = serde_json::to_string(&d) else {
+        return result;
+    };
+    rmcp::model::CallToolResult::success(vec![rmcp::model::Content::text(json)])
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct RankListParam {
+    /// Tab key from rank_categories second_tags[].key, e.g. "hot_all-us" (US total heat),
+    /// "hot_up-hk" (HK rising heat), "trade_heat-us" (US hot trades).
+    /// The "ib_" prefix is stripped from rank_categories keys and added back automatically.
+    pub key: String,
+    /// Market override: "US" | "HK" | "CN" | "SG".
+    /// Defaults to the market suffix in the key (e.g. "ib_hot_all-hk" → HK), then "US".
+    pub market: Option<String>,
+    /// Number of results to return (default: 20)
+    pub size: Option<u32>,
+    /// Whether to include related news articles (default: false)
+    pub need_article: Option<bool>,
+}
+
+pub async fn rank_list(
+    mctx: &crate::tools::McpContext,
+    p: RankListParam,
+) -> Result<CallToolResult, McpError> {
+    let client = mctx.create_http_client();
+    let need_article = p.need_article.unwrap_or(false).to_string();
+    // Auto-prepend "ib_" if the key doesn't already start with it.
+    let key = if p.key.starts_with("ib_") {
+        p.key.clone()
+    } else {
+        format!("ib_{}", p.key)
+    };
+    // Infer market from key suffix (e.g. "ib_hot_all-hk" → "HK"), fall back to param or "US".
+    let key_market = key
+        .rsplit_once('-')
+        .map(|(_, m)| m.to_uppercase())
+        .filter(|m| matches!(m.as_str(), "US" | "HK" | "CN" | "SG"))
+        .or_else(|| p.market.as_deref().map(|m| m.to_uppercase()))
+        .unwrap_or_else(|| "US".to_string());
+    let size = p.size.unwrap_or(20).to_string();
+    http_get_tool(
+        &client,
+        "/v1/quote/market/rank/list",
+        &[
+            ("key", key.as_str()),
+            ("delay_bmp", "false"),
+            ("need_article", need_article.as_str()),
+            ("market", key_market.as_str()),
+            ("size", size.as_str()),
+        ],
+    )
+    .await
 }

@@ -20,10 +20,12 @@
     },
     "security_list": {
       "title": "證券列表",
-      "description": "獲取指定市場的證券列表。`category` 當前必須為 `\"Overnight\"`，其他取值或留空都會報錯；並且目前僅支援 `market=\"US\"`，其他市場同樣會返回錯誤",
+      "description": "獲取指定市場的證券列表。支援市場：US、HK、CN、SG。category 當前僅支援 \"Overnight\"（預設）。page：頁碼（從1開始，預設1）。count：每頁筆數（預設50）。返回 {total, page, count, items[]{symbol, name_en, name_cn}}。",
       "properties": {
-        "market": "市場代碼：HK、US、CN、SG",
-        "category": "類別篩選。當前僅支援 `\"Overnight\"`，傳入其他值或不傳都會觸發 `param_error`；並且 `\"Overnight\"` 類別目前僅支援 `US` 市場，其他市場同樣會返回 `param_error`"
+        "market": "市場代碼：US、HK、CN、SG",
+        "category": "類別篩選，當前僅支援 \"Overnight\"（預設）",
+        "page": "頁碼，從1開始，預設1",
+        "count": "每頁返回筆數，預設50"
       }
     },
     "update_watchlist_group": {
@@ -316,9 +318,11 @@
     },
     "anomaly": {
       "title": "市場異動",
-      "description": "獲取市場異動提醒（價量異常變動），返回 items[]{symbol, name, anomaly_type, change_rate, volume, timestamp}",
+      "description": "獲取市場異動提醒（價量異常變動）。market: HK/US/CN/SG。symbol: 可選，篩選特定股票。count: 返回數量（預設 50，最多 100）。返回 changes[]{symbol, name, change_rate, volume, ...}, all_off。",
       "properties": {
-        "market": "市場代碼：HK、US、CN、SG"
+        "market": "市場代碼：HK、US、CN、SG",
+        "symbol": "可選證券代碼，如 AAPL.US 或 700.HK，篩選特定股票的異動",
+        "count": "返回數量，預設 50，最多 100"
       }
     },
     "broker_holding": {
@@ -460,7 +464,7 @@
     },
     "finance_calendar": {
       "title": "財經日曆",
-      "description": "獲取財經日曆事件。category：report（財報+業績）/ dividend（除息日與派發日）/ split（拆股/反拆）/ ipo / macrodata（CPI、非農、議息等）/ closed（休市日）；market：HK/US/CN/SG/JP/UK/DE/AU",
+      "description": "獲取財經日曆事件。category：report（財報+業績）/ dividend（除息日與派發日）/ split（拆股/反拆）/ ipo / macrodata（CPI、非農、議息等）/ closed（休市日）；market：HK/US/CN/SG/JP/UK/DE/AU。日期範圍建議不超過 2 週；如需查詢更長時間段，請拆分為多次呼叫以避免資料截斷。",
       "properties": {
         "market": "市場代碼：HK、US、CN、SG，省略則查詢所有市場",
         "start": "起始日期（`yyyy-mm-dd`）",
@@ -713,11 +717,11 @@
       }
     },
     "short_positions": {
-      "title": "空頭持倉",
-      "description": "獲取美股沽空數據（空頭比率、空頭股數、回補天數等），僅支援美股市場",
+      "title": "做空持倉",
+      "description": "獲取港股或美股的賣空持倉歷史（未平倉空頭頭寸）。市場由 symbol 後綴自動判斷。count: 1–100（預設20）。統一返回 data[]{timestamp(RFC3339), short_shares(空頭持倉股數), rate(小數比率 如0.009=0.9%), close}。僅美股：avg_daily_vol(日均成交量), days_to_cover(回補天數)。僅港股：balance(港元空頭餘額)。美股來源：FINRA 雙週報。港股來源：HKEX 每日。",
       "properties": {
-        "symbol": "證券代碼（僅美股），例如 `\"AAPL.US\"`",
-        "count": "返回條數（1-100，預設 20）"
+        "symbol": "證券代碼，如 AAPL.US（美股）或 700.HK（港股），市場由後綴自動判斷",
+        "count": "返回記錄數，1–100，預設 20"
       }
     },
     "static_info": {
@@ -1026,6 +1030,96 @@
       "properties": {
         "symbol": "證券代碼，例如 `\"AAPL.US\"`",
         "report": "報告期：`qf`（季報）、`saf`（半年報）、`af`（年報）"
+      }
+    },
+    "shareholder_top": {
+      "title": "Top20 大股東",
+      "description": "獲取前20大股東（機構、個人、內部人士）的多期持倉資訊。返回 info[]{period, share_holders[]{object_id, name, title, shares_held, percent_shares_held, shares_changed, filing_date}}。用 object_id 傳入 shareholder_detail 查看該股東的完整交易記錄。",
+      "properties": {
+        "symbol": "證券代碼，如 AAPL.US"
+      }
+    },
+    "shareholder_detail": {
+      "title": "股東持倉詳情",
+      "description": "獲取指定股東的持倉歷史與交易明細。需要來自 shareholder_top 的 object_id。返回 name, owner_source（Company/Institution/Person/Insider）, tradings[]{period, accum_buy, accum_sell, net_buy, trading_details[]{trading_date, trading_type, trading_shares, trading_price, security_type, filing_date}}, holding_summary, holding_periods, trading_periods。注意：機構股東（13F申報）的 trading_details[] 為空，僅個人/內部人（Form 4）有交易明細。",
+      "properties": {
+        "symbol": "證券代碼，如 AAPL.US",
+        "object_id": "股東 object_id，來自 shareholder_top 返回的數據"
+      }
+    },
+    "valuation_comparison": {
+      "title": "多股股票對比",
+      "description": "股票估值對比。模式A（單股）：只傳 symbol，服務端自動返回該股票及同行業推薦對標股。模式B（多股）：傳 symbol 作為主股 + comparison_symbols（逗號分隔，如 'MSFT.US,GOOGL.US'）進行指定股票對比。currency: USD/HKD/CNY。返回 list[]{symbol, name, market_value, price_close, pe, pb, ps, history[]{date, pe, pb, ps}}。",
+      "properties": {
+        "symbol": "要比較的證券代碼，如 AAPL.US",
+        "currency": "貨幣單位：USD/HKD/CNY",
+        "comparison_symbols": "對比標的，逗號分隔，最多 4 個，如 MSFT.US,GOOGL.US"
+      }
+    },
+    "screener_strategy": {
+      "title": "策略詳情",
+      "description": "執行前查看策略的篩選條件詳情。返回 market, filter{filters[]{key, min, max, tech_values}}。如需直接執行策略，使用 screener_search 的 strategy_id 參數。",
+      "properties": {
+        "id": "策略 ID，來自 screener_recommend_strategies 或 screener_user_strategies 的 screeners[].id"
+      }
+    },
+    "screener_search": {
+      "title": "策略選股",
+      "description": "執行選股查詢。market: US|HK|CN|SG（模式B必填；模式A使用策略內建市場）。模式A：傳 strategy_id（來自 screener_recommend_strategies）自動執行策略。模式B：conditions=[{\"key\":\"KEY\",\"min\":\"10\",\"max\":\"50\",\"tech_values\":{}},...] 直接透傳給 API。 extra_returns=[\"key\",...] 追加展示欄；sort_by_key 指定排序欄位；sort_order: asc|desc（預設 desc）；page: 從0開始（預設0）。返回 {total, items[]{symbol, name, indicators[]{key, name, value, unit}}}，每條結果預設包含 prevclose、prevchg、marketcap、salesgrowthyoy、pettm、pbmrq、industry 七欄。基本面 key：pettm pbmrq roe roa netmargin salesgrowthyoy netincomegrowthyoy marketcap(億) circulating_marketcap(億) prevclose prevchg(%) divyld la epsttm netincome(億) sales(億) turnover_rate balance(萬)。技術 key（tech_values 見 screener_indicators）：macd_day/week rsi_day/week kdj_day/week boll_day/week。注意：key 由平台動態維護，不確定時先調 screener_indicators 確認。",
+      "properties": {
+        "market": "市場：US/HK/CN/SG。模式B必填；模式A可不傳（策略已內建市場）"
+      }
+    },
+    "screener_indicators": {
+      "title": "選股指標配置",
+      "description": "獲取全部可用選股指標的 key、單位和預設值域。技術指標（MACD/RSI/KDJ/BOLL）含 tech_values 欄位，列出可選參數值（如 macd_day 的 category: goldenfork/deadcross/upzero）。可選 symbol（如 AAPL.US）過濾特定股票的指標。返回 groups[]{group_name, indicators[]{id, key, name, unit, default_range{min,max}, tech_values?{param:[{value,label},...]}}}。",
+      "properties": {
+        "symbol": "可選證券代碼，用於篩選該股票支援的指標，如 AAPL.US"
+      }
+    },
+    "screener_recommend_strategies": {
+      "title": "平台預設選股策略",
+      "description": "獲取平台預設的選股策略列表。market: US|HK|CN|SG（預設 US）。返回 strategys[]{id, name, description, market, three_months_chg, risk}。將 id 傳入 screener_search 的 strategy_id 可直接執行該策略；傳入 screener_strategy 可查看策略的篩選條件。"
+    },
+    "screener_user_strategies": {
+      "title": "我的選股策略",
+      "description": "獲取當前用戶已儲存的選股策略列表。market: US|HK|CN|SG（預設 US）。返回 strategys[]{id, name, description, market, three_months_chg, risk}。將 id 傳入 screener_search 的 strategy_id 可直接執行該策略；傳入 screener_strategy 可查看策略的篩選條件。",
+      "properties": {
+        "market": "市場篩選：US/HK/CN/SG，預設 US"
+      }
+    },
+    "top_movers": {
+      "title": "熱股異動",
+      "description": "獲取價格波動超過近20日標準差的異動股票及關聯新聞原因。markets: 逗號分隔的 HK/US/CN/SG（不傳 = 全市場）。sort: 0=時間 1=漲跌幅 2=熱度（預設）。limit: 每頁數量（預設20）。next_params: 分頁游標，傳上一次返回的 next_params 物件。返回 events[]{timestamp(RFC3339), alert_reason, alert_type, stock{symbol, name, change(小數如0.0445=+4.45%), last_done, labels[], intro}}, updated_at, next_params。",
+      "properties": {
+        "markets": "市場篩選，逗號分隔，支援 HK/US/CN/SG，不傳返回全市場",
+        "sort": "排序方式：0=按時間（最新優先）1=按漲跌幅（幅度最大優先）2=按熱度（預設）",
+        "date": "查詢日期，格式 YYYY-MM-DD，不傳預設今日",
+        "limit": "每頁返回數量，預設 20，最多 100",
+        "next_params": "翻頁游標，將上一次回應的 next_params 原樣傳入即可取得下一頁，首頁不傳"
+      }
+    },
+    "rank_categories": {
+      "title": "熱度榜分類配置",
+      "description": "獲取熱度排行榜的分類配置。返回 first_tags[]{key, name, second_tags[]{key, name, market}}。將 second_tags[].key（如 hot_all-us）傳入 rank_list 獲取對應榜單。"
+    },
+    "rank_list": {
+      "title": "熱度榜股票列表",
+      "description": "按熱度榜 key 獲取股票排名列表。key 來自 rank_categories 的 second_tags[].key（如 hot_all-us、hot_up-hk、trade_heat-us）。market: 從 key 後綴推斷或顯式傳入。size: 返回數量（預設 20）。返回 lists[]{symbol, name, last_done, chg(小數), inflow, market_cap, pre_post_price, pre_post_chg, amplitude, turnover_rate, volume_rate, five_day_chg, ten_day_chg, twenty_day_chg, this_year_chg, industry, intro}, updated_at。",
+      "properties": {
+        "key": "榜單 key，來自 rank_categories 的 second_tags[].key，如 hot_all-us、hot_up-hk",
+        "market": "市場覆蓋：US/HK/CN/SG，預設從 key 後綴推斷",
+        "size": "返回數量，預設 20",
+        "need_article": "是否返回關聯新聞，預設 false"
+      }
+    },
+    "short_trades": {
+      "title": "做空成交",
+      "description": "獲取港股或美股的每日賣空成交量歷史。市場由 symbol 後綴自動判斷。last_timestamp: Unix 秒（不傳則取最新）。page_size: 1–100（預設20）。統一返回 data[]{timestamp(RFC3339), short_vol(當日賣空股數), rate(小數比率 如0.36=36%), close}。僅美股：nasdaq_vol(納斯達克賣空量), nyse_vol(紐交所賣空量)。僅港股：balance(港元), market_vol(當日市場總成交量)。美股來源：FINRA/NASDAQ。港股來源：HKEX。",
+      "properties": {
+        "symbol": "證券代碼，如 AAPL.US（美股）或 700.HK（港股），市場由後綴自動判斷",
+        "last_timestamp": "查詢截止時間戳（秒），傳當前時間戳取得最新數據",
+        "page_size": "每頁數量，1–100，預設 20"
       }
     }
   }

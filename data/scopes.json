@@ -3,6 +3,7 @@
     {
       "id": "0",
       "name": "General",
+      "key": "",
       "description": "General-purpose tools covering market data, quotes, fundamentals, alerts, DCA, sharelists, IPO, and content.",
       "tools": [
         "ah_premium",
@@ -73,7 +74,16 @@
         "participants",
         "quant_run",
         "quote",
+        "rank_categories",
+        "rank_list",
+        "screener_indicators",
+        "screener_recommend_strategies",
+        "screener_search",
+        "screener_strategy",
+        "screener_user_strategies",
         "shareholder",
+        "shareholder_detail",
+        "shareholder_top",
         "sharelist_add",
         "sharelist_create",
         "sharelist_delete",
@@ -83,7 +93,9 @@
         "sharelist_remove",
         "sharelist_sort",
         "short_positions",
+        "short_trades",
         "static_info",
+        "top_movers",
         "topic",
         "topic_create",
         "topic_create_reply",
@@ -95,6 +107,7 @@
         "trading_days",
         "trading_session",
         "valuation",
+        "valuation_comparison",
         "valuation_history",
         "valuation_rank",
         "warrant_issuers",
@@ -105,6 +118,7 @@
     {
       "id": "4",
       "name": "Watchlist",
+      "key": "watchlist",
       "description": "Manage the user's watchlist groups (read/create/update/delete) and look up the securities each group contains.",
       "tools": [
         "create_watchlist_group",
@@ -117,6 +131,7 @@
     {
       "id": "6",
       "name": "Account & Positions",
+      "key": "account.read",
       "description": "Query account assets and cash flow — fund/stock holdings, account cash and equity, margin ratio, profit analysis and statements — for portfolio overviews, position display and account reconciliation.",
       "tools": [
         "account_balance",
@@ -140,6 +155,7 @@
     {
       "id": "10",
       "name": "Trade Order Lookup",
+      "key": "trade.read",
       "description": "Cover the post-submit order lifecycle and execution data: order detail, today/history orders, today/history executions, DCA plan reads, plus pre-trade max purchase quantity estimation.",
       "tools": [
         "dca_history",
@@ -156,6 +172,7 @@
     {
       "id": "11",
       "name": "Trade Execution",
+      "key": "trade.write",
       "description": "Place, replace and cancel orders, plus DCA plan create/update/pause/resume/stop.",
       "tools": [
         "cancel_order",
