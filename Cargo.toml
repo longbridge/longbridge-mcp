@@ -31,7 +31,11 @@ clap = { version = "4", features = ["derive"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-appender = "0.2"
-time = { version = "0.3", features = ["formatting", "parsing"] }
+time = { version = "0.3", features = [
+    "formatting",
+    "parsing",
+    "serde-human-readable",
+] }
 reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
 tower = "0.5"
 tower-http = { version = "0.6", features = ["cors"] }

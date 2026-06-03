@@ -38,8 +38,14 @@ impl<S: Serializer> Serializer for TransformSerializer<S> {
     delegate_simple!(serialize_f32, f32);
     delegate_simple!(serialize_f64, f64);
     delegate_simple!(serialize_char, char);
-    delegate_simple!(serialize_str, &str);
     delegate_simple!(serialize_bytes, &[u8]);
+
+    fn serialize_str(self, v: &str) -> Result<Self::Ok, Self::Error> {
+        match crate::serialize::datetime_str_to_rfc3339(v) {
+            Some(rfc3339) => self.inner.serialize_str(&rfc3339),
+            None => self.inner.serialize_str(v),
+        }
+    }
 
     fn serialize_none(self) -> Result<Self::Ok, Self::Error> {
         self.inner.serialize_none()

@@ -39,6 +39,9 @@ impl<S: Serializer> Serializer for TimestampSerializer<S> {
         self.inner.serialize_str(&timestamp_to_rfc3339(v as i64))
     }
     fn serialize_str(self, v: &str) -> Result<Self::Ok, Self::Error> {
+        if let Some(rfc3339) = crate::serialize::datetime_str_to_rfc3339(v) {
+            return self.inner.serialize_str(&rfc3339);
+        }
         match try_parse_unix_string(v) {
             Some(ts) => self.inner.serialize_str(&timestamp_to_rfc3339(ts)),
             None => self.inner.serialize_str(v),

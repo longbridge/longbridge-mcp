@@ -118,12 +118,22 @@ pub struct CashFlowParam {
 pub struct EstimateMaxQtyParam {
     /// Security symbol, e.g. "700.HK"
     pub symbol: String,
-    /// Buy or Sell
+    /// Buy or Sell (case-insensitive; default: Buy)
+    #[serde(default = "default_order_side")]
     pub side: String,
-    /// Order type: LO (Limit Order) / ELO (Enhanced Limit Order) / MO (Market Order) / AO (At-auction) / ALO (At-auction Limit Order)
+    /// Order type, case-insensitive (default: LO): LO (Limit Order) / ELO (Enhanced Limit Order) / MO (Market Order) / AO (At-auction) / ALO (At-auction Limit Order)
+    #[serde(default = "default_order_type")]
     pub order_type: String,
     /// Limit price for limit-style orders. Omit for market orders.
     pub price: Option<String>,
+}
+
+fn default_order_side() -> String {
+    "Buy".to_string()
+}
+
+fn default_order_type() -> String {
+    "LO".to_string()
 }
 
 pub async fn account_balance(
@@ -439,12 +449,21 @@ pub async fn estimate_max_purchase_quantity(
     use longbridge::trade::{EstimateMaxPurchaseQuantityOptions, OrderSide, OrderType};
     use std::str::FromStr;
 
-    let side = p
-        .side
+    // SDK FromStr is case-sensitive ("Buy"/"LO"). Normalize first so callers can
+    // pass any case: side -> "Buy"/"Sell", order_type -> upper-case (all variants
+    // serialize as upper-case acronyms).
+    let side_norm = match p.side.trim().to_ascii_lowercase().as_str() {
+        "buy" => "Buy".to_string(),
+        "sell" => "Sell".to_string(),
+        _ => p.side.trim().to_string(),
+    };
+    let side = side_norm
         .parse::<OrderSide>()
         .map_err(|e| McpError::invalid_params(format!("invalid side: {e}"), None))?;
     let order_type = p
         .order_type
+        .trim()
+        .to_ascii_uppercase()
         .parse::<OrderType>()
         .map_err(|e| McpError::invalid_params(format!("invalid order_type: {e}"), None))?;
     let mut opts = EstimateMaxPurchaseQuantityOptions::new(p.symbol, order_type, side);
