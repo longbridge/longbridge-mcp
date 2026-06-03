@@ -59,7 +59,7 @@ impl Longbridge {
                  Use the following tools in order:\n\
                  1. `quote` — get the real-time price, change, and volume.\n\
                  2. `static_info` — retrieve the company name, exchange, sector, and listing details.\n\
-                 3. `financial_summary` — fetch the latest revenue, earnings, P/E ratio, and EPS.\n\
+                 3. `financial_report` — fetch the latest revenue, earnings, and EPS; use `valuation` for P/E ratio.\n\
                  4. `institution_rating` — get analyst ratings and consensus price target.\n\
                  5. `news` — retrieve the 5 most recent news articles.\n\n\
                  After gathering all data, write a concise investment brief covering: \
@@ -112,8 +112,9 @@ impl Longbridge {
             format!(
                 "Screen options for the underlying {symbol}. Use the following tools:\n\
                  1. `quote` — get the current price and recent trend of {symbol}.\n\
-                 2. `option_chain` — retrieve the option chain for the nearest two expiry dates.\n\
-                 3. `option_quote` — fetch quotes (IV, greeks, open interest) for the \
+                 2. `option_chain_expiry_date_list` — get available expiry dates for {symbol}.\n\
+                 3. `option_chain_info_by_date` — retrieve the option chain for the nearest two expiry dates.\n\
+                 4. `option_quote` — fetch quotes (IV, greeks, open interest) for the \
                  5 most-active strikes near the current price (ATM ±5%).\n\n\
                  Then summarise:\n\
                  - Underlying price and recent direction\n\
@@ -147,7 +148,7 @@ impl Longbridge {
                  2. `quote` — get the current bid, ask, and last price for {symbol}.\n\
                  3. `account_balance` (for buy) or `stock_positions` (for sell) — \
                  determine available funds or current position size.\n\
-                 4. `estimate_max_buy_quantity` or position check — \
+                 4. `estimate_max_purchase_quantity` — \
                  calculate the maximum quantity I can {side}.\n\
                  5. Present a trade summary (symbol, side, suggested price, suggested quantity) \
                  and **wait for my explicit confirmation** before proceeding.\n\
@@ -177,10 +178,10 @@ impl Longbridge {
             format!(
                 "Give me a comprehensive market overview. {scope}\n\
                  Use the following tools:\n\
-                 1. `market_indices` or `quote` — get today's performance for major indices.\n\
+                 1. `quote` — get today's performance for major indices.\n\
                  2. `security_list` with `sort=change_rate` — \
                  retrieve the top 5 gainers and top 5 losers by % change.\n\
-                 3. `market_turnover_anomaly` — check for unusual volume or trading anomalies.\n\
+                 3. `anomaly` — check for unusual volume or trading anomalies.\n\
                  4. `market_temperature` — get the overall market sentiment/heat indicator.\n\
                  5. `finance_calendar` — list any earnings, dividends, or macro events today.\n\n\
                  Then provide:\n\
