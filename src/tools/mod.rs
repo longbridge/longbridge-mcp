@@ -2732,6 +2732,7 @@ impl Longbridge {
     name = "longbridge-mcp",
     instructions = "Longbridge OpenAPI MCP Server - provides market data, trading, and financial analysis tools"
 )]
+#[prompt_handler]
 impl ServerHandler for Longbridge {
     async fn list_tools(
         &self,
