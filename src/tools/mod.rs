@@ -83,16 +83,38 @@ where
 pub struct McpContext {
     pub token: String,
     pub language: Option<String>,
+    /// The originating MCP client's `User-Agent` (e.g. `claude-code/2.1.89 (cli)`),
+    /// when the client sent one. Some clients (e.g. Codex) send none.
+    pub client_user_agent: Option<String>,
     /// Extra headers to forward to upstream Longbridge services.
     pub extra_headers: Vec<(String, String)>,
 }
 
 impl McpContext {
+    /// This server's own identity as an RFC 9110 product token.
+    const SELF_USER_AGENT: &'static str = concat!("longbridge-mcp/", env!("CARGO_PKG_VERSION"));
+
+    /// Builds the upstream `User-Agent` as an RFC 9110 product-token chain: the
+    /// originating MCP client's UA (when present) followed by this server's own
+    /// token, e.g. `claude-code/2.1.89 (cli) longbridge-mcp/0.4.6`. Acting as a
+    /// proxy, we append our token rather than inventing a custom header, so the
+    /// backend sees both the client and this server in a single standard field.
+    /// Falls back to just our token when the client sent no UA.
+    fn user_agent(&self) -> String {
+        match self.client_user_agent.as_deref() {
+            Some(ua) if !ua.trim().is_empty() => format!("{ua} {}", Self::SELF_USER_AGENT),
+            _ => Self::SELF_USER_AGENT.to_string(),
+        }
+    }
+
     pub fn create_config(&self) -> Arc<longbridge::Config> {
         let mut config =
             longbridge::Config::from_oauth(longbridge::oauth::OAuth::from_token(&self.token))
                 .dont_print_quote_packages()
-                .enable_overnight();
+                .enable_overnight()
+                // Identify MCP-originated requests on the Context path (REST and
+                // WebSocket upgrades), mirroring how longbridge-cli tags itself.
+                .header("user-agent", self.user_agent());
         if let Some(ref lang) = self.language {
             let lb_lang = if lang.contains("zh-CN") || lang.contains("zh-Hans") {
                 longbridge::Language::ZH_CN
@@ -117,7 +139,10 @@ impl McpContext {
         for (key, value) in &self.extra_headers {
             client = client.header(key.as_str(), value.as_str());
         }
-        client
+        // Identify MCP-originated upstream requests. The client's UA is appended
+        // with our token by `user_agent`; set last so a forwarded header cannot
+        // shadow it.
+        client.header("user-agent", self.user_agent())
     }
 
     /// Extracts `account_channel` from the JWT bearer token's `sub` claim.
@@ -197,6 +222,9 @@ const SKIP_FORWARD_HEADERS: &[&str] = &[
     "accept-encoding",
     "mcp-session-id",
     "authorization",
+    // Captured separately in `extract_context` and folded into the synthesized
+    // upstream User-Agent; never forwarded raw.
+    "user-agent",
 ];
 
 fn collect_headers(headers: &axum::http::HeaderMap) -> Vec<(String, String)> {
@@ -226,9 +254,15 @@ fn extract_context(ctx: &RequestContext<RoleServer>) -> Result<McpContext, McpEr
         .get("accept-language")
         .and_then(|v| v.to_str().ok())
         .map(|s| s.to_string());
+    let client_user_agent = parts
+        .headers
+        .get("user-agent")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
     Ok(McpContext {
         token: token.0.clone(),
         language,
+        client_user_agent,
         // NOTE: This is very important for passing headers to upstream Longbridge services.
         // Do not remove this unless you have a good reason and know exactly which headers to forward instead.
         extra_headers: collect_headers(&parts.headers),
@@ -2730,6 +2764,106 @@ mod tests {
             headers
                 .iter()
                 .any(|(k, v)| k == "accept-language" && v == "zh-CN")
+        );
+    }
+
+    #[test]
+    fn does_not_forward_raw_user_agent() {
+        let mut map = HeaderMap::new();
+        map.insert(
+            HeaderName::from_static("user-agent"),
+            HeaderValue::from_static("claude-code/2.1.89 (cli)"),
+        );
+        // The client UA is folded into the synthesized upstream UA, not forwarded raw.
+        assert!(!collect_headers(&map).iter().any(|(k, _)| k == "user-agent"));
+    }
+
+    fn ctx_with_ua(ua: Option<&str>) -> super::McpContext {
+        super::McpContext {
+            token: String::new(),
+            language: None,
+            client_user_agent: ua.map(str::to_owned),
+            extra_headers: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn user_agent_chains_client_then_self() {
+        let ua = ctx_with_ua(Some("claude-code/2.1.89 (cli)")).user_agent();
+        assert!(ua.starts_with("claude-code/2.1.89 (cli) longbridge-mcp/"));
+    }
+
+    #[test]
+    fn user_agent_falls_back_to_self_when_client_absent() {
+        assert!(
+            ctx_with_ua(None)
+                .user_agent()
+                .starts_with("longbridge-mcp/")
+        );
+        assert!(
+            ctx_with_ua(Some("   "))
+                .user_agent()
+                .starts_with("longbridge-mcp/")
+        );
+    }
+
+    /// End-to-end: the client produced by `create_http_client` must put the
+    /// synthesized `User-Agent` (client UA + our token) on the wire as the
+    /// primary value. A minimal TCP server captures the real request headers;
+    /// the SDK base URL is redirected to it via the `HTTP_URL` env var.
+    #[tokio::test]
+    async fn upstream_request_carries_synthesized_user_agent() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        use std::sync::{Arc, Mutex};
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let captured: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+        let cap = Arc::clone(&captured);
+        std::thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut buf = [0u8; 4096];
+                let n = stream.read(&mut buf).unwrap_or(0);
+                let req = String::from_utf8_lossy(&buf[..n]);
+                for line in req.lines() {
+                    if line.to_ascii_lowercase().starts_with("user-agent:") {
+                        *cap.lock().unwrap() =
+                            Some(line["user-agent:".len()..].trim().to_string());
+                        break;
+                    }
+                }
+                let _ = stream.write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}",
+                );
+            }
+        });
+
+        // SDK reads the base URL from `LONGBRIDGE_HTTP_URL` (see httpclient config).
+        // SAFETY: single-threaded test setup; no other thread reads it here.
+        unsafe { std::env::set_var("LONGBRIDGE_HTTP_URL", format!("http://{addr}")) };
+
+        let mctx = super::McpContext {
+            token: "dummy-token".to_string(),
+            language: None,
+            client_user_agent: Some("claude-code/2.1.89 (cli)".to_string()),
+            extra_headers: Vec::new(),
+        };
+        let _ = mctx
+            .create_http_client()
+            .request(reqwest::Method::GET, "/v1/ping")
+            .response::<String>()
+            .send()
+            .await;
+
+        let ua = captured
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("echo server did not receive a request");
+        assert!(
+            ua.starts_with("claude-code/2.1.89 (cli) longbridge-mcp/"),
+            "unexpected upstream User-Agent: {ua}"
         );
     }
 
