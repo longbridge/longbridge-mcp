@@ -1040,7 +1040,7 @@ impl Longbridge {
         title = "Estimate Max Purchase Quantity",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
         output_schema = schema_for::<output::EstimateMaxQtyResponse>(),
-        description = "Estimate maximum buy/sell quantity for a symbol. Returns {cash_max_qty, margin_max_qty} (decimal strings). Requires symbol, side (Buy/Sell), order_type, and optionally price."
+        description = "Estimate maximum buy/sell quantity for a symbol. Returns {cash_max_qty, margin_max_qty} (decimal strings). Only symbol is required; side (case-insensitive Buy/Sell) defaults to Buy, order_type (case-insensitive) defaults to LO, and price is optional."
     )]
     async fn estimate_max_purchase_quantity(
         &self,
