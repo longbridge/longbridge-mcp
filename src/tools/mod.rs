@@ -2828,8 +2828,7 @@ mod tests {
                 let req = String::from_utf8_lossy(&buf[..n]);
                 for line in req.lines() {
                     if line.to_ascii_lowercase().starts_with("user-agent:") {
-                        *cap.lock().unwrap() =
-                            Some(line["user-agent:".len()..].trim().to_string());
+                        *cap.lock().unwrap() = Some(line["user-agent:".len()..].trim().to_string());
                         break;
                     }
                 }
