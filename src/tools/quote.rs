@@ -218,13 +218,61 @@ pub async fn static_info(
     tool_json(&result)
 }
 
+/// True when an extended-hours session has actually traded. The upstream fills
+/// untraded sessions with `last_done == 0`, which must not be reported as a
+/// real (and wildly negative) price move.
+fn session_has_data(session: &serde_json::Map<String, serde_json::Value>) -> bool {
+    match session.get("last_done") {
+        Some(serde_json::Value::String(s)) => s.parse::<f64>().is_ok_and(|v| v > 0.0),
+        Some(serde_json::Value::Number(n)) => n.as_f64().is_some_and(|v| v > 0.0),
+        _ => false,
+    }
+}
+
+/// Rewrites the extended-hours keys on `quote` output: the `_quote` suffix is
+/// dropped (`post_market` / `overnight` / `pre_market`, in that order), and
+/// sessions that never traded are emitted as `null` instead of a zero-filled
+/// object, so callers don't read a bogus -100% move after the close.
+fn normalize_extended_sessions(value: &mut serde_json::Value) {
+    let Some(items) = value.as_array_mut() else {
+        return;
+    };
+    for item in items {
+        let Some(obj) = item.as_object_mut() else {
+            continue;
+        };
+        // Remove all three before inserting: `serde_json::Map::remove` is a
+        // swap-remove, so interleaving remove/insert would scramble key order.
+        let post = clean_session(obj.remove("post_market_quote"));
+        let overnight = clean_session(obj.remove("overnight_quote"));
+        let pre = clean_session(obj.remove("pre_market_quote"));
+        obj.insert("post_market".to_string(), post);
+        obj.insert("overnight".to_string(), overnight);
+        obj.insert("pre_market".to_string(), pre);
+    }
+}
+
+/// Maps a removed extended-session value to its normalized form: a traded
+/// session is kept as-is, anything else (missing, null, or a zero `last_done`)
+/// becomes `null`.
+fn clean_session(removed: Option<serde_json::Value>) -> serde_json::Value {
+    match removed {
+        Some(serde_json::Value::Object(map)) if session_has_data(&map) => {
+            serde_json::Value::Object(map)
+        }
+        _ => serde_json::Value::Null,
+    }
+}
+
 pub async fn quote(
     mctx: &crate::tools::McpContext,
     p: SymbolsParam,
 ) -> Result<CallToolResult, McpError> {
     let (ctx, _) = QuoteContext::new(mctx.create_config());
     let result = ctx.quote(p.symbols).await.map_err(Error::longbridge)?;
-    tool_json(&result)
+    let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;
+    normalize_extended_sessions(&mut value);
+    tool_json(&value)
 }
 
 pub async fn option_quote(
@@ -822,4 +870,56 @@ pub async fn option_volume_daily(
         &["stats.*.timestamp"],
     )
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::normalize_extended_sessions;
+
+    #[test]
+    fn normalizes_sessions_string_last_done() {
+        // Mirrors `serde_json::to_value(&Vec<SecurityQuote>)` when Decimal
+        // serializes to strings: untraded sessions carry `last_done == "0"`.
+        let mut value = json!([{
+            "symbol": "MRVL.US",
+            "last_done": "290.79",
+            "pre_market_quote": { "last_done": "0", "volume": 0 },
+            "post_market_quote": { "last_done": "318.765", "volume": 8071540 },
+            "overnight_quote": serde_json::Value::Null,
+        }]);
+        normalize_extended_sessions(&mut value);
+        let obj = value[0].as_object().unwrap();
+
+        // `_quote` suffix dropped.
+        assert!(!obj.contains_key("pre_market_quote"));
+        assert!(!obj.contains_key("post_market_quote"));
+        assert!(!obj.contains_key("overnight_quote"));
+        // Traded session kept, untraded/zero and null sessions become null.
+        assert!(obj["post_market"].is_object());
+        assert!(obj["overnight"].is_null());
+        assert!(obj["pre_market"].is_null());
+        // Order is post / overnight / pre.
+        let keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        let pos = |k| keys.iter().position(|x| *x == k).unwrap();
+        assert!(pos("post_market") < pos("overnight"));
+        assert!(pos("overnight") < pos("pre_market"));
+    }
+
+    #[test]
+    fn normalizes_sessions_numeric_last_done() {
+        // When Decimal serializes to numbers instead of strings.
+        let mut value = json!([{
+            "symbol": "X",
+            "post_market_quote": { "last_done": 100.5 },
+            "overnight_quote": { "last_done": 0 },
+            "pre_market_quote": serde_json::Value::Null,
+        }]);
+        normalize_extended_sessions(&mut value);
+        let obj = value[0].as_object().unwrap();
+        assert!(obj["post_market"].is_object());
+        assert!(obj["overnight"].is_null());
+        assert!(obj["pre_market"].is_null());
+    }
 }
