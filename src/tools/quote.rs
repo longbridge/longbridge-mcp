@@ -8,6 +8,7 @@ use rmcp::serde::Deserialize;
 
 use crate::counter::symbol_to_counter_id;
 use crate::error::Error;
+use crate::tools::output;
 use crate::tools::support::http_client::{http_get_tool, http_get_tool_unix};
 use crate::tools::support::parse;
 use crate::tools::support::tolerant::{
@@ -50,16 +51,33 @@ pub struct SymbolCountParam {
 pub struct CandlesticksParam {
     /// Security symbol, e.g. "700.HK"
     pub symbol: String,
-    /// Period: 1m, 5m, 15m, 30m, 60m, day, week, month, year
+    /// Period: 1m, 5m, 15m, 30m, 60m, day, week, month, year (default: day)
+    #[serde(default = "default_candlestick_period")]
     pub period: String,
-    /// Number of candlesticks (max 1000)
-    #[serde(deserialize_with = "tolerant_usize")]
+    /// Number of candlesticks (optional, max 1000; default 100)
+    #[serde(
+        default = "default_candlestick_count",
+        deserialize_with = "tolerant_usize"
+    )]
     pub count: usize,
-    /// Whether to forward-adjust for splits/dividends
-    #[serde(deserialize_with = "tolerant_bool")]
+    /// Whether to forward-adjust for splits/dividends (default: false / no adjust)
+    #[serde(default, deserialize_with = "tolerant_bool")]
     pub forward_adjust: bool,
-    /// Trade sessions: "intraday" (regular hours only) or "all" (include pre-market and post-market)
+    /// Trade sessions: "intraday" (regular hours only) or "all" (include pre-market and post-market; default "all")
+    #[serde(default = "default_trade_sessions")]
     pub trade_sessions: String,
+}
+
+fn default_candlestick_period() -> String {
+    "day".to_string()
+}
+
+fn default_candlestick_count() -> usize {
+    100
+}
+
+fn default_trade_sessions() -> String {
+    "all".to_string()
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -154,8 +172,8 @@ pub struct CalcIndexesParam {
     /// Security symbols, e.g. ["700.HK", "AAPL.US"]
     #[serde(deserialize_with = "tolerant_vec_string")]
     pub symbols: Vec<String>,
-    /// Calc indexes: LastDone, ChangeValue, ChangeRate, Volume, Turnover, YtdChangeRate, TurnoverRate, TotalMarketValue, CapitalFlow, Amplitude, VolumeRatio, PeTtmRatio, PbRatio, DividendRatioTtm, FiveDayChangeRate, TenDayChangeRate, HalfYearChangeRate, FiveMinutesChangeRate, ExpiryDate, StrikePrice, UpperStrikePrice, LowerStrikePrice, OutstandingQty, OutstandingRatio, Premium, ItmOtm, ImpliedVolatility, WarrantDelta, CallPrice, ToCallPrice, EffectiveLeverage, LeverageRatio, ConversionRatio, BalancePoint, OpenInterest, Delta, Gamma, Theta, Vega, Rho
-    #[serde(deserialize_with = "tolerant_vec_string")]
+    /// Calc indexes (optional; defaults to LastDone, ChangeValue, ChangeRate, Volume, PeTtmRatio, PbRatio, DividendRatioTtm, TurnoverRate, TotalMarketValue): LastDone, ChangeValue, ChangeRate, Volume, Turnover, YtdChangeRate, TurnoverRate, TotalMarketValue, CapitalFlow, Amplitude, VolumeRatio, PeTtmRatio, PbRatio, DividendRatioTtm, FiveDayChangeRate, TenDayChangeRate, HalfYearChangeRate, FiveMinutesChangeRate, ExpiryDate, StrikePrice, UpperStrikePrice, LowerStrikePrice, OutstandingQty, OutstandingRatio, Premium, ItmOtm, ImpliedVolatility, WarrantDelta, CallPrice, ToCallPrice, EffectiveLeverage, LeverageRatio, ConversionRatio, BalancePoint, OpenInterest, Delta, Gamma, Theta, Vega, Rho
+    #[serde(default, deserialize_with = "tolerant_vec_string")]
     pub indexes: Vec<String>,
 }
 
@@ -482,7 +500,24 @@ pub async fn capital_distribution(
         .capital_distribution(p.symbol)
         .await
         .map_err(Error::longbridge)?;
-    tool_json(&result)
+    let timestamp = result
+        .timestamp
+        .format(&time::format_description::well_known::Rfc3339)
+        .map_err(|e| Error::Other(e.to_string()))?;
+    let resp = output::CapitalDistributionResponse {
+        timestamp,
+        capital_in: output::CapitalDistribution {
+            large: result.capital_in.large.to_string(),
+            medium: result.capital_in.medium.to_string(),
+            small: result.capital_in.small.to_string(),
+        },
+        capital_out: output::CapitalDistribution {
+            large: result.capital_out.large.to_string(),
+            medium: result.capital_out.medium.to_string(),
+            small: result.capital_out.small.to_string(),
+        },
+    };
+    tool_json(&resp)
 }
 
 pub async fn trading_session(mctx: &crate::tools::McpContext) -> Result<CallToolResult, McpError> {
@@ -601,12 +636,31 @@ pub async fn warrant_list(
     tool_json(&result)
 }
 
+/// Default calc indexes when the caller omits `indexes`: common quote fields
+/// (last_done, change_value, change_rate, volume) plus the `longbridge
+/// calc-index` CLI valuation default (pe, pb, dps_rate, turnover_rate, mktcap).
+const DEFAULT_CALC_INDEXES: [&str; 9] = [
+    "LastDone",
+    "ChangeValue",
+    "ChangeRate",
+    "Volume",
+    "PeTtmRatio",
+    "PbRatio",
+    "DividendRatioTtm",
+    "TurnoverRate",
+    "TotalMarketValue",
+];
+
 pub async fn calc_indexes(
     mctx: &crate::tools::McpContext,
     p: CalcIndexesParam,
 ) -> Result<CallToolResult, McpError> {
-    let indexes: Vec<longbridge::quote::CalcIndex> = p
-        .indexes
+    let index_strs: Vec<&str> = if p.indexes.is_empty() {
+        DEFAULT_CALC_INDEXES.to_vec()
+    } else {
+        p.indexes.iter().map(String::as_str).collect()
+    };
+    let indexes: Vec<longbridge::quote::CalcIndex> = index_strs
         .iter()
         .map(|s| parse::parse_calc_index(s))
         .collect::<Result<_, _>>()?;

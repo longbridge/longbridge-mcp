@@ -427,7 +427,7 @@ impl Longbridge {
         title = "Broker Queue",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
         output_schema = schema_for::<output::BrokersResponse>(),
-        description = "Get broker queue (HK only). Returns bid_brokers/ask_brokers arrays, each with position (1-based) and broker_ids. Map broker IDs to names via participants."
+        description = "Get broker queue (HK stocks only). Returns bid_brokers/ask_brokers arrays, each with position (1-based) and broker_ids. Map broker IDs to names via participants."
     )]
     async fn brokers(
         &self,
@@ -486,7 +486,7 @@ impl Longbridge {
     #[tool(
         title = "Candlesticks",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get candlestick data (OHLCV). period: 1m/5m/15m/30m/60m/day/week/month/year. trade_sessions: intraday/all"
+        description = "Get candlestick data (OHLCV). Only symbol is required; period defaults to day, count to 100 (max 1000), forward_adjust to false, trade_sessions to all. period: 1m/5m/15m/30m/60m/day/week/month/year. trade_sessions: intraday/all"
     )]
     async fn candlesticks(
         &self,
@@ -727,7 +727,7 @@ impl Longbridge {
     #[tool(
         title = "Calc Indexes",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Calculate financial indexes for symbols. Pass symbols and indexes (e.g. [\"PeTtmRatio\",\"PbRatio\",\"LastDone\",\"TurnoverRate\"]). Returns per-symbol index values."
+        description = "Calculate financial indexes for symbols. Pass symbols, and optionally indexes (e.g. [\"PeTtmRatio\",\"PbRatio\",\"LastDone\",\"TurnoverRate\"]). When indexes is omitted or empty, defaults to [\"LastDone\",\"ChangeValue\",\"ChangeRate\",\"Volume\",\"PeTtmRatio\",\"PbRatio\",\"DividendRatioTtm\",\"TurnoverRate\",\"TotalMarketValue\"]. Returns per-symbol index values."
     )]
     async fn calc_indexes(
         &self,
@@ -1360,7 +1360,7 @@ impl Longbridge {
     #[tool(
         title = "Broker Holding",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get top broker holding data for a symbol. Returns items[]{broker_name, holding_quantity, holding_change, holding_ratio} for the given period (rct_1/rct_5/rct_20/rct_60)."
+        description = "Get top broker holding data for a symbol (HK stocks only; sourced from HKEX CCASS participant disclosure). Returns items[]{broker_name, holding_quantity, holding_change, holding_ratio} for the given period (rct_1/rct_5/rct_20/rct_60)."
     )]
     async fn broker_holding(
         &self,
@@ -1375,7 +1375,7 @@ impl Longbridge {
     #[tool(
         title = "Broker Holding Detail",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get full broker holding detail list for a symbol. Returns items[]{broker_id, broker_name, holding_quantity, holding_ratio, holding_change, date}."
+        description = "Get full broker holding detail list for a symbol (HK stocks only; sourced from HKEX CCASS participant disclosure). Returns items[]{broker_id, broker_name, holding_quantity, holding_ratio, holding_change, date}."
     )]
     async fn broker_holding_detail(
         &self,
@@ -1393,7 +1393,7 @@ impl Longbridge {
     #[tool(
         title = "Broker Holding (Daily)",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get daily holding history for a specific broker (by broker_id) in a symbol. Returns items[]{date, holding_quantity, holding_change, holding_ratio}."
+        description = "Get daily holding history for a specific broker (by broker_id) in a symbol (HK stocks only; sourced from HKEX CCASS participant disclosure). Returns items[]{date, holding_quantity, holding_change, holding_ratio}."
     )]
     async fn broker_holding_daily(
         &self,

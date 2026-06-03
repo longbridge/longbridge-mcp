@@ -1,6 +1,8 @@
 //! Custom Serializer wrapper that transforms JSON output during serialization:
 //! - Field names -> snake_case
 //! - Fields ending with `_at` containing i64/u64 -> RFC3339 UTC string
+//! - Any string in `time`'s default `OffsetDateTime` shape (e.g.
+//!   `2026-06-02 20:00:00.0 +00:00:00`) -> RFC3339, regardless of field name
 //! - Field `counter_id` (string) -> renamed to `symbol`, value converted
 //! - Field `counter_ids` (array of strings) -> renamed to `symbols`, each converted
 //! - Fields `aaid` and `account_channel` -> value set to null
@@ -96,6 +98,31 @@ pub(crate) fn timestamp_to_rfc3339(ts: i64) -> String {
             .unwrap_or_else(|_| ts.to_string()),
         Err(_) => ts.to_string(),
     }
+}
+
+/// Convert a string emitted by `time`'s default human-readable `OffsetDateTime`
+/// serialization (e.g. `"2026-06-02 20:00:00.0 +00:00:00"`) into RFC3339.
+///
+/// SDK response types carry `OffsetDateTime` fields which serialize to this
+/// non-RFC3339 shape; our timestamp transform only handles unix-seconds, so
+/// such values would otherwise pass through unchanged. `time`'s `Serialize` and
+/// `Deserialize` for `OffsetDateTime` share one format and are symmetric, so we
+/// round-trip the string back through serde rather than hand-write a fragile
+/// parser. Returns `None` (leaving the value untouched) for anything that is
+/// not in this exact shape — including values already in RFC3339.
+pub(crate) fn datetime_str_to_rfc3339(s: &str) -> Option<String> {
+    // Fast reject: the format is `YYYY-MM-DD HH:MM:SS...` — digit-led, `-` at
+    // index 4, space at index 10. RFC3339 uses `T` at index 10, so it is
+    // rejected here and left as-is.
+    let b = s.as_bytes();
+    if b.len() < 19 || !b[0].is_ascii_digit() || b.get(4) != Some(&b'-') || b.get(10) != Some(&b' ')
+    {
+        return None;
+    }
+    let quoted = serde_json::to_string(s).ok()?;
+    let dt: time::OffsetDateTime = serde_json::from_str(&quoted).ok()?;
+    dt.format(&time::format_description::well_known::Rfc3339)
+        .ok()
 }
 
 /// Parse a string as a plausible unix-seconds timestamp. Returns `None` for
@@ -533,5 +560,53 @@ mod tests {
         assert_eq!(v["aaid"], serde_json::Value::Null);
         assert_eq!(v["account_channel"], serde_json::Value::Null);
         assert_eq!(v["plan_id"], "1");
+    }
+
+    #[test]
+    fn datetime_str_to_rfc3339_conversions() {
+        // time's default human-readable OffsetDateTime format -> RFC3339.
+        assert_eq!(
+            datetime_str_to_rfc3339("2026-06-02 20:00:00.0 +00:00:00").as_deref(),
+            Some("2026-06-02T20:00:00Z")
+        );
+        // Non-UTC offset is preserved.
+        assert_eq!(
+            datetime_str_to_rfc3339("2026-06-02 04:00:00.0 +08:00:00").as_deref(),
+            Some("2026-06-02T04:00:00+08:00")
+        );
+        // Already RFC3339 ('T' at index 10) -> left untouched.
+        assert_eq!(datetime_str_to_rfc3339("2026-06-02T20:00:00Z"), None);
+        // Plain strings / dates / unix seconds -> untouched.
+        assert_eq!(datetime_str_to_rfc3339("hello world"), None);
+        assert_eq!(datetime_str_to_rfc3339("2026-06-02"), None);
+        assert_eq!(datetime_str_to_rfc3339("1700000000"), None);
+    }
+
+    #[test]
+    fn offset_datetime_fields_serialize_as_rfc3339() {
+        use time::OffsetDateTime;
+        #[derive(Serialize)]
+        struct Data {
+            // Bare `timestamp` (Normal path) and `created_at` (_at Timestamp path)
+            // both carry SDK-style OffsetDateTime values.
+            timestamp: OffsetDateTime,
+            created_at: OffsetDateTime,
+        }
+        let dt = OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap();
+        let json = to_tool_json(&Data {
+            timestamp: dt,
+            created_at: dt,
+        })
+        .unwrap();
+        assert!(
+            json.contains("\"timestamp\":\"2023-11-14T22:13:20Z\""),
+            "got: {json}"
+        );
+        assert!(
+            json.contains("\"created_at\":\"2023-11-14T22:13:20Z\""),
+            "got: {json}"
+        );
+        // time's default separator/offset shape must not leak through.
+        assert!(!json.contains("+00:00:00"), "got: {json}");
     }
 }
