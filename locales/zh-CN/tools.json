@@ -403,10 +403,10 @@
       }
     },
     "constituent": {
-      "title": "指数成份股",
-      "description": "获取指数成份股（如 HSI.HK），返回 constituents[]{symbol, name, last_done（最新价）, change_rate, market_cap, weight}",
+      "title": "指数成份股 / ETF 资产分布",
+      "description": "获取指数成份股或 ETF 资产分布。指数（如 HSI.HK、.DJI.US）返回 constituents[]{symbol, name, last_done（最新价）, change_rate, market_cap, weight}。ETF（如 QQQ.US、2800.HK）返回资产分布 info[]，按 asset_type 分组：1=Holdings（前十大持仓，含 code、symbol、holding_detail）/ 2=Regional（地区分布）/ 3=AssetClass（资产类别，如股票/债券/现金）/ 4=Industry（行业分布）。每组含 report_date 与 lists[]{name, position_ratio, name_locales}；Holdings 组额外含 code、symbol 及 holding_detail{industry_name, index_name, holding_type_name}",
       "properties": {
-        "symbol": "指数代码，例如 `\"HSI.HK\"`"
+        "symbol": "指数或 ETF 代码，例如 `\"HSI.HK\"`、`\"QQQ.US\"`"
       }
     },
     "corp_action": {
@@ -442,13 +442,6 @@
       "description": "获取详细派息分红方案，返回 details[]{period, cash_dividend, stock_dividend, record_date, ex_date, pay_date, currency}",
       "properties": {
         "symbol": "证券代码，例如 `\"700.HK\"`"
-      }
-    },
-    "etf_asset_allocation": {
-      "title": "ETF 资产分布",
-      "description": "获取 ETF 的资产分布（例如 QQQ.US、2800.HK），返回 info[]，按 asset_type 分组：1=Holdings（前十大持仓，含 code、symbol、holding_detail）/ 2=Regional（地区分布）/ 3=AssetClass（资产类别，如股票/债券/现金）/ 4=Industry（行业分布）。每组含 report_date 与 lists[]{name, position_ratio, name_locales}；Holdings 组额外含 code、symbol 及 holding_detail{industry_name, index_name, holding_type_name}",
-      "properties": {
-        "symbol": "ETF 证券代码，例如 `\"QQQ.US\"`、`\"2800.HK\"`"
       }
     },
     "exchange_rate": {
