@@ -1,10 +1,12 @@
+use longbridge::FundamentalContext;
+use longbridge::fundamental::types::AssetAllocationResponse;
 use reqwest::Method;
 use rmcp::ErrorData as McpError;
 use rmcp::model::CallToolResult;
 use rmcp::schemars::JsonSchema;
 use rmcp::serde::{Deserialize, Serialize};
 
-use crate::counter::{index_symbol_to_counter_id, symbol_to_counter_id};
+use crate::counter::{index_symbol_to_counter_id, is_etf, symbol_to_counter_id};
 use crate::error::Error;
 use crate::serialize::convert_unix_paths;
 use crate::tools::support::http_client::{http_get_tool, http_get_tool_unix};
@@ -231,6 +233,17 @@ pub async fn constituent(
     mctx: &crate::tools::McpContext,
     p: IndexSymbolParam,
 ) -> Result<CallToolResult, McpError> {
+    // When the symbol resolves to an ETF counter (e.g. `ETF/US/QQQ`), return the
+    // ETF's asset allocation instead of index constituents. Indexes keep the
+    // original index-constituents behaviour. When the symbol is an ETF but the
+    // upstream reports no allocation groups (some ETFs are not covered), fall
+    // through to the index-constituents source below.
+    if is_etf(&p.symbol)
+        && let Some(result) = etf_asset_allocation(mctx, &p.symbol).await?
+    {
+        return tool_json(&result);
+    }
+
     let client = mctx.create_http_client();
     let cid = index_symbol_to_counter_id(&p.symbol);
     http_get_tool(
@@ -239,6 +252,26 @@ pub async fn constituent(
         &[("counter_id", cid.as_str())],
     )
     .await
+}
+
+/// Fetch an ETF's asset allocation via the SDK `FundamentalContext`.
+///
+/// Returns `Ok(None)` when the upstream reports no allocation groups, so the
+/// caller can fall back to another data source.
+async fn etf_asset_allocation(
+    mctx: &crate::tools::McpContext,
+    symbol: &str,
+) -> Result<Option<AssetAllocationResponse>, McpError> {
+    let ctx = FundamentalContext::new(mctx.create_config());
+    let result = ctx
+        .etf_asset_allocation(symbol)
+        .await
+        .map_err(Error::longbridge)?;
+    if result.info.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(result))
+    }
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
