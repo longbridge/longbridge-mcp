@@ -8,7 +8,8 @@ phf_codegen = "0.11"
 
 [dependencies]
 phf = "0.11"
-longbridge = "4.2.2"
+# TODO: switch back to crates.io after openapi PR #535 merges and releases
+longbridge = { git = "https://github.com/longbridge/openapi.git", branch = "etf-allocation" }
 rust_decimal = "1"
 rmcp = { version = "1.4", features = [
     "server",

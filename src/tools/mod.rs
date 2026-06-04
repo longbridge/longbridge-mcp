@@ -497,6 +497,24 @@ impl Longbridge {
         measured_tool_call("candlesticks", || quote::candlesticks(&mctx, p)).await
     }
 
+    /// Get ETF asset allocation.
+    #[tool(
+        title = "ETF Asset Allocation",
+        annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
+        description = "Get the asset allocation of an ETF (e.g. QQQ.US, 2800.HK). Returns info[] grouped by asset_type: 1=Holdings (top constituents with code, symbol, holding_detail), 2=Regional (country/region breakdown), 3=AssetClass (stock/bond/cash etc.), 4=Industry (sector breakdown). Each group has report_date and lists[]{name, position_ratio, name_locales}; Holdings groups additionally include code, symbol and holding_detail{industry_name, index_name, holding_type_name}."
+    )]
+    async fn etf_asset_allocation(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<SymbolParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("etf_asset_allocation", || {
+            quote::etf_asset_allocation(&mctx, p)
+        })
+        .await
+    }
+
     /// Get historical candlesticks by offset.
     #[tool(
         title = "Historical Candlesticks by Offset",

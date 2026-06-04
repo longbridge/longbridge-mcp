@@ -444,6 +444,13 @@
         "symbol": "证券代码，例如 `\"700.HK\"`"
       }
     },
+    "etf_asset_allocation": {
+      "title": "ETF 资产分布",
+      "description": "获取 ETF 的资产分布（例如 QQQ.US、2800.HK），返回 info[]，按 asset_type 分组：1=Holdings（前十大持仓，含 code、symbol、holding_detail）/ 2=Regional（地区分布）/ 3=AssetClass（资产类别，如股票/债券/现金）/ 4=Industry（行业分布）。每组含 report_date 与 lists[]{name, position_ratio, name_locales}；Holdings 组额外含 code、symbol 及 holding_detail{industry_name, index_name, holding_type_name}",
+      "properties": {
+        "symbol": "ETF 证券代码，例如 `\"QQQ.US\"`、`\"2800.HK\"`"
+      }
+    },
     "exchange_rate": {
       "title": "汇率",
       "description": "获取全部支持币种的汇率，返回 list[]{from_currency, to_currency, rate, timestamp}，覆盖 USD/HKD/CNY/SGD 等"

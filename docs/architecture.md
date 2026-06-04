@@ -150,7 +150,7 @@ Two entry points:
 
 | Module | Count | Data Source | Description |
 |--------|-------|-------------|-------------|
-| `quote` | 29 | SDK `QuoteContext` | Quotes, candlesticks, depth, options, warrants, watchlists, capital flow |
+| `quote` | 30 | SDK `QuoteContext` | Quotes, candlesticks, depth, options, warrants, watchlists, capital flow, ETF asset allocation |
 | `trade` | 14 | SDK `TradeContext` | Orders, positions, balance, executions, margin |
 | `fundamental` | 18 | HTTP `/v1/quote/*` | Financial reports, ratings, valuations, company info |
 | `market` | 9 | HTTP `/v1/quote/*` | Broker holdings, A/H premium, anomalies, index constituents |

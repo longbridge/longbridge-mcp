@@ -13,11 +13,11 @@
   <a href="https://longbridge.com"><img alt="Longbridge" src="https://img.shields.io/badge/brokerage-Longbridge-ffe000?labelColor=000"></a>
 </p>
 
-Official MCP server for the [Longbridge](https://longbridge.com) brokerage. **145 tools** across real-time quotes, options, order routing, fundamentals, analyst ratings, calendars, IPO, price alerts, DCA plans, portfolio analytics and community sharelists — covering **US and HK markets**. Built with Rust using [rmcp](https://github.com/anthropics/rmcp) and [axum](https://github.com/tokio-rs/axum).
+Official MCP server for the [Longbridge](https://longbridge.com) brokerage. **146 tools** across real-time quotes, options, order routing, fundamentals, analyst ratings, calendars, IPO, price alerts, DCA plans, portfolio analytics and community sharelists — covering **US and HK markets**. Built with Rust using [rmcp](https://github.com/anthropics/rmcp) and [axum](https://github.com/tokio-rs/axum).
 
 ## Features
 
-- **145 MCP tools** across 13 categories: quotes, trading, fundamentals, screener, market data, calendars, IPO, portfolio, alerts, content, account statements, DCA, and community sharelists
+- **146 MCP tools** across 13 categories: quotes, trading, fundamentals, screener, market data, calendars, IPO, portfolio, alerts, content, account statements, DCA, and community sharelists
 - **Stateless architecture** -- each request carries a Bearer token forwarded directly to the Longbridge SDK; no server-side sessions or database
 - **OAuth 2.1 resource metadata** compliant with RFC 9728, pointing clients to Longbridge OAuth for authorization
 - **JSON response transformation** -- field names normalized to snake_case, timestamps converted to RFC 3339, internal counter_id values mapped to human-readable symbols
@@ -173,7 +173,7 @@ On the first tool invocation, Claude Code reads the `WWW-Authenticate` challenge
 
 | Category | Count | Description |
 |----------|-------|-------------|
-| **Quote** | 32 | Real-time and historical quotes, candlesticks, depth, brokers, options, warrants, watchlists, capital flow, market temperature, short positions, option volume |
+| **Quote** | 33 | Real-time and historical quotes, candlesticks, depth, brokers, options, warrants, watchlists, capital flow, market temperature, short positions, option volume, ETF asset allocation |
 | **Trade** | 14 | Order submission/cancellation/replacement, positions, balance, executions, cash flow, margin |
 | **Fundamental** | 19 | Financial statements, business segments, institutional views, industry peers, earnings snapshot, dividends, EPS forecasts, valuations, company info, shareholders, corporate actions |
 | **Market** | 10 | Market status, industry rank, broker holdings, A/H premium, trade statistics, anomalies, index constituents |

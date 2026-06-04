@@ -466,6 +466,18 @@ pub async fn option_chain_expiry_date_list(
     tool_json(&strs)
 }
 
+pub async fn etf_asset_allocation(
+    mctx: &crate::tools::McpContext,
+    p: SymbolParam,
+) -> Result<CallToolResult, McpError> {
+    let (ctx, _) = QuoteContext::new(mctx.create_config());
+    let result = ctx
+        .etf_asset_allocation(p.symbol)
+        .await
+        .map_err(Error::longbridge)?;
+    tool_json(&result)
+}
+
 pub async fn option_chain_info_by_date(
     mctx: &crate::tools::McpContext,
     p: SymbolDateParam,
