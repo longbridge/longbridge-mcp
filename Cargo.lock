@@ -1512,7 +1512,7 @@ checksum = "5e5032e24019045c762d3c0f28f5b6b8bbf38563a65908389bf7978758920897"
 [[package]]
 name = "longbridge"
 version = "4.2.2"
-source = "git+https://github.com/longbridge/openapi.git?branch=etf-allocation#f4499018556e98d622ad2bb86e4bb15ecdf589ca"
+source = "git+https://github.com/longbridge/openapi.git?branch=main#4f055f23d5bd75dfa7d20699289411591dea9ce8"
 dependencies = [
  "anyhow",
  "bitflags 2.11.1",
@@ -1547,7 +1547,7 @@ dependencies = [
 [[package]]
 name = "longbridge-candlesticks"
 version = "4.2.2"
-source = "git+https://github.com/longbridge/openapi.git?branch=etf-allocation#f4499018556e98d622ad2bb86e4bb15ecdf589ca"
+source = "git+https://github.com/longbridge/openapi.git?branch=main#4f055f23d5bd75dfa7d20699289411591dea9ce8"
 dependencies = [
  "bitflags 2.11.1",
  "num-traits",
@@ -1559,7 +1559,7 @@ dependencies = [
 [[package]]
 name = "longbridge-geo"
 version = "4.2.2"
-source = "git+https://github.com/longbridge/openapi.git?branch=etf-allocation#f4499018556e98d622ad2bb86e4bb15ecdf589ca"
+source = "git+https://github.com/longbridge/openapi.git?branch=main#4f055f23d5bd75dfa7d20699289411591dea9ce8"
 dependencies = [
  "reqwest 0.12.28",
 ]
@@ -1567,7 +1567,7 @@ dependencies = [
 [[package]]
 name = "longbridge-httpcli"
 version = "4.2.2"
-source = "git+https://github.com/longbridge/openapi.git?branch=etf-allocation#f4499018556e98d622ad2bb86e4bb15ecdf589ca"
+source = "git+https://github.com/longbridge/openapi.git?branch=main#4f055f23d5bd75dfa7d20699289411591dea9ce8"
 dependencies = [
  "dotenv",
  "futures-util",
@@ -1619,7 +1619,7 @@ dependencies = [
 [[package]]
 name = "longbridge-oauth"
 version = "4.2.2"
-source = "git+https://github.com/longbridge/openapi.git?branch=etf-allocation#f4499018556e98d622ad2bb86e4bb15ecdf589ca"
+source = "git+https://github.com/longbridge/openapi.git?branch=main#4f055f23d5bd75dfa7d20699289411591dea9ce8"
 dependencies = [
  "dirs",
  "futures-util",
@@ -1636,7 +1636,7 @@ dependencies = [
 [[package]]
 name = "longbridge-proto"
 version = "4.2.2"
-source = "git+https://github.com/longbridge/openapi.git?branch=etf-allocation#f4499018556e98d622ad2bb86e4bb15ecdf589ca"
+source = "git+https://github.com/longbridge/openapi.git?branch=main#4f055f23d5bd75dfa7d20699289411591dea9ce8"
 dependencies = [
  "prost",
  "serde",
@@ -1645,7 +1645,7 @@ dependencies = [
 [[package]]
 name = "longbridge-wscli"
 version = "4.2.2"
-source = "git+https://github.com/longbridge/openapi.git?branch=etf-allocation#f4499018556e98d622ad2bb86e4bb15ecdf589ca"
+source = "git+https://github.com/longbridge/openapi.git?branch=main#4f055f23d5bd75dfa7d20699289411591dea9ce8"
 dependencies = [
  "byteorder",
  "flate2",
