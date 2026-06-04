@@ -5,8 +5,7 @@ edition = "2024"
 
 [dependencies]
 # TODO: switch back to crates.io after the next openapi release
-# TODO: revert to main after openapi PR #537 merges
-longbridge = { git = "https://github.com/longbridge/openapi.git", branch = "update-us-etf-list" }
+longbridge = { git = "https://github.com/longbridge/openapi.git", branch = "main" }
 rust_decimal = "1"
 rmcp = { version = "1.4", features = [
     "server",
