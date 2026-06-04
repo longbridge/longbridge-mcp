@@ -6,7 +6,7 @@ use rmcp::model::CallToolResult;
 use rmcp::schemars::JsonSchema;
 use rmcp::serde::{Deserialize, Serialize};
 
-use crate::counter::{index_symbol_to_counter_id, symbol_to_counter_id};
+use crate::counter::{index_symbol_to_counter_id, is_etf, symbol_to_counter_id};
 use crate::error::Error;
 use crate::serialize::convert_unix_paths;
 use crate::tools::support::http_client::{http_get_tool, http_get_tool_unix};
@@ -238,7 +238,7 @@ pub async fn constituent(
     // original index-constituents behaviour. When the symbol is an ETF but the
     // upstream reports no allocation groups (some ETFs are not covered), fall
     // through to the index-constituents source below.
-    if symbol_to_counter_id(&p.symbol).starts_with("ETF/")
+    if is_etf(&p.symbol)
         && let Some(result) = etf_asset_allocation(mctx, &p.symbol).await?
     {
         return tool_json(&result);
