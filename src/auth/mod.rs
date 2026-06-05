@@ -126,10 +126,14 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route("/mcp/tools.json", axum::routing::get(tools_json))
         .route("/mcp/scopes.json", axum::routing::get(scopes_json));
 
-    // Build an auth-wrapped MCP service. Called twice so both /mcp and /
-    // (root) are served — allowing deployments where the gateway strips the
-    // /mcp prefix or routes directly to the domain root.
-    let make_mcp_with_auth = |base_url: String| {
+    // Build an auth-wrapped MCP service for one mounting point. The same
+    // `Longbridge` MCP server is mounted several times; the only thing that
+    // differs is the auth `mode`:
+    //   - `AuthMode::Required` for the main endpoints (`/mcp` and root): a
+    //     missing token yields 401, exactly as before this feature.
+    //   - `AuthMode::Optional` for the `/agent` endpoint: token-less requests
+    //     are allowed through into the `authenticate` reverse-auth flow.
+    let make_mcp_with_auth = |base_url: String, mode: middleware::AuthMode| {
         let svc = StreamableHttpService::new(
             move || Ok(Longbridge),
             Arc::new(NeverSessionManager::default()),
@@ -141,14 +145,20 @@ pub fn create_router(state: Arc<AppState>) -> Router {
             .layer(axum::middleware::from_fn(
                 move |req: axum::extract::Request, next: axum::middleware::Next| {
                     let base_url = base_url.clone();
-                    async move { middleware::mcp_auth_layer(req, next, &base_url).await }
+                    async move { middleware::mcp_auth_layer(req, next, &base_url, mode).await }
                 },
             ))
             .service(svc)
     };
 
-    let mcp_with_auth = make_mcp_with_auth(state.base_url.clone());
-    let mcp_with_auth_root = make_mcp_with_auth(state.base_url.clone());
+    // Main endpoints — Bearer required (token-less -> 401). Mounted at both
+    // `/mcp` and root so deployments that strip or omit the `/mcp` prefix work.
+    let mcp_with_auth = make_mcp_with_auth(state.base_url.clone(), middleware::AuthMode::Required);
+    let mcp_with_auth_root =
+        make_mcp_with_auth(state.base_url.clone(), middleware::AuthMode::Required);
+    // Optional-auth endpoint — same MCP server, but token-less requests are let
+    // through so an OAuth-incapable client can call the `authenticate` tool.
+    let mcp_agent = make_mcp_with_auth(state.base_url.clone(), middleware::AuthMode::Optional);
 
     Router::new()
         .merge(metadata_routes)
@@ -156,6 +166,7 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .merge(health_route)
         .merge(metrics_route)
         .merge(tools_route)
+        .nest_service("/agent", mcp_agent)
         .nest_service("/mcp", mcp_with_auth)
         // Also serve at root so deployments that omit the /mcp path prefix work.
         .fallback_service(mcp_with_auth_root)
