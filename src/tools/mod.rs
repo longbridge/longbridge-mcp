@@ -1523,11 +1523,11 @@ impl Longbridge {
         measured_tool_call("anomaly", || market::anomaly(&mctx, p)).await
     }
 
-    /// Get index constituents.
+    /// Get index constituents or ETF asset allocation.
     #[tool(
-        title = "Index Constituents",
+        title = "Index Constituents / ETF Asset Allocation",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get constituent stocks of an index (e.g. HSI.HK, .DJI.US). Returns constituents[]{symbol, name, last_done, change_rate, market_cap, weight}."
+        description = "Get the constituents of an index or the asset allocation of an ETF. For an index (e.g. HSI.HK, .DJI.US) returns constituents[]{symbol, name, last_done, change_rate, market_cap, weight}. For an ETF (e.g. QQQ.US, 2800.HK) returns the asset allocation as info[] grouped by asset_type: 1=Holdings (top constituents with code, symbol, holding_detail), 2=Regional (country/region breakdown), 3=AssetClass (stock/bond/cash etc.), 4=Industry (sector breakdown). Each group has report_date and lists[]{name, position_ratio, name_locales}; Holdings groups additionally include code, symbol and holding_detail{industry_name, index_name, holding_type_name}."
     )]
     async fn constituent(
         &self,

@@ -1,14 +1,11 @@
 [package]
 name = "longbridge-mcp"
-version = "0.4.8"
+version = "0.4.9"
 edition = "2024"
 
-[build-dependencies]
-phf_codegen = "0.11"
-
 [dependencies]
-phf = "0.11"
-longbridge = "4.2.2"
+# TODO: switch back to crates.io after the next openapi release
+longbridge = { git = "https://github.com/longbridge/openapi.git", branch = "main" }
 rust_decimal = "1"
 rmcp = { version = "1.4", features = [
     "server",
