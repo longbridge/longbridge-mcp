@@ -1121,6 +1121,13 @@
         "last_timestamp": "查询截止时间戳（秒），传当前时间戳获取最新数据",
         "page_size": "每页数量，1–100，默认 20"
       }
+    },
+    "authenticate": {
+      "title": "授权认证",
+      "description": "当你尚未取得长桥凭据时使用（例如客户端无法完成浏览器 OAuth 流程）。用户在 https://open.longbridge.com/connect 生成一次性授权码并粘贴给你，将其作为 `auth_code` 传入。成功后服务端会返回访问令牌，请在后续请求中作为 Bearer 凭据使用，即可解锁全部工具。若你未授权且用户尚未提供授权码，请引导其前往 https://open.longbridge.com/connect 生成。",
+      "properties": {
+        "auth_code": "用户在 https://open.longbridge.com/connect 生成的一次性 OAuth 授权码，5 分钟内有效且仅可使用一次。"
+      }
     }
   }
 }

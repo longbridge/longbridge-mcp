@@ -10,7 +10,7 @@ use rmcp::tool;
 use rmcp::tool_handler;
 use rmcp::tool_router;
 
-use crate::auth::middleware::BearerToken;
+use crate::auth::middleware::{AgentEndpoint, BearerToken};
 use crate::error::Error;
 use crate::serialize::to_tool_json;
 
@@ -28,6 +28,7 @@ where
 
 mod alert;
 mod atm;
+mod authenticate;
 mod calendar;
 mod content;
 mod dca;
@@ -240,15 +241,48 @@ fn collect_headers(headers: &axum::http::HeaderMap) -> Vec<(String, String)> {
         .collect()
 }
 
+/// Whether the current request carries Longbridge credentials.
+///
+/// True when the auth middleware attached a `BearerToken` (i.e. the client sent
+/// an `Authorization: Bearer` header). Used to (a) gate the tool list shown to
+/// unauthenticated sessions and (b) let `authenticate` report when a session is
+/// already authenticated.
+fn is_authenticated(ctx: &RequestContext<RoleServer>) -> bool {
+    ctx.extensions
+        .get::<axum::http::request::Parts>()
+        .map(|parts| parts.extensions.get::<BearerToken>().is_some())
+        .unwrap_or(false)
+}
+
+/// Whether the request arrived on the optional-auth `/agent` endpoint.
+///
+/// The auth middleware inserts [`AgentEndpoint`] only for token-less requests
+/// on `/agent`. On the main endpoint a token-less request is rejected with 401
+/// before reaching a handler, so this is never true there. Used to decide
+/// whether to surface the `authenticate` tool to an unauthenticated session.
+fn is_agent_endpoint(ctx: &RequestContext<RoleServer>) -> bool {
+    ctx.extensions
+        .get::<axum::http::request::Parts>()
+        .map(|parts| parts.extensions.get::<AgentEndpoint>().is_some())
+        .unwrap_or(false)
+}
+
 fn extract_context(ctx: &RequestContext<RoleServer>) -> Result<McpContext, McpError> {
     let parts = ctx
         .extensions
         .get::<axum::http::request::Parts>()
         .ok_or_else(|| McpError::internal_error("missing request parts", None))?;
-    let token = parts
-        .extensions
-        .get::<BearerToken>()
-        .ok_or_else(|| McpError::internal_error("not authenticated", None))?;
+    let token = parts.extensions.get::<BearerToken>().ok_or_else(|| {
+        McpError::invalid_request(
+            format!(
+                "Not authenticated. Provide credentials by calling the `authenticate` tool \
+                     with a one-time authorization code generated at {}, or connect with an \
+                     `Authorization: Bearer <token>` header obtained via the OAuth flow.",
+                crate::tools::authenticate::connect_page_url()
+            ),
+            None,
+        )
+    })?;
     let language = parts
         .headers
         .get("accept-language")
@@ -334,6 +368,25 @@ use crate::tools::trade::{
 
 #[tool_router(vis = "pub(crate)")]
 impl Longbridge {
+    /// Authenticate this MCP session using a one-time authorization code.
+    #[tool(
+        title = "Authenticate",
+        annotations(
+            read_only_hint = false,
+            idempotent_hint = false,
+            open_world_hint = true
+        ),
+        description = "Authenticate when you have no Longbridge credentials yet (e.g. your client could not complete the browser OAuth flow). The user generates a one-time authorization code at https://open.longbridge.com/connect and pastes it to you; pass it as `auth_code`. On success the server returns an access token to use as the Bearer credential on subsequent requests, unlocking the full tool set. If you are not authenticated and the user has not provided a code, direct them to https://open.longbridge.com/connect to generate one."
+    )]
+    async fn authenticate(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<authenticate::AuthenticateParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let already = is_authenticated(&ctx);
+        measured_tool_call("authenticate", || authenticate::authenticate(already, p)).await
+    }
+
     /// Get current UTC time in RFC3339 format.
     #[tool(
         title = "Current Time",
@@ -2729,13 +2782,81 @@ impl Longbridge {
     instructions = "Longbridge OpenAPI MCP Server - provides market data, trading, and financial analysis tools"
 )]
 impl ServerHandler for Longbridge {
+    // NOTE: `get_info` is intentionally NOT overridden — the `initialize`
+    // override below delegates to the `#[tool_handler]` macro default and only
+    // swaps `instructions` for unauthenticated `/agent` sessions, so the main
+    // endpoint's `initialize` response stays byte-for-byte identical to its
+    // pre-feature behaviour. The reverse-auth flow does not need a
+    // `tools.listChanged` push: the agent client obtains the token from
+    // `authenticate` and reconnects with the `Authorization` header, which
+    // re-initializes the session and re-fetches the full tool list.
+
+    /// `initialize`, with endpoint-aware `instructions`.
+    ///
+    /// Main endpoint: byte-for-byte the macro default (`get_info`), so the
+    /// pre-feature `initialize` response is unchanged. Unauthenticated
+    /// `/agent` sessions instead get instructions that explicitly frame the
+    /// endpoint as a temporary authorization channel, so AI clients do not
+    /// mistake `<host>/agent` for the Longbridge MCP service address itself.
+    async fn initialize(
+        &self,
+        request: rmcp::model::InitializeRequestParams,
+        context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> Result<rmcp::model::InitializeResult, rmcp::ErrorData> {
+        // Mirror the rmcp default implementation.
+        if context.peer.peer_info().is_none() {
+            context.peer.set_peer_info(request);
+        }
+        let mut info = self.get_info();
+        if is_agent_endpoint(&context) && !is_authenticated(&context) {
+            info.instructions = Some(format!(
+                "Longbridge MCP AUTHORIZATION endpoint. The `/agent` path is only a temporary \
+                 channel for completing authorization — it is NOT the Longbridge MCP service \
+                 address. Call the `authenticate` tool with a one-time authorization code (the \
+                 user can generate one at {}), then follow the tool result: connect to the main \
+                 Longbridge MCP service (same host, without the `/agent` path) using the \
+                 returned `Authorization: Bearer` token.",
+                crate::tools::authenticate::connect_page_url()
+            ));
+        }
+        Ok(info)
+    }
+
+    /// List tools, gated on endpoint and authentication state.
+    ///
+    /// Three cases:
+    /// - **Main endpoint** (`/mcp`, root): a token is always present (the auth
+    ///   middleware rejects token-less requests with 401 before they reach
+    ///   here), so the full tool set is returned — the `authenticate` tool is
+    ///   filtered out, keeping the main endpoint's tool list byte-for-byte
+    ///   identical to its pre-feature behaviour.
+    /// - **`/agent` endpoint, authenticated**: behaves exactly like the main
+    ///   endpoint — full tool set, no `authenticate`.
+    /// - **`/agent` endpoint, unauthenticated**: only the `authenticate` tool is
+    ///   exposed, so an OAuth-incapable client can complete the handshake and
+    ///   self-authorize. After `authenticate` succeeds and the client starts
+    ///   sending the returned token, the next `tools/list` returns the full set.
     async fn list_tools(
         &self,
         _request: Option<rmcp::model::PaginatedRequestParams>,
-        _context: rmcp::service::RequestContext<rmcp::RoleServer>,
+        context: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> Result<rmcp::model::ListToolsResult, rmcp::ErrorData> {
+        let tools = if is_agent_endpoint(&context) && !is_authenticated(&context) {
+            // Optional-auth endpoint with no credentials: only `authenticate`.
+            list_tools()
+                .into_iter()
+                .filter(|t| t.name == "authenticate")
+                .collect()
+        } else {
+            // Main endpoint, or `/agent` with a valid token: the full tool set,
+            // minus `authenticate` (which is only meaningful pre-auth on /agent).
+            list_tools()
+                .into_iter()
+                .filter(|t| t.name != "authenticate")
+                .collect()
+        };
         Ok(rmcp::model::ListToolsResult {
-            tools: list_tools(),
+            tools,
             ..Default::default()
         })
     }

@@ -318,6 +318,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "bs58"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bf88ba1141d185c399bee5288d850d63b8369520c1eafc32a0430b5b6c287bf4"
+dependencies = [
+ "tinyvec",
+]
+
+[[package]]
 name = "bumpalo"
 version = "3.20.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1511,8 +1520,8 @@ checksum = "5e5032e24019045c762d3c0f28f5b6b8bbf38563a65908389bf7978758920897"
 
 [[package]]
 name = "longbridge"
-version = "4.2.2"
-source = "git+https://github.com/longbridge/openapi.git?branch=main#89e44368eba0d1ba107fd98d5988ab3a2ee0e7ec"
+version = "4.3.0"
+source = "git+https://github.com/longbridge/openapi.git?branch=main#573846945971adf7586376292c318dc389b16552"
 dependencies = [
  "anyhow",
  "bitflags 2.11.1",
@@ -1546,8 +1555,8 @@ dependencies = [
 
 [[package]]
 name = "longbridge-candlesticks"
-version = "4.2.2"
-source = "git+https://github.com/longbridge/openapi.git?branch=main#89e44368eba0d1ba107fd98d5988ab3a2ee0e7ec"
+version = "4.3.0"
+source = "git+https://github.com/longbridge/openapi.git?branch=main#573846945971adf7586376292c318dc389b16552"
 dependencies = [
  "bitflags 2.11.1",
  "num-traits",
@@ -1558,16 +1567,16 @@ dependencies = [
 
 [[package]]
 name = "longbridge-geo"
-version = "4.2.2"
-source = "git+https://github.com/longbridge/openapi.git?branch=main#89e44368eba0d1ba107fd98d5988ab3a2ee0e7ec"
+version = "4.3.0"
+source = "git+https://github.com/longbridge/openapi.git?branch=main#573846945971adf7586376292c318dc389b16552"
 dependencies = [
  "reqwest 0.12.28",
 ]
 
 [[package]]
 name = "longbridge-httpcli"
-version = "4.2.2"
-source = "git+https://github.com/longbridge/openapi.git?branch=main#89e44368eba0d1ba107fd98d5988ab3a2ee0e7ec"
+version = "4.3.0"
+source = "git+https://github.com/longbridge/openapi.git?branch=main#573846945971adf7586376292c318dc389b16552"
 dependencies = [
  "dotenv",
  "futures-util",
@@ -1593,6 +1602,8 @@ dependencies = [
  "anyhow",
  "axum",
  "axum-server",
+ "base64 0.22.1",
+ "bs58",
  "clap",
  "longbridge",
  "prometheus",
@@ -1616,8 +1627,8 @@ dependencies = [
 
 [[package]]
 name = "longbridge-oauth"
-version = "4.2.2"
-source = "git+https://github.com/longbridge/openapi.git?branch=main#89e44368eba0d1ba107fd98d5988ab3a2ee0e7ec"
+version = "4.3.0"
+source = "git+https://github.com/longbridge/openapi.git?branch=main#573846945971adf7586376292c318dc389b16552"
 dependencies = [
  "dirs",
  "futures-util",
@@ -1633,8 +1644,8 @@ dependencies = [
 
 [[package]]
 name = "longbridge-proto"
-version = "4.2.2"
-source = "git+https://github.com/longbridge/openapi.git?branch=main#89e44368eba0d1ba107fd98d5988ab3a2ee0e7ec"
+version = "4.3.0"
+source = "git+https://github.com/longbridge/openapi.git?branch=main#573846945971adf7586376292c318dc389b16552"
 dependencies = [
  "prost",
  "serde",
@@ -1642,8 +1653,8 @@ dependencies = [
 
 [[package]]
 name = "longbridge-wscli"
-version = "4.2.2"
-source = "git+https://github.com/longbridge/openapi.git?branch=main#89e44368eba0d1ba107fd98d5988ab3a2ee0e7ec"
+version = "4.3.0"
+source = "git+https://github.com/longbridge/openapi.git?branch=main#573846945971adf7586376292c318dc389b16552"
 dependencies = [
  "byteorder",
  "flate2",
