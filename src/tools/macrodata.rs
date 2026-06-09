@@ -44,7 +44,7 @@ pub async fn macrodata_list(
         &client,
         "/v1/quote/macrodata",
         &params,
-        &["items[*].start_date"],
+        &["items.*.start_date"],
     )
     .await
 }
@@ -68,12 +68,9 @@ pub async fn macrodata(
     }
     let params_ref: Vec<(&str, &str)> = params.iter().map(|(k, v)| (*k, v.as_str())).collect();
 
-    let unix_paths = &[
-        "info.start_date",
-        "data[*].release_at",
-        "data[*].next_release_at",
-    ];
-    http_get_tool_unix(&client, &path, &params_ref, unix_paths).await
+    // release_at / next_release_at end with _at and are converted automatically
+    // by transform_json; only start_date (no _at suffix) needs explicit listing.
+    http_get_tool_unix(&client, &path, &params_ref, &["info.start_date"]).await
 }
 
 #[cfg(test)]
