@@ -576,6 +576,24 @@
       "title": "市场状态",
       "description": "获取所有市场当前交易状态，返回 market_time[]{market, trade_status（Pre-Open/Trading/Lunch Break/Post-Trading/Closed 等）, timestamp}"
     },
+    "macrodata_list": {
+      "title": "宏观指标列表",
+      "description": "列出所有支持的宏观经济指标（约 619 条）。返回 items[]{indicator_code, source_org, country, name, periodicity, category, importance, start_date}。传 limit=1000 可一次获取全部。",
+      "properties": {
+        "offset": "分页偏移量，默认 0",
+        "limit": "返回条数上限，默认 100，最大 1000"
+      }
+    },
+    "macrodata": {
+      "title": "宏观指标历史数据",
+      "description": "按指标代码（来自 macrodata_list）查询历史数据。返回 info{name, periodicity, country, unit} 和 data[]{period, release_at, actual_value, previous_value, forecast_value, revised_value, next_release_at}。limit 最大 100。",
+      "properties": {
+        "indicator_code": "指标代码，例如 `\"USCPI\"`，来自 macrodata_list",
+        "start_time": "数据起始发布时间（RFC3339，例如 `\"2024-01-01T00:00:00Z\"`）",
+        "end_time": "数据结束发布时间（RFC3339）",
+        "limit": "返回条数上限，默认 100，最大 100"
+      }
+    },
     "market_temperature": {
       "title": "市场温度",
       "description": "获取当前市场情绪温度，返回 {temperature（0-100）, description, valuation（0-100）, sentiment（0-100）, timestamp}",
