@@ -20,16 +20,10 @@ pub struct MacrodataParam {
     pub indicator_code: String,
     /// Earliest release time to include (RFC3339, e.g. `"2024-01-01T00:00:00Z"`).
     pub start_time: Option<String>,
-    /// Latest release time to include (RFC3339).
+    /// Latest release time to include (RFC3339, e.g. `"2024-12-31T23:59:59Z"`).
     pub end_time: Option<String>,
     /// Maximum number of data points to return (default 100, max 100).
     pub limit: Option<i32>,
-}
-
-/// Convert an RFC3339 string to a unix-seconds string for use as a query param.
-fn rfc3339_to_unix(s: &str) -> Result<String, McpError> {
-    let dt = crate::tools::support::parse::parse_rfc3339(s)?;
-    Ok(dt.unix_timestamp().to_string())
 }
 
 pub async fn macrodata_indicators(
@@ -56,35 +50,20 @@ pub async fn macrodata(
     let client = mctx.create_http_client();
     let path = format!("/v1/quote/macrodata/{}", p.indicator_code);
 
-    let mut params: Vec<(&str, String)> = Vec::new();
+    let mut params: Vec<(&str, &str)> = Vec::new();
     if let Some(ref s) = p.start_time {
-        params.push(("start_time", rfc3339_to_unix(s)?));
+        params.push(("start_time", s.as_str()));
     }
     if let Some(ref e) = p.end_time {
-        params.push(("end_time", rfc3339_to_unix(e)?));
+        params.push(("end_time", e.as_str()));
     }
+    let limit_str;
     if let Some(l) = p.limit {
-        params.push(("limit", l.to_string()));
+        limit_str = l.to_string();
+        params.push(("limit", limit_str.as_str()));
     }
-    let params_ref: Vec<(&str, &str)> = params.iter().map(|(k, v)| (*k, v.as_str())).collect();
 
     // release_at / next_release_at end with _at and are converted automatically
     // by transform_json; only start_date (no _at suffix) needs explicit listing.
-    http_get_tool_unix(&client, &path, &params_ref, &["info.start_date"]).await
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn rfc3339_to_unix_known_value() {
-        let result = rfc3339_to_unix("2024-01-01T00:00:00Z").unwrap();
-        assert_eq!(result, "1704067200");
-    }
-
-    #[test]
-    fn rfc3339_to_unix_rejects_invalid() {
-        assert!(rfc3339_to_unix("not-a-date").is_err());
-    }
+    http_get_tool_unix(&client, &path, &params, &["info.start_date"]).await
 }
