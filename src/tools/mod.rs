@@ -34,6 +34,7 @@ mod content;
 mod dca;
 mod fundamental;
 mod ipo;
+mod macrodata;
 mod market;
 mod output;
 mod portfolio;
