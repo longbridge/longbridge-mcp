@@ -728,20 +728,23 @@ impl Longbridge {
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
         description = "List all supported macro-economic indicators (~619 total). Returns items[]{indicator_code, source_org, country, name, periodicity, category, importance, start_date}. Pass limit=1000 to fetch all at once."
     )]
-    async fn macrodata_list(
+    async fn macrodata_indicators(
         &self,
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<macrodata::MacrodataListParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("macrodata_list", || macrodata::macrodata_list(&mctx, p)).await
+        measured_tool_call("macrodata_indicators", || {
+            macrodata::macrodata_indicators(&mctx, p)
+        })
+        .await
     }
 
     /// Get historical data for a macro-economic indicator.
     #[tool(
         title = "Macro Indicator Data",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get historical data for a macro-economic indicator by its code (from macrodata_list). Returns info{name, periodicity, country, unit} and data[]{period, release_at, actual_value, previous_value, forecast_value, revised_value, next_release_at}. limit max 100."
+        description = "Get historical data for a macro-economic indicator by its code (from macrodata_indicators). Returns info{name, periodicity, country, unit} and data[]{period, release_at, actual_value, previous_value, forecast_value, revised_value, next_release_at}. limit max 100."
     )]
     async fn macrodata(
         &self,

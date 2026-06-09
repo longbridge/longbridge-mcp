@@ -16,7 +16,7 @@ pub struct MacrodataListParam {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct MacrodataParam {
-    /// Indicator code from `macrodata_list`, e.g. `"USCPI"`.
+    /// Indicator code from `macrodata_indicators`, e.g. `"USCPI"`.
     pub indicator_code: String,
     /// Earliest release time to include (RFC3339, e.g. `"2024-01-01T00:00:00Z"`).
     pub start_time: Option<String>,
@@ -32,7 +32,7 @@ fn rfc3339_to_unix(s: &str) -> Result<String, McpError> {
     Ok(dt.unix_timestamp().to_string())
 }
 
-pub async fn macrodata_list(
+pub async fn macrodata_indicators(
     mctx: &crate::tools::McpContext,
     p: MacrodataListParam,
 ) -> Result<CallToolResult, McpError> {
