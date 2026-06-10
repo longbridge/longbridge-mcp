@@ -731,7 +731,7 @@ impl Longbridge {
     async fn macrodata_indicators(
         &self,
         ctx: RequestContext<RoleServer>,
-        Parameters(p): Parameters<macrodata::MacrodataListParam>,
+        Parameters(p): Parameters<macrodata::MacrodataIndicatorsParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
         measured_tool_call("macrodata_indicators", || {
@@ -744,7 +744,7 @@ impl Longbridge {
     #[tool(
         title = "Macro Indicator Data",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get historical data for a macro-economic indicator by its code (from macrodata_indicators). Returns info{name, periodicity, country, unit} and data[]{period, release_at, actual_value, previous_value, forecast_value, revised_value, next_release_at}. limit max 100."
+        description = "Get historical data for a macro-economic indicator by its code (from macrodata_indicators). start_date/end_date accept YYYY-MM-DD format. Returns info{name, periodicity, country, unit} and data[]{period, release_at, actual_value, previous_value, forecast_value, revised_value, next_release_at}. limit max 100."
     )]
     async fn macrodata(
         &self,

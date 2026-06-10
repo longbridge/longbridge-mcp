@@ -589,8 +589,8 @@
       "description": "按指標代碼（來自 macrodata_indicators）查詢歷史數據。返回 info{name, periodicity, country, unit} 和 data[]{period, release_at, actual_value, previous_value, forecast_value, revised_value, next_release_at}。limit 最大 100。",
       "properties": {
         "indicator_code": "指標代碼，例如 `\"USCPI\"`，來自 macrodata_indicators",
-        "start_time": "數據起始發布時間（RFC3339，例如 `\"2024-01-01T00:00:00Z\"`）",
-        "end_time": "數據結束發布時間（RFC3339）",
+        "start_date": "數據起始日期（`yyyy-mm-dd`，例如 `\"2024-01-01\"`）",
+        "end_date": "數據結束日期（`yyyy-mm-dd`，例如 `\"2024-12-31\"`）",
         "limit": "返回條數上限，預設 100，最大 100"
       }
     },

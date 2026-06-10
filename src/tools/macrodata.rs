@@ -1,12 +1,14 @@
+use longbridge::fundamental::FundamentalContext;
 use rmcp::ErrorData as McpError;
 use rmcp::model::CallToolResult;
 use rmcp::schemars::JsonSchema;
 use rmcp::serde::Deserialize;
 
-use crate::tools::support::http_client::http_get_tool_unix;
+use crate::error::Error;
+use crate::tools::tool_json;
 
 #[derive(Debug, Deserialize, JsonSchema)]
-pub struct MacrodataListParam {
+pub struct MacrodataIndicatorsParam {
     /// Pagination offset, default 0.
     pub offset: Option<i32>,
     /// Maximum number of indicators to return (default 100, max 1000).
@@ -18,52 +20,52 @@ pub struct MacrodataListParam {
 pub struct MacrodataParam {
     /// Indicator code from `macrodata_indicators`, e.g. `"USCPI"`.
     pub indicator_code: String,
-    /// Earliest release time to include (RFC3339, e.g. `"2024-01-01T00:00:00Z"`).
-    pub start_time: Option<String>,
-    /// Latest release time to include (RFC3339, e.g. `"2024-12-31T23:59:59Z"`).
-    pub end_time: Option<String>,
+    /// Earliest release date to include (YYYY-MM-DD, e.g. `"2024-01-01"`).
+    pub start_date: Option<String>,
+    /// Latest release date to include (YYYY-MM-DD, e.g. `"2024-12-31"`).
+    pub end_date: Option<String>,
     /// Maximum number of data points to return (default 100, max 100).
     pub limit: Option<i32>,
 }
 
 pub async fn macrodata_indicators(
     mctx: &crate::tools::McpContext,
-    p: MacrodataListParam,
+    p: MacrodataIndicatorsParam,
 ) -> Result<CallToolResult, McpError> {
-    let client = mctx.create_http_client();
-    let offset = p.offset.unwrap_or(0).to_string();
-    let limit = p.limit.unwrap_or(100).to_string();
-    let params = [("offset", offset.as_str()), ("limit", limit.as_str())];
-    http_get_tool_unix(
-        &client,
-        "/v1/quote/macrodata",
-        &params,
-        &["items.*.start_date"],
-    )
-    .await
+    let ctx = FundamentalContext::new(mctx.create_config());
+    let result = ctx
+        .macrodata_indicators(p.offset, p.limit)
+        .await
+        .map_err(Error::longbridge)?;
+    tool_json(&result)
 }
 
 pub async fn macrodata(
     mctx: &crate::tools::McpContext,
     p: MacrodataParam,
 ) -> Result<CallToolResult, McpError> {
-    let client = mctx.create_http_client();
-    let path = format!("/v1/quote/macrodata/{}", p.indicator_code);
+    let ctx = FundamentalContext::new(mctx.create_config());
+    let result = ctx
+        .macrodata(p.indicator_code, p.start_date, p.end_date, p.limit)
+        .await
+        .map_err(Error::longbridge)?;
+    tool_json(&result)
+}
 
-    let mut params: Vec<(&str, &str)> = Vec::new();
-    if let Some(ref s) = p.start_time {
-        params.push(("start_time", s.as_str()));
-    }
-    if let Some(ref e) = p.end_time {
-        params.push(("end_time", e.as_str()));
-    }
-    let limit_str;
-    if let Some(l) = p.limit {
-        limit_str = l.to_string();
-        params.push(("limit", limit_str.as_str()));
-    }
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-    // release_at / next_release_at end with _at and are converted automatically
-    // by transform_json; only start_date (no _at suffix) needs explicit listing.
-    http_get_tool_unix(&client, &path, &params, &["info.start_date"]).await
+    #[test]
+    fn macrodata_param_accepts_date_only_format() {
+        // The SDK wraps YYYY-MM-DD into YYYY-MM-DDT00:00:00Z / T23:59:59Z internally.
+        // Verify the param struct deserialises as expected.
+        let p: MacrodataParam = serde_json::from_str(
+            r#"{"indicator_code":"USCPI","start_date":"2024-01-01","end_date":"2024-12-31"}"#,
+        )
+        .unwrap();
+        assert_eq!(p.indicator_code, "USCPI");
+        assert_eq!(p.start_date.as_deref(), Some("2024-01-01"));
+        assert_eq!(p.end_date.as_deref(), Some("2024-12-31"));
+    }
 }

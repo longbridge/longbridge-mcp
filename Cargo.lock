@@ -1520,8 +1520,8 @@ checksum = "5e5032e24019045c762d3c0f28f5b6b8bbf38563a65908389bf7978758920897"
 
 [[package]]
 name = "longbridge"
-version = "4.3.0"
-source = "git+https://github.com/longbridge/openapi.git?branch=main#573846945971adf7586376292c318dc389b16552"
+version = "4.3.1"
+source = "git+https://github.com/longbridge/openapi.git?branch=feat%2Feconomic-indicator#329264979bd4e832188816771fcf9a454b5789df"
 dependencies = [
  "anyhow",
  "bitflags 2.11.1",
@@ -1555,8 +1555,8 @@ dependencies = [
 
 [[package]]
 name = "longbridge-candlesticks"
-version = "4.3.0"
-source = "git+https://github.com/longbridge/openapi.git?branch=main#573846945971adf7586376292c318dc389b16552"
+version = "4.3.1"
+source = "git+https://github.com/longbridge/openapi.git?branch=feat%2Feconomic-indicator#329264979bd4e832188816771fcf9a454b5789df"
 dependencies = [
  "bitflags 2.11.1",
  "num-traits",
@@ -1567,16 +1567,16 @@ dependencies = [
 
 [[package]]
 name = "longbridge-geo"
-version = "4.3.0"
-source = "git+https://github.com/longbridge/openapi.git?branch=main#573846945971adf7586376292c318dc389b16552"
+version = "4.3.1"
+source = "git+https://github.com/longbridge/openapi.git?branch=feat%2Feconomic-indicator#329264979bd4e832188816771fcf9a454b5789df"
 dependencies = [
  "reqwest 0.12.28",
 ]
 
 [[package]]
 name = "longbridge-httpcli"
-version = "4.3.0"
-source = "git+https://github.com/longbridge/openapi.git?branch=main#573846945971adf7586376292c318dc389b16552"
+version = "4.3.1"
+source = "git+https://github.com/longbridge/openapi.git?branch=feat%2Feconomic-indicator#329264979bd4e832188816771fcf9a454b5789df"
 dependencies = [
  "dotenv",
  "futures-util",
@@ -1627,8 +1627,8 @@ dependencies = [
 
 [[package]]
 name = "longbridge-oauth"
-version = "4.3.0"
-source = "git+https://github.com/longbridge/openapi.git?branch=main#573846945971adf7586376292c318dc389b16552"
+version = "4.3.1"
+source = "git+https://github.com/longbridge/openapi.git?branch=feat%2Feconomic-indicator#329264979bd4e832188816771fcf9a454b5789df"
 dependencies = [
  "dirs",
  "futures-util",
@@ -1644,8 +1644,8 @@ dependencies = [
 
 [[package]]
 name = "longbridge-proto"
-version = "4.3.0"
-source = "git+https://github.com/longbridge/openapi.git?branch=main#573846945971adf7586376292c318dc389b16552"
+version = "4.3.1"
+source = "git+https://github.com/longbridge/openapi.git?branch=feat%2Feconomic-indicator#329264979bd4e832188816771fcf9a454b5789df"
 dependencies = [
  "prost",
  "serde",
@@ -1653,8 +1653,8 @@ dependencies = [
 
 [[package]]
 name = "longbridge-wscli"
-version = "4.3.0"
-source = "git+https://github.com/longbridge/openapi.git?branch=main#573846945971adf7586376292c318dc389b16552"
+version = "4.3.1"
+source = "git+https://github.com/longbridge/openapi.git?branch=feat%2Feconomic-indicator#329264979bd4e832188816771fcf9a454b5789df"
 dependencies = [
  "byteorder",
  "flate2",
