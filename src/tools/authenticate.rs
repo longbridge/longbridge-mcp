@@ -293,6 +293,21 @@ mod tests {
         assert!(unpack_agent_code("").is_none());
     }
 
+    #[test]
+    fn unpack_agent_code_strips_chat_copy_junk() {
+        // A code pasted from chat may carry surrounding whitespace / quotes /
+        // backticks; unpacking must strip them (subsumes what auth_code_candidates
+        // used to do, since base58 needs no further restoration).
+        let (client_id, code) =
+            unpack_agent_code(&format!("  `{PACKED_DISPLAY}`  ")).expect("should unpack");
+        assert_eq!(client_id, PACKED_CLIENT_ID);
+        assert_eq!(code, ORIGINAL);
+        let (client_id, code) =
+            unpack_agent_code(&format!("\"{PACKED_DISPLAY}\"")).expect("should unpack");
+        assert_eq!(client_id, PACKED_CLIENT_ID);
+        assert_eq!(code, ORIGINAL);
+    }
+
     #[tokio::test]
     async fn already_authenticated_short_circuits() {
         let result = authenticate(
