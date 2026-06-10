@@ -91,6 +91,24 @@ pub struct McpContext {
     pub extra_headers: Vec<(String, String)>,
 }
 
+/// Server-side beacon endpoint. Quote operations flow over the WebSocket quote
+/// channel and never reach the HTTP access log; a request to this fake path lets
+/// the server record (and count) that a WS-backed quote tool ran. The path only
+/// needs to exist server-side to be logged.
+pub(crate) const QUOTE_CMD_PATH: &str = "/v1/quote/cmd";
+
+/// Send the tracking beacon over `client`. The (empty) body and any transport
+/// error are ignored — the server only needs the access-log entry. Extracted as
+/// its own awaitable function so the integration test can drive it against a
+/// local server deterministically.
+pub(crate) async fn send_quote_cmd(client: &longbridge::httpclient::HttpClient) {
+    let _ = client
+        .request(reqwest::Method::GET, QUOTE_CMD_PATH)
+        .response::<String>()
+        .send()
+        .await;
+}
+
 impl McpContext {
     /// This server's own identity as an RFC 9110 product token.
     const SELF_USER_AGENT: &'static str = concat!("longbridge-mcp/", env!("CARGO_PKG_VERSION"));
@@ -144,6 +162,29 @@ impl McpContext {
         // with our token by `user_agent`; set last so a forwarded header cannot
         // shadow it.
         client.header("user-agent", self.user_agent())
+    }
+
+    /// Fire a best-effort `GET /v1/quote/cmd` so the server records a log entry
+    /// for this WS-backed quote operation. Quote traffic flows over the
+    /// WebSocket quote channel and is therefore invisible to HTTP access logs;
+    /// this ping makes the call countable server-side. It reuses an `HttpClient`
+    /// carrying the same `user-agent`, OAuth token, and forwarded headers as the
+    /// real request, so no extra payload is needed. Fire-and-forget: spawned on
+    /// the runtime with its result and errors ignored, never blocking the call.
+    fn track_quote_cmd(&self) {
+        let client = self.create_http_client();
+        tokio::spawn(async move { send_quote_cmd(&client).await });
+    }
+
+    /// Build a `QuoteContext` and record the WS quote operation server-side via
+    /// [`track_quote_cmd`]. Use this instead of
+    /// `QuoteContext::new(self.create_config())` at every quote tool entry point
+    /// so the otherwise-unlogged WebSocket request is counted. The push receiver
+    /// is dropped immediately, matching the existing `let (ctx, _) = …` callers.
+    pub fn create_quote_context(&self) -> longbridge::quote::QuoteContext {
+        self.track_quote_cmd();
+        let (ctx, _) = longbridge::quote::QuoteContext::new(self.create_config());
+        ctx
     }
 
     /// Extracts `account_channel` from the JWT bearer token's `sub` claim.
@@ -3006,5 +3047,126 @@ mod tests {
     #[test]
     fn empty_map_returns_empty() {
         assert!(collect_headers(&HeaderMap::new()).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod quote_cmd_tests {
+    use super::{QUOTE_CMD_PATH, send_quote_cmd};
+    use std::time::Duration;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    /// Start a throwaway HTTP server on an ephemeral port that captures the raw
+    /// bytes of the first request, replies `200`, and hands the request back over
+    /// a oneshot channel. A real socket — no HTTP mocking — so the test exercises
+    /// the actual SDK `HttpClient` send path and survives future refactors.
+    async fn spawn_capture_server() -> (u16, tokio::sync::oneshot::Receiver<String>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        tokio::spawn(async move {
+            let Ok((mut socket, _)) = listener.accept().await else {
+                return;
+            };
+            let mut buf = [0u8; 4096];
+            let mut data = Vec::new();
+            // Read until the end of the request headers.
+            while !data.windows(4).any(|w| w == b"\r\n\r\n") {
+                match socket.read(&mut buf).await {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => data.extend_from_slice(&buf[..n]),
+                }
+            }
+            let _ = socket
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+                .await;
+            let _ = socket.flush().await;
+            let _ = tx.send(String::from_utf8_lossy(&data).into_owned());
+        });
+        (port, rx)
+    }
+
+    /// `send_quote_cmd` must issue `GET /v1/quote/cmd` and carry whatever tracking
+    /// headers the client was built with, so the server can attribute the
+    /// otherwise-invisible WS quote tool call.
+    #[tokio::test]
+    async fn send_quote_cmd_hits_endpoint_with_tracking_headers() {
+        let (port, rx) = spawn_capture_server().await;
+
+        // Build a client the same way `create_http_client` does (token + UA),
+        // but pointed at the local capture server.
+        let oauth = longbridge::oauth::OAuth::from_token("test-token");
+        let config = longbridge::httpclient::HttpClientConfig::from_oauth(oauth)
+            .http_url(format!("http://127.0.0.1:{port}"));
+        let client = longbridge::httpclient::HttpClient::new(config)
+            .header("user-agent", "test-client/9.9 longbridge-mcp/test");
+
+        send_quote_cmd(&client).await;
+
+        let request = tokio::time::timeout(Duration::from_secs(5), rx)
+            .await
+            .expect("capture server did not receive a request in time")
+            .expect("capture server dropped the request");
+
+        let request_line = request.lines().next().unwrap_or_default();
+        assert!(
+            request_line.starts_with(&format!("GET {QUOTE_CMD_PATH}")),
+            "expected `GET {QUOTE_CMD_PATH}`, got request line: {request_line}"
+        );
+        assert!(
+            request
+                .to_lowercase()
+                .contains("user-agent: test-client/9.9 longbridge-mcp/test"),
+            "tracking user-agent header missing; request was:\n{request}"
+        );
+    }
+
+    /// Recursively collect `.rs` files under `dir`.
+    fn rs_files(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+        let mut out = Vec::new();
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    out.extend(rs_files(&path));
+                } else if path.extension().is_some_and(|e| e == "rs") {
+                    out.push(path);
+                }
+            }
+        }
+        out
+    }
+
+    /// Guard: every quote tool must obtain its `QuoteContext` via
+    /// `mctx.create_quote_context()` (which fires the `/v1/quote/cmd` beacon),
+    /// never `QuoteContext::new(...)` directly. The sole sanctioned constructor
+    /// call lives in `mod.rs` (the helper itself), so every other tool file must
+    /// be free of `QuoteContext::new(`. This makes "every WS quote tool is
+    /// tracked" an enforced invariant: a new tool that constructs its own
+    /// `QuoteContext` fails this test.
+    #[test]
+    fn quote_tools_use_tracking_context_constructor() {
+        let tools_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/tools");
+        // `mod.rs` defines `create_quote_context`, the one allowed constructor.
+        let helper_file = tools_dir.join("mod.rs");
+        let mut offenders = Vec::new();
+        for file in rs_files(&tools_dir) {
+            if file == helper_file {
+                continue;
+            }
+            let src = std::fs::read_to_string(&file).unwrap();
+            for (i, line) in src.lines().enumerate() {
+                if line.contains("QuoteContext::new(") {
+                    offenders.push(format!("{}:{}", file.display(), i + 1));
+                }
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "quote tools must use `mctx.create_quote_context()` (fires the \
+             /v1/quote/cmd beacon), not `QuoteContext::new(...)` directly. \
+             Untracked constructor at:\n{}",
+            offenders.join("\n")
+        );
     }
 }
