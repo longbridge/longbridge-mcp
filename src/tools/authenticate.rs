@@ -184,7 +184,9 @@ fn unpack_agent_code(input: &str) -> Option<(String, String)> {
     if bytes.len() < 2 + cid_len {
         return None;
     }
-    let client_id = std::str::from_utf8(&bytes[2..2 + cid_len]).ok()?.to_string();
+    let client_id = std::str::from_utf8(&bytes[2..2 + cid_len])
+        .ok()?
+        .to_string();
     let auth_code = std::str::from_utf8(&bytes[2 + cid_len..]).ok()?.to_string();
     if client_id.is_empty() || auth_code.is_empty() {
         return None;
@@ -365,8 +367,7 @@ mod tests {
     // Packed agent code: base58([0x01][cid_len][client_id][ORIGINAL]).
     // Shared format/vector with the web `packAgentAuthCode` and the CLI.
     const PACKED_CLIENT_ID: &str = "c91cd252-2f89-4024-9c5d-7b1340fc3bd1";
-    const PACKED_DISPLAY: &str =
-        "F4ep4yfKvDgpZnFUR6T8vm5bCjG65XZKgaTiNWbwTCVPqGw3HCrpDvYuxLUu6uNtn73ht5BKtKS7Fk9WG9MV9V2PYkwSGWoZfoEtFbfCL2f45c8";
+    const PACKED_DISPLAY: &str = "F4ep4yfKvDgpZnFUR6T8vm5bCjG65XZKgaTiNWbwTCVPqGw3HCrpDvYuxLUu6uNtn73ht5BKtKS7Fk9WG9MV9V2PYkwSGWoZfoEtFbfCL2f45c8";
 
     #[test]
     fn unpack_agent_code_extracts_client_id_and_code() {
