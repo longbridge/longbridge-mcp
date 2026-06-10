@@ -578,7 +578,7 @@
     },
     "macrodata_indicators": {
       "title": "宏觀指標列表",
-      "description": "列出所有支援的宏觀經濟指標（約 619 條）。返回 items[]{indicator_code, source_org, country, name, periodicity, category, importance, start_date}。傳 limit=1000 可一次獲取全部。",
+      "description": "列出所有支援的宏觀經濟指標。傳 limit=1000 獲取全量後自行掃描定位 indicator_code，再呼叫 macrodata。返回 []{indicator_code, source_org, country, name{english,simplified_chinese,traditional_chinese}, periodicity, category, importance, start_date}。",
       "properties": {
         "offset": "分頁偏移量，預設 0",
         "limit": "返回條數上限，預設 100，最大 1000"
@@ -586,7 +586,7 @@
     },
     "macrodata": {
       "title": "宏觀指標歷史數據",
-      "description": "按指標代碼（來自 macrodata_indicators）查詢歷史數據。返回 info{name, periodicity, country, unit} 和 data[]{period, release_at, actual_value, previous_value, forecast_value, revised_value, next_release_at}。limit 最大 100。",
+      "description": "按指標代碼（來自 macrodata_indicators）查詢歷史數據。指標代碼不存在時返回錯誤。返回 info{indicator_code, source_org, country, name, category, periodicity, adjustment_factor, importance, start_date} 和 data[]{period, release_at, actual_value, previous_value, forecast_value, revised_value, next_release_at, unit, unit_prefix}。limit 最大 100。",
       "properties": {
         "indicator_code": "指標代碼，例如 `\"USCPI\"`，來自 macrodata_indicators",
         "start_date": "數據起始日期（`yyyy-mm-dd`，例如 `\"2024-01-01\"`）",

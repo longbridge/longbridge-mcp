@@ -44,12 +44,21 @@ pub async fn macrodata(
     mctx: &crate::tools::McpContext,
     p: MacrodataParam,
 ) -> Result<CallToolResult, McpError> {
+    let code = p.indicator_code.clone();
     let ctx = FundamentalContext::new(mctx.create_config());
-    let result = ctx
-        .macrodata(p.indicator_code, p.start_date, p.end_date, p.limit)
+    ctx.macrodata(p.indicator_code, p.start_date, p.end_date, p.limit)
         .await
-        .map_err(Error::longbridge)?;
-    tool_json(&result)
+        .map_err(|e| {
+            // The API returns {"info": null} when the code does not exist,
+            // which causes a deserialize error inside the SDK.
+            let msg = e.to_string();
+            if msg.contains("null") && msg.contains("MacrodataIndicator") {
+                McpError::invalid_params(format!("indicator_code '{code}' not found"), None)
+            } else {
+                Error::longbridge(e).into()
+            }
+        })
+        .and_then(|result| tool_json(&result))
 }
 
 #[cfg(test)]

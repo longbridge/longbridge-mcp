@@ -578,7 +578,7 @@
     },
     "macrodata_indicators": {
       "title": "宏观指标列表",
-      "description": "列出所有支持的宏观经济指标（约 619 条）。返回 items[]{indicator_code, source_org, country, name, periodicity, category, importance, start_date}。传 limit=1000 可一次获取全部。",
+      "description": "列出所有支持的宏观经济指标。传 limit=1000 获取全量后自行扫描定位 indicator_code，再调用 macrodata。返回 []{indicator_code, source_org, country, name{english,simplified_chinese,traditional_chinese}, periodicity, category, importance, start_date}。",
       "properties": {
         "offset": "分页偏移量，默认 0",
         "limit": "返回条数上限，默认 100，最大 1000"
@@ -586,7 +586,7 @@
     },
     "macrodata": {
       "title": "宏观指标历史数据",
-      "description": "按指标代码（来自 macrodata_indicators）查询历史数据。返回 info{name, periodicity, country, unit} 和 data[]{period, release_at, actual_value, previous_value, forecast_value, revised_value, next_release_at}。limit 最大 100。",
+      "description": "按指标代码（来自 macrodata_indicators）查询历史数据。指标代码不存在时返回错误。返回 info{indicator_code, source_org, country, name, category, periodicity, adjustment_factor, importance, start_date} 和 data[]{period, release_at, actual_value, previous_value, forecast_value, revised_value, next_release_at, unit, unit_prefix}。limit 最大 100。",
       "properties": {
         "indicator_code": "指标代码，例如 `\"USCPI\"`，来自 macrodata_indicators",
         "start_date": "数据起始日期（`yyyy-mm-dd`，例如 `\"2024-01-01\"`）",

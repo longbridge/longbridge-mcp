@@ -726,7 +726,7 @@ impl Longbridge {
     #[tool(
         title = "Macro Indicator List",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "List all supported macro-economic indicators (~619 total). Returns items[]{indicator_code, source_org, country, name, periodicity, category, importance, start_date}. Pass limit=1000 to fetch all at once."
+        description = "List all supported macro-economic indicators. Pass limit=1000 to fetch all, then scan the list to find a code before calling macrodata. Returns []{indicator_code, source_org, country, name{english,simplified_chinese,traditional_chinese}, periodicity, category, importance, start_date}."
     )]
     async fn macrodata_indicators(
         &self,
@@ -744,7 +744,7 @@ impl Longbridge {
     #[tool(
         title = "Macro Indicator Data",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get historical data for a macro-economic indicator by its code (from macrodata_indicators). start_date/end_date accept YYYY-MM-DD format. Returns info{name, periodicity, country, unit} and data[]{period, release_at, actual_value, previous_value, forecast_value, revised_value, next_release_at}. limit max 100."
+        description = "Get historical data for a macro-economic indicator by its code (from macrodata_indicators). start_date/end_date accept YYYY-MM-DD format. Returns info{indicator_code, source_org, country, name, category, periodicity, adjustment_factor, importance, start_date} and data[]{period, release_at, actual_value, previous_value, forecast_value, revised_value, next_release_at, unit, unit_prefix}. Returns error if indicator_code does not exist. limit max 100."
     )]
     async fn macrodata(
         &self,
