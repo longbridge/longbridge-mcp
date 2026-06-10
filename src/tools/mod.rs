@@ -726,7 +726,7 @@ impl Longbridge {
     #[tool(
         title = "Macro Indicator List",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "List all supported macro-economic indicators. Pass limit=1000 to fetch all, then scan the list to find a code before calling macrodata. Returns []{indicator_code, source_org, country, name{english,simplified_chinese,traditional_chinese}, periodicity, category, importance, start_date}."
+        description = "List macro-economic indicators. country: US/CN/HK/EU/JP/SG (omit for all). Returns {count, list[]{indicator_code, source_org, country, name{english,simplified_chinese,traditional_chinese}, periodicity, category, importance(1=low/2=mid/3=high), start_date}}. Supports offset/limit pagination."
     )]
     async fn macrodata_indicators(
         &self,
@@ -744,7 +744,7 @@ impl Longbridge {
     #[tool(
         title = "Macro Indicator Data",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get historical data for a macro-economic indicator by its code (from macrodata_indicators). start_date/end_date accept YYYY-MM-DD format. Returns info{indicator_code, source_org, country, name, category, periodicity, adjustment_factor, importance, start_date} and data[]{period, release_at, actual_value, previous_value, forecast_value, revised_value, next_release_at, unit, unit_prefix}. Note: empty actual_value means the data has not been released yet (only forecast_value is available); empty data[] means no records in the given date range. Returns error if indicator_code does not exist. limit max 100."
+        description = "Get historical data for a macro-economic indicator by its code (from macrodata_indicators). start_date/end_date accept YYYY-MM-DD. Returns {count, info{indicator_code, source_org, country, name, category, periodicity, adjustment_factor, importance(1=low/2=mid/3=high), start_date}, data[]{period, release_at, actual_value, previous_value, forecast_value, revised_value, next_release_at, unit, unit_prefix}}. Note: empty actual_value = not yet released (only forecast_value available); empty data[] = no records in range. Supports offset/limit pagination (max 100 per page). Returns error if indicator_code does not exist."
     )]
     async fn macrodata(
         &self,
