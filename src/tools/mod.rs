@@ -14,16 +14,30 @@ use crate::auth::middleware::{AgentEndpoint, BearerToken};
 use crate::error::Error;
 use crate::serialize::to_tool_json;
 
+tokio::task_local! {
+    /// The name of the tool currently executing, scoped around each tool call by
+    /// [`measured_tool_call`]. Read by [`McpContext::create_http_client`] and
+    /// [`McpContext::create_config`] to tag every upstream Longbridge request
+    /// with an `x-mcp-tool` header (the MCP equivalent of the CLI's `x-cli-cmd`),
+    /// so server-side stats can attribute requests per tool. Absent outside a
+    /// tool call (e.g. server init), in which case no tag is added.
+    pub(crate) static CURRENT_TOOL: String;
+}
+
 async fn measured_tool_call<F, Fut>(name: &str, f: F) -> Result<CallToolResult, McpError>
 where
     F: FnOnce() -> Fut,
     Fut: std::future::Future<Output = Result<CallToolResult, McpError>>,
 {
-    let start = std::time::Instant::now();
-    let result = f().await;
-    let duration = start.elapsed().as_secs_f64();
-    crate::metrics::record_tool_call(name, duration, result.is_err());
-    result
+    CURRENT_TOOL
+        .scope(name.to_string(), async move {
+            let start = std::time::Instant::now();
+            let result = f().await;
+            let duration = start.elapsed().as_secs_f64();
+            crate::metrics::record_tool_call(name, duration, result.is_err());
+            result
+        })
+        .await
 }
 
 mod alert;
@@ -109,6 +123,12 @@ pub(crate) async fn send_quote_cmd(client: &longbridge::httpclient::HttpClient) 
         .await;
 }
 
+/// Serializes tests that mutate the process-global `LONGBRIDGE_HTTP_URL` env var
+/// to redirect the SDK base URL at a local capture server. Multiple such tests
+/// run concurrently in one binary and would otherwise clobber each other's URL.
+#[cfg(test)]
+pub(crate) static HTTP_URL_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 impl McpContext {
     /// This server's own identity as an RFC 9110 product token.
     const SELF_USER_AGENT: &'static str = concat!("longbridge-mcp/", env!("CARGO_PKG_VERSION"));
@@ -144,6 +164,11 @@ impl McpContext {
             };
             config = config.language(lb_lang);
         }
+        // Tag the originating tool so server-side stats can attribute Context
+        // (REST + WS upgrade) requests per tool, mirroring the CLI's x-cli-cmd.
+        if let Ok(tool) = CURRENT_TOOL.try_with(|t| t.clone()) {
+            config = config.header("x-mcp-tool", tool.as_str());
+        }
         Arc::new(config)
     }
 
@@ -158,6 +183,11 @@ impl McpContext {
         for (key, value) in &self.extra_headers {
             client = client.header(key.as_str(), value.as_str());
         }
+        // Tag the originating tool so server-side stats can attribute requests
+        // per tool, mirroring the CLI's x-cli-cmd.
+        if let Ok(tool) = CURRENT_TOOL.try_with(|t| t.clone()) {
+            client = client.header("x-mcp-tool", tool.as_str());
+        }
         // Identify MCP-originated upstream requests. The client's UA is appended
         // with our token by `user_agent`; set last so a forwarded header cannot
         // shadow it.
@@ -168,9 +198,12 @@ impl McpContext {
     /// for this WS-backed quote operation. Quote traffic flows over the
     /// WebSocket quote channel and is therefore invisible to HTTP access logs;
     /// this ping makes the call countable server-side. It reuses an `HttpClient`
-    /// carrying the same `user-agent`, OAuth token, and forwarded headers as the
-    /// real request, so no extra payload is needed. Fire-and-forget: spawned on
-    /// the runtime with its result and errors ignored, never blocking the call.
+    /// from [`create_http_client`], which already carries the `user-agent`, OAuth
+    /// token, forwarded headers, and the `x-mcp-tool` tool tag (see
+    /// [`CURRENT_TOOL`]). Fire-and-forget: spawned on the runtime with its result
+    /// and errors ignored, never blocking the call. The client is built
+    /// synchronously here (reading the task-local before spawning), so the spawn
+    /// not inheriting task-locals is fine.
     fn track_quote_cmd(&self) {
         let client = self.create_http_client();
         tokio::spawn(async move { send_quote_cmd(&client).await });
@@ -3000,18 +3033,24 @@ mod tests {
             }
         });
 
-        // SDK reads the base URL from `LONGBRIDGE_HTTP_URL` (see httpclient config).
-        // SAFETY: single-threaded test setup; no other thread reads it here.
-        unsafe { std::env::set_var("LONGBRIDGE_HTTP_URL", format!("http://{addr}")) };
-
         let mctx = super::McpContext {
             token: "dummy-token".to_string(),
             language: None,
             client_user_agent: Some("claude-code/2.1.89 (cli)".to_string()),
             extra_headers: Vec::new(),
         };
-        let _ = mctx
-            .create_http_client()
+        // Build the client with the SDK base URL redirected at the local server.
+        // Serialized against other env-mutating tests; the guard is released
+        // before the await so it is never held across a suspension point.
+        let client = {
+            let _env_guard = super::HTTP_URL_ENV_LOCK.lock().unwrap();
+            // SAFETY: guarded by HTTP_URL_ENV_LOCK; set before build, cleared after.
+            unsafe { std::env::set_var("LONGBRIDGE_HTTP_URL", format!("http://{addr}")) };
+            let client = mctx.create_http_client();
+            unsafe { std::env::remove_var("LONGBRIDGE_HTTP_URL") };
+            client
+        };
+        let _ = client
             .request(reqwest::Method::GET, "/v1/ping")
             .response::<String>()
             .send()
@@ -3052,7 +3091,7 @@ mod tests {
 
 #[cfg(test)]
 mod quote_cmd_tests {
-    use super::{QUOTE_CMD_PATH, send_quote_cmd};
+    use super::{CURRENT_TOOL, HTTP_URL_ENV_LOCK, McpContext, QUOTE_CMD_PATH, send_quote_cmd};
     use std::time::Duration;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -3086,20 +3125,34 @@ mod quote_cmd_tests {
         (port, rx)
     }
 
-    /// `send_quote_cmd` must issue `GET /v1/quote/cmd` and carry whatever tracking
-    /// headers the client was built with, so the server can attribute the
-    /// otherwise-invisible WS quote tool call.
+    /// Every upstream request built within a tool scope must carry both the
+    /// synthesized `user-agent` (client UA chained with this server's token) and
+    /// an `x-mcp-tool` header naming the tool, so the server can attribute the
+    /// call per tool. Drives the real `create_http_client` path (which reads the
+    /// `CURRENT_TOOL` task-local set by `measured_tool_call`) and sends the beacon
+    /// to `GET /v1/quote/cmd` against a local server — no HTTP mocking.
     #[tokio::test]
-    async fn send_quote_cmd_hits_endpoint_with_tracking_headers() {
+    async fn upstream_request_carries_x_mcp_tool_and_user_agent() {
         let (port, rx) = spawn_capture_server().await;
 
-        // Build a client the same way `create_http_client` does (token + UA),
-        // but pointed at the local capture server.
-        let oauth = longbridge::oauth::OAuth::from_token("test-token");
-        let config = longbridge::httpclient::HttpClientConfig::from_oauth(oauth)
-            .http_url(format!("http://127.0.0.1:{port}"));
-        let client = longbridge::httpclient::HttpClient::new(config)
-            .header("user-agent", "test-client/9.9 longbridge-mcp/test");
+        let mctx = McpContext {
+            token: "test-token".to_string(),
+            language: None,
+            client_user_agent: Some("claude-test/1.0 (cli)".to_string()),
+            extra_headers: Vec::new(),
+        };
+
+        // Build the client inside a `CURRENT_TOOL` scope (as `measured_tool_call`
+        // does for real tool calls), with the SDK base URL redirected at the
+        // local server. `sync_scope` keeps the locked region free of any await.
+        let client = {
+            let _env_guard = HTTP_URL_ENV_LOCK.lock().unwrap();
+            // SAFETY: guarded by HTTP_URL_ENV_LOCK; set before build, cleared after.
+            unsafe { std::env::set_var("LONGBRIDGE_HTTP_URL", format!("http://127.0.0.1:{port}")) };
+            let client = CURRENT_TOOL.sync_scope("depth".to_string(), || mctx.create_http_client());
+            unsafe { std::env::remove_var("LONGBRIDGE_HTTP_URL") };
+            client
+        };
 
         send_quote_cmd(&client).await;
 
@@ -3107,6 +3160,7 @@ mod quote_cmd_tests {
             .await
             .expect("capture server did not receive a request in time")
             .expect("capture server dropped the request");
+        let lower = request.to_lowercase();
 
         let request_line = request.lines().next().unwrap_or_default();
         assert!(
@@ -3114,10 +3168,16 @@ mod quote_cmd_tests {
             "expected `GET {QUOTE_CMD_PATH}`, got request line: {request_line}"
         );
         assert!(
-            request
-                .to_lowercase()
-                .contains("user-agent: test-client/9.9 longbridge-mcp/test"),
-            "tracking user-agent header missing; request was:\n{request}"
+            lower.contains("x-mcp-tool: depth"),
+            "x-mcp-tool tracking header missing; request was:\n{request}"
+        );
+        let expected_ua = format!(
+            "user-agent: claude-test/1.0 (cli) longbridge-mcp/{}",
+            env!("CARGO_PKG_VERSION")
+        );
+        assert!(
+            lower.contains(&expected_ua.to_lowercase()),
+            "synthesized user-agent missing; request was:\n{request}"
         );
     }
 
