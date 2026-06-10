@@ -63,21 +63,6 @@ fn agent_redirect_uri() -> &'static str {
     }
 }
 
-/// OAuth `client_id` of the dedicated "AI Agent" public client used for the
-/// authorization-code exchange. This is a public client: no client secret and
-/// no PKCE (the code is short-lived and one-time).
-///
-/// Defaults to the production client; set `LONGBRIDGE_AGENT_CLIENT_ID` to
-/// override for non-prod deployments (canary client:
-/// `c0c3ae51-dd73-4706-8d29-601ae376034c` on openapi.longbridge.xyz),
-/// mirroring how `LONGBRIDGE_HTTP_URL` redirects the exchange endpoint.
-const AGENT_CLIENT_ID: &str = "c91cd252-2f89-4024-9c5d-7b1340fc3bd1";
-
-/// Resolve the "AI Agent" client id, honoring `LONGBRIDGE_AGENT_CLIENT_ID`.
-fn agent_client_id() -> String {
-    std::env::var("LONGBRIDGE_AGENT_CLIENT_ID").unwrap_or_else(|_| AGENT_CLIENT_ID.to_string())
-}
-
 /// Parameters for the `authenticate` tool.
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct AuthenticateParam {
@@ -125,40 +110,6 @@ fn self_heal_hint() -> String {
         "The authorization code is invalid or has expired. Generate a new one at {} and call `authenticate` again.",
         connect_page_url()
     )
-}
-
-/// Build the ordered exchange candidates for a user-pasted authorization
-/// code. The connect page displays codes in a pure-alphanumeric base58 form
-/// (raw standard-base64 codes get escaped or truncated by chat apps); legacy
-/// pages used an unpadded base64url form. Candidate order: base58-decoded,
-/// base64url-restored, the string as pasted. A rejected lookup does not
-/// consume the one-time code, so later attempts are safe.
-///
-/// Mirrors the CLI's `auth login --auth-code` — keep the two in sync (both
-/// repos pin the same shared test vector).
-fn auth_code_candidates(input: &str) -> Vec<String> {
-    use base64::Engine as _;
-    let raw = input
-        .trim()
-        .trim_matches(|c| matches!(c, '"' | '\'' | '`'))
-        .to_string();
-    if raw.is_empty() {
-        return Vec::new();
-    }
-    let mut candidates: Vec<String> = Vec::new();
-    if let Ok(bytes) = bs58::decode(&raw).into_vec() {
-        candidates.push(base64::engine::general_purpose::STANDARD.encode(bytes));
-    }
-    if let Ok(bytes) = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(&raw) {
-        let restored = base64::engine::general_purpose::STANDARD.encode(bytes);
-        if !candidates.contains(&restored) {
-            candidates.push(restored);
-        }
-    }
-    if !candidates.contains(&raw) {
-        candidates.push(raw);
-    }
-    candidates
 }
 
 /// Unpack the base58 "packed agent code" issued by the Connect AI page.
@@ -213,51 +164,22 @@ pub async fn authenticate(
         ));
     }
 
-    // Build the ordered (code, client_id) exchange attempts:
-    // 1) the base58 "packed agent code" — client_id + real code packed together
-    //    (current Connect AI format); the trailing code is sent to the endpoint
-    //    with the dynamically-registered client_id carried in the code.
-    // 2) legacy candidates (base58 / base64url / raw) exchanged with the fixed
-    //    public "AI Agent" client_id, for codes minted before the Agent Name step.
-    let mut attempts: Vec<(String, String)> = Vec::new();
-    if let Some((client_id, real_code)) = unpack_agent_code(&param.auth_code) {
-        attempts.push((real_code, client_id));
-    }
-    let fixed_client_id = agent_client_id();
-    for candidate in auth_code_candidates(&param.auth_code) {
-        attempts.push((candidate, fixed_client_id.clone()));
-    }
-    if attempts.is_empty() {
+    // The Connect AI page packs the dynamically-registered client_id into the
+    // code (base58([0x01][client_id_len][client_id][code])); unpack it and
+    // exchange the carried code with the carried client_id. There is no
+    // hardcoded public client any more — a code that doesn't unpack isn't one
+    // of ours.
+    let Some((client_id, real_code)) = unpack_agent_code(&param.auth_code) else {
         return Err(McpError::invalid_params(
-            format!("`auth_code` must not be empty. {}", self_heal_hint()),
+            format!(
+                "`auth_code` is not a valid Longbridge authorization code. {}",
+                self_heal_hint()
+            ),
             None,
         ));
-    }
-
-    let mut token = None;
-    // Prefer the first definitive rejection from the token endpoint over any
-    // later transport error (e.g. the fallback attempt failing to connect).
-    let mut first_rejection: Option<McpError> = None;
-    let mut last_other: Option<McpError> = None;
-    for (code, client_id) in &attempts {
-        match exchange_code(code, client_id).await {
-            Ok(t) => {
-                token = Some(t);
-                break;
-            }
-            Err(e) if e.code == rmcp::model::ErrorCode::INVALID_PARAMS => {
-                if first_rejection.is_none() {
-                    first_rejection = Some(e);
-                }
-            }
-            Err(e) => last_other = Some(e),
-        }
-    }
-    let Some(token) = token else {
-        return Err(first_rejection
-            .or(last_other)
-            .expect("at least one candidate is attempted"));
     };
+
+    let token = exchange_code(&real_code, &client_id).await?;
 
     let scopes: Vec<String> = token
         .scope
@@ -345,24 +267,12 @@ async fn exchange_code(code: &str, client_id: &str) -> Result<TokenResponse, Mcp
 mod tests {
     use super::*;
 
-    // Shared vector with longbridge-terminal: the connect page displays
-    // `RKBXES26iL0CdQL85vXz+tSNeoHeqyUuLEz3nVWgqVU=` as
-    // `5ctXgj3mEtEHoUBRwJnyURf4EkfA1924fY3o9Njev2zp` (base58).
+    // `ORIGINAL` is the backend's standard-base64 authorization code; the connect
+    // page packs it together with the client_id (see PACKED_DISPLAY). `BASE58_FORM`
+    // is the legacy *unpacked* base58 display form, kept to assert that unpacking
+    // rejects non-packed input.
     const ORIGINAL: &str = "RKBXES26iL0CdQL85vXz+tSNeoHeqyUuLEz3nVWgqVU=";
     const BASE58_FORM: &str = "5ctXgj3mEtEHoUBRwJnyURf4EkfA1924fY3o9Njev2zp";
-    const BASE64URL_FORM: &str = "RKBXES26iL0CdQL85vXz-tSNeoHeqyUuLEz3nVWgqVU";
-
-    #[test]
-    fn base58_display_form_decodes_to_original_code() {
-        assert_eq!(auth_code_candidates(BASE58_FORM)[0], ORIGINAL);
-    }
-
-    #[test]
-    fn legacy_base64url_form_and_raw_pass_through() {
-        assert!(auth_code_candidates(BASE64URL_FORM).contains(&ORIGINAL.to_string()));
-        assert!(auth_code_candidates(ORIGINAL).contains(&ORIGINAL.to_string()));
-        assert!(auth_code_candidates("   ").is_empty());
-    }
 
     // Packed agent code: base58([0x01][cid_len][client_id][ORIGINAL]).
     // Shared format/vector with the web `packAgentAuthCode` and the CLI.
@@ -439,14 +349,18 @@ mod tests {
         // SAFETY: single-threaded test setup; no other thread reads this env var here.
         unsafe { std::env::set_var("LONGBRIDGE_HTTP_URL", format!("http://{addr}")) };
 
-        let err = authenticate(
-            false,
-            AuthenticateParam {
-                auth_code: "expired-code".into(),
-            },
-        )
-        .await
-        .expect_err("expired code must fail");
+        // Pack a dummy code so it unpacks and actually reaches the token endpoint.
+        let packed = {
+            let cid = b"test-client";
+            let code = b"expired-code";
+            let mut v = vec![0x01u8, cid.len() as u8];
+            v.extend_from_slice(cid);
+            v.extend_from_slice(code);
+            bs58::encode(v).into_string()
+        };
+        let err = authenticate(false, AuthenticateParam { auth_code: packed })
+            .await
+            .expect_err("expired code must fail");
 
         unsafe { std::env::remove_var("LONGBRIDGE_HTTP_URL") };
 
