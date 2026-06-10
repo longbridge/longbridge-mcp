@@ -744,7 +744,7 @@ impl Longbridge {
     #[tool(
         title = "Macro Indicator Data",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get historical data for a macro-economic indicator by its code (from macrodata_indicators). start_date/end_date accept YYYY-MM-DD. Returns {count, info{indicator_code, source_org, country, name, category, periodicity, adjustment_factor, importance(1=low/2=mid/3=high), start_date}, data[]{period, release_at, actual_value, previous_value, forecast_value, revised_value, next_release_at, unit, unit_prefix}}. Note: empty actual_value = not yet released (only forecast_value available); empty data[] = no records in range. Supports offset/limit pagination (max 100 per page). Returns error if indicator_code does not exist."
+        description = "Get historical data for a macro-economic indicator by its code (from macrodata_indicators). start_date/end_date accept YYYY-MM-DD. Returns {count, info{indicator_code, source_org, country, name, category, periodicity, adjustment_factor, importance(1=low/2=mid/3=high), start_date}, data[]{period, release_at, actual_value, previous_value, forecast_value, revised_value, next_release_at, unit, unit_prefix}}. period format varies by periodicity: monthly=\"YYYY-MM-DD\", quarterly=\"YYYY-Qn\" (e.g. \"2024-Q1\"), annual=\"YYYY-01-01\". Note: empty actual_value = not yet released (only forecast_value available); empty data[] = no records in range. Supports offset/limit pagination (max 100 per page). Returns error if indicator_code does not exist."
     )]
     async fn macrodata(
         &self,
