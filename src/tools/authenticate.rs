@@ -361,9 +361,6 @@ mod tests {
             }
         });
 
-        // SAFETY: single-threaded test setup; no other thread reads this env var here.
-        unsafe { std::env::set_var("LONGBRIDGE_HTTP_URL", format!("http://{addr}")) };
-
         // Pack a dummy code so it unpacks and actually reaches the token endpoint.
         let packed = {
             let cid = b"test-client";
@@ -373,11 +370,18 @@ mod tests {
             v.extend_from_slice(code);
             bs58::encode(v).into_string()
         };
-        let err = authenticate(false, AuthenticateParam { auth_code: packed })
-            .await
-            .expect_err("expired code must fail");
 
-        unsafe { std::env::remove_var("LONGBRIDGE_HTTP_URL") };
+        // Serialized against other tests that mutate LONGBRIDGE_HTTP_URL; guard
+        // released before the await so it is never held across a suspension point.
+        let err = {
+            let _env_guard = crate::tools::HTTP_URL_ENV_LOCK.lock().unwrap();
+            // SAFETY: guarded by HTTP_URL_ENV_LOCK; set before call, cleared after.
+            unsafe { std::env::set_var("LONGBRIDGE_HTTP_URL", format!("http://{addr}")) };
+            let result = authenticate(false, AuthenticateParam { auth_code: packed }).await;
+            unsafe { std::env::remove_var("LONGBRIDGE_HTTP_URL") };
+            result
+        }
+        .expect_err("expired code must fail");
 
         assert!(
             err.message.contains(CONNECT_PAGE_URL),

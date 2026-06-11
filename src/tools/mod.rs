@@ -387,7 +387,7 @@ fn extract_context(ctx: &RequestContext<RoleServer>) -> Result<McpContext, McpEr
 fn all_tools_cached() -> &'static [rmcp::model::Tool] {
     static TOOLS: std::sync::OnceLock<Vec<rmcp::model::Tool>> = std::sync::OnceLock::new();
     TOOLS.get_or_init(|| {
-        Longbridge::tool_router()
+        cached_router()
             .list_all()
             .into_iter()
             .map(|mut tool| {
