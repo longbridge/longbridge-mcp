@@ -156,7 +156,9 @@ async fn main() -> anyhow::Result<()> {
             .with_writer(std::io::stderr)
             .init();
         let tools = crate::tools::list_tools();
-        tracing::info!(count = tools.len(), "stdio mode: tools available");
+        // count includes all registered tools; authenticated clients on /mcp see one fewer
+        // (the `authenticate` tool is only surfaced on the unauthenticated /agent endpoint).
+        tracing::info!(count = tools.len(), "tools registered");
         use rmcp::transport::async_rw::AsyncRwTransport;
         let transport = AsyncRwTransport::<rmcp::RoleServer, _, _>::new(
             tokio::io::stdin(),
@@ -179,10 +181,12 @@ async fn main() -> anyhow::Result<()> {
         auth::create_router(app_state.clone()).layer(tower_http::cors::CorsLayer::permissive());
 
     let tools = crate::tools::list_tools();
+    // count includes all registered tools; authenticated clients on /mcp see one fewer
+    // (the `authenticate` tool is only surfaced on the unauthenticated /agent endpoint).
     tracing::info!(
         count = tools.len(),
         url = format!("{}/mcp/tools.json", config.base_url),
-        "tools available"
+        "tools registered"
     );
 
     if let (Some(cert), Some(key)) = (&config.tls_cert, &config.tls_key) {

@@ -14,6 +14,12 @@ use crate::auth::middleware::{AgentEndpoint, BearerToken};
 use crate::error::Error;
 use crate::serialize::to_tool_json;
 
+/// Registered name of the reverse-auth tool, used as the filter key in both
+/// `tools_main_endpoint` (excluded) and `tools_agent_endpoint` (only this one).
+/// Tied to `fn authenticate` via `measured_tool_call(AUTHENTICATE_TOOL_NAME, ...)`.
+/// Change this constant if the method is ever renamed so all three sites stay in sync.
+const AUTHENTICATE_TOOL_NAME: &str = "authenticate";
+
 tokio::task_local! {
     /// The name of the tool currently executing, scoped around each tool call by
     /// [`measured_tool_call`]. Read by [`McpContext::create_http_client`] and
@@ -21,16 +27,16 @@ tokio::task_local! {
     /// with an `x-mcp-tool` header (the MCP equivalent of the CLI's `x-cli-cmd`),
     /// so server-side stats can attribute requests per tool. Absent outside a
     /// tool call (e.g. server init), in which case no tag is added.
-    pub(crate) static CURRENT_TOOL: String;
+    pub(crate) static CURRENT_TOOL: &'static str;
 }
 
-async fn measured_tool_call<F, Fut>(name: &str, f: F) -> Result<CallToolResult, McpError>
+async fn measured_tool_call<F, Fut>(name: &'static str, f: F) -> Result<CallToolResult, McpError>
 where
     F: FnOnce() -> Fut,
     Fut: std::future::Future<Output = Result<CallToolResult, McpError>>,
 {
     CURRENT_TOOL
-        .scope(name.to_string(), async move {
+        .scope(name, async move {
             let start = std::time::Instant::now();
             let result = f().await;
             let duration = start.elapsed().as_secs_f64();
@@ -126,8 +132,13 @@ pub(crate) async fn send_quote_cmd(client: &longbridge::httpclient::HttpClient) 
 /// Serializes tests that mutate the process-global `LONGBRIDGE_HTTP_URL` env var
 /// to redirect the SDK base URL at a local capture server. Multiple such tests
 /// run concurrently in one binary and would otherwise clobber each other's URL.
+///
+/// `tokio::sync::Mutex` is used so the guard can be held across `.await` points
+/// without blocking the executor thread (needed by authenticate.rs's test, which
+/// must keep the env var set for the duration of an async call).
 #[cfg(test)]
-pub(crate) static HTTP_URL_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+pub(crate) static HTTP_URL_ENV_LOCK: std::sync::LazyLock<tokio::sync::Mutex<()>> =
+    std::sync::LazyLock::new(|| tokio::sync::Mutex::new(()));
 
 impl McpContext {
     /// This server's own identity as an RFC 9110 product token.
@@ -166,8 +177,8 @@ impl McpContext {
         }
         // Tag the originating tool so server-side stats can attribute Context
         // (REST + WS upgrade) requests per tool, mirroring the CLI's x-cli-cmd.
-        if let Ok(tool) = CURRENT_TOOL.try_with(|t| t.clone()) {
-            config = config.header("x-mcp-tool", tool.as_str());
+        if let Ok(tool) = CURRENT_TOOL.try_with(|t| *t) {
+            config = config.header("x-mcp-tool", tool);
         }
         Arc::new(config)
     }
@@ -185,8 +196,8 @@ impl McpContext {
         }
         // Tag the originating tool so server-side stats can attribute requests
         // per tool, mirroring the CLI's x-cli-cmd.
-        if let Ok(tool) = CURRENT_TOOL.try_with(|t| t.clone()) {
-            client = client.header("x-mcp-tool", tool.as_str());
+        if let Ok(tool) = CURRENT_TOOL.try_with(|t| *t) {
+            client = client.header("x-mcp-tool", tool);
         }
         // Identify MCP-originated upstream requests. The client's UA is appended
         // with our token by `user_agent`; set last so a forwarded header cannot
@@ -379,23 +390,71 @@ fn extract_context(ctx: &RequestContext<RoleServer>) -> Result<McpContext, McpEr
 
 /// Returns all registered MCP tools sorted by name.
 ///
+/// Returns all tools, processed once and cached for the lifetime of the process.
+///
+/// Building the router (151 entries) and recursively traversing every JSON Schema
+/// is expensive; doing it on each `tools/list` request was the primary CPU hotspot.
+/// The result is immutable after startup, so a `OnceLock` is safe.
+fn all_tools_cached() -> &'static [rmcp::model::Tool] {
+    static TOOLS: std::sync::OnceLock<Vec<rmcp::model::Tool>> = std::sync::OnceLock::new();
+    TOOLS.get_or_init(|| {
+        cached_router()
+            .list_all()
+            .into_iter()
+            .map(|mut tool| {
+                let mut schema = serde_json::Value::Object((*tool.input_schema).clone());
+                strip_null_from_type_arrays(&mut schema);
+                if let serde_json::Value::Object(obj) = schema {
+                    tool.input_schema = std::sync::Arc::new(obj);
+                }
+                tool
+            })
+            .collect()
+    })
+}
+
 /// Input schemas are post-processed to remove `null` from `type` arrays so that
 /// optional parameters are represented as plain scalar types (e.g. `"type": "string"`
 /// instead of `"type": ["string", "null"]`).  Optionality is already expressed by
 /// the field being absent from the `required` array, which is the MCP convention.
 pub fn list_tools() -> Vec<rmcp::model::Tool> {
-    Longbridge::tool_router()
-        .list_all()
-        .into_iter()
-        .map(|mut tool| {
-            let mut schema = serde_json::Value::Object((*tool.input_schema).clone());
-            strip_null_from_type_arrays(&mut schema);
-            if let serde_json::Value::Object(obj) = schema {
-                tool.input_schema = std::sync::Arc::new(obj);
-            }
-            tool
-        })
-        .collect()
+    all_tools_cached().to_vec()
+}
+
+/// Tools for the main endpoint (`/mcp`, root): full set minus `authenticate`.
+/// Computed once; every `tools/list` response clones from this slice.
+fn tools_main_endpoint() -> &'static [rmcp::model::Tool] {
+    static MAIN: std::sync::OnceLock<Vec<rmcp::model::Tool>> = std::sync::OnceLock::new();
+    MAIN.get_or_init(|| {
+        all_tools_cached()
+            .iter()
+            .filter(|t| t.name != AUTHENTICATE_TOOL_NAME)
+            .cloned()
+            .collect()
+    })
+}
+
+/// Tools for the unauthenticated `/agent` endpoint: only `authenticate`.
+/// Computed once; every `tools/list` response clones from this one-element slice.
+fn tools_agent_endpoint() -> &'static [rmcp::model::Tool] {
+    static AGENT: std::sync::OnceLock<Vec<rmcp::model::Tool>> = std::sync::OnceLock::new();
+    AGENT.get_or_init(|| {
+        all_tools_cached()
+            .iter()
+            .filter(|t| t.name == AUTHENTICATE_TOOL_NAME)
+            .cloned()
+            .collect()
+    })
+}
+
+/// Returns the tool router, built once and cached for the lifetime of the process.
+///
+/// Shared by `ServerHandler::call_tool` (dispatch) and `ServerHandler::get_tool`
+/// (task-support validation, called by rmcp on every `CallToolRequest`).
+fn cached_router() -> &'static rmcp::handler::server::router::tool::ToolRouter<Longbridge> {
+    use rmcp::handler::server::router::tool::ToolRouter;
+    static ROUTER: std::sync::OnceLock<ToolRouter<Longbridge>> = std::sync::OnceLock::new();
+    ROUTER.get_or_init(Longbridge::tool_router)
 }
 
 /// Recursively remove `"null"` from JSON Schema `type` arrays.
@@ -458,7 +517,10 @@ impl Longbridge {
         Parameters(p): Parameters<authenticate::AuthenticateParam>,
     ) -> Result<CallToolResult, McpError> {
         let already = is_authenticated(&ctx);
-        measured_tool_call("authenticate", || authenticate::authenticate(already, p)).await
+        measured_tool_call(AUTHENTICATE_TOOL_NAME, || {
+            authenticate::authenticate(already, p)
+        })
+        .await
     }
 
     /// Get current UTC time in RFC3339 format.
@@ -2910,24 +2972,30 @@ impl ServerHandler for Longbridge {
     ///   exposed, so an OAuth-incapable client can complete the handshake and
     ///   self-authorize. After `authenticate` succeeds and the client starts
     ///   sending the returned token, the next `tools/list` returns the full set.
+    fn get_tool(&self, name: &str) -> Option<rmcp::model::Tool> {
+        cached_router().get(name).cloned()
+    }
+
+    async fn call_tool(
+        &self,
+        request: rmcp::model::CallToolRequestParams,
+        context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> Result<rmcp::model::CallToolResult, rmcp::ErrorData> {
+        let tcc = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
+        cached_router().call(tcc).await
+    }
+
     async fn list_tools(
         &self,
         _request: Option<rmcp::model::PaginatedRequestParams>,
         context: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> Result<rmcp::model::ListToolsResult, rmcp::ErrorData> {
+        // Both slices are pre-filtered once at startup; each request only pays
+        // the clone cost (Arc ref-bumps + String title copies), not filter work.
         let tools = if is_agent_endpoint(&context) && !is_authenticated(&context) {
-            // Optional-auth endpoint with no credentials: only `authenticate`.
-            list_tools()
-                .into_iter()
-                .filter(|t| t.name == "authenticate")
-                .collect()
+            tools_agent_endpoint().to_vec()
         } else {
-            // Main endpoint, or `/agent` with a valid token: the full tool set,
-            // minus `authenticate` (which is only meaningful pre-auth on /agent).
-            list_tools()
-                .into_iter()
-                .filter(|t| t.name != "authenticate")
-                .collect()
+            tools_main_endpoint().to_vec()
         };
         Ok(rmcp::model::ListToolsResult {
             tools,
@@ -3019,8 +3087,20 @@ mod tests {
         std::thread::spawn(move || {
             if let Ok((mut stream, _)) = listener.accept() {
                 let mut buf = [0u8; 4096];
-                let n = stream.read(&mut buf).unwrap_or(0);
-                let req = String::from_utf8_lossy(&buf[..n]);
+                let mut data = Vec::new();
+                // Accumulate until the full HTTP header block arrives (matching
+                // the async spawn_capture_server pattern used in quote_cmd_tests).
+                loop {
+                    let n = stream.read(&mut buf).unwrap_or(0);
+                    if n == 0 {
+                        break;
+                    }
+                    data.extend_from_slice(&buf[..n]);
+                    if data.windows(4).any(|w| w == b"\r\n\r\n") {
+                        break;
+                    }
+                }
+                let req = String::from_utf8_lossy(&data);
                 for line in req.lines() {
                     if line.to_ascii_lowercase().starts_with("user-agent:") {
                         *cap.lock().unwrap() = Some(line["user-agent:".len()..].trim().to_string());
@@ -3043,7 +3123,7 @@ mod tests {
         // Serialized against other env-mutating tests; the guard is released
         // before the await so it is never held across a suspension point.
         let client = {
-            let _env_guard = super::HTTP_URL_ENV_LOCK.lock().unwrap();
+            let _env_guard = super::HTTP_URL_ENV_LOCK.lock().await;
             // SAFETY: guarded by HTTP_URL_ENV_LOCK; set before build, cleared after.
             unsafe { std::env::set_var("LONGBRIDGE_HTTP_URL", format!("http://{addr}")) };
             let client = mctx.create_http_client();
@@ -3146,10 +3226,10 @@ mod quote_cmd_tests {
         // does for real tool calls), with the SDK base URL redirected at the
         // local server. `sync_scope` keeps the locked region free of any await.
         let client = {
-            let _env_guard = HTTP_URL_ENV_LOCK.lock().unwrap();
+            let _env_guard = HTTP_URL_ENV_LOCK.lock().await;
             // SAFETY: guarded by HTTP_URL_ENV_LOCK; set before build, cleared after.
             unsafe { std::env::set_var("LONGBRIDGE_HTTP_URL", format!("http://127.0.0.1:{port}")) };
-            let client = CURRENT_TOOL.sync_scope("depth".to_string(), || mctx.create_http_client());
+            let client = CURRENT_TOOL.sync_scope("depth", || mctx.create_http_client());
             unsafe { std::env::remove_var("LONGBRIDGE_HTTP_URL") };
             client
         };
@@ -3227,6 +3307,85 @@ mod quote_cmd_tests {
              /v1/quote/cmd beacon), not `QuoteContext::new(...)` directly. \
              Untracked constructor at:\n{}",
             offenders.join("\n")
+        );
+    }
+
+    /// Measures the speedup of the cached tool list vs. the old rebuild-on-every-call path.
+    /// Also benchmarks the actual production hot path (`tools_main_endpoint().to_vec()`).
+    ///
+    /// Run with:
+    ///   cargo test bench_list_tools_speedup -- --nocapture --ignored
+    #[test]
+    #[ignore]
+    fn bench_list_tools_speedup() {
+        use super::{Longbridge, list_tools, strip_null_from_type_arrays, tools_main_endpoint};
+        use std::hint::black_box;
+        use std::time::Instant;
+
+        let n = 500u32;
+
+        // Warm up all OnceLock caches (ROUTER → TOOLS → MAIN).
+        for _ in 0..10 {
+            let _ = list_tools();
+            let _ = tools_main_endpoint();
+        }
+
+        // ── Production hot path: tools_main_endpoint().to_vec() ─────────────
+        let start = Instant::now();
+        for _ in 0..n {
+            let _ = black_box(tools_main_endpoint().to_vec());
+        }
+        let hot_elapsed = start.elapsed();
+
+        // ── list_tools() path: all_tools_cached().to_vec() (all 151 tools) ──
+        let start = Instant::now();
+        for _ in 0..n {
+            let _ = black_box(list_tools());
+        }
+        let cached_elapsed = start.elapsed();
+
+        // ── Rebuild path (old behaviour: build router + traverse every schema) ─
+        let start = Instant::now();
+        for _ in 0..n {
+            let _ = black_box(
+                Longbridge::tool_router()
+                    .list_all()
+                    .into_iter()
+                    .map(|mut tool| {
+                        let mut schema = serde_json::Value::Object((*tool.input_schema).clone());
+                        strip_null_from_type_arrays(&mut schema);
+                        if let serde_json::Value::Object(obj) = schema {
+                            tool.input_schema = std::sync::Arc::new(obj);
+                        }
+                        tool
+                    })
+                    .collect::<Vec<_>>(),
+            );
+        }
+        let rebuild_elapsed = start.elapsed();
+
+        let hot_us = hot_elapsed.as_micros() as f64 / n as f64;
+        let cached_us = cached_elapsed.as_micros() as f64 / n as f64;
+        let rebuild_us = rebuild_elapsed.as_micros() as f64 / n as f64;
+
+        eprintln!(
+            "\nhot path (tools_main_endpoint): {:>8.1} µs/call  ({n} calls, {:?} total)",
+            hot_us, hot_elapsed
+        );
+        eprintln!(
+            "list_tools (all 151 tools):     {:>8.1} µs/call  ({n} calls, {:?} total)",
+            cached_us, cached_elapsed
+        );
+        eprintln!(
+            "rebuild path (old behaviour):   {:>8.1} µs/call  ({n} calls, {:?} total)",
+            rebuild_us, rebuild_elapsed
+        );
+        eprintln!("speedup (hot vs rebuild): {:.1}×", rebuild_us / hot_us);
+
+        assert!(
+            hot_us * 5.0 < rebuild_us,
+            "expected hot path ({hot_us:.1}µs) to be at least 5× faster \
+             than rebuild ({rebuild_us:.1}µs)"
         );
     }
 }
