@@ -1,4 +1,4 @@
-use longbridge::fundamental::{FundamentalContext, MacrodataCountry};
+use longbridge::fundamental::{FundamentalContext, MacroeconomicCountry};
 use rmcp::ErrorData as McpError;
 use rmcp::model::CallToolResult;
 use rmcp::schemars::JsonSchema;
@@ -8,7 +8,7 @@ use crate::error::Error;
 use crate::tools::tool_json;
 
 #[derive(Debug, Deserialize, JsonSchema)]
-pub struct MacrodataIndicatorsParam {
+pub struct MacroeconomicIndicatorsParam {
     /// Filter by country code. One of: "US", "CN", "HK", "EU", "JP", "SG".
     /// Omit to return all countries.
     pub country: Option<String>,
@@ -19,8 +19,8 @@ pub struct MacrodataIndicatorsParam {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
-pub struct MacrodataParam {
-    /// Indicator code from `macrodata_indicators`, e.g. `"USCPI"`.
+pub struct MacroeconomicParam {
+    /// Indicator code from `macroeconomic_indicators`, e.g. `"USCPI"`.
     pub indicator_code: String,
     /// Earliest release date to include (YYYY-MM-DD, e.g. `"2024-01-01"`).
     pub start_date: Option<String>,
@@ -32,14 +32,14 @@ pub struct MacrodataParam {
     pub limit: Option<i32>,
 }
 
-fn parse_country(s: &str) -> Result<MacrodataCountry, McpError> {
+fn parse_country(s: &str) -> Result<MacroeconomicCountry, McpError> {
     match s {
-        "US" => Ok(MacrodataCountry::UnitedStates),
-        "CN" => Ok(MacrodataCountry::China),
-        "HK" => Ok(MacrodataCountry::HongKong),
-        "EU" => Ok(MacrodataCountry::EuroZone),
-        "JP" => Ok(MacrodataCountry::Japan),
-        "SG" => Ok(MacrodataCountry::Singapore),
+        "US" => Ok(MacroeconomicCountry::UnitedStates),
+        "CN" => Ok(MacroeconomicCountry::China),
+        "HK" => Ok(MacroeconomicCountry::HongKong),
+        "EU" => Ok(MacroeconomicCountry::EuroZone),
+        "JP" => Ok(MacroeconomicCountry::Japan),
+        "SG" => Ok(MacroeconomicCountry::Singapore),
         other => Err(McpError::invalid_params(
             format!("invalid country '{other}'. Valid values: US, CN, HK, EU, JP, SG"),
             None,
@@ -47,26 +47,26 @@ fn parse_country(s: &str) -> Result<MacrodataCountry, McpError> {
     }
 }
 
-pub async fn macrodata_indicators(
+pub async fn macroeconomic_indicators(
     mctx: &crate::tools::McpContext,
-    p: MacrodataIndicatorsParam,
+    p: MacroeconomicIndicatorsParam,
 ) -> Result<CallToolResult, McpError> {
     let country = p.country.as_deref().map(parse_country).transpose()?;
     let ctx = FundamentalContext::new(mctx.create_config());
     let result = ctx
-        .macrodata_indicators(country, p.offset, p.limit)
+        .macroeconomic_indicators(country, p.offset, p.limit)
         .await
         .map_err(Error::longbridge)?;
     tool_json(&result)
 }
 
-pub async fn macrodata(
+pub async fn macroeconomic(
     mctx: &crate::tools::McpContext,
-    p: MacrodataParam,
+    p: MacroeconomicParam,
 ) -> Result<CallToolResult, McpError> {
     let ctx = FundamentalContext::new(mctx.create_config());
     let result = ctx
-        .macrodata(
+        .macroeconomic(
             p.indicator_code,
             p.start_date,
             p.end_date,
@@ -86,21 +86,27 @@ mod tests {
     fn parse_country_valid() {
         assert!(matches!(
             parse_country("US"),
-            Ok(MacrodataCountry::UnitedStates)
+            Ok(MacroeconomicCountry::UnitedStates)
         ));
-        assert!(matches!(parse_country("CN"), Ok(MacrodataCountry::China)));
+        assert!(matches!(
+            parse_country("CN"),
+            Ok(MacroeconomicCountry::China)
+        ));
         assert!(matches!(
             parse_country("HK"),
-            Ok(MacrodataCountry::HongKong)
+            Ok(MacroeconomicCountry::HongKong)
         ));
         assert!(matches!(
             parse_country("EU"),
-            Ok(MacrodataCountry::EuroZone)
+            Ok(MacroeconomicCountry::EuroZone)
         ));
-        assert!(matches!(parse_country("JP"), Ok(MacrodataCountry::Japan)));
+        assert!(matches!(
+            parse_country("JP"),
+            Ok(MacroeconomicCountry::Japan)
+        ));
         assert!(matches!(
             parse_country("SG"),
-            Ok(MacrodataCountry::Singapore)
+            Ok(MacroeconomicCountry::Singapore)
         ));
     }
 
@@ -112,8 +118,8 @@ mod tests {
     }
 
     #[test]
-    fn macrodata_param_accepts_date_and_offset() {
-        let p: MacrodataParam = serde_json::from_str(
+    fn macroeconomic_param_accepts_date_and_offset() {
+        let p: MacroeconomicParam = serde_json::from_str(
             r#"{"indicator_code":"USCPI","start_date":"2024-01-01","end_date":"2024-12-31","offset":100}"#,
         )
         .unwrap();
