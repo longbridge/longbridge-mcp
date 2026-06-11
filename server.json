@@ -25,7 +25,7 @@
   "packages": [
     {
       "registryType": "oci",
-      "identifier": "ghcr.io/longbridge/longbridge-mcp:0.4.9",
+      "identifier": "ghcr.io/longbridge/longbridge-mcp:0.5.3",
       "transport": {
         "type": "streamable-http",
         "url": "http://localhost:8000/mcp",
