@@ -415,6 +415,32 @@ pub fn list_tools() -> Vec<rmcp::model::Tool> {
     all_tools_cached().to_vec()
 }
 
+/// Tools for the main endpoint (`/mcp`, root): full set minus `authenticate`.
+/// Computed once; every `tools/list` response clones from this slice.
+fn tools_main_endpoint() -> &'static [rmcp::model::Tool] {
+    static MAIN: std::sync::OnceLock<Vec<rmcp::model::Tool>> = std::sync::OnceLock::new();
+    MAIN.get_or_init(|| {
+        all_tools_cached()
+            .iter()
+            .filter(|t| t.name != "authenticate")
+            .cloned()
+            .collect()
+    })
+}
+
+/// Tools for the unauthenticated `/agent` endpoint: only `authenticate`.
+/// Computed once; every `tools/list` response clones from this one-element slice.
+fn tools_agent_endpoint() -> &'static [rmcp::model::Tool] {
+    static AGENT: std::sync::OnceLock<Vec<rmcp::model::Tool>> = std::sync::OnceLock::new();
+    AGENT.get_or_init(|| {
+        all_tools_cached()
+            .iter()
+            .filter(|t| t.name == "authenticate")
+            .cloned()
+            .collect()
+    })
+}
+
 /// Returns the tool router, built once and cached for the lifetime of the process.
 ///
 /// Shared by `ServerHandler::call_tool` (dispatch) and `ServerHandler::get_tool`
@@ -2955,20 +2981,12 @@ impl ServerHandler for Longbridge {
         _request: Option<rmcp::model::PaginatedRequestParams>,
         context: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> Result<rmcp::model::ListToolsResult, rmcp::ErrorData> {
-        let all = all_tools_cached();
+        // Both slices are pre-filtered once at startup; each request only pays
+        // the clone cost (Arc ref-bumps + String title copies), not filter work.
         let tools = if is_agent_endpoint(&context) && !is_authenticated(&context) {
-            // Optional-auth endpoint with no credentials: only `authenticate`.
-            all.iter()
-                .filter(|t| t.name == "authenticate")
-                .cloned()
-                .collect()
+            tools_agent_endpoint().to_vec()
         } else {
-            // Main endpoint, or `/agent` with a valid token: the full tool set,
-            // minus `authenticate` (which is only meaningful pre-auth on /agent).
-            all.iter()
-                .filter(|t| t.name != "authenticate")
-                .cloned()
-                .collect()
+            tools_main_endpoint().to_vec()
         };
         Ok(rmcp::model::ListToolsResult {
             tools,
