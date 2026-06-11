@@ -14,6 +14,12 @@ use crate::auth::middleware::{AgentEndpoint, BearerToken};
 use crate::error::Error;
 use crate::serialize::to_tool_json;
 
+/// Registered name of the reverse-auth tool, used as the filter key in both
+/// `tools_main_endpoint` (excluded) and `tools_agent_endpoint` (only this one).
+/// Tied to `fn authenticate` via `measured_tool_call(AUTHENTICATE_TOOL_NAME, ...)`.
+/// Change this constant if the method is ever renamed so all three sites stay in sync.
+const AUTHENTICATE_TOOL_NAME: &str = "authenticate";
+
 tokio::task_local! {
     /// The name of the tool currently executing, scoped around each tool call by
     /// [`measured_tool_call`]. Read by [`McpContext::create_http_client`] and
@@ -21,16 +27,16 @@ tokio::task_local! {
     /// with an `x-mcp-tool` header (the MCP equivalent of the CLI's `x-cli-cmd`),
     /// so server-side stats can attribute requests per tool. Absent outside a
     /// tool call (e.g. server init), in which case no tag is added.
-    pub(crate) static CURRENT_TOOL: String;
+    pub(crate) static CURRENT_TOOL: &'static str;
 }
 
-async fn measured_tool_call<F, Fut>(name: &str, f: F) -> Result<CallToolResult, McpError>
+async fn measured_tool_call<F, Fut>(name: &'static str, f: F) -> Result<CallToolResult, McpError>
 where
     F: FnOnce() -> Fut,
     Fut: std::future::Future<Output = Result<CallToolResult, McpError>>,
 {
     CURRENT_TOOL
-        .scope(name.to_string(), async move {
+        .scope(name, async move {
             let start = std::time::Instant::now();
             let result = f().await;
             let duration = start.elapsed().as_secs_f64();
@@ -171,8 +177,8 @@ impl McpContext {
         }
         // Tag the originating tool so server-side stats can attribute Context
         // (REST + WS upgrade) requests per tool, mirroring the CLI's x-cli-cmd.
-        if let Ok(tool) = CURRENT_TOOL.try_with(|t| t.clone()) {
-            config = config.header("x-mcp-tool", tool.as_str());
+        if let Ok(tool) = CURRENT_TOOL.try_with(|t| *t) {
+            config = config.header("x-mcp-tool", tool);
         }
         Arc::new(config)
     }
@@ -190,8 +196,8 @@ impl McpContext {
         }
         // Tag the originating tool so server-side stats can attribute requests
         // per tool, mirroring the CLI's x-cli-cmd.
-        if let Ok(tool) = CURRENT_TOOL.try_with(|t| t.clone()) {
-            client = client.header("x-mcp-tool", tool.as_str());
+        if let Ok(tool) = CURRENT_TOOL.try_with(|t| *t) {
+            client = client.header("x-mcp-tool", tool);
         }
         // Identify MCP-originated upstream requests. The client's UA is appended
         // with our token by `user_agent`; set last so a forwarded header cannot
@@ -422,7 +428,7 @@ fn tools_main_endpoint() -> &'static [rmcp::model::Tool] {
     MAIN.get_or_init(|| {
         all_tools_cached()
             .iter()
-            .filter(|t| t.name != "authenticate")
+            .filter(|t| t.name != AUTHENTICATE_TOOL_NAME)
             .cloned()
             .collect()
     })
@@ -435,7 +441,7 @@ fn tools_agent_endpoint() -> &'static [rmcp::model::Tool] {
     AGENT.get_or_init(|| {
         all_tools_cached()
             .iter()
-            .filter(|t| t.name == "authenticate")
+            .filter(|t| t.name == AUTHENTICATE_TOOL_NAME)
             .cloned()
             .collect()
     })
@@ -511,7 +517,10 @@ impl Longbridge {
         Parameters(p): Parameters<authenticate::AuthenticateParam>,
     ) -> Result<CallToolResult, McpError> {
         let already = is_authenticated(&ctx);
-        measured_tool_call("authenticate", || authenticate::authenticate(already, p)).await
+        measured_tool_call(AUTHENTICATE_TOOL_NAME, || {
+            authenticate::authenticate(already, p)
+        })
+        .await
     }
 
     /// Get current UTC time in RFC3339 format.
@@ -3078,8 +3087,20 @@ mod tests {
         std::thread::spawn(move || {
             if let Ok((mut stream, _)) = listener.accept() {
                 let mut buf = [0u8; 4096];
-                let n = stream.read(&mut buf).unwrap_or(0);
-                let req = String::from_utf8_lossy(&buf[..n]);
+                let mut data = Vec::new();
+                // Accumulate until the full HTTP header block arrives (matching
+                // the async spawn_capture_server pattern used in quote_cmd_tests).
+                loop {
+                    let n = stream.read(&mut buf).unwrap_or(0);
+                    if n == 0 {
+                        break;
+                    }
+                    data.extend_from_slice(&buf[..n]);
+                    if data.windows(4).any(|w| w == b"\r\n\r\n") {
+                        break;
+                    }
+                }
+                let req = String::from_utf8_lossy(&data);
                 for line in req.lines() {
                     if line.to_ascii_lowercase().starts_with("user-agent:") {
                         *cap.lock().unwrap() = Some(line["user-agent:".len()..].trim().to_string());
@@ -3208,7 +3229,7 @@ mod quote_cmd_tests {
             let _env_guard = HTTP_URL_ENV_LOCK.lock().await;
             // SAFETY: guarded by HTTP_URL_ENV_LOCK; set before build, cleared after.
             unsafe { std::env::set_var("LONGBRIDGE_HTTP_URL", format!("http://127.0.0.1:{port}")) };
-            let client = CURRENT_TOOL.sync_scope("depth".to_string(), || mctx.create_http_client());
+            let client = CURRENT_TOOL.sync_scope("depth", || mctx.create_http_client());
             unsafe { std::env::remove_var("LONGBRIDGE_HTTP_URL") };
             client
         };
@@ -3290,25 +3311,33 @@ mod quote_cmd_tests {
     }
 
     /// Measures the speedup of the cached tool list vs. the old rebuild-on-every-call path.
+    /// Also benchmarks the actual production hot path (`tools_main_endpoint().to_vec()`).
     ///
     /// Run with:
     ///   cargo test bench_list_tools_speedup -- --nocapture --ignored
     #[test]
     #[ignore]
     fn bench_list_tools_speedup() {
-        use super::{Longbridge, list_tools, strip_null_from_type_arrays};
+        use super::{Longbridge, list_tools, strip_null_from_type_arrays, tools_main_endpoint};
         use std::hint::black_box;
         use std::time::Instant;
 
         let n = 500u32;
 
-        // Warm up both OnceLock caches: list_tools() → all_tools_cached() →
-        // cached_router(), so neither ROUTER nor TOOLS is cold during measurement.
+        // Warm up all OnceLock caches (ROUTER → TOOLS → MAIN).
         for _ in 0..10 {
             let _ = list_tools();
+            let _ = tools_main_endpoint();
         }
 
-        // ── Cached path (new behaviour) ──────────────────────────────────────
+        // ── Production hot path: tools_main_endpoint().to_vec() ─────────────
+        let start = Instant::now();
+        for _ in 0..n {
+            let _ = black_box(tools_main_endpoint().to_vec());
+        }
+        let hot_elapsed = start.elapsed();
+
+        // ── list_tools() path: all_tools_cached().to_vec() (all 151 tools) ──
         let start = Instant::now();
         for _ in 0..n {
             let _ = black_box(list_tools());
@@ -3335,22 +3364,27 @@ mod quote_cmd_tests {
         }
         let rebuild_elapsed = start.elapsed();
 
+        let hot_us = hot_elapsed.as_micros() as f64 / n as f64;
         let cached_us = cached_elapsed.as_micros() as f64 / n as f64;
         let rebuild_us = rebuild_elapsed.as_micros() as f64 / n as f64;
 
         eprintln!(
-            "\ncached path:  {:>8.1} µs/call  ({n} calls, {:?} total)",
+            "\nhot path (tools_main_endpoint): {:>8.1} µs/call  ({n} calls, {:?} total)",
+            hot_us, hot_elapsed
+        );
+        eprintln!(
+            "list_tools (all 151 tools):     {:>8.1} µs/call  ({n} calls, {:?} total)",
             cached_us, cached_elapsed
         );
         eprintln!(
-            "rebuild path: {:>8.1} µs/call  ({n} calls, {:?} total)",
+            "rebuild path (old behaviour):   {:>8.1} µs/call  ({n} calls, {:?} total)",
             rebuild_us, rebuild_elapsed
         );
-        eprintln!("speedup: {:.1}×", rebuild_us / cached_us);
+        eprintln!("speedup (hot vs rebuild): {:.1}×", rebuild_us / hot_us);
 
         assert!(
-            cached_us * 5.0 < rebuild_us,
-            "expected cached path ({cached_us:.1}µs) to be at least 5× faster \
+            hot_us * 5.0 < rebuild_us,
+            "expected hot path ({hot_us:.1}µs) to be at least 5× faster \
              than rebuild ({rebuild_us:.1}µs)"
         );
     }
