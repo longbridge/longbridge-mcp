@@ -2929,8 +2929,7 @@ impl ServerHandler for Longbridge {
     ) -> Result<rmcp::model::CallToolResult, rmcp::ErrorData> {
         use rmcp::handler::server::router::tool::ToolRouter;
         static ROUTER: std::sync::OnceLock<ToolRouter<Longbridge>> = std::sync::OnceLock::new();
-        let tcc =
-            rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
+        let tcc = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
         ROUTER.get_or_init(Longbridge::tool_router).call(tcc).await
     }
 
@@ -2942,11 +2941,17 @@ impl ServerHandler for Longbridge {
         let all = all_tools_cached();
         let tools = if is_agent_endpoint(&context) && !is_authenticated(&context) {
             // Optional-auth endpoint with no credentials: only `authenticate`.
-            all.iter().filter(|t| t.name == "authenticate").cloned().collect()
+            all.iter()
+                .filter(|t| t.name == "authenticate")
+                .cloned()
+                .collect()
         } else {
             // Main endpoint, or `/agent` with a valid token: the full tool set,
             // minus `authenticate` (which is only meaningful pre-auth on /agent).
-            all.iter().filter(|t| t.name != "authenticate").cloned().collect()
+            all.iter()
+                .filter(|t| t.name != "authenticate")
+                .cloned()
+                .collect()
         };
         Ok(rmcp::model::ListToolsResult {
             tools,
@@ -3246,6 +3251,72 @@ mod quote_cmd_tests {
              /v1/quote/cmd beacon), not `QuoteContext::new(...)` directly. \
              Untracked constructor at:\n{}",
             offenders.join("\n")
+        );
+    }
+
+    /// Measures the speedup of the cached tool list vs. the old rebuild-on-every-call path.
+    ///
+    /// Run with:
+    ///   cargo test bench_list_tools_speedup -- --nocapture --ignored
+    #[test]
+    #[ignore]
+    fn bench_list_tools_speedup() {
+        use super::{Longbridge, list_tools, strip_null_from_type_arrays};
+        use std::hint::black_box;
+        use std::time::Instant;
+
+        let n = 500u32;
+
+        // Warm-up: populate the OnceLock caches before measurement.
+        for _ in 0..10 {
+            let _ = list_tools();
+            let _ = Longbridge::tool_router();
+        }
+
+        // ── Cached path (new behaviour) ──────────────────────────────────────
+        let start = Instant::now();
+        for _ in 0..n {
+            let _ = black_box(list_tools());
+        }
+        let cached_elapsed = start.elapsed();
+
+        // ── Rebuild path (old behaviour: build router + traverse every schema) ─
+        let start = Instant::now();
+        for _ in 0..n {
+            let _ = black_box(
+                Longbridge::tool_router()
+                    .list_all()
+                    .into_iter()
+                    .map(|mut tool| {
+                        let mut schema = serde_json::Value::Object((*tool.input_schema).clone());
+                        strip_null_from_type_arrays(&mut schema);
+                        if let serde_json::Value::Object(obj) = schema {
+                            tool.input_schema = std::sync::Arc::new(obj);
+                        }
+                        tool
+                    })
+                    .collect::<Vec<_>>(),
+            );
+        }
+        let rebuild_elapsed = start.elapsed();
+
+        let cached_us = cached_elapsed.as_micros() as f64 / n as f64;
+        let rebuild_us = rebuild_elapsed.as_micros() as f64 / n as f64;
+
+        eprintln!(
+            "\ncached path:  {:>8.1} µs/call  ({n} calls, {:?} total)",
+            cached_us, cached_elapsed
+        );
+        eprintln!(
+            "rebuild path: {:>8.1} µs/call  ({n} calls, {:?} total)",
+            rebuild_us, rebuild_elapsed
+        );
+        eprintln!("speedup: {:.1}×", rebuild_us / cached_us);
+
+        assert!(
+            cached_us * 5.0 < rebuild_us,
+            "expected cached path ({cached_us:.1}µs) to be at least 5× faster \
+             than rebuild ({rebuild_us:.1}µs)"
         );
     }
 }
