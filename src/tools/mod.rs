@@ -379,23 +379,35 @@ fn extract_context(ctx: &RequestContext<RoleServer>) -> Result<McpContext, McpEr
 
 /// Returns all registered MCP tools sorted by name.
 ///
+/// Returns all tools, processed once and cached for the lifetime of the process.
+///
+/// Building the router (151 entries) and recursively traversing every JSON Schema
+/// is expensive; doing it on each `tools/list` request was the primary CPU hotspot.
+/// The result is immutable after startup, so a `OnceLock` is safe.
+fn all_tools_cached() -> &'static [rmcp::model::Tool] {
+    static TOOLS: std::sync::OnceLock<Vec<rmcp::model::Tool>> = std::sync::OnceLock::new();
+    TOOLS.get_or_init(|| {
+        Longbridge::tool_router()
+            .list_all()
+            .into_iter()
+            .map(|mut tool| {
+                let mut schema = serde_json::Value::Object((*tool.input_schema).clone());
+                strip_null_from_type_arrays(&mut schema);
+                if let serde_json::Value::Object(obj) = schema {
+                    tool.input_schema = std::sync::Arc::new(obj);
+                }
+                tool
+            })
+            .collect()
+    })
+}
+
 /// Input schemas are post-processed to remove `null` from `type` arrays so that
 /// optional parameters are represented as plain scalar types (e.g. `"type": "string"`
 /// instead of `"type": ["string", "null"]`).  Optionality is already expressed by
 /// the field being absent from the `required` array, which is the MCP convention.
 pub fn list_tools() -> Vec<rmcp::model::Tool> {
-    Longbridge::tool_router()
-        .list_all()
-        .into_iter()
-        .map(|mut tool| {
-            let mut schema = serde_json::Value::Object((*tool.input_schema).clone());
-            strip_null_from_type_arrays(&mut schema);
-            if let serde_json::Value::Object(obj) = schema {
-                tool.input_schema = std::sync::Arc::new(obj);
-            }
-            tool
-        })
-        .collect()
+    all_tools_cached().to_vec()
 }
 
 /// Recursively remove `"null"` from JSON Schema `type` arrays.
@@ -2910,24 +2922,31 @@ impl ServerHandler for Longbridge {
     ///   exposed, so an OAuth-incapable client can complete the handshake and
     ///   self-authorize. After `authenticate` succeeds and the client starts
     ///   sending the returned token, the next `tools/list` returns the full set.
+    async fn call_tool(
+        &self,
+        request: rmcp::model::CallToolRequestParams,
+        context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> Result<rmcp::model::CallToolResult, rmcp::ErrorData> {
+        use rmcp::handler::server::router::tool::ToolRouter;
+        static ROUTER: std::sync::OnceLock<ToolRouter<Longbridge>> = std::sync::OnceLock::new();
+        let tcc =
+            rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
+        ROUTER.get_or_init(Longbridge::tool_router).call(tcc).await
+    }
+
     async fn list_tools(
         &self,
         _request: Option<rmcp::model::PaginatedRequestParams>,
         context: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> Result<rmcp::model::ListToolsResult, rmcp::ErrorData> {
+        let all = all_tools_cached();
         let tools = if is_agent_endpoint(&context) && !is_authenticated(&context) {
             // Optional-auth endpoint with no credentials: only `authenticate`.
-            list_tools()
-                .into_iter()
-                .filter(|t| t.name == "authenticate")
-                .collect()
+            all.iter().filter(|t| t.name == "authenticate").cloned().collect()
         } else {
             // Main endpoint, or `/agent` with a valid token: the full tool set,
             // minus `authenticate` (which is only meaningful pre-auth on /agent).
-            list_tools()
-                .into_iter()
-                .filter(|t| t.name != "authenticate")
-                .collect()
+            all.iter().filter(|t| t.name != "authenticate").cloned().collect()
         };
         Ok(rmcp::model::ListToolsResult {
             tools,
