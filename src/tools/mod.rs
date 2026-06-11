@@ -126,8 +126,13 @@ pub(crate) async fn send_quote_cmd(client: &longbridge::httpclient::HttpClient) 
 /// Serializes tests that mutate the process-global `LONGBRIDGE_HTTP_URL` env var
 /// to redirect the SDK base URL at a local capture server. Multiple such tests
 /// run concurrently in one binary and would otherwise clobber each other's URL.
+///
+/// `tokio::sync::Mutex` is used so the guard can be held across `.await` points
+/// without blocking the executor thread (needed by authenticate.rs's test, which
+/// must keep the env var set for the duration of an async call).
 #[cfg(test)]
-pub(crate) static HTTP_URL_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+pub(crate) static HTTP_URL_ENV_LOCK: std::sync::LazyLock<tokio::sync::Mutex<()>> =
+    std::sync::LazyLock::new(|| tokio::sync::Mutex::new(()));
 
 impl McpContext {
     /// This server's own identity as an RFC 9110 product token.
@@ -3079,7 +3084,7 @@ mod tests {
         // Serialized against other env-mutating tests; the guard is released
         // before the await so it is never held across a suspension point.
         let client = {
-            let _env_guard = super::HTTP_URL_ENV_LOCK.lock().unwrap();
+            let _env_guard = super::HTTP_URL_ENV_LOCK.lock().await;
             // SAFETY: guarded by HTTP_URL_ENV_LOCK; set before build, cleared after.
             unsafe { std::env::set_var("LONGBRIDGE_HTTP_URL", format!("http://{addr}")) };
             let client = mctx.create_http_client();
@@ -3182,7 +3187,7 @@ mod quote_cmd_tests {
         // does for real tool calls), with the SDK base URL redirected at the
         // local server. `sync_scope` keeps the locked region free of any await.
         let client = {
-            let _env_guard = HTTP_URL_ENV_LOCK.lock().unwrap();
+            let _env_guard = HTTP_URL_ENV_LOCK.lock().await;
             // SAFETY: guarded by HTTP_URL_ENV_LOCK; set before build, cleared after.
             unsafe { std::env::set_var("LONGBRIDGE_HTTP_URL", format!("http://127.0.0.1:{port}")) };
             let client = CURRENT_TOOL.sync_scope("depth".to_string(), || mctx.create_http_client());
@@ -3279,10 +3284,10 @@ mod quote_cmd_tests {
 
         let n = 500u32;
 
-        // Warm-up: populate the OnceLock caches before measurement.
+        // Warm up both OnceLock caches: list_tools() → all_tools_cached() →
+        // cached_router(), so neither ROUTER nor TOOLS is cold during measurement.
         for _ in 0..10 {
             let _ = list_tools();
-            let _ = Longbridge::tool_router();
         }
 
         // ── Cached path (new behaviour) ──────────────────────────────────────

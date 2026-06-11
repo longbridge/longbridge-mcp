@@ -371,10 +371,13 @@ mod tests {
             bs58::encode(v).into_string()
         };
 
-        // Serialized against other tests that mutate LONGBRIDGE_HTTP_URL; guard
-        // released before the await so it is never held across a suspension point.
+        // Serialized against other tests that mutate LONGBRIDGE_HTTP_URL. The
+        // guard is intentionally held across the .await: oauth_base_url() is
+        // called inside authenticate() and must see the redirected URL for the
+        // entire async call. tokio::sync::Mutex is used precisely so the guard
+        // can be held across suspension points without blocking the executor.
         let err = {
-            let _env_guard = crate::tools::HTTP_URL_ENV_LOCK.lock().unwrap();
+            let _env_guard = crate::tools::HTTP_URL_ENV_LOCK.lock().await;
             // SAFETY: guarded by HTTP_URL_ENV_LOCK; set before call, cleared after.
             unsafe { std::env::set_var("LONGBRIDGE_HTTP_URL", format!("http://{addr}")) };
             let result = authenticate(false, AuthenticateParam { auth_code: packed }).await;
