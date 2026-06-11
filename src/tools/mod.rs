@@ -410,6 +410,16 @@ pub fn list_tools() -> Vec<rmcp::model::Tool> {
     all_tools_cached().to_vec()
 }
 
+/// Returns the tool router, built once and cached for the lifetime of the process.
+///
+/// Shared by `ServerHandler::call_tool` (dispatch) and `ServerHandler::get_tool`
+/// (task-support validation, called by rmcp on every `CallToolRequest`).
+fn cached_router() -> &'static rmcp::handler::server::router::tool::ToolRouter<Longbridge> {
+    use rmcp::handler::server::router::tool::ToolRouter;
+    static ROUTER: std::sync::OnceLock<ToolRouter<Longbridge>> = std::sync::OnceLock::new();
+    ROUTER.get_or_init(Longbridge::tool_router)
+}
+
 /// Recursively remove `"null"` from JSON Schema `type` arrays.
 /// When the array is left with a single element it is unwrapped to a plain string.
 fn strip_null_from_type_arrays(value: &mut serde_json::Value) {
@@ -2922,15 +2932,17 @@ impl ServerHandler for Longbridge {
     ///   exposed, so an OAuth-incapable client can complete the handshake and
     ///   self-authorize. After `authenticate` succeeds and the client starts
     ///   sending the returned token, the next `tools/list` returns the full set.
+    fn get_tool(&self, name: &str) -> Option<rmcp::model::Tool> {
+        cached_router().get(name).cloned()
+    }
+
     async fn call_tool(
         &self,
         request: rmcp::model::CallToolRequestParams,
         context: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> Result<rmcp::model::CallToolResult, rmcp::ErrorData> {
-        use rmcp::handler::server::router::tool::ToolRouter;
-        static ROUTER: std::sync::OnceLock<ToolRouter<Longbridge>> = std::sync::OnceLock::new();
         let tcc = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
-        ROUTER.get_or_init(Longbridge::tool_router).call(tcc).await
+        cached_router().call(tcc).await
     }
 
     async fn list_tools(
