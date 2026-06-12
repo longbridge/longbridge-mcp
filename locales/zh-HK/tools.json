@@ -578,7 +578,7 @@
     },
     "macroeconomic_indicators": {
       "title": "宏觀指標列表",
-      "description": "列出宏觀經濟指標。可按國家代碼過濾：US/CN/HK/EU/JP/SG，省略則返回全部。返回 {count, list[]{indicator_code, source_org, country（縮寫）, name（字串）, describe（字串）, periodicity, category, importance(1=低/2=中/3=高), start_date（可為 null）}}。支援 offset/limit 分頁。",
+      "description": "列出宏觀經濟指標。可按國家代碼過濾：US/CN/HK/EU/JP/SG，省略則返回全部。返回 {count, list[]{indicator_code, country, name, describe, periodicity, importance(1=低/2=中/3=高)}}。支援 offset/limit 分頁。",
       "properties": {
         "country": "按國家代碼過濾：US（美國）、CN（中國大陸）、HK（香港）、EU（歐元區）、JP（日本）、SG（新加坡）",
         "offset": "分頁偏移量，預設 0",
@@ -587,7 +587,7 @@
     },
     "macroeconomic": {
       "title": "宏觀指標歷史數據",
-      "description": "按指標代碼（來自 macroeconomic_indicators）查詢歷史數據。指標代碼不存在時返回錯誤。返回 {count, info{indicator_code, source_org, country, name（字串）, describe（字串）, category, periodicity, adjustment_factor, importance(1=低/2=中/3=高), start_date（可為 null）}, data[]{period, release_at, actual_value, previous_value, forecast_value, revised_value, next_release_at, unit（字串）, unit_prefix（字串）}}。period 格式因發布週期而異：月度=\"YYYY-MM-DD\"、季度=\"YYYY-Qn\"（如 \"2024-Q1\"）、年度=\"YYYY-01-01\"。注意：actual_value 為空表示該期數據尚未發佈（僅有 forecast_value）；data[] 為空表示該日期範圍內無記錄。支援 offset/limit 分頁（每頁最多 100 條）。",
+      "description": "按指標代碼（來自 macroeconomic_indicators）查詢歷史數據。指標代碼不存在時返回錯誤。返回 {count, info{indicator_code, country, name, describe, periodicity, importance(1=低/2=中/3=高)}, data[]{period, release_at, actual_value, previous_value, forecast_value, unit}}。period 格式因發布週期而異：月度=\"YYYY-MM-DD\"、季度=\"YYYY-Qn\"（如 \"2024-Q1\"）、年度=\"YYYY-01-01\"。注意：actual_value 為空表示該期數據尚未發佈（僅有 forecast_value）；data[] 為空表示該日期範圍內無記錄。支援 offset/limit 分頁（每頁最多 100 條）。",
       "properties": {
         "indicator_code": "指標代碼，例如 `\"USCPI\"`，來自 macroeconomic_indicators",
         "start_date": "數據起始日期（`yyyy-mm-dd`，例如 `\"2024-01-01\"`）",

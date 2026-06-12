@@ -47,6 +47,20 @@ fn parse_country(s: &str) -> Result<MacroeconomicCountry, McpError> {
     }
 }
 
+/// Remove fields that v2 SDK does not populate (always empty/null).
+/// Reduces noise in AI context.
+fn strip_indicator(obj: &mut serde_json::Map<String, serde_json::Value>) {
+    for key in &["source_org", "adjustment_factor", "category", "start_date"] {
+        obj.remove(*key);
+    }
+}
+
+fn strip_data_point(obj: &mut serde_json::Map<String, serde_json::Value>) {
+    for key in &["revised_value", "next_release_at", "unit_prefix"] {
+        obj.remove(*key);
+    }
+}
+
 pub async fn macroeconomic_indicators(
     mctx: &crate::tools::McpContext,
     p: MacroeconomicIndicatorsParam,
@@ -57,7 +71,18 @@ pub async fn macroeconomic_indicators(
         .macroeconomic_indicators(country, p.offset, p.limit)
         .await
         .map_err(Error::longbridge)?;
-    tool_json(&result)
+    let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;
+    if let Some(list) = value["list"].as_array_mut() {
+        for item in list {
+            if let Some(obj) = item.as_object_mut() {
+                strip_indicator(obj);
+            }
+        }
+    }
+    let json = serde_json::to_string(&value).map_err(Error::Serialize)?;
+    Ok(CallToolResult::success(vec![rmcp::model::Content::text(
+        json,
+    )]))
 }
 
 pub async fn macroeconomic(
@@ -75,7 +100,23 @@ pub async fn macroeconomic(
         )
         .await
         .map_err(Error::longbridge)?;
-    tool_json(&result)
+    let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;
+    // Strip unmapped fields from info
+    if let Some(obj) = value["info"].as_object_mut() {
+        strip_indicator(obj);
+    }
+    // Strip unmapped fields from each data point
+    if let Some(data) = value["data"].as_array_mut() {
+        for item in data {
+            if let Some(obj) = item.as_object_mut() {
+                strip_data_point(obj);
+            }
+        }
+    }
+    let json = serde_json::to_string(&value).map_err(Error::Serialize)?;
+    Ok(CallToolResult::success(vec![rmcp::model::Content::text(
+        json,
+    )]))
 }
 
 #[cfg(test)]
