@@ -90,6 +90,15 @@ async fn health() -> axum::http::StatusCode {
     axum::http::StatusCode::OK
 }
 
+/// Domain-verification token for the OpenAI Apps directory, served as plain text
+/// at `/.well-known/openai-apps-challenge`. OpenAI fetches this path and expects
+/// the exact token back to confirm ownership of the deployment.
+const OPENAI_APPS_CHALLENGE: &str = "h5mgJvzRNVwtVXfT4QYbhlGhhNoni0WdHUFwIrZpbpE";
+
+async fn openai_apps_challenge() -> &'static str {
+    OPENAI_APPS_CHALLENGE
+}
+
 pub struct AppState {
     pub base_url: String,
 }
@@ -116,6 +125,11 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         );
 
     let health_route = Router::new().route("/health", axum::routing::get(health));
+
+    let openai_apps_challenge_route = Router::new().route(
+        "/.well-known/openai-apps-challenge",
+        axum::routing::get(openai_apps_challenge),
+    );
 
     let metrics_route = Router::new().route(
         "/metrics",
@@ -164,6 +178,7 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .merge(metadata_routes)
         .merge(server_card_route)
         .merge(health_route)
+        .merge(openai_apps_challenge_route)
         .merge(metrics_route)
         .merge(tools_route)
         .nest_service("/agent", mcp_agent)
