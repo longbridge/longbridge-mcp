@@ -5,7 +5,7 @@ edition = "2024"
 
 [dependencies]
 # TODO: switch back to crates.io after the next openapi release
-longbridge = { git = "https://github.com/longbridge/openapi.git", branch = "main" }
+longbridge = { git = "https://github.com/longbridge/openapi.git", branch = "feat/macroeconomic-v2" }
 rust_decimal = "1"
 rmcp = { version = "1.4", features = [
     "server",
