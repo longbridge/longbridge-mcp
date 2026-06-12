@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashMap};
 
 use rmcp::ErrorData as McpError;
-use rmcp::model::{CallToolResult, Content};
+use rmcp::model::CallToolResult;
 use rmcp::schemars::JsonSchema;
 use rmcp::serde::Deserialize;
 
@@ -132,7 +132,7 @@ pub async fn finance_calendar(
         serde_json::from_str(&transformed).map_err(Error::Serialize)?;
     convert_unix_paths(&mut value, &["list.*.infos.*.datetime"]);
     let json = serde_json::to_string(&value).map_err(Error::Serialize)?;
-    Ok(CallToolResult::success(vec![Content::text(json)]))
+    Ok(crate::tools::tool_result(json))
 }
 
 #[cfg(test)]

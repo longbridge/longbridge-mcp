@@ -422,7 +422,7 @@ fn normalize_short_trades(
     let Ok(json) = serde_json::to_string(&d) else {
         return result;
     };
-    rmcp::model::CallToolResult::success(vec![rmcp::model::Content::text(json)])
+    crate::tools::tool_result(json)
 }
 
 /// Pagination cursor returned by `top_movers`; pass it back verbatim to fetch the next page.
@@ -544,7 +544,7 @@ fn strip_ib_prefix_from_rank_keys(
     let Ok(json) = serde_json::to_string(&d) else {
         return result;
     };
-    rmcp::model::CallToolResult::success(vec![rmcp::model::Content::text(json)])
+    crate::tools::tool_result(json)
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]

@@ -80,7 +80,7 @@ where
 #[derive(Debug, Clone)]
 pub struct Longbridge;
 
-fn tool_result(json: String) -> CallToolResult {
+pub(crate) fn tool_result(json: String) -> CallToolResult {
     // MCP spec §tool-result: a tool that declares an `outputSchema` MUST
     // return `structuredContent`. We populate it for every response so the
     // invariant holds regardless of which tools gain a schema in the future.
@@ -1037,6 +1037,7 @@ impl Longbridge {
             idempotent_hint = false,
             open_world_hint = true
         ),
+        output_schema = schema_for::<output::quote::CreateWatchlistGroupResponse>(),
         description = "Create a new watchlist group. Returns the created group {id, name}. Optionally pass securities (e.g. [\"AAPL.US\", \"700.HK\"]) to pre-populate."
     )]
     async fn create_watchlist_group(
@@ -1060,6 +1061,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
+        output_schema = schema_for::<output::quote::DeleteWatchlistGroupResponse>(),
         description = "Delete a watchlist group by id (numeric). Set purge=true to also remove its securities from all other groups. Returns upstream API response."
     )]
     async fn delete_watchlist_group(
@@ -1083,6 +1085,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
+        output_schema = schema_for::<output::quote::UpdateWatchlistGroupResponse>(),
         description = "Update a watchlist group by id. Can rename (name param) or modify securities (securities + mode: add/remove/replace). Returns upstream API response."
     )]
     async fn update_watchlist_group(
@@ -1106,6 +1109,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
+        output_schema = schema_for::<output::quote::SecurityListResponse>(),
         description = "Get security list for a market. Supports market: US, HK, CN, SG. category: \"Overnight\" (default). page: 1-based page number (default 1). count: records per page (default 50). Returns {total, page, count, items[]{symbol, name_en, name_cn}}."
     )]
     async fn security_list(
@@ -1411,6 +1415,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
+        output_schema = schema_for::<output::fundamental::InstitutionRatingResponse>(),
         description = "Get institution rating summary. Returns analyst{buy, outperform, hold, underperform, sell counts, target_price, consensus_rating} and instratings list."
     )]
     async fn institution_rating(
@@ -1434,6 +1439,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
+        output_schema = schema_for::<output::fundamental::InstitutionRatingDetailResponse>(),
         description = "Get detailed historical institution ratings and target price history. Returns target.list[]{analyst, firm, rating, target_price, timestamp} per institution."
     )]
     async fn institution_rating_detail(
@@ -1457,6 +1463,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
+        output_schema = schema_for::<output::fundamental::DividendResponse>(),
         description = "Get dividend history. Returns items[]{ex_date, pay_date, record_date, dividend_type, amount, currency, status} for the symbol."
     )]
     async fn dividend(
@@ -1477,6 +1484,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
+        output_schema = schema_for::<output::fundamental::DividendDetailResponse>(),
         description = "Get detailed dividend distribution scheme. Returns details[]{period, cash_dividend, stock_dividend, record_date, ex_date, pay_date, currency}."
     )]
     async fn dividend_detail(
@@ -1497,6 +1505,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
+        output_schema = schema_for::<output::fundamental::ForecastEpsResponse>(),
         description = "Get EPS forecast and analyst estimate history. Returns items[]{forecast_start_date, forecast_end_date, eps_estimate, eps_actual, surprise_pct, analyst_count}."
     )]
     async fn forecast_eps(
@@ -1517,6 +1526,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
+        output_schema = schema_for::<output::fundamental::ConsensusResponse>(),
         description = "Get financial consensus estimates. Returns items[]{period, revenue_estimate, eps_estimate, net_income_estimate, analyst_count, last_updated} for upcoming periods."
     )]
     async fn consensus(
@@ -1537,6 +1547,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
+        output_schema = schema_for::<output::fundamental::ValuationResponse>(),
         description = "Get valuation overview with peer comparison. Returns metrics.pe/pb/ps/dividend_yield{current, industry_avg, 5yr_avg, percentile} and peer comparison list."
     )]
     async fn valuation(
@@ -1557,6 +1568,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
+        output_schema = schema_for::<output::fundamental::ValuationHistoryResponse>(),
         description = "Get detailed valuation history time series. Returns history.metrics{pe/pb/ps/dividend_yield}[]{timestamp, value} for long-term percentile analysis."
     )]
     async fn valuation_history(
@@ -1580,6 +1592,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
+        output_schema = schema_for::<output::fundamental::IndustryValuationResponse>(),
         description = "Get industry valuation comparison for peers. Returns list[]{symbol, name, pe, pb, ps, dividend_yield, history[]{date, pe, pb}} for peers in the same industry."
     )]
     async fn industry_valuation(
@@ -1603,6 +1616,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
+        output_schema = schema_for::<output::fundamental::IndustryValuationDistResponse>(),
         description = "Get industry PE/PB/PS valuation distribution. Returns distributions{pe/pb/ps}{min, p25, median, p75, max, current_percentile} to see where the stock sits in its sector."
     )]
     async fn industry_valuation_dist(
@@ -1626,6 +1640,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
+        output_schema = schema_for::<output::fundamental::CompanyResponse>(),
         description = "Get company overview. Returns name, description, employees, CEO, founded_year, website, exchange, industry, market_cap, and business profile summary."
     )]
     async fn company(
@@ -1646,6 +1661,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
+        output_schema = schema_for::<output::fundamental::ExecutiveResponse>(),
         description = "Get company executive and board member information. Returns members[]{name, title, appointed_date, age, biography, compensation}."
     )]
     async fn executive(
@@ -1666,6 +1682,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
+        output_schema = schema_for::<output::fundamental::ShareholderResponse>(),
         description = "Get institutional shareholders for a symbol. Returns shareholders[]{institution, shares, ratio, change, change_type, reported_at}."
     )]
     async fn shareholder(
@@ -1686,6 +1703,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
+        output_schema = schema_for::<output::fundamental::FundHolderResponse>(),
         description = "Get funds and ETFs that hold a given symbol. Returns fund_holders[]{fund_name, fund_symbol, shares, ratio, change, reported_at}."
     )]
     async fn fund_holder(
@@ -1706,6 +1724,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
+        output_schema = schema_for::<output::fundamental::CorpActionResponse>(),
         description = "Get corporate actions (splits, buybacks, name changes). Returns items[]{action_type, effective_date, ratio, description} for the symbol."
     )]
     async fn corp_action(
@@ -1726,6 +1745,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
+        output_schema = schema_for::<output::fundamental::InvestRelationResponse>(),
         description = "Get investor relations events and announcements. Returns items[]{title, event_type, event_date, url, description} for the symbol."
     )]
     async fn invest_relation(
@@ -1746,6 +1766,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
+        output_schema = schema_for::<output::fundamental::OperatingResponse>(),
         description = "Get company operating metrics (HK stocks only). Returns items[]{period, metric_name, value, unit} such as passenger traffic, cargo volumes, or store counts."
     )]
     async fn operating(
@@ -1766,6 +1787,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
+        output_schema = schema_for::<output::market::MarketStatusResponse>(),
         description = "Get current market trading status for all markets. Returns market_time[]{market, trade_status (Pre-Open/Trading/Lunch Break/Post-Trading/Closed/Pre-Market/Post-Market), timestamp}."
     )]
     async fn market_status(
@@ -1785,6 +1807,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
+        output_schema = schema_for::<output::market::BrokerHoldingResponse>(),
         description = "Get top broker holding data for a symbol (HK stocks only; sourced from HKEX CCASS participant disclosure). Returns items[]{broker_name, holding_quantity, holding_change, holding_ratio} for the given period (rct_1/rct_5/rct_20/rct_60)."
     )]
     async fn broker_holding(
@@ -1805,6 +1828,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
+        output_schema = schema_for::<output::market::BrokerHoldingDetailResponse>(),
         description = "Get full broker holding detail list for a symbol (HK stocks only; sourced from HKEX CCASS participant disclosure). Returns items[]{broker_id, broker_name, holding_quantity, holding_ratio, holding_change, date}."
     )]
     async fn broker_holding_detail(
@@ -1828,6 +1852,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
+        output_schema = schema_for::<output::market::BrokerHoldingDailyResponse>(),
         description = "Get daily holding history for a specific broker (by broker_id) in a symbol (HK stocks only; sourced from HKEX CCASS participant disclosure). Returns items[]{date, holding_quantity, holding_change, holding_ratio}."
     )]
     async fn broker_holding_daily(
@@ -1914,6 +1939,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
+        output_schema = schema_for::<output::market::AnomalyResponse>(),
         description = "Get market anomaly alerts (unusual price/volume changes). market: HK/US/CN/SG. symbol: optional, filter to a specific stock. count: results per page (default 50, max 100). Returns changes[]{symbol, name, change_rate, volume, ...}, all_off."
     )]
     async fn anomaly(
@@ -1954,6 +1980,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
+        output_schema = schema_for::<output::market::FinanceCalendarResponse>(),
         description = "Get finance calendar events by category and date range. category: report (earnings + financials) / dividend / split (splits & reverse splits) / ipo / macrodata (CPI, NFP, rate decisions) / closed (market holidays). market: HK/US/CN/SG/JP/UK/DE/AU (optional). Keep the date range to 2 weeks or less; for longer periods split into multiple calls to avoid truncation."
     )]
     async fn finance_calendar(
@@ -2036,6 +2063,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
+        output_schema = schema_for::<output::social::AlertListResponse>(),
         description = "Get all configured price alerts. Returns lists[]{counter_id, indicators[]{id, indicator_id, condition, price, frequency, enabled, triggered_at}}."
     )]
     async fn alert_list(
@@ -2095,6 +2123,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
+        output_schema = schema_for::<output::social::AlertToggleResponse>(),
         description = "Enable a price alert by alert_id. Returns {alert_id, enabled: true} on success. Use alert_list to find the numeric alert_id."
     )]
     async fn alert_enable(
@@ -2115,6 +2144,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
+        output_schema = schema_for::<output::social::AlertToggleResponse>(),
         description = "Disable a price alert by alert_id. Returns {alert_id, enabled: false} on success. Use alert_list to find the numeric alert_id."
     )]
     async fn alert_disable(
@@ -2175,6 +2205,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
+        output_schema = schema_for::<output::social::TopicDetailResponse>(),
         description = "Get discussion topic detail by topic_id. Returns {id, title, content, author, created_at, like_count, comment_count, symbols[]}."
     )]
     async fn topic_detail(
@@ -2215,6 +2246,7 @@ impl Longbridge {
             idempotent_hint = false,
             open_world_hint = true
         ),
+        output_schema = schema_for::<output::social::TopicCreateResponse>(),
         description = "Create a new discussion topic. topic_type=\"post\" (default) is plain text; \"article\" requires a non-empty title and accepts Markdown body."
     )]
     async fn topic_create(
@@ -2235,6 +2267,7 @@ impl Longbridge {
             idempotent_hint = false,
             open_world_hint = true
         ),
+        output_schema = schema_for::<output::social::TopicCreateReplyResponse>(),
         description = "Create a reply to a discussion topic. Pass reply_to_id to nest under another reply; omit for a top-level reply."
     )]
     async fn topic_create_reply(
@@ -2258,6 +2291,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
+        output_schema = schema_for::<output::account::StatementListResponse>(),
         description = "List available account statements (daily/monthly). Returns list[]{id, type (daily/monthly), date, status}. Use the id with statement_export to download."
     )]
     async fn statement_list(
@@ -2357,6 +2391,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
+        output_schema = schema_for::<output::social::DcaListResponse>(),
         description = "List DCA recurring investment plans. Returns plans[]{plan_id, symbol, amount, currency, frequency, status, next_execution_date}. Filter by status (Active/Suspended/Finished) or symbol."
     )]
     async fn dca_list(
@@ -2477,6 +2512,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
+        output_schema = schema_for::<output::social::DcaHistoryResponse>(),
         description = "Get execution history records for a DCA plan by plan_id. Returns executions[]{date, quantity, amount, price, status, order_id}."
     )]
     async fn dca_history(
@@ -2497,6 +2533,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
+        output_schema = schema_for::<output::social::DcaStatsResponse>(),
         description = "Get DCA investment statistics. Returns {total_invested, total_value, total_return, return_rate, plan_count, items[]{symbol, invested, value, return_rate}}."
     )]
     async fn dca_stats(
@@ -2517,6 +2554,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
+        output_schema = schema_for::<output::social::DcaCheckResponse>(),
         description = "Check whether given symbols support DCA recurring investment. Returns items[]{symbol, support_dca (bool), reason} for each queried symbol."
     )]
     async fn dca_check(
@@ -2537,6 +2575,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
+        output_schema = schema_for::<output::discovery::SharelistListResponse>(),
         description = "List user's own and subscribed community sharelists. Returns lists[]{id, name, description, symbol_count, is_owner, follower_count}."
     )]
     async fn sharelist_list(
@@ -2557,6 +2596,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
+        output_schema = schema_for::<output::discovery::SharelistDetailResponse>(),
         description = "Get community sharelist detail by id. Returns {id, name, description, constituents[]{symbol, name, last_done, change_rate}, quote data, subscription status}."
     )]
     async fn sharelist_detail(
@@ -2577,6 +2617,7 @@ impl Longbridge {
             idempotent_hint = false,
             open_world_hint = true
         ),
+        output_schema = schema_for::<output::discovery::SharelistCreateResponse>(),
         description = "Create a new community sharelist with a name and optional description. Returns the created sharelist object including its id, name, and description."
     )]
     async fn sharelist_create(
@@ -2677,6 +2718,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
+        output_schema = schema_for::<output::discovery::SharelistListResponse>(),
         description = "Get popular/trending community sharelists. Returns lists[]{id, name, description, symbol_count, follower_count, creator} sorted by popularity."
     )]
     async fn sharelist_popular(
@@ -2783,6 +2825,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
+        output_schema = schema_for::<output::fundamental::FinancialReportLatestResponse>(),
         description = "Get the latest financial report summary for a security. Returns {period, revenue, net_income, eps, roe, gross_margin, report_date} and key financial highlights."
     )]
     async fn financial_report_latest(
@@ -2826,6 +2869,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
+        output_schema = schema_for::<output::fundamental::InstitutionRatingHistoryResponse>(),
         description = "Get institution rating history. Returns target_history[]{firm, analyst, old_target, new_target, date} and evaluate_history[]{firm, old_rating, new_rating, date}."
     )]
     async fn institution_rating_history(
@@ -2849,6 +2893,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
+        output_schema = schema_for::<output::fundamental::InstitutionRatingIndustryRankResponse>(),
         description = "Get peers ranked by institution analyst ratings in the same industry. Returns list[]{symbol, name, buy_count, sell_count, consensus_rating, target_price}. Paginated."
     )]
     async fn institution_rating_industry_rank(
@@ -2950,6 +2995,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
+        output_schema = schema_for::<output::discovery::IpoSubscriptionsResponse>(),
         description = "List IPO stocks in subscription/pre-filing stage (HK+US). Returns items[]{symbol, name, market, sub_start_date, sub_end_date, listing_date, issue_price, min_lot_size}."
     )]
     async fn ipo_subscriptions(
@@ -2969,6 +3015,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
+        output_schema = schema_for::<output::discovery::IpoCalendarResponse>(),
         description = "Show the IPO calendar. Returns items[]{symbol, name, market, sub_start_date, sub_end_date, listing_date, status} for upcoming and recent IPOs."
     )]
     async fn ipo_calendar(
@@ -2988,6 +3035,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
+        output_schema = schema_for::<output::discovery::IpoListedResponse>(),
         description = "List recently listed IPO stocks (HK+US). Returns items[]{symbol, name, listing_date, issue_price, first_day_close, first_day_return, volume, market}."
     )]
     async fn ipo_listed(
@@ -3008,6 +3056,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
+        output_schema = schema_for::<output::discovery::IpoDetailResponse>(),
         description = "Show IPO detail for a symbol. Returns profile (business overview), timeline[]{event, date}, subscription eligibility, pricing_range, lot_size, allotment_rules."
     )]
     async fn ipo_detail(
@@ -3028,6 +3077,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
+        output_schema = schema_for::<output::discovery::IpoOrdersResponse>(),
         description = "List IPO orders (active+history). Returns orders[]{order_id, symbol, market, quantity, total_amount, status, submitted_at}. Filter by symbol, market, or status."
     )]
     async fn ipo_orders(
@@ -3048,6 +3098,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
+        output_schema = schema_for::<output::discovery::IpoOrderDetailResponse>(),
         description = "Show detailed information for a specific IPO order by order_id. Returns {order_id, symbol, market, quantity, allotted_quantity, total_amount, status, submitted_at}."
     )]
     async fn ipo_order_detail(
@@ -3068,6 +3119,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
+        output_schema = schema_for::<output::discovery::IpoProfitLossResponse>(),
         description = "Show IPO profit/loss summary and per-stock breakdown. Returns {total_cost, total_value, total_return, items[]{symbol, cost, current_value, return_rate}}. period: all/ytd/1y/3y."
     )]
     async fn ipo_profit_loss(
@@ -3111,6 +3163,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
+        output_schema = schema_for::<output::fundamental::BusinessSegmentsHistoryResponse>(),
         description = "Get historical business segment revenue trends (by period and category). Returns historical[].{date, total, currency, business[{name,percent,value}], regionals[{name,percent,value}]}"
     )]
     async fn business_segments_history(
@@ -3134,6 +3187,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
+        output_schema = schema_for::<output::fundamental::InstitutionalViewsResponse>(),
         description = "Get monthly institutional rating distribution timeline. Returns months[]{date, buy, outperform, hold, underperform, sell, total} for trend analysis."
     )]
     async fn institutional_views(
@@ -3177,6 +3231,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
+        output_schema = schema_for::<output::fundamental::IndustryPeersResponse>(),
         description = "Hierarchical sub-sector tree for an industry group. Accepts BK counter_id from industry_rank (e.g. BK/US/IN00258). Returns chain{name,counter_id,stock_num,chg,ytd_chg,next[{...}]} and top{name,market}. Each node shows stock count, daily change, and YTD change."
     )]
     async fn industry_peers(
@@ -3197,6 +3252,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
+        output_schema = schema_for::<output::fundamental::FinancialReportSnapshotResponse>(),
         description = "Get financial report snapshot: report_desc (text summary), fo_revenue/fo_ebit/fo_eps (actual vs forecast with yoy/cmp), fr_* financial ratios (ROE, margins, assets, cash flow). report: qf/saf/af."
     )]
     async fn financial_report_snapshot(
@@ -3220,6 +3276,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
+        output_schema = schema_for::<output::fundamental::ShareholderTopResponse>(),
         description = "Get Top 20 major shareholders (institutions, individuals, insiders) across reporting periods. Returns info[]{period, share_holders[]{object_id, name, title, shares_held, percent_shares_held, shares_changed, filing_date}}. Use object_id with shareholder_detail to drill into a holder's full trade history."
     )]
     async fn shareholder_top(
@@ -3240,6 +3297,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
+        output_schema = schema_for::<output::fundamental::ShareholderDetailResponse>(),
         description = "Get a single shareholder's holding and trade history. Requires object_id from shareholder_top. Returns name, owner_source (Company/Institution/Person/Insider), tradings[]{period, accum_buy, accum_sell, net_buy, trading_details[]{trading_date, trading_type, trading_shares, trading_price, security_type, filing_date}}, holding_summary, holding_periods, trading_periods. Note: trading_details[] is empty for institutional (13F) holders — it is only populated for insider/individual filers (Form 4)."
     )]
     async fn shareholder_detail(
@@ -3263,6 +3321,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
+        output_schema = schema_for::<output::fundamental::ValuationComparisonResponse>(),
         description = "Stock valuation comparison. Mode A (single): pass only symbol — server returns stock + auto-selected industry peers. Mode B (multi): pass symbol as primary + comparison_symbols (comma-separated, e.g. 'MSFT.US,GOOGL.US') for explicit peer comparison. currency: USD/HKD/CNY. Returns list[]{symbol, name, market_value, price_close, pe, pb, ps, history[]{date, pe, pb, ps}}."
     )]
     async fn valuation_comparison(
@@ -3286,6 +3345,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
+        output_schema = schema_for::<output::market::ShortTradesResponse>(),
         description = "Get daily short-sale volume history for HK or US stocks. Market inferred from symbol suffix. last_timestamp: unix seconds (omit for latest). page_size: 1–100 (default 20). Unified data[]{timestamp(RFC3339), short_vol(daily short volume in shares), rate(decimal ratio e.g. 0.36=36%), close}. US-only: nasdaq_vol(NASDAQ short), nyse_vol(NYSE short). HK-only: balance(HKD), market_vol(total market volume that day). US source: FINRA/NASDAQ daily. HK source: HKEX daily."
     )]
     async fn short_trades(
@@ -3306,6 +3366,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
+        output_schema = schema_for::<output::market::TopMoversResponse>(),
         description = "Get stocks whose price fluctuation exceeds the 20-trading-day standard deviation, with correlated news reasons. markets: comma-separated HK/US/CN/SG (omit=all). sort: 0=time 1=change-magnitude 2=popularity/heat (default). limit: results per page (default 20). next_params: pass next_params from previous response to paginate. Returns events[]{timestamp(RFC3339), alert_reason, alert_type, stock{symbol, name, change(decimal ratio e.g. 0.0445=+4.45%), last_done, labels[], intro}}, updated_at, next_params."
     )]
     async fn top_movers(
@@ -3326,6 +3387,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
+        output_schema = schema_for::<output::market::RankCategoriesResponse>(),
         description = "Get rank tab category configurations for the popularity leaderboard. Returns first_tags[]{key, name, second_tags[]{key, name, market}}. Pass a second_tags key (e.g. `hot_all-us`) to rank_list."
     )]
     async fn rank_categories(
@@ -3345,6 +3407,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
+        output_schema = schema_for::<output::market::RankListResponse>(),
         description = "Get ranked stock list by leaderboard tab key. key: from rank_categories second_tags[].key (e.g. \"hot_all-us\", \"hot_up-hk\", \"trade_heat-us\"). market: inferred from key suffix (-us/-hk) or pass explicitly. size: results (default 20). Returns lists[]{symbol, name, last_done, chg(decimal), inflow, market_cap, pre_post_price, pre_post_chg, amplitude, turnover_rate, volume_rate, five_day_chg, ten_day_chg, twenty_day_chg, this_year_chg, industry, intro}, updated_at."
     )]
     async fn rank_list(
@@ -3365,6 +3428,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
+        output_schema = schema_for::<output::discovery::ScreenerStrategiesResponse>(),
         description = "List platform-preset screener strategies. market: US|HK|CN|SG (default: US). Returns strategys[]{id, name, description, market, three_months_chg, risk}. Pass id to screener_search strategy_id to run, or screener_strategy to inspect filter conditions."
     )]
     async fn screener_recommend_strategies(
@@ -3388,6 +3452,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
+        output_schema = schema_for::<output::discovery::ScreenerStrategiesResponse>(),
         description = "List the current user's saved screener strategies. market: US|HK|CN|SG (default: US). Returns strategys[]{id, name, description, market, three_months_chg, risk}. Pass id to screener_search strategy_id to run, or screener_strategy to inspect conditions."
     )]
     async fn screener_user_strategies(
@@ -3411,6 +3476,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
+        output_schema = schema_for::<output::discovery::ScreenerStrategyResponse>(),
         description = "Inspect a screener strategy's filter conditions before running it. Returns market, filter{filters[]{key, min, max, tech_values}}. Use screener_search strategy_id to execute the strategy."
     )]
     async fn screener_strategy(
@@ -3434,6 +3500,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
+        output_schema = schema_for::<output::discovery::ScreenerSearchResponse>(),
         description = "Screen stocks. market: US|HK|CN|SG (Mode B required; Mode A uses strategy's market). Mode A: strategy_id from screener_recommend_strategies — auto-runs saved strategy. Mode B: conditions=[{\"key\":\"KEY\",\"min\":\"10\",\"max\":\"50\",\"tech_values\":{}},...]. extra_returns=[\"key\",...] adds display-only columns. sort_by_key: key name to sort by; sort_order: asc|desc (default desc). page: 0-based (default 0). Returns {total, items[]{symbol, name, indicators[]{key, name, value, unit}}}. Fundamental keys: pettm pbmrq roe roa netmargin salesgrowthyoy netincomegrowthyoy marketcap(亿) circulating_marketcap(亿) prevclose prevchg(%) divyld la epsttm netincome(亿) sales(亿) turnover_rate balance(万). Technical keys (call screener_indicators for tech_values schema): macd_day/week rsi_day/week kdj_day/week boll_day/week."
     )]
     async fn screener_search(
@@ -3454,6 +3521,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
+        output_schema = schema_for::<output::discovery::ScreenerIndicatorsResponse>(),
         description = "Get all available screener indicator keys with units and default value ranges. Technical indicators include a tech_values field showing available options (e.g. macd_day: {category:[goldenfork,deadcross], period:[day,week]}). Optional symbol (e.g. AAPL.US) narrows to stock-specific indicators. Returns groups[]{group_name, indicators[]{id, key, name, unit, default_range{min,max}, tech_values?{key:[{value,label},...]}}}."
     )]
     async fn screener_indicators(

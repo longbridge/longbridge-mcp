@@ -9,6 +9,13 @@
 //! - the tool's response is a JSON object (MCP spec requires root `type:
 //!   "object"` for outputSchema)
 
+pub mod account;
+pub mod discovery;
+pub mod fundamental;
+pub mod market;
+pub mod quote;
+pub mod social;
+
 use rmcp::schemars::JsonSchema;
 use rmcp::serde::Serialize;
 

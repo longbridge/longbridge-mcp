@@ -5,9 +5,25 @@ use rmcp::model::{CallToolResult, Content, ErrorData as McpError};
 use crate::error::Error;
 use crate::serialize::{convert_unix_paths, transform_json};
 
+/// Build a tool result from a transformed JSON string, additionally populating
+/// `structured_content` when the JSON is an object. MCP requires a tool that
+/// declares an `output_schema` to return `structuredContent`; mirroring the
+/// SDK-typed path (`crate::tools::tool_result`) here keeps every object-shaped
+/// response spec-compliant whether or not the tool currently declares a schema.
+/// Array- or scalar-rooted responses leave `structured_content` unset (the MCP
+/// `structuredContent` field must be an object).
+fn success_with_structured(json: String) -> CallToolResult {
+    let structured = serde_json::from_str::<serde_json::Value>(&json)
+        .ok()
+        .filter(serde_json::Value::is_object);
+    let mut result = CallToolResult::success(vec![Content::text(json)]);
+    result.structured_content = structured;
+    result
+}
+
 fn result_from_raw_json(raw: &str) -> Result<CallToolResult, McpError> {
     let json = transform_json(raw.as_bytes()).map_err(Error::Serialize)?;
-    Ok(CallToolResult::success(vec![Content::text(json)]))
+    Ok(success_with_structured(json))
 }
 
 /// Like `result_from_raw_json` but additionally converts unix-seconds strings
@@ -23,7 +39,7 @@ fn result_from_raw_json_with_unix_paths(
         serde_json::from_str(&transformed).map_err(Error::Serialize)?;
     convert_unix_paths(&mut value, unix_paths);
     let json = serde_json::to_string(&value).map_err(Error::Serialize)?;
-    Ok(CallToolResult::success(vec![Content::text(json)]))
+    Ok(success_with_structured(json))
 }
 
 pub async fn http_get_tool(
