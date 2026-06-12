@@ -8,6 +8,8 @@ use crate::error::Error;
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct MacroeconomicIndicatorsParam {
+    /// Keyword to search indicator names (e.g. "CPI", "非农", "GDP").
+    pub keyword: Option<String>,
     /// Filter by country code. One of: "US", "CN", "HK", "EU", "JP", "SG".
     /// Omit to return all countries.
     pub country: Option<String>,
@@ -67,7 +69,7 @@ pub async fn macroeconomic_indicators(
     let country = p.country.as_deref().map(parse_country).transpose()?;
     let ctx = FundamentalContext::new(mctx.create_config());
     let result = ctx
-        .macroeconomic_indicators(country, p.offset, p.limit)
+        .macroeconomic_indicators(country, p.keyword, p.offset, p.limit)
         .await
         .map_err(Error::longbridge)?;
     let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;
