@@ -4,6 +4,7 @@ pub mod middleware;
 use std::sync::Arc;
 
 use axum::Router;
+use axum::response::Response;
 use rmcp::transport::streamable_http_server::session::never::NeverSessionManager;
 use rmcp::transport::streamable_http_server::{StreamableHttpServerConfig, StreamableHttpService};
 
@@ -90,6 +91,41 @@ async fn health() -> axum::http::StatusCode {
     axum::http::StatusCode::OK
 }
 
+/// Human-facing landing page served at `/` for browser visits. Static
+/// onboarding text only — see the file for content.
+const LANDING_PAGE_HTML: &str = include_str!("landing.html");
+
+/// Serve [`LANDING_PAGE_HTML`] only for a browser navigation to `/`
+/// (a `GET` whose `Accept` header asks for `text/html`). Every other request —
+/// JSON-RPC `POST`, the SSE `GET` with `Accept: text/event-stream`, `Accept:
+/// */*`, any non-root path — falls through untouched to the wrapped MCP service,
+/// so client connection/installation is never affected. Layered ahead of the
+/// auth middleware so the page renders without credentials.
+async fn landing_or_mcp(req: axum::extract::Request, next: axum::middleware::Next) -> Response {
+    use axum::response::IntoResponse;
+
+    let is_browser_root = req.method() == axum::http::Method::GET
+        && req.uri().path() == "/"
+        && req
+            .headers()
+            .get(axum::http::header::ACCEPT)
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|accept| accept.contains("text/html"));
+
+    if is_browser_root {
+        return (
+            [(
+                axum::http::header::CONTENT_TYPE,
+                "text/html; charset=utf-8",
+            )],
+            LANDING_PAGE_HTML,
+        )
+            .into_response();
+    }
+
+    next.run(req).await
+}
+
 /// Domain-verification token for the OpenAI Apps directory, served as plain text
 /// at `/.well-known/openai-apps-challenge`. OpenAI fetches this path and expects
 /// the exact token back to confirm ownership of the deployment.
@@ -170,6 +206,11 @@ pub fn create_router(state: Arc<AppState>) -> Router {
     let mcp_with_auth = make_mcp_with_auth(state.base_url.clone(), middleware::AuthMode::Required);
     let mcp_with_auth_root =
         make_mcp_with_auth(state.base_url.clone(), middleware::AuthMode::Required);
+    // Root mount, plus a thin front layer that serves the human landing page for
+    // browser GETs to `/`. All programmatic MCP traffic passes straight through.
+    let root_service = tower::ServiceBuilder::new()
+        .layer(axum::middleware::from_fn(landing_or_mcp))
+        .service(mcp_with_auth_root);
     // Optional-auth endpoint — same MCP server, but token-less requests are let
     // through so an OAuth-incapable client can call the `authenticate` tool.
     let mcp_agent = make_mcp_with_auth(state.base_url.clone(), middleware::AuthMode::Optional);
@@ -184,7 +225,7 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .nest_service("/agent", mcp_agent)
         .nest_service("/mcp", mcp_with_auth)
         // Also serve at root so deployments that omit the /mcp path prefix work.
-        .fallback_service(mcp_with_auth_root)
+        .fallback_service(root_service)
 }
 
 #[cfg(test)]

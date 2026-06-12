@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>Longbridge MCP Server</title>
+        <style>
+            * {
+                box-sizing: border-box;
+            }
+            :root {
+                --bg: #000;
+                --fg: #f5f5f5;
+                --muted: #8a8a8a;
+                --accent: #00dbb6;
+                --line: #1f1f1f;
+                --panel: #0c0c0c;
+            }
+            html,
+            body {
+                margin: 0;
+                background: var(--bg);
+            }
+            body {
+                font-family:
+                    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+                    Helvetica, Arial, sans-serif;
+                color: var(--fg);
+                line-height: 1.5;
+                -webkit-font-smoothing: antialiased;
+                text-rendering: optimizeLegibility;
+            }
+            .wrap {
+                max-width: 720px;
+                margin: 0 auto;
+                padding: 36px 24px 40px;
+            }
+            .mono {
+                font-family:
+                    ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas,
+                    monospace;
+            }
+
+            .badge {
+                display: inline-block;
+                font-size: 0.66rem;
+                letter-spacing: 0.14em;
+                text-transform: uppercase;
+                color: #cfcfcf;
+                background: rgba(255, 255, 255, 0.06);
+                border: 1px solid var(--line);
+                padding: 3px 9px;
+                border-radius: 999px;
+                font-weight: 600;
+            }
+            h1 {
+                font-size: clamp(1.7rem, 4.5vw, 2.3rem);
+                line-height: 1.05;
+                margin: 14px 0 6px;
+                letter-spacing: -0.02em;
+            }
+            h1 .accent {
+                color: var(--accent);
+            }
+            .lede {
+                font-size: 0.98rem;
+                color: var(--muted);
+                margin: 0;
+                max-width: 60ch;
+            }
+
+            h2 {
+                font-size: 0.72rem;
+                letter-spacing: 0.16em;
+                text-transform: uppercase;
+                color: var(--muted);
+                margin: 26px 0 8px;
+                font-weight: 600;
+            }
+
+            dl.meta {
+                display: grid;
+                grid-template-columns: max-content 1fr;
+                border: 1px solid var(--line);
+                border-radius: 10px;
+                overflow: hidden;
+                margin: 0;
+            }
+            dl.meta dt,
+            dl.meta dd {
+                padding: 8px 16px;
+                border-top: 1px solid var(--line);
+                margin: 0;
+                font-size: 0.82rem;
+            }
+            dl.meta dt:first-of-type,
+            dl.meta dd:nth-of-type(1) {
+                border-top: 0;
+            }
+            dl.meta dt {
+                color: var(--muted);
+                letter-spacing: 0.04em;
+                background: var(--panel);
+                border-right: 1px solid var(--line);
+            }
+            dl.meta dd {
+                font-weight: 500;
+            }
+            dl.meta dd.url {
+                color: var(--accent);
+            }
+
+            pre {
+                background: var(--panel);
+                border: 1px solid var(--line);
+                border-radius: 9px;
+                padding: 12px 16px;
+                overflow-x: auto;
+                font-size: 0.82rem;
+                margin: 0;
+                color: #e8e8e8;
+            }
+            pre .c {
+                color: var(--accent);
+            }
+            .label {
+                color: var(--muted);
+                font-size: 0.85rem;
+                margin: 0 0 6px;
+            }
+
+            a {
+                color: var(--accent);
+                text-decoration: none;
+            }
+            a:hover {
+                text-decoration: underline;
+            }
+
+            footer {
+                margin-top: 28px;
+                color: var(--muted);
+                font-size: 0.82rem;
+            }
+            footer a {
+                color: var(--muted);
+            }
+        </style>
+    </head>
+    <body>
+        <div class="wrap">
+            <span class="badge">Model Context Protocol</span>
+            <h1>Longbridge <span class="accent">MCP</span> Server</h1>
+            <p class="lede">
+                Investment market insights — quotes, options, fundamentals, news
+                &amp; portfolio analytics for US &amp; HK markets, inside your
+                AI client. Add this URL to an MCP client; it isn't meant to be
+                browsed.
+            </p>
+
+            <h2>Server</h2>
+            <dl class="meta">
+                <dt>Name</dt>
+                <dd>Longbridge</dd>
+                <dt>Description</dt>
+                <dd>Investment market insights</dd>
+                <dt>Server URL</dt>
+                <dd class="url mono">https://mcp.longbridge.com</dd>
+                <dt>Authentication</dt>
+                <dd>OAuth</dd>
+            </dl>
+
+            <h2>Claude Code</h2>
+            <pre
+                class="mono"
+            >claude mcp add <span class="c">--transport</span> http longbridge https://mcp.longbridge.com</pre>
+
+            <h2>Codex</h2>
+            <pre
+                class="mono"
+            >codex mcp add longbridge <span class="c">--url</span> https://mcp.longbridge.com</pre>
+
+            <h2>Claude Desktop · Cursor · Zed</h2>
+            <p class="label">Add to your client's MCP server config:</p>
+            <pre
+                class="mono"
+            >{ <span class="c">"mcpServers"</span>: { <span class="c">"longbridge"</span>: { <span class="c">"url"</span>: "https://mcp.longbridge.com" } } }</pre>
+
+            <h2>Documentation</h2>
+            <p>
+                <a href="https://open.longbridge.com/docs/mcp"
+                    >open.longbridge.com/docs/mcp</a
+                >
+                — full setup, tool reference &amp; examples.
+            </p>
+
+            <footer>© <a href="https://longbridge.com">Longbridge</a></footer>
+        </div>
+    </body>
+</html>
