@@ -114,10 +114,7 @@ async fn landing_or_mcp(req: axum::extract::Request, next: axum::middleware::Nex
 
     if is_browser_root {
         return (
-            [(
-                axum::http::header::CONTENT_TYPE,
-                "text/html; charset=utf-8",
-            )],
+            [(axum::http::header::CONTENT_TYPE, "text/html; charset=utf-8")],
             LANDING_PAGE_HTML,
         )
             .into_response();
