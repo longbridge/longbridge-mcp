@@ -800,7 +800,7 @@ impl Longbridge {
     #[tool(
         title = "Macro Indicator List",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "List macro-economic indicators. keyword: search by name (e.g. \"CPI\", \"非农\", \"GDP\"). country: US/CN/HK/EU/JP/SG (omit for all). Returns {count, list[]{indicator_code, country, name, describe, periodicity, importance(1=low/2=mid/3=high)}}. Supports offset/limit pagination."
+        description = "List macro-economic indicators. country: US/CN/HK/EU/JP/SG (omit for all). Returns {count, list[]{indicator_code, country, name, describe, periodicity, importance(1=low/2=mid/3=high)}}. Supports offset/limit pagination."
     )]
     async fn macroeconomic_indicators(
         &self,

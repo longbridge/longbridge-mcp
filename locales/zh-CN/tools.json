@@ -578,9 +578,8 @@
     },
     "macroeconomic_indicators": {
       "title": "宏观指标列表",
-      "description": "列出宏观经济指标。keyword 按指标名称搜索（如 \"CPI\"、\"非农\"、\"GDP\"）。可按国家代码过滤：US/CN/HK/EU/JP/SG，省略则返回全部。返回 {count, list[]{indicator_code, country, name, describe, periodicity, importance(1=低/2=中/3=高)}}。支持 offset/limit 分页。",
+      "description": "列出宏观经济指标。可按国家代码过滤：US/CN/HK/EU/JP/SG，省略则返回全部。返回 {count, list[]{indicator_code, country, name, describe, periodicity, importance(1=低/2=中/3=高)}}。支持 offset/limit 分页。",
       "properties": {
-        "keyword": "按指标名称关键词搜索，例如 `\"CPI\"`、`\"非农\"`",
         "country": "按国家代码过滤：US（美国）、CN（中国大陆）、HK（香港）、EU（欧元区）、JP（日本）、SG（新加坡）",
         "offset": "分页偏移量，默认 0",
         "limit": "返回条数上限，默认 100，最大 1000"

@@ -578,9 +578,8 @@
     },
     "macroeconomic_indicators": {
       "title": "宏觀指標列表",
-      "description": "列出宏觀經濟指標。keyword 按指標名稱搜尋（如 \"CPI\"、\"非農\"、\"GDP\"）。可按國家代碼過濾：US/CN/HK/EU/JP/SG，省略則返回全部。返回 {count, list[]{indicator_code, country, name, describe, periodicity, importance(1=低/2=中/3=高)}}。支援 offset/limit 分頁。",
+      "description": "列出宏觀經濟指標。可按國家代碼過濾：US/CN/HK/EU/JP/SG，省略則返回全部。返回 {count, list[]{indicator_code, country, name, describe, periodicity, importance(1=低/2=中/3=高)}}。支援 offset/limit 分頁。",
       "properties": {
-        "keyword": "按指標名稱關鍵詞搜尋，例如 `\"CPI\"`、`\"非農\"`",
         "country": "按國家代碼過濾：US（美國）、CN（中國大陸）、HK（香港）、EU（歐元區）、JP（日本）、SG（新加坡）",
         "offset": "分頁偏移量，預設 0",
         "limit": "返回條數上限，預設 100，最大 1000"
