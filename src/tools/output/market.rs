@@ -44,8 +44,8 @@ pub struct MarketStatusEntry {
     /// Market code, e.g. "US" / "HK" / "CN" / "SG".
     #[serde(skip_serializing_if = "Option::is_none")]
     pub market: Option<String>,
-    /// Trading status label: one of Pre-Open / Trading / Lunch Break /
-    /// Post-Trading / Closed / Pre-Market / Post-Market / Unknown.
+    /// Trading status label, e.g. Trading / Closed / Mid-Day Break /
+    /// Pre-Market / Post-Market / Overnight / Unknown.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub trade_status: Option<String>,
     /// Status snapshot timestamp (RFC3339).

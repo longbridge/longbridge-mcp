@@ -574,7 +574,7 @@
     },
     "market_status": {
       "title": "市場狀態",
-      "description": "獲取所有市場當前交易狀態，返回 market_time[]{market, trade_status（Pre-Open/Trading/Lunch Break/Post-Trading/Closed 等）, timestamp}"
+      "description": "獲取所有市場當前交易狀態，返回 market_time[]{market, trade_status（Trading/Closed/Mid-Day Break/Pre-Market/Post-Market/Overnight 等）, timestamp}"
     },
     "market_temperature": {
       "title": "市場溫度",
