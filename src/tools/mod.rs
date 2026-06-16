@@ -1788,7 +1788,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::market::MarketStatusResponse>(),
-        description = "Get current market trading status for all markets. Returns market_time[]{market, trade_status (Pre-Open/Trading/Lunch Break/Post-Trading/Closed/Pre-Market/Post-Market), timestamp}."
+        description = "Get current market trading status for all markets. Returns market_time[]{market, trade_status (Trading/Closed/Mid-Day Break/Pre-Market/Post-Market/Overnight), timestamp}."
     )]
     async fn market_status(
         &self,

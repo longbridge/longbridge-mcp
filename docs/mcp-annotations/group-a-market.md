@@ -194,7 +194,7 @@ mutating SDK method.
 - **Open World = true** — The security universe is maintained externally and served from the Longbridge backend over the network.
 
 ### market_status
-- **Read Only = true** — Returns the current trading status (Trading, Closed, Lunch Break, etc.) per market; pure read.
+- **Read Only = true** — Returns the current trading status (Trading, Closed, Mid-Day Break, Pre-Market, etc.) per market; pure read.
 - **Destructive = false** — Reading market status changes no state.
 - **Idempotent = true** — Repeated calls re-read the current status with no side effects.
 - **Open World = true** — Market status reflects live exchange state delivered by the Longbridge backend over the network.

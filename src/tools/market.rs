@@ -61,16 +61,10 @@ pub struct IndexSymbolParam {
 }
 
 fn trade_status_label(code: i64) -> &'static str {
-    match code {
-        101 => "Pre-Open",
-        102 | 103 | 105 | 202 | 203 => "Trading",
-        104 => "Lunch Break",
-        106 => "Post-Trading",
-        108 => "Closed",
-        201 => "Pre-Market",
-        204 => "Post-Market",
-        _ => "Unknown",
-    }
+    i32::try_from(code)
+        .map(longbridge::market::TradeStatus::from)
+        .unwrap_or_default()
+        .name()
 }
 
 pub async fn market_status(mctx: &crate::tools::McpContext) -> Result<CallToolResult, McpError> {
@@ -594,4 +588,28 @@ pub async fn rank_list(
         ],
     )
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::trade_status_label;
+
+    #[test]
+    fn trade_status_label_matches_openapi_status() {
+        let cases = [
+            (101, "Closed"),
+            (103, "Morning Break"),
+            (106, "Mid-Day Break"),
+            (123, "Realtime Quotes"),
+            (202, "Trading"),
+            (204, "Closed"),
+            (206, "Pre-Market"),
+            (210, "Trading"),
+            (456, "Unknown"),
+        ];
+
+        for (code, expected) in cases {
+            assert_eq!(trade_status_label(code), expected, "code {code}");
+        }
+    }
 }
