@@ -4,7 +4,11 @@ use rmcp::ErrorData as McpError;
 use rmcp::RoleServer;
 use rmcp::ServerHandler;
 use rmcp::handler::server::wrapper::Parameters;
-use rmcp::model::{CallToolResult, Content};
+use rmcp::model::{
+    CallToolResult, Content, GetPromptRequestParams, GetPromptResult, ListPromptsResult,
+    PaginatedRequestParams,
+};
+use rmcp::prompt_handler;
 use rmcp::service::RequestContext;
 use rmcp::tool;
 use rmcp::tool_handler;
@@ -3541,6 +3545,7 @@ impl Longbridge {
     name = "longbridge-mcp",
     instructions = "Longbridge OpenAPI MCP Server - provides market data, trading, and financial analysis tools"
 )]
+#[prompt_handler]
 impl ServerHandler for Longbridge {
     // NOTE: `get_info` is intentionally NOT overridden — the `initialize`
     // override below delegates to the `#[tool_handler]` macro default and only
