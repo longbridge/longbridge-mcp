@@ -91,13 +91,13 @@ pub struct SubmitOrderParam {
     /// Attach a take-profit/stop-loss order. Values: "ProfitTaker", "StopLoss", "Bracket"
     pub attached_order_type: Option<String>,
     /// Take-profit trigger price (required for ProfitTaker / Bracket)
-    pub profit_taker_price: Option<String>,
+    pub attached_profit_taker_price: Option<String>,
     /// Stop-loss trigger price (required for StopLoss / Bracket)
-    pub stop_loss_price: Option<String>,
+    pub attached_stop_loss_price: Option<String>,
     /// Limit price for the take-profit leg (use with LO activate_order_type)
-    pub profit_taker_submit_price: Option<String>,
+    pub attached_profit_taker_submit_price: Option<String>,
     /// Limit price for the stop-loss leg (use with LO activate_order_type)
-    pub stop_loss_submit_price: Option<String>,
+    pub attached_stop_loss_submit_price: Option<String>,
     /// Time-in-force for the attached order: Day / GTC / GTD
     pub attached_time_in_force: Option<String>,
     /// Expiry for the attached order as unix timestamp seconds (required when attached_time_in_force is GTD)
@@ -125,21 +125,21 @@ pub struct ReplaceOrderParam {
     /// New trailing percent as decimal e.g. 0.05 = 5% (for TSLPPCT)
     pub trailing_percent: Option<String>,
     /// Set to true to cancel all attached orders on this parent order
-    pub cancel_all_attached: Option<bool>,
+    pub attached_cancel_all: Option<bool>,
     /// Attached order type to set/update: "ProfitTaker", "StopLoss", or "Bracket"
     pub attached_order_type: Option<String>,
     /// ID of an existing take-profit attached order to modify
-    pub profit_taker_id: Option<String>,
+    pub attached_profit_taker_id: Option<String>,
     /// ID of an existing stop-loss attached order to modify
-    pub stop_loss_id: Option<String>,
+    pub attached_stop_loss_id: Option<String>,
     /// New take-profit trigger price
-    pub profit_taker_price: Option<String>,
+    pub attached_profit_taker_price: Option<String>,
     /// New stop-loss trigger price
-    pub stop_loss_price: Option<String>,
+    pub attached_stop_loss_price: Option<String>,
     /// New limit price for the take-profit leg
-    pub profit_taker_submit_price: Option<String>,
+    pub attached_profit_taker_submit_price: Option<String>,
     /// New limit price for the stop-loss leg
-    pub stop_loss_submit_price: Option<String>,
+    pub attached_stop_loss_submit_price: Option<String>,
     /// New time-in-force for the attached order: Day / GTC / GTD
     pub attached_time_in_force: Option<String>,
     /// New expiry for the attached order as unix timestamp seconds
@@ -462,17 +462,17 @@ pub async fn submit_order(
             McpError::invalid_params(format!("invalid attached_order_type: {e}"), None)
         })?;
         let mut ap = SubmitAttachedParams::new(at);
-        if let Some(ref v) = p.profit_taker_price {
+        if let Some(ref v) = p.attached_profit_taker_price {
             ap = ap.profit_taker_price(Decimal::from_str(v).map_err(|e| {
                 McpError::invalid_params(format!("invalid profit_taker_price: {e}"), None)
             })?);
         }
-        if let Some(ref v) = p.stop_loss_price {
+        if let Some(ref v) = p.attached_stop_loss_price {
             ap = ap.stop_loss_price(Decimal::from_str(v).map_err(|e| {
                 McpError::invalid_params(format!("invalid stop_loss_price: {e}"), None)
             })?);
         }
-        if let Some(ref v) = p.profit_taker_submit_price {
+        if let Some(ref v) = p.attached_profit_taker_submit_price {
             ap = ap.profit_taker_submit_price(Decimal::from_str(v).map_err(|e| {
                 McpError::invalid_params(
                     format!("invalid profit_taker_submit_price: {e}"),
@@ -480,7 +480,7 @@ pub async fn submit_order(
                 )
             })?);
         }
-        if let Some(ref v) = p.stop_loss_submit_price {
+        if let Some(ref v) = p.attached_stop_loss_submit_price {
             ap = ap.stop_loss_submit_price(Decimal::from_str(v).map_err(|e| {
                 McpError::invalid_params(format!("invalid stop_loss_submit_price: {e}"), None)
             })?);
@@ -556,14 +556,14 @@ pub async fn replace_order(
         })?);
     }
 
-    let has_attached = p.cancel_all_attached.is_some()
+    let has_attached = p.attached_cancel_all.is_some()
         || p.attached_order_type.is_some()
-        || p.profit_taker_id.is_some()
-        || p.stop_loss_id.is_some()
-        || p.profit_taker_price.is_some()
-        || p.stop_loss_price.is_some()
-        || p.profit_taker_submit_price.is_some()
-        || p.stop_loss_submit_price.is_some()
+        || p.attached_profit_taker_id.is_some()
+        || p.attached_stop_loss_id.is_some()
+        || p.attached_profit_taker_price.is_some()
+        || p.attached_stop_loss_price.is_some()
+        || p.attached_profit_taker_submit_price.is_some()
+        || p.attached_stop_loss_submit_price.is_some()
         || p.attached_time_in_force.is_some()
         || p.attached_expire_time.is_some()
         || p.attached_activate_order_type.is_some()
@@ -581,30 +581,30 @@ pub async fn replace_order(
             None => AttachedOrderType::Unknown,
         };
         let mut ap = ReplaceAttachedParams::new(at);
-        if p.cancel_all_attached == Some(true) {
+        if p.attached_cancel_all == Some(true) {
             ap = ap.cancel_all_attached();
         }
-        if let Some(ref v) = p.profit_taker_id {
+        if let Some(ref v) = p.attached_profit_taker_id {
             ap = ap.profit_taker_id(v.parse::<i64>().map_err(|e| {
                 McpError::invalid_params(format!("invalid profit_taker_id: {e}"), None)
             })?);
         }
-        if let Some(ref v) = p.stop_loss_id {
+        if let Some(ref v) = p.attached_stop_loss_id {
             ap = ap.stop_loss_id(v.parse::<i64>().map_err(|e| {
                 McpError::invalid_params(format!("invalid stop_loss_id: {e}"), None)
             })?);
         }
-        if let Some(ref v) = p.profit_taker_price {
+        if let Some(ref v) = p.attached_profit_taker_price {
             ap = ap.profit_taker_price(Decimal::from_str(v).map_err(|e| {
                 McpError::invalid_params(format!("invalid profit_taker_price: {e}"), None)
             })?);
         }
-        if let Some(ref v) = p.stop_loss_price {
+        if let Some(ref v) = p.attached_stop_loss_price {
             ap = ap.stop_loss_price(Decimal::from_str(v).map_err(|e| {
                 McpError::invalid_params(format!("invalid stop_loss_price: {e}"), None)
             })?);
         }
-        if let Some(ref v) = p.profit_taker_submit_price {
+        if let Some(ref v) = p.attached_profit_taker_submit_price {
             ap = ap.profit_taker_submit_price(Decimal::from_str(v).map_err(|e| {
                 McpError::invalid_params(
                     format!("invalid profit_taker_submit_price: {e}"),
@@ -612,7 +612,7 @@ pub async fn replace_order(
                 )
             })?);
         }
-        if let Some(ref v) = p.stop_loss_submit_price {
+        if let Some(ref v) = p.attached_stop_loss_submit_price {
             ap = ap.stop_loss_submit_price(Decimal::from_str(v).map_err(|e| {
                 McpError::invalid_params(format!("invalid stop_loss_submit_price: {e}"), None)
             })?);
