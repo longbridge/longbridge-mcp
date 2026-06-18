@@ -1196,7 +1196,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get orders placed today. Returns orders[]{order_id, symbol, side, order_type, status, quantity, price, submitted_at, executed_quantity, executed_price, attached_orders[]}. Pass symbol to filter. Set is_attached=true to list only attached (take-profit/stop-loss) orders."
+        description = "Get orders placed today. Returns orders[]{order_id, symbol, side, order_type, status, quantity, price, submitted_at, executed_quantity, executed_price, attached_orders[]}. Pass symbol or order_id to filter. When querying by order_id of an attached order (take-profit/stop-loss leg), also set is_attached=true so the server resolves it as an attached order ID rather than a regular order ID."
     )]
     async fn today_orders(
         &self,

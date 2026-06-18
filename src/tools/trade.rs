@@ -37,7 +37,12 @@ pub struct AccountBalanceParam {
 pub struct TodayOrdersParam {
     /// Filter by symbol, e.g. "700.HK". Omit to return all today's orders.
     pub symbol: Option<String>,
-    /// Set to true to list only attached orders (take-profit / stop-loss legs).
+    /// Filter by a specific order ID.
+    pub order_id: Option<String>,
+    /// When set together with order_id, tells the server that order_id is an
+    /// attached order ID (take-profit / stop-loss leg), not a regular order ID.
+    /// Has no effect without order_id and does NOT filter results to show only
+    /// attached orders.
     pub is_attached: Option<bool>,
 }
 
@@ -239,6 +244,9 @@ pub async fn today_orders(
     let mut opts = GetTodayOrdersOptions::new();
     if let Some(symbol) = p.symbol {
         opts = opts.symbol(symbol);
+    }
+    if let Some(order_id) = p.order_id {
+        opts = opts.order_id(order_id);
     }
     if p.is_attached == Some(true) {
         opts = opts.is_attached();
