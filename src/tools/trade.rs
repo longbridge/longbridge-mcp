@@ -21,9 +21,11 @@ pub struct OrderIdParam {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct OrderDetailParam {
-    /// Order ID to look up
+    /// Order ID to look up. Can be a parent order ID or an attached sub-order ID.
     pub order_id: String,
-    /// Set to true when order_id belongs to an attached order (take-profit / stop-loss leg)
+    /// Set to true when order_id is an attached sub-order ID (take-profit / stop-loss
+    /// leg). Returns the sub-order itself as an OrderDetail. charge_detail will be
+    /// null for attached orders. Omit (or false) for regular parent order IDs.
     pub is_attached: Option<bool>,
 }
 
@@ -37,12 +39,12 @@ pub struct AccountBalanceParam {
 pub struct TodayOrdersParam {
     /// Filter by symbol, e.g. "700.HK". Omit to return all today's orders.
     pub symbol: Option<String>,
-    /// Filter by a specific order ID.
+    /// Filter by order ID. Can be a parent order ID or (with is_attached=true) an attached order ID.
     pub order_id: Option<String>,
-    /// When set together with order_id, tells the server that order_id is an
-    /// attached order ID (take-profit / stop-loss leg), not a regular order ID.
-    /// Has no effect without order_id and does NOT filter results to show only
-    /// attached orders.
+    /// Only meaningful when order_id is also set. Tells the server that order_id
+    /// is an attached sub-order ID (take-profit / stop-loss leg); the response
+    /// returns that sub-order itself as an Order entry. Has no effect without
+    /// order_id.
     pub is_attached: Option<bool>,
 }
 

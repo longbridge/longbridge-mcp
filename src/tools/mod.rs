@@ -1196,7 +1196,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get orders placed today. Returns orders[]{order_id, symbol, side, order_type, status, quantity, price, submitted_at, executed_quantity, executed_price, attached_orders[]}. Pass symbol or order_id to filter. When querying by order_id of an attached order (take-profit/stop-loss leg), also set is_attached=true so the server resolves it as an attached order ID rather than a regular order ID."
+        description = "Get orders placed today. Returns orders[]{order_id, symbol, side, order_type, status, quantity, price, submitted_at, executed_quantity, executed_price, attached_orders[]}. Pass symbol to filter by symbol, or order_id to filter by a specific order. To query a take-profit/stop-loss sub-order by its own order_id, set both order_id and is_attached=true; the response returns that sub-order itself as an Order entry. is_attached has no effect without order_id."
     )]
     async fn today_orders(
         &self,
@@ -1212,7 +1212,7 @@ impl Longbridge {
         title = "Order Detail",
         annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = true),
         output_schema = schema_for::<output::OrderDetailResponse>(),
-        description = "Get detailed information about a specific order. Returns {order_id, symbol, status, side, order_type, quantity, price, executed_quantity, executed_price, submitted_at, time_in_force, msg, attached_orders[]}. Set is_attached=true to query an attached order (take-profit/stop-loss leg) by its own order_id."
+        description = "Get detailed information about a specific order. For a parent order, returns full detail including attached_orders[] (take-profit/stop-loss legs). To query a sub-order by its own order_id instead, set is_attached=true; the response returns the sub-order itself, with charge_detail=null."
     )]
     async fn order_detail(
         &self,
