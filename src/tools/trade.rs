@@ -484,10 +484,7 @@ pub async fn submit_order(
         }
         if let Some(ref v) = p.attached_profit_taker_submit_price {
             ap = ap.profit_taker_submit_price(Decimal::from_str(v).map_err(|e| {
-                McpError::invalid_params(
-                    format!("invalid profit_taker_submit_price: {e}"),
-                    None,
-                )
+                McpError::invalid_params(format!("invalid profit_taker_submit_price: {e}"), None)
             })?);
         }
         if let Some(ref v) = p.attached_stop_loss_submit_price {
@@ -507,10 +504,7 @@ pub async fn submit_order(
         }
         if let Some(ref v) = p.attached_activate_order_type {
             ap = ap.activate_order_type(v.parse::<OrderType>().map_err(|e| {
-                McpError::invalid_params(
-                    format!("invalid attached_activate_order_type: {e}"),
-                    None,
-                )
+                McpError::invalid_params(format!("invalid attached_activate_order_type: {e}"), None)
             })?);
         }
         if let Some(ref v) = p.attached_outside_rth {
@@ -616,10 +610,7 @@ pub async fn replace_order(
         }
         if let Some(ref v) = p.attached_profit_taker_submit_price {
             ap = ap.profit_taker_submit_price(Decimal::from_str(v).map_err(|e| {
-                McpError::invalid_params(
-                    format!("invalid profit_taker_submit_price: {e}"),
-                    None,
-                )
+                McpError::invalid_params(format!("invalid profit_taker_submit_price: {e}"), None)
             })?);
         }
         if let Some(ref v) = p.attached_stop_loss_submit_price {
@@ -639,10 +630,7 @@ pub async fn replace_order(
         }
         if let Some(ref v) = p.attached_activate_order_type {
             ap = ap.activate_order_type(v.parse::<OrderType>().map_err(|e| {
-                McpError::invalid_params(
-                    format!("invalid attached_activate_order_type: {e}"),
-                    None,
-                )
+                McpError::invalid_params(format!("invalid attached_activate_order_type: {e}"), None)
             })?);
         }
         if let Some(ref v) = p.attached_outside_rth {

@@ -349,4 +349,3 @@ pub struct OrderDetailResponse {
     /// Attached take-profit / stop-loss legs. Empty when none.
     pub attached_orders: Vec<AttachedOrderDetailResponse>,
 }
-
