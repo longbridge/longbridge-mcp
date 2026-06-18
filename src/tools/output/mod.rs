@@ -227,6 +227,51 @@ pub struct BrokerLevel {
     pub broker_ids: Vec<i32>,
 }
 
+/// One take-profit or stop-loss attached order leg, returned inside `OrderDetailResponse.attached_orders`.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct AttachedOrderDetailResponse {
+    /// Attached order ID.
+    pub order_id: String,
+    /// Attached order type: `ProfitTaker`, `StopLoss`, or `Bracket`.
+    pub attached_type_display: String,
+    /// Order status.
+    pub status: String,
+    /// Trigger price (null if not set).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trigger_price: Option<String>,
+    /// Submitted limit price (null for market-style legs).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub submit_price: Option<String>,
+    /// Submitted quantity.
+    pub quantity: String,
+    /// Quantity already executed.
+    pub executed_qty: String,
+    /// Volume-weighted average executed price (null when unfilled).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub executed_price: Option<String>,
+    /// Order type for the triggered leg, e.g. `LO`, `MO`.
+    pub activate_order_type: String,
+    /// Time-in-force: `Day` / `GTC` / `GTD`.
+    pub time_in_force: String,
+    /// GTD expiry date (yyyy-mm-dd, null when not GTD).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gtd: Option<String>,
+    /// Trigger status, e.g. `Deactive` / `Active` / `Released`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trigger_status: Option<String>,
+    /// Order submission time (RFC3339).
+    pub submitted_at: String,
+    /// Last update time (RFC3339).
+    pub updated_at: String,
+    /// Whether this leg has been withdrawn.
+    pub withdrawn: bool,
+    /// Whether this leg has been reviewed.
+    pub reviewed: bool,
+    /// RTH setting for the triggered leg.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub activate_rth: Option<String>,
+}
+
 /// Returned by `order_detail`. Single order with full lifecycle metadata.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct OrderDetailResponse {
@@ -292,4 +337,7 @@ pub struct OrderDetailResponse {
     /// Outside-RTH setting: `RTH_ONLY` / `ANY_TIME` / `OVERNIGHT`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub outside_rth: Option<String>,
+    /// Attached take-profit / stop-loss legs. Empty when none.
+    pub attached_orders: Vec<AttachedOrderDetailResponse>,
 }
+

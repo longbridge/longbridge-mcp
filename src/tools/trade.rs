@@ -1,4 +1,6 @@
-use longbridge::trade::{GetTodayExecutionsOptions, GetTodayOrdersOptions, TradeContext};
+use longbridge::trade::{
+    GetOrderDetailOptions, GetTodayExecutionsOptions, GetTodayOrdersOptions, TradeContext,
+};
 use rmcp::ErrorData as McpError;
 use rmcp::model::CallToolResult;
 use rmcp::schemars::JsonSchema;
@@ -18,6 +20,14 @@ pub struct OrderIdParam {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct OrderDetailParam {
+    /// Order ID to look up
+    pub order_id: String,
+    /// Set to true when order_id belongs to an attached order (take-profit / stop-loss leg)
+    pub is_attached: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct AccountBalanceParam {
     /// Filter by currency code (e.g. "USD", "HKD"). Omit to return all currencies.
     pub currency: Option<String>,
@@ -27,6 +37,8 @@ pub struct AccountBalanceParam {
 pub struct TodayOrdersParam {
     /// Filter by symbol, e.g. "700.HK". Omit to return all today's orders.
     pub symbol: Option<String>,
+    /// Set to true to list only attached orders (take-profit / stop-loss legs).
+    pub is_attached: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -76,6 +88,24 @@ pub struct SubmitOrderParam {
     pub outside_rth: Option<String>,
     /// Order remark (max 255 characters)
     pub remark: Option<String>,
+    /// Attach a take-profit/stop-loss order. Values: "ProfitTaker", "StopLoss", "Bracket"
+    pub attached_order_type: Option<String>,
+    /// Take-profit trigger price (required for ProfitTaker / Bracket)
+    pub profit_taker_price: Option<String>,
+    /// Stop-loss trigger price (required for StopLoss / Bracket)
+    pub stop_loss_price: Option<String>,
+    /// Limit price for the take-profit leg (use with LO activate_order_type)
+    pub profit_taker_submit_price: Option<String>,
+    /// Limit price for the stop-loss leg (use with LO activate_order_type)
+    pub stop_loss_submit_price: Option<String>,
+    /// Time-in-force for the attached order: Day / GTC / GTD
+    pub attached_time_in_force: Option<String>,
+    /// Expiry for the attached order as unix timestamp seconds (required when attached_time_in_force is GTD)
+    pub attached_expire_time: Option<String>,
+    /// Order type for the triggered leg, e.g. "LO" or "MO"
+    pub attached_activate_order_type: Option<String>,
+    /// RTH setting for the triggered leg: "RTH_ONLY" / "ANY_TIME" / "OVERNIGHT"
+    pub attached_outside_rth: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -94,6 +124,30 @@ pub struct ReplaceOrderParam {
     pub trailing_amount: Option<String>,
     /// New trailing percent as decimal e.g. 0.05 = 5% (for TSLPPCT)
     pub trailing_percent: Option<String>,
+    /// Set to true to cancel all attached orders on this parent order
+    pub cancel_all_attached: Option<bool>,
+    /// Attached order type to set/update: "ProfitTaker", "StopLoss", or "Bracket"
+    pub attached_order_type: Option<String>,
+    /// ID of an existing take-profit attached order to modify
+    pub profit_taker_id: Option<String>,
+    /// ID of an existing stop-loss attached order to modify
+    pub stop_loss_id: Option<String>,
+    /// New take-profit trigger price
+    pub profit_taker_price: Option<String>,
+    /// New stop-loss trigger price
+    pub stop_loss_price: Option<String>,
+    /// New limit price for the take-profit leg
+    pub profit_taker_submit_price: Option<String>,
+    /// New limit price for the stop-loss leg
+    pub stop_loss_submit_price: Option<String>,
+    /// New time-in-force for the attached order: Day / GTC / GTD
+    pub attached_time_in_force: Option<String>,
+    /// New expiry for the attached order as unix timestamp seconds
+    pub attached_expire_time: Option<String>,
+    /// New order type for the triggered leg, e.g. "LO" or "MO"
+    pub attached_activate_order_type: Option<String>,
+    /// New RTH setting for the triggered leg: "RTH_ONLY" / "ANY_TIME" / "OVERNIGHT"
+    pub attached_outside_rth: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -180,6 +234,9 @@ pub async fn today_orders(
     if let Some(symbol) = p.symbol {
         opts = opts.symbol(symbol);
     }
+    if p.is_attached == Some(true) {
+        opts = opts.is_attached();
+    }
     let (ctx, _) = TradeContext::new(mctx.create_config());
     let result = ctx.today_orders(opts).await.map_err(Error::longbridge)?;
     tool_json(&result)
@@ -187,13 +244,14 @@ pub async fn today_orders(
 
 pub async fn order_detail(
     mctx: &crate::tools::McpContext,
-    p: OrderIdParam,
+    p: OrderDetailParam,
 ) -> Result<CallToolResult, McpError> {
+    let mut opts = GetOrderDetailOptions::new(p.order_id);
+    if p.is_attached == Some(true) {
+        opts = opts.is_attached();
+    }
     let (ctx, _) = TradeContext::new(mctx.create_config());
-    let result = ctx
-        .order_detail(p.order_id)
-        .await
-        .map_err(Error::longbridge)?;
+    let result = ctx.order_detail(opts).await.map_err(Error::longbridge)?;
     tool_json(&result)
 }
 
@@ -392,6 +450,61 @@ pub async fn submit_order(
         opts = opts.remark(v.clone());
     }
 
+    if let Some(ref at) = p.attached_order_type {
+        use longbridge::trade::{AttachedOrderType, SubmitAttachedParams};
+        let at = at.parse::<AttachedOrderType>().map_err(|e| {
+            McpError::invalid_params(format!("invalid attached_order_type: {e}"), None)
+        })?;
+        let mut ap = SubmitAttachedParams::new(at);
+        if let Some(ref v) = p.profit_taker_price {
+            ap = ap.profit_taker_price(Decimal::from_str(v).map_err(|e| {
+                McpError::invalid_params(format!("invalid profit_taker_price: {e}"), None)
+            })?);
+        }
+        if let Some(ref v) = p.stop_loss_price {
+            ap = ap.stop_loss_price(Decimal::from_str(v).map_err(|e| {
+                McpError::invalid_params(format!("invalid stop_loss_price: {e}"), None)
+            })?);
+        }
+        if let Some(ref v) = p.profit_taker_submit_price {
+            ap = ap.profit_taker_submit_price(Decimal::from_str(v).map_err(|e| {
+                McpError::invalid_params(
+                    format!("invalid profit_taker_submit_price: {e}"),
+                    None,
+                )
+            })?);
+        }
+        if let Some(ref v) = p.stop_loss_submit_price {
+            ap = ap.stop_loss_submit_price(Decimal::from_str(v).map_err(|e| {
+                McpError::invalid_params(format!("invalid stop_loss_submit_price: {e}"), None)
+            })?);
+        }
+        if let Some(ref v) = p.attached_time_in_force {
+            ap = ap.time_in_force(v.parse::<TimeInForceType>().map_err(|e| {
+                McpError::invalid_params(format!("invalid attached_time_in_force: {e}"), None)
+            })?);
+        }
+        if let Some(ref v) = p.attached_expire_time {
+            ap = ap.expire_time(v.parse::<i64>().map_err(|e| {
+                McpError::invalid_params(format!("invalid attached_expire_time: {e}"), None)
+            })?);
+        }
+        if let Some(ref v) = p.attached_activate_order_type {
+            ap = ap.activate_order_type(v.parse::<OrderType>().map_err(|e| {
+                McpError::invalid_params(
+                    format!("invalid attached_activate_order_type: {e}"),
+                    None,
+                )
+            })?);
+        }
+        if let Some(ref v) = p.attached_outside_rth {
+            ap = ap.activate_rth(v.parse::<OutsideRTH>().map_err(|e| {
+                McpError::invalid_params(format!("invalid attached_outside_rth: {e}"), None)
+            })?);
+        }
+        opts = opts.attached_params(ap);
+    }
+
     let (ctx, _) = TradeContext::new(mctx.create_config());
     let result = ctx.submit_order(opts).await.map_err(Error::longbridge)?;
     tool_json(&result)
@@ -402,7 +515,7 @@ pub async fn replace_order(
     p: ReplaceOrderParam,
 ) -> Result<CallToolResult, McpError> {
     use longbridge::Decimal;
-    use longbridge::trade::ReplaceOrderOptions;
+    use longbridge::trade::{OrderType, OutsideRTH, ReplaceOrderOptions, TimeInForceType};
     use std::str::FromStr;
 
     let quantity = Decimal::from_str(&p.quantity)
@@ -436,6 +549,91 @@ pub async fn replace_order(
             McpError::invalid_params(format!("invalid trailing_percent: {e}"), None)
         })?);
     }
+
+    let has_attached = p.cancel_all_attached.is_some()
+        || p.attached_order_type.is_some()
+        || p.profit_taker_id.is_some()
+        || p.stop_loss_id.is_some()
+        || p.profit_taker_price.is_some()
+        || p.stop_loss_price.is_some()
+        || p.profit_taker_submit_price.is_some()
+        || p.stop_loss_submit_price.is_some()
+        || p.attached_time_in_force.is_some()
+        || p.attached_expire_time.is_some()
+        || p.attached_activate_order_type.is_some()
+        || p.attached_outside_rth.is_some();
+
+    if has_attached {
+        use longbridge::trade::{AttachedOrderType, ReplaceAttachedParams};
+        let at = match p.attached_order_type.as_deref() {
+            Some(s) => s.parse::<AttachedOrderType>().map_err(|e| {
+                McpError::invalid_params(format!("invalid attached_order_type: {e}"), None)
+            })?,
+            None => AttachedOrderType::Unknown,
+        };
+        let mut ap = ReplaceAttachedParams::new(at);
+        if p.cancel_all_attached == Some(true) {
+            ap = ap.cancel_all_attached();
+        }
+        if let Some(ref v) = p.profit_taker_id {
+            ap = ap.profit_taker_id(v.parse::<i64>().map_err(|e| {
+                McpError::invalid_params(format!("invalid profit_taker_id: {e}"), None)
+            })?);
+        }
+        if let Some(ref v) = p.stop_loss_id {
+            ap = ap.stop_loss_id(v.parse::<i64>().map_err(|e| {
+                McpError::invalid_params(format!("invalid stop_loss_id: {e}"), None)
+            })?);
+        }
+        if let Some(ref v) = p.profit_taker_price {
+            ap = ap.profit_taker_price(Decimal::from_str(v).map_err(|e| {
+                McpError::invalid_params(format!("invalid profit_taker_price: {e}"), None)
+            })?);
+        }
+        if let Some(ref v) = p.stop_loss_price {
+            ap = ap.stop_loss_price(Decimal::from_str(v).map_err(|e| {
+                McpError::invalid_params(format!("invalid stop_loss_price: {e}"), None)
+            })?);
+        }
+        if let Some(ref v) = p.profit_taker_submit_price {
+            ap = ap.profit_taker_submit_price(Decimal::from_str(v).map_err(|e| {
+                McpError::invalid_params(
+                    format!("invalid profit_taker_submit_price: {e}"),
+                    None,
+                )
+            })?);
+        }
+        if let Some(ref v) = p.stop_loss_submit_price {
+            ap = ap.stop_loss_submit_price(Decimal::from_str(v).map_err(|e| {
+                McpError::invalid_params(format!("invalid stop_loss_submit_price: {e}"), None)
+            })?);
+        }
+        if let Some(ref v) = p.attached_time_in_force {
+            ap = ap.time_in_force(v.parse::<TimeInForceType>().map_err(|e| {
+                McpError::invalid_params(format!("invalid attached_time_in_force: {e}"), None)
+            })?);
+        }
+        if let Some(ref v) = p.attached_expire_time {
+            ap = ap.expire_time(v.parse::<i64>().map_err(|e| {
+                McpError::invalid_params(format!("invalid attached_expire_time: {e}"), None)
+            })?);
+        }
+        if let Some(ref v) = p.attached_activate_order_type {
+            ap = ap.activate_order_type(v.parse::<OrderType>().map_err(|e| {
+                McpError::invalid_params(
+                    format!("invalid attached_activate_order_type: {e}"),
+                    None,
+                )
+            })?);
+        }
+        if let Some(ref v) = p.attached_outside_rth {
+            ap = ap.activate_rth(v.parse::<OutsideRTH>().map_err(|e| {
+                McpError::invalid_params(format!("invalid attached_outside_rth: {e}"), None)
+            })?);
+        }
+        opts = opts.attached_params(ap);
+    }
+
     let (ctx, _) = TradeContext::new(mctx.create_config());
     ctx.replace_order(opts).await.map_err(Error::longbridge)?;
     Ok(tool_result("order replaced".to_string()))

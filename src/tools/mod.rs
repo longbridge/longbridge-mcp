@@ -495,8 +495,8 @@ use crate::tools::quote::{
     WarrantListParam,
 };
 use crate::tools::trade::{
-    CashFlowParam, EstimateMaxQtyParam, HistoryOrdersParam, OrderIdParam, ReplaceOrderParam,
-    SubmitOrderParam,
+    CashFlowParam, EstimateMaxQtyParam, HistoryOrdersParam, OrderDetailParam, OrderIdParam,
+    ReplaceOrderParam, SubmitOrderParam,
 };
 
 #[tool_router(vis = "pub(crate)")]
@@ -1196,7 +1196,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get orders placed today. Returns orders[]{order_id, symbol, side, order_type, status, quantity, price, submitted_at, executed_quantity, executed_price}. Pass symbol to filter."
+        description = "Get orders placed today. Returns orders[]{order_id, symbol, side, order_type, status, quantity, price, submitted_at, executed_quantity, executed_price, attached_orders[]}. Pass symbol to filter. Set is_attached=true to list only attached (take-profit/stop-loss) orders."
     )]
     async fn today_orders(
         &self,
@@ -1212,12 +1212,12 @@ impl Longbridge {
         title = "Order Detail",
         annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = true),
         output_schema = schema_for::<output::OrderDetailResponse>(),
-        description = "Get detailed information about a specific order. Returns {order_id, symbol, status, side, order_type, quantity, price, executed_quantity, executed_price, submitted_at, time_in_force, msg}."
+        description = "Get detailed information about a specific order. Returns {order_id, symbol, status, side, order_type, quantity, price, executed_quantity, executed_price, submitted_at, time_in_force, msg, attached_orders[]}. Set is_attached=true to query an attached order (take-profit/stop-loss leg) by its own order_id."
     )]
     async fn order_detail(
         &self,
         ctx: RequestContext<RoleServer>,
-        Parameters(p): Parameters<OrderIdParam>,
+        Parameters(p): Parameters<OrderDetailParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
         measured_tool_call("order_detail", || trade::order_detail(&mctx, p)).await
@@ -1333,7 +1333,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::OrderIdResponse>(),
-        description = "Submit a buy/sell order. order_type: LO (Limit) / ELO (Enhanced Limit, HK) / MO (Market) / AO (At-auction, HK) / ALO (At-auction Limit, HK) / ODD (Odd Lots, HK) / LIT (Limit If Touched) / MIT (Market If Touched) / TSLPAMT (Trailing Limit by Amount) / TSLPPCT (Trailing Limit by Percent) / SLO (Special Limit, HK). side: Buy/Sell. time_in_force: Day/GTC/GTD"
+        description = "Submit a buy/sell order. order_type: LO (Limit) / ELO (Enhanced Limit, HK) / MO (Market) / AO (At-auction, HK) / ALO (At-auction Limit, HK) / ODD (Odd Lots, HK) / LIT (Limit If Touched) / MIT (Market If Touched) / TSLPAMT (Trailing Limit by Amount) / TSLPPCT (Trailing Limit by Percent) / SLO (Special Limit, HK). side: Buy/Sell. time_in_force: Day/GTC/GTD. To attach a take-profit/stop-loss: set attached_order_type (ProfitTaker/StopLoss/Bracket) with profit_taker_price and/or stop_loss_price."
     )]
     async fn submit_order(
         &self,
@@ -1353,7 +1353,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Modify an open order's quantity, price, trigger_price, or trailing params. Returns \"order replaced\" on success. Only open/pending orders can be modified."
+        description = "Modify an open order's quantity, price, trigger_price, or trailing params. Returns \"order replaced\" on success. Only open/pending orders can be modified. To modify attached take-profit/stop-loss: provide attached_order_type with updated prices. To cancel all attached orders: set cancel_all_attached=true. To update a specific attached leg by ID: use profit_taker_id or stop_loss_id."
     )]
     async fn replace_order(
         &self,
