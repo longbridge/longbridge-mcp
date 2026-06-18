@@ -270,6 +270,15 @@ pub struct AttachedOrderDetailResponse {
     /// RTH setting for the triggered leg.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub activate_rth: Option<String>,
+    /// RTH enforcement flag for the attached order itself.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub force_only_rth: Option<String>,
+    /// Order tag (e.g. `Normal`, `LongTerm`).
+    pub tag: String,
+    /// Total executed amount (quantity × price).
+    pub executed_amount: String,
+    /// Internal counter ID.
+    pub counter_id: String,
 }
 
 /// Returned by `order_detail`. Single order with full lifecycle metadata.

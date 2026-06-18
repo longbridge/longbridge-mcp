@@ -148,6 +148,12 @@ pub struct ReplaceOrderParam {
     pub attached_activate_order_type: Option<String>,
     /// New RTH setting for the triggered leg: "RTH_ONLY" / "ANY_TIME" / "OVERNIGHT"
     pub attached_outside_rth: Option<String>,
+    /// Main order ID that owns the attached order (used when modifying an attached order independently)
+    pub attached_main_id: Option<String>,
+    /// New quantity for the attached order leg
+    pub attached_quantity: Option<String>,
+    /// Market price reference for the attached order leg
+    pub attached_market_price: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -561,7 +567,10 @@ pub async fn replace_order(
         || p.attached_time_in_force.is_some()
         || p.attached_expire_time.is_some()
         || p.attached_activate_order_type.is_some()
-        || p.attached_outside_rth.is_some();
+        || p.attached_outside_rth.is_some()
+        || p.attached_main_id.is_some()
+        || p.attached_quantity.is_some()
+        || p.attached_market_price.is_some();
 
     if has_attached {
         use longbridge::trade::{AttachedOrderType, ReplaceAttachedParams};
@@ -629,6 +638,21 @@ pub async fn replace_order(
         if let Some(ref v) = p.attached_outside_rth {
             ap = ap.activate_rth(v.parse::<OutsideRTH>().map_err(|e| {
                 McpError::invalid_params(format!("invalid attached_outside_rth: {e}"), None)
+            })?);
+        }
+        if let Some(ref v) = p.attached_main_id {
+            ap = ap.main_id(v.parse::<i64>().map_err(|e| {
+                McpError::invalid_params(format!("invalid attached_main_id: {e}"), None)
+            })?);
+        }
+        if let Some(ref v) = p.attached_quantity {
+            ap = ap.quantity(Decimal::from_str(v).map_err(|e| {
+                McpError::invalid_params(format!("invalid attached_quantity: {e}"), None)
+            })?);
+        }
+        if let Some(ref v) = p.attached_market_price {
+            ap = ap.market_price(Decimal::from_str(v).map_err(|e| {
+                McpError::invalid_params(format!("invalid attached_market_price: {e}"), None)
             })?);
         }
         opts = opts.attached_params(ap);
