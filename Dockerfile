@@ -5,12 +5,12 @@ COPY . .
 RUN cargo build --release
 
 FROM debian:bookworm-slim
-LABEL io.modelcontextprotocol.server.name="com.longportapp/mcp"
+LABEL io.modelcontextprotocol.server.name="com.longbridge/mcp"
 
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder /app/target/release/longport-mcp /usr/local/bin/longport-mcp
+COPY --from=builder /app/target/release/longbridge-mcp /usr/local/bin/longbridge-mcp
 
 EXPOSE 8000
 
-ENTRYPOINT ["longport-mcp", "--bind", "0.0.0.0:8000"]
+ENTRYPOINT ["longbridge-mcp", "--bind", "0.0.0.0:8000"]

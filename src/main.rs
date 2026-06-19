@@ -5,8 +5,6 @@ mod metrics;
 mod serialize;
 mod tools;
 
-extern crate longbridge as longport;
-
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -30,7 +28,7 @@ struct FileConfig {
 }
 
 #[derive(Debug, Parser)]
-#[command(name = "LongPort", about = "LongPort MCP Server")]
+#[command(name = "Longbridge", about = "Longbridge MCP Server")]
 struct Cli {
     /// HTTP server bind address
     #[arg(long)]
@@ -70,13 +68,13 @@ pub struct AppConfig {
 }
 
 fn config_path() -> PathBuf {
-    let dir = std::env::var("LONGPORT_MCP_CONFIG_DIR")
+    let dir = std::env::var("LONGBRIDGE_MCP_CONFIG_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|_| {
             let home = std::env::var("HOME")
                 .or_else(|_| std::env::var("USERPROFILE"))
                 .unwrap_or_else(|_| ".".to_string());
-            PathBuf::from(home).join(".longport").join("mcp")
+            PathBuf::from(home).join(".longbridge").join("mcp")
         });
     dir.join("config.json")
 }
@@ -115,11 +113,11 @@ fn load_config() -> AppConfig {
 
 fn init_logging(log_dir: Option<&PathBuf>) {
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-        EnvFilter::new("info,longport_mcp=debug,longport_httpcli=warn,rmcp=warn")
+        EnvFilter::new("info,longbridge_mcp=debug,longbridge_httpcli=warn,rmcp=warn")
     });
 
     if let Some(dir) = log_dir {
-        let file_appender = tracing_appender::rolling::daily(dir, "longport-mcp.log");
+        let file_appender = tracing_appender::rolling::daily(dir, "longbridge-mcp.log");
         tracing_subscriber::fmt()
             .with_env_filter(filter)
             .with_writer(file_appender)
@@ -166,7 +164,7 @@ async fn main() -> anyhow::Result<()> {
             tokio::io::stdin(),
             tokio::io::stdout(),
         );
-        if let Ok(service) = rmcp::serve_server(crate::tools::LongPort, transport).await {
+        if let Ok(service) = rmcp::serve_server(crate::tools::Longbridge, transport).await {
             service.waiting().await.ok();
         }
         return Ok(());

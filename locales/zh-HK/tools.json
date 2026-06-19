@@ -1,6 +1,6 @@
 {
   "$schema": "../tools.schema.json",
-  "server_instructions": "LongPort MCP 服務 —— 提供市場數據、交易與金融分析工具。",
+  "server_instructions": "長橋 MCP 服務 —— 提供市場數據、交易與金融分析工具。",
   "tools": {
     "create_watchlist_group": {
       "title": "新建自選分組",
@@ -1124,9 +1124,9 @@
     },
     "authenticate": {
       "title": "授權認證",
-      "description": "當你尚未取得 LongPort 憑據時使用（例如客戶端無法完成瀏覽器 OAuth 流程）。用戶在 https://open.longportapp.com/connect 生成一次性授權碼並貼給你，將其作為 `auth_code` 傳入。成功後服務端會返回存取權杖，請在後續請求中作為 Bearer 憑據使用，即可解鎖全部工具。若你未授權且用戶尚未提供授權碼，請引導其前往 https://open.longportapp.com/connect 生成。",
+      "description": "當你尚未取得長橋憑據時使用（例如客戶端無法完成瀏覽器 OAuth 流程）。用戶在 https://open.longbridge.com/connect 生成一次性授權碼並貼給你，將其作為 `auth_code` 傳入。成功後服務端會返回存取權杖，請在後續請求中作為 Bearer 憑據使用，即可解鎖全部工具。若你未授權且用戶尚未提供授權碼，請引導其前往 https://open.longbridge.com/connect 生成。",
       "properties": {
-        "auth_code": "用戶在 https://open.longportapp.com/connect 生成的一次性 OAuth 授權碼，5 分鐘內有效且僅可使用一次。"
+        "auth_code": "用戶在 https://open.longbridge.com/connect 生成的一次性 OAuth 授權碼，5 分鐘內有效且僅可使用一次。"
       }
     }
   }

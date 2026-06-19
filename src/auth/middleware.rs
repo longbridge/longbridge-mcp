@@ -38,7 +38,7 @@ pub enum AuthMode {
 ///
 /// Extracts the Bearer token from the `Authorization` header and stores it as a
 /// `BearerToken` in request extensions. No JWT validation -- the token is
-/// forwarded to LongPort SDK calls directly.
+/// forwarded to Longbridge SDK calls directly.
 ///
 /// On 401 responses, includes `resource_metadata` in the `WWW-Authenticate`
 /// header as required by the MCP OAuth 2.1 spec (RFC 9728).
