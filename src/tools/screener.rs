@@ -338,7 +338,7 @@ pub async fn screener_search(
 
     let resp: String = client
         .request(Method::POST, "/v1/quote/ai/screener/search")
-        .body(longbridge::httpclient::Json(body))
+        .body(longport::httpclient::Json(body))
         .response::<String>()
         .send()
         .await

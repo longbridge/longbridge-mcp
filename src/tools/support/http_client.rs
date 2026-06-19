@@ -1,4 +1,4 @@
-use longbridge::httpclient::{HttpClient, Json};
+use longport::httpclient::{HttpClient, Json};
 use reqwest::Method;
 use rmcp::model::{CallToolResult, Content, ErrorData as McpError};
 
