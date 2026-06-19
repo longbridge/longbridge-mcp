@@ -1597,6 +1597,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "longbridge-mcp"
+version = "0.5.8"
+dependencies = [
+ "anyhow",
+ "axum",
+ "axum-server",
+ "base64 0.22.1",
+ "bs58",
+ "clap",
+ "longbridge",
+ "prometheus",
+ "reqwest 0.12.28",
+ "rmcp",
+ "rust_decimal",
+ "rustls 0.23.38",
+ "schemars",
+ "serde",
+ "serde-transcode",
+ "serde_json",
+ "thiserror 2.0.18",
+ "time",
+ "tokio",
+ "tower",
+ "tower-http",
+ "tracing",
+ "tracing-appender",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "longbridge-oauth"
 version = "4.3.2"
 source = "git+https://github.com/longbridge/openapi.git?branch=main#3c995f576e245c5b3235a88f1aad5d4c2343a6c2"
@@ -1639,36 +1669,6 @@ dependencies = [
  "tokio-tungstenite",
  "tracing",
  "url",
-]
-
-[[package]]
-name = "longport-mcp"
-version = "0.5.8"
-dependencies = [
- "anyhow",
- "axum",
- "axum-server",
- "base64 0.22.1",
- "bs58",
- "clap",
- "longbridge",
- "prometheus",
- "reqwest 0.12.28",
- "rmcp",
- "rust_decimal",
- "rustls 0.23.38",
- "schemars",
- "serde",
- "serde-transcode",
- "serde_json",
- "thiserror 2.0.18",
- "time",
- "tokio",
- "tower",
- "tower-http",
- "tracing",
- "tracing-appender",
- "tracing-subscriber",
 ]
 
 [[package]]

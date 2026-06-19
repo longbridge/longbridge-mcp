@@ -5,7 +5,7 @@ explicitly declared annotation value is accurate and does not misrepresent the t
 behavior.
 
 All tools in this group are **read-only fundamental/research data queries**. Each is implemented
-as a single HTTP `GET` request against the LongPort fundamental/research backend (e.g.
+as a single HTTP `GET` request against the Longbridge fundamental/research backend (e.g.
 `GET /v1/quote/...`, `GET /v1/asset/cash/short-margin`) via the shared `http_get_tool` /
 `http_get_tool_unix` helpers. None of them issue any write, mutation, or side-effecting request.
 
@@ -16,7 +16,7 @@ Shared annotation semantics for this group:
 - **destructiveHint = false** — the tool performs no write or destructive update of any kind.
 - **idempotentHint = true** — calling with the same parameters repeatedly produces no additional
   side effects (each call is just another read).
-- **openWorldHint = true** — the tool reaches an external LongPort fundamental/research backend
+- **openWorldHint = true** — the tool reaches an external Longbridge fundamental/research backend
   over the network; the returned data tracks the market and issuer disclosures and is not under
   this server's control.
 
@@ -28,7 +28,7 @@ Shared annotation semantics for this group:
 - **Destructive = false** — Retrieving published financial statements alters nothing.
 - **Idempotent = true** — Repeating the same symbol/kind/report_type returns the same statements
   with no cumulative effect.
-- **Open World = true** — Statement data is sourced from issuer filings on the external LongPort
+- **Open World = true** — Statement data is sourced from issuer filings on the external Longbridge
   backend and updates as new periods are disclosed; the server does not control it.
 
 ### financial_statement
@@ -45,7 +45,7 @@ Shared annotation semantics for this group:
 - **Destructive = false** — Fetching a summary modifies no data.
 - **Idempotent = true** — The same symbol returns the same latest-period summary until a new report
   is disclosed; calling repeatedly has no side effect.
-- **Open World = true** — "Latest" reflects the most recent external disclosure on the LongPort
+- **Open World = true** — "Latest" reflects the most recent external disclosure on the Longbridge
   backend and advances as issuers report; not server-controlled.
 
 ### financial_report_snapshot
@@ -64,7 +64,7 @@ Shared annotation semantics for this group:
 - **Destructive = false** — Reading the rating consensus changes nothing.
 - **Idempotent = true** — The same symbol returns the same consensus snapshot per call.
 - **Open World = true** — Analyst ratings originate from external research firms and are updated on
-  the LongPort backend as firms publish; not server-controlled.
+  the Longbridge backend as firms publish; not server-controlled.
 
 ### institution_rating_detail
 - **Read Only = true** — Reads per-institution historical ratings and target-price history
@@ -120,7 +120,7 @@ Shared annotation semantics for this group:
 - **Destructive = false** — Reading consensus estimates writes nothing.
 - **Idempotent = true** — Same symbol returns the same consensus snapshot per call.
 - **Open World = true** — Consensus figures aggregate external analyst estimates that revise over
-  time on the LongPort backend; not server-controlled.
+  time on the Longbridge backend; not server-controlled.
 
 ### valuation
 - **Read Only = true** — Reads a valuation overview (PE/PB/PS/dividend_yield with current,
@@ -176,7 +176,7 @@ Shared annotation semantics for this group:
   founded_year, website, exchange, industry, market_cap, business summary). Read-only fetch.
 - **Destructive = false** — Reading the profile writes nothing.
 - **Idempotent = true** — The same symbol returns the same profile per call.
-- **Open World = true** — Company data is maintained externally on the LongPort backend and
+- **Open World = true** — Company data is maintained externally on the Longbridge backend and
   updates with disclosures (e.g. market_cap moves daily); outside server control.
 
 ### executive
@@ -282,7 +282,7 @@ Shared annotation semantics for this group:
   range. Query only; it computes/reads results without changing account state.
 - **Destructive = false** — Reading P&L analysis writes nothing to the account.
 - **Idempotent = true** — The same start/end range returns the same summary per call.
-- **Open World = true** — The analysis is computed on the external LongPort backend from account
+- **Open World = true** — The analysis is computed on the external Longbridge backend from account
   and market data that update over time; not server-controlled.
 
 ### profit_analysis_detail
@@ -339,7 +339,7 @@ Shared annotation semantics for this group:
   `GET /v1/asset/cash/short-margin`. Read-only.
 - **Destructive = false** — Reading short-margin details modifies no account or position state.
 - **Idempotent = true** — Repeated calls return the same margin details with no side effect.
-- **Open World = true** — Margin figures are maintained on the external LongPort backend and
+- **Open World = true** — Margin figures are maintained on the external Longbridge backend and
   update with positions, rates, and market data; outside server control.
 
 ### short_trades

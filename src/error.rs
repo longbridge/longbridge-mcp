@@ -2,8 +2,8 @@ use rmcp::model::ErrorData as McpError;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("longport: {0}")]
-    LongPort(Box<longport::Error>),
+    #[error("longbridge: {0}")]
+    Longbridge(Box<longbridge::Error>),
     #[error("serialize: {0}")]
     Serialize(#[from] serde_json::Error),
     #[error("http: {0}")]
@@ -14,16 +14,16 @@ pub enum Error {
     Other(String),
 }
 
-impl From<longport::Error> for Error {
-    fn from(err: longport::Error) -> Self {
-        Self::LongPort(Box::new(err))
+impl From<longbridge::Error> for Error {
+    fn from(err: longbridge::Error) -> Self {
+        Self::Longbridge(Box::new(err))
     }
 }
 
 impl Error {
-    /// Shorthand for use with `.map_err(Error::longport)`.
-    pub fn longport(err: longport::Error) -> Self {
-        Self::LongPort(Box::new(err))
+    /// Shorthand for use with `.map_err(Error::longbridge)`.
+    pub fn longbridge(err: longbridge::Error) -> Self {
+        Self::Longbridge(Box::new(err))
     }
 }
 

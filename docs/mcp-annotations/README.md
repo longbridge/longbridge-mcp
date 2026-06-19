@@ -1,7 +1,7 @@
 # MCP Tool Annotations — OpenAI Submission Review
 
 This directory addresses two items from the OpenAI MCP submission review for the
-LongPort MCP server:
+Longbridge MCP server:
 
 1. **Every tool must explicitly set `readOnlyHint`, `openWorldHint`, and
    `destructiveHint`.** (Mandatory — fixed in code.)
@@ -42,7 +42,7 @@ Per the [MCP spec — Tool Annotations](https://modelcontextprotocol.io/specific
 | `readOnlyHint = true` | The tool does not modify its environment — it is a pure read. |
 | `destructiveHint = true` | The tool may perform destructive (irreversible / overwriting / deleting) updates. `false` = updates are additive or non-destructive. Only meaningful when `readOnlyHint = false`; for a read-only tool it is trivially `false` because the tool performs no updates at all. |
 | `idempotentHint = true` | Repeated calls with the same arguments have no additional effect beyond the first. |
-| `openWorldHint = true` | The tool interacts with external entities outside the server's closed system. Here, **every** tool reaches the LongPort market/brokerage backend over the network, whose responses change with the live market and are not controlled by this server — hence `true` everywhere. |
+| `openWorldHint = true` | The tool interacts with external entities outside the server's closed system. Here, **every** tool reaches the Longbridge market/brokerage backend over the network, whose responses change with the live market and are not controlled by this server — hence `true` everywhere. |
 
 ## 2. Per-tool annotation justifications
 
@@ -91,6 +91,6 @@ on each tool. Currently **14** tools declare a typed `output_schema` (via
 
 This is a recommendation, not a submission blocker. Adding output schemas for
 the rest is tracked separately — most return loosely-typed JSON proxied straight
-from the upstream LongPort API, so each needs a typed `output::*` struct
+from the upstream Longbridge API, so each needs a typed `output::*` struct
 (matching the post-`to_tool_json` snake_case + RFC3339 shape) before its tool
 can reference it. See `src/tools/output.rs` for the established pattern.

@@ -2,11 +2,11 @@
 
 ## Overview
 
-LongPort MCP Server is a **stateless** Rust service that exposes LongPort financial data and trading capabilities through the [Model Context Protocol](https://modelcontextprotocol.io/) (MCP). It translates MCP tool calls into LongPort SDK and HTTP API calls, handling authentication, JSON response transformation, and metrics collection.
+Longbridge MCP Server is a **stateless** Rust service that exposes Longbridge financial data and trading capabilities through the [Model Context Protocol](https://modelcontextprotocol.io/) (MCP). It translates MCP tool calls into Longbridge SDK and HTTP API calls, handling authentication, JSON response transformation, and metrics collection.
 
 ```
 ┌─────────────┐         ┌──────────────────────┐         ┌──────────────────┐
-│  MCP Client │  HTTP   │  LongPort MCP      │  SDK /  │  LongPort      │
+│  MCP Client │  HTTP   │  Longbridge MCP      │  SDK /  │  Longbridge      │
 │ (Claude,    │ Bearer  │  Server              │  HTTP   │  OpenAPI         │
 │  etc.)      │────────▶│                      │────────▶│                  │
 │             │◀────────│  (stateless)         │◀────────│  (quote, trade,  │
@@ -15,7 +15,7 @@ LongPort MCP Server is a **stateless** Rust service that exposes LongPort financ
                                │
                                ▼
                         ┌──────────────┐
-                        │  LongPort  │
+                        │  Longbridge  │
                         │  OAuth       │
                         │  Server      │
                         └──────────────┘
@@ -25,14 +25,14 @@ LongPort MCP Server is a **stateless** Rust service that exposes LongPort financ
 
 1. **Stateless** — No sessions, no database. Each request carries a Bearer token; the server creates SDK contexts on the fly and discards them after use.
 
-2. **Direct OAuth** — The server does not proxy OAuth. It publishes [RFC 9728](https://datatracker.ietf.org/doc/html/rfc9728) Protected Resource Metadata pointing MCP clients directly to LongPort's OAuth authorization server.
+2. **Direct OAuth** — The server does not proxy OAuth. It publishes [RFC 9728](https://datatracker.ietf.org/doc/html/rfc9728) Protected Resource Metadata pointing MCP clients directly to Longbridge's OAuth authorization server.
 
 3. **Streaming JSON transformation** — Responses are transformed (snake_case, timestamp conversion, counter_id mapping) during serialization via a custom `serde::Serializer` wrapper, avoiding intermediate allocations.
 
 ## Request Lifecycle
 
 ```
-1. MCP Client sends POST /mcp with Authorization: Bearer <longport_token>
+1. MCP Client sends POST /mcp with Authorization: Bearer <longbridge_token>
 
 2. Auth middleware extracts token, stores as BearerToken in request extensions
 
@@ -42,7 +42,7 @@ LongPort MCP Server is a **stateless** Rust service that exposes LongPort financ
    a. Extracts McpContext (token + Accept-Language) from request
    b. Creates Config via OAuth::from_token(token)
    c. Creates QuoteContext / TradeContext / HttpClient as needed
-   d. Calls the LongPort SDK or HTTP API
+   d. Calls the Longbridge SDK or HTTP API
    e. Serializes the response through TransformSerializer
    f. Returns CallToolResult with transformed JSON
    g. Config and contexts are dropped (connections closed)
@@ -90,7 +90,7 @@ src/
 The server implements the **resource server** role from the MCP OAuth 2.1 spec.
 
 ```
-MCP Client                        MCP Server                    LongPort OAuth
+MCP Client                        MCP Server                    Longbridge OAuth
     │                                  │                              │
     ├─ POST /mcp (no token) ──────────▶│                              │
     │◀── 401 + WWW-Authenticate ───────┤                              │
@@ -102,7 +102,7 @@ MCP Client                        MCP Server                    LongPort OAuth
     │      ["https://openapi..."] } ───┤                              │
     │                                  │                              │
     ├─ OAuth flow directly with ───────┼─────────────────────────────▶│
-    │  LongPort (PKCE, etc.)         │                              │
+    │  Longbridge (PKCE, etc.)         │                              │
     │◀── access_token ─────────────────┼──────────────────────────────┤
     │                                  │                              │
     ├─ POST /mcp + Bearer token ──────▶│                              │
@@ -118,7 +118,7 @@ Every tool call receives an `McpContext` struct extracted from the HTTP request:
 
 ```rust
 pub struct McpContext {
-    pub token: String,             // LongPort access token
+    pub token: String,             // Longbridge access token
     pub language: Option<String>,  // Accept-Language header
 }
 ```
@@ -164,7 +164,7 @@ SDK tools create `QuoteContext`/`TradeContext`/`ContentContext` per request (Web
 
 ## Symbol Mapping
 
-LongPort HTTP APIs use an internal `counter_id` format (`ST/US/TSLA`, `ETF/US/SPY`, `IX/HK/HSI`). The MCP server converts between this and the user-facing symbol format (`TSLA.US`, `SPY.US`, `HSI.HK`):
+Longbridge HTTP APIs use an internal `counter_id` format (`ST/US/TSLA`, `ETF/US/SPY`, `IX/HK/HSI`). The MCP server converts between this and the user-facing symbol format (`TSLA.US`, `SPY.US`, `HSI.HK`):
 
 - **Request path**: `symbol_to_counter_id()` converts tool input parameters before HTTP calls
 - **Response path**: `TransformSerializer` automatically renames `counter_id` → `symbol` and converts values
@@ -185,14 +185,14 @@ Every tool call is wrapped with `measured_tool_call()` which records timing and 
 
 ## Configuration
 
-The server reads configuration from CLI arguments (highest priority), a JSON config file (`~/.longport/mcp/config.json`), and environment variables. Key settings:
+The server reads configuration from CLI arguments (highest priority), a JSON config file (`~/.longbridge/mcp/config.json`), and environment variables. Key settings:
 
 | Setting | Purpose |
 |---------|---------|
 | `bind` | Listen address (default: `127.0.0.1:8000`) |
 | `base_url` | Public URL for OAuth metadata (**required for public deployments**) |
 | `tls_cert` / `tls_key` | Enable HTTPS with PEM certificate and key |
-| `LONGPORT_HTTP_URL` | Override LongPort API endpoint (env var) |
+| `LONGBRIDGE_HTTP_URL` | Override Longbridge API endpoint (env var) |
 
 ## Deployment
 

@@ -84,7 +84,7 @@ fn transform_news_item(item: &serde_json::Value) -> serde_json::Value {
         }
     }
     if let Some(id) = obj.get("id").and_then(|v| v.as_str()) {
-        let url = format!("https://longportapp.com/news/{id}.md");
+        let url = format!("https://longbridge.com/news/{id}.md");
         obj.insert("url".to_string(), serde_json::Value::String(url));
     }
     serde_json::Value::Object(obj)
@@ -120,7 +120,7 @@ fn transform_topic_item(item: &serde_json::Value) -> serde_json::Value {
         }
     }
     if let Some(id) = obj.get("id").and_then(|v| v.as_str()) {
-        let url = format!("https://longportapp.com/topics/{id}.md");
+        let url = format!("https://longbridge.com/topics/{id}.md");
         obj.insert("url".to_string(), serde_json::Value::String(url));
     }
     serde_json::Value::Object(obj)

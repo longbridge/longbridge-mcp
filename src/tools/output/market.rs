@@ -3,7 +3,7 @@
 //!
 //! These tools are mostly HTTP pass-throughs (`http_get_tool` /
 //! `http_get_tool_unix` / `http_post_tool_unix`) that stream the upstream
-//! LongPort response through the standard transform pipeline
+//! Longbridge response through the standard transform pipeline
 //! (`transform_json`): keys are converted to snake_case, `counter_id`/
 //! `counter_ids` are renamed to `symbol`/`symbols`, `aaid`/`account_channel`
 //! are nulled, `*_at` fields and timestamps become RFC3339 strings, and any

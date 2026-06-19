@@ -7,16 +7,16 @@ use serde::Serialize;
 
 use crate::auth::AppState;
 
-fn longport_oauth_url() -> String {
-    std::env::var("LONGPORT_HTTP_URL")
-        .unwrap_or_else(|_| "https://openapi.longportapp.com".to_string())
+fn longbridge_oauth_url() -> String {
+    std::env::var("LONGBRIDGE_HTTP_URL")
+        .unwrap_or_else(|_| "https://openapi.longbridge.com".to_string())
 }
 
 /// Derives `scheme://host` from the incoming request headers.
 ///
 /// Header priority for the host:
 ///   1. `X-Forwarded-Host` — set by the reverse proxy to the external hostname
-///      (e.g. `openapi.longportapp.xyz` when the proxy rewrites the Host).
+///      (e.g. `openapi.longbridge.xyz` when the proxy rewrites the Host).
 ///   2. `Host` — the hostname the client actually connected to (correct for
 ///      direct connections; may be the internal backend host behind a proxy).
 ///   3. Falls back to `fallback` (`--base-url`) when both are absent.
@@ -57,7 +57,7 @@ pub async fn protected_resource_metadata(
 ) -> Json<ProtectedResourceMetadata> {
     Json(ProtectedResourceMetadata {
         resource: resource_url_from_headers(&headers, &state.base_url),
-        authorization_servers: vec![longport_oauth_url()],
+        authorization_servers: vec![longbridge_oauth_url()],
         scopes_supported: vec!["openapi".to_string()],
     })
 }
@@ -84,7 +84,7 @@ pub(crate) struct ServerCard {
 
 static SERVER_CARD: LazyLock<ServerCard> = LazyLock::new(|| ServerCard {
     server_info: ServerInfoCard {
-        name: "LongPort MCP",
+        name: "Longbridge MCP",
         version: env!("CARGO_PKG_VERSION"),
     },
     authentication: AuthCard {

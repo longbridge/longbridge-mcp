@@ -1,32 +1,32 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/longportapp/longport-mcp/main/docs/logo.png" alt="LongPort" width="120" height="120">
+  <img src="https://raw.githubusercontent.com/longbridge/longbridge-mcp/main/docs/logo.png" alt="Longbridge" width="120" height="120">
 </p>
 
-<h1 align="center">LongPort MCP Server</h1>
+<h1 align="center">Longbridge MCP Server</h1>
 
 <p align="center">
-  <a href="https://registry.modelcontextprotocol.io/v0/servers/com.longportapp%2Fmcp/versions"><img alt="Official MCP Registry" src="https://img.shields.io/badge/MCP%20Registry-com.longportapp%2Fmcp-0a66c2"></a>
-  <a href="https://smithery.ai/servers/longport-official/longport-mcp"><img alt="Smithery" src="https://smithery.ai/badge/longport-official/longport-mcp"></a>
-  <a href="https://lobehub.com/mcp/longport-longport-mcp"><img alt="LobeHub" src="https://lobehub.com/badge/mcp/longport-longport-mcp"></a>
-  <a href="https://glama.ai/mcp/servers/longport/longport-mcp"><img alt="longport-mcp MCP server" src="https://glama.ai/mcp/servers/longport/longport-mcp/badges/score.svg"></a>
-  <a href="https://github.com/longportapp/longport-mcp/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/badge/license-MIT-blue"></a>
-  <a href="https://longportapp.com"><img alt="LongPort" src="https://img.shields.io/badge/brokerage-LongPort-ffe000?labelColor=000"></a>
+  <a href="https://registry.modelcontextprotocol.io/v0/servers/com.longbridge%2Fmcp/versions"><img alt="Official MCP Registry" src="https://img.shields.io/badge/MCP%20Registry-com.longbridge%2Fmcp-0a66c2"></a>
+  <a href="https://smithery.ai/servers/longbridge-official/longbridge-mcp"><img alt="Smithery" src="https://smithery.ai/badge/longbridge-official/longbridge-mcp"></a>
+  <a href="https://lobehub.com/mcp/longbridge-longbridge-mcp"><img alt="LobeHub" src="https://lobehub.com/badge/mcp/longbridge-longbridge-mcp"></a>
+  <a href="https://glama.ai/mcp/servers/longbridge/longbridge-mcp"><img alt="longbridge-mcp MCP server" src="https://glama.ai/mcp/servers/longbridge/longbridge-mcp/badges/score.svg"></a>
+  <a href="https://github.com/longbridge/longbridge-mcp/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/badge/license-MIT-blue"></a>
+  <a href="https://longbridge.com"><img alt="Longbridge" src="https://img.shields.io/badge/brokerage-Longbridge-ffe000?labelColor=000"></a>
 </p>
 
-Official MCP server for the [LongPort](https://longportapp.com) brokerage. **145 tools** across real-time quotes, options, order routing, fundamentals, analyst ratings, calendars, IPO, price alerts, DCA plans, portfolio analytics and community sharelists — covering **US and HK markets**. Built with Rust using [rmcp](https://github.com/anthropics/rmcp) and [axum](https://github.com/tokio-rs/axum).
+Official MCP server for the [Longbridge](https://longbridge.com) brokerage. **145 tools** across real-time quotes, options, order routing, fundamentals, analyst ratings, calendars, IPO, price alerts, DCA plans, portfolio analytics and community sharelists — covering **US and HK markets**. Built with Rust using [rmcp](https://github.com/anthropics/rmcp) and [axum](https://github.com/tokio-rs/axum).
 
 ## Features
 
 - **145 MCP tools** across 13 categories: quotes, trading, fundamentals, screener, market data, calendars, IPO, portfolio, alerts, content, account statements, DCA, and community sharelists
-- **Stateless architecture** -- each request carries a Bearer token forwarded directly to the LongPort SDK; no server-side sessions or database
-- **OAuth 2.1 resource metadata** compliant with RFC 9728, pointing clients to LongPort OAuth for authorization
+- **Stateless architecture** -- each request carries a Bearer token forwarded directly to the Longbridge SDK; no server-side sessions or database
+- **OAuth 2.1 resource metadata** compliant with RFC 9728, pointing clients to Longbridge OAuth for authorization
 - **JSON response transformation** -- field names normalized to snake_case, timestamps converted to RFC 3339, internal counter_id values mapped to human-readable symbols
 - **Prometheus metrics** for monitoring tool calls, latency, and errors
 - **Configurable** via CLI arguments or a JSON config file (CLI takes precedence)
 
 ## Connect from an MCP client
 
-LongPort operates a hosted endpoint at `https://mcp.longportapp.com`, so most users don't need to run their own server — just point your MCP client at it and complete OAuth when prompted. Authorization is auto-discovered via RFC 9728.
+Longbridge operates a hosted endpoint at `https://openapi.longbridge.com/mcp`, so most users don't need to run their own server — just point your MCP client at it and complete OAuth when prompted. Authorization is auto-discovered via RFC 9728.
 
 ### Claude Desktop
 
@@ -35,19 +35,19 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
 ```json
 {
   "mcpServers": {
-    "longport": {
-      "url": "https://mcp.longportapp.com"
+    "longbridge": {
+      "url": "https://openapi.longbridge.com/mcp"
     }
   }
 }
 ```
 
-Restart Claude Desktop. On first tool invocation it will open a browser to complete the LongPort OAuth flow.
+Restart Claude Desktop. On first tool invocation it will open a browser to complete the Longbridge OAuth flow.
 
 ### Claude Code
 
 ```bash
-claude mcp add --transport http longport https://mcp.longportapp.com
+claude mcp add --transport http longbridge https://openapi.longbridge.com/mcp
 ```
 
 ### Zed
@@ -57,18 +57,18 @@ Add to your Zed `settings.json` (open with `zed: open settings`):
 ```json
 {
   "context_servers": {
-    "longport": {
-      "url": "https://mcp.longportapp.com"
+    "longbridge": {
+      "url": "https://openapi.longbridge.com/mcp"
     }
   }
 }
 ```
 
-On first use, Zed will open a browser to complete the LongPort OAuth flow.
+On first use, Zed will open a browser to complete the Longbridge OAuth flow.
 
 ### Cursor / Cline / Windsurf / other MCP clients
 
-Point the client at `https://mcp.longportapp.com` using transport `streamable-http`. OAuth is auto-discovered via RFC 9728; no manual token required.
+Point the client at `https://openapi.longbridge.com/mcp` using transport `streamable-http`. OAuth is auto-discovered via RFC 9728; no manual token required.
 
 ---
 
@@ -81,7 +81,7 @@ Prefer running your own instance? Use Docker or build from source.
 ```bash
 docker run -p 8443:8443 \
   -v /path/to/certs:/certs:ro \
-  ghcr.io/longportapp/longport-mcp \
+  ghcr.io/longbridge/longbridge-mcp \
   --bind 0.0.0.0:8443 \
   --base-url https://mcp.example.com \
   --tls-cert /certs/cert.pem \
@@ -94,18 +94,18 @@ docker run -p 8443:8443 \
 
 ```bash
 cargo build --release
-./target/release/longport-mcp
+./target/release/longbridge-mcp
 ```
 
 ### Configure
 
-Create a config file at `~/.longport/mcp/config.json` (optional):
+Create a config file at `~/.longbridge/mcp/config.json` (optional):
 
 ```json
 {
   "bind": "127.0.0.1:8000",
   "base_url": "https://mcp.example.com",
-  "log_dir": "/var/log/longport-mcp"
+  "log_dir": "/var/log/longbridge-mcp"
 }
 ```
 
@@ -119,25 +119,25 @@ Create a config file at `~/.longport/mcp/config.json` (optional):
 | TLS certificate | `tls_cert` | `--tls-cert` | *(none)* | PEM certificate file for HTTPS |
 | TLS private key | `tls_key` | `--tls-key` | *(none)* | PEM private key file for HTTPS |
 
-CLI arguments override config file values. The config file is read from `~/.longport/mcp/config.json` (override with `LONGPORT_MCP_CONFIG_DIR`).
+CLI arguments override config file values. The config file is read from `~/.longbridge/mcp/config.json` (override with `LONGBRIDGE_MCP_CONFIG_DIR`).
 
 When `tls_cert` and `tls_key` are both set, the server runs HTTPS. Otherwise it falls back to HTTP. The `base_url` defaults to `https://localhost:{port}` with TLS or `http://localhost:{port}` without.
 
 ### Environment Variables
 
-These are **advanced settings** — most users do not need to change them. They are primarily useful for connecting to non-production LongPort environments or debugging SDK internals.
+These are **advanced settings** — most users do not need to change them. They are primarily useful for connecting to non-production Longbridge environments or debugging SDK internals.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `LONGPORT_MCP_CONFIG_DIR` | `~/.longport/mcp` | Config file directory |
-| `LONGPORT_HTTP_URL` | `https://openapi.longportapp.com` | LongPort API base URL (also used for OAuth metadata) |
-| `LONGPORT_QUOTE_WS_URL` | `wss://openapi-quote.longportapp.com/v2` | Quote WebSocket endpoint |
-| `LONGPORT_TRADE_WS_URL` | `wss://openapi-trade.longportapp.com/v2` | Trade WebSocket endpoint |
-| `LONGPORT_LOG_PATH` | *(none)* | SDK internal log path |
+| `LONGBRIDGE_MCP_CONFIG_DIR` | `~/.longbridge/mcp` | Config file directory |
+| `LONGBRIDGE_HTTP_URL` | `https://openapi.longbridge.com` | Longbridge API base URL (also used for OAuth metadata) |
+| `LONGBRIDGE_QUOTE_WS_URL` | `wss://openapi-quote.longbridge.com/v2` | Quote WebSocket endpoint |
+| `LONGBRIDGE_TRADE_WS_URL` | `wss://openapi-trade.longbridge.com/v2` | Trade WebSocket endpoint |
+| `LONGBRIDGE_LOG_PATH` | *(none)* | SDK internal log path |
 
 ## Authentication
 
-The server expects a LongPort OAuth access token in the `Authorization: Bearer <token>` header. On missing or invalid auth, it returns 401 with a `WWW-Authenticate` header pointing to the protected resource metadata endpoint, which in turn directs MCP clients to the LongPort OAuth authorization server.
+The server expects a Longbridge OAuth access token in the `Authorization: Bearer <token>` header. On missing or invalid auth, it returns 401 with a `WWW-Authenticate` header pointing to the protected resource metadata endpoint, which in turn directs MCP clients to the Longbridge OAuth authorization server.
 
 ## Claude Code integration
 
@@ -145,21 +145,21 @@ The one-liner in [Connect → Claude Code](#claude-code) gets you connected. Bel
 
 ```bash
 # Hosted — use this unless you have a reason not to
-claude mcp add --transport http longport https://mcp.longportapp.com
+claude mcp add --transport http longbridge https://openapi.longbridge.com/mcp
 
 # Local self-hosted instance (see Self-hosting above)
-claude mcp add --transport http longport-local http://localhost:8000/mcp
+claude mcp add --transport http longbridge-local http://localhost:8000/mcp
 
 # Inspect
 claude mcp list                         # registered servers
-claude mcp get longport               # config + auth status of one server
-claude mcp remove longport            # unregister
+claude mcp get longbridge               # config + auth status of one server
+claude mcp remove longbridge            # unregister
 
-# Re-trigger OAuth (e.g. after token revocation on the LongPort side)
-claude mcp logout longport
+# Re-trigger OAuth (e.g. after token revocation on the Longbridge side)
+claude mcp logout longbridge
 ```
 
-On the first tool invocation, Claude Code reads the `WWW-Authenticate` challenge from the server, fetches `/.well-known/oauth-protected-resource` (RFC 9728), and opens your browser for the LongPort OAuth flow. Access tokens are cached per-session and refreshed automatically.
+On the first tool invocation, Claude Code reads the `WWW-Authenticate` challenge from the server, fetches `/.well-known/oauth-protected-resource` (RFC 9728), and opens your browser for the Longbridge OAuth flow. Access tokens are cached per-session and refreshed automatically.
 
 ## API Endpoints
 

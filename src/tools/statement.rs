@@ -1,5 +1,5 @@
-use longport::AssetContext;
-use longport::asset::{GetStatementListOptions, GetStatementOptions, StatementType};
+use longbridge::AssetContext;
+use longbridge::asset::{GetStatementListOptions, GetStatementOptions, StatementType};
 use rmcp::ErrorData as McpError;
 use rmcp::model::CallToolResult;
 use rmcp::schemars::JsonSchema;
@@ -68,7 +68,7 @@ pub async fn statement_list(
         .page_size(limit);
 
     let ctx = AssetContext::new(mctx.create_config());
-    let result = ctx.statements(options).await.map_err(Error::longport)?;
+    let result = ctx.statements(options).await.map_err(Error::longbridge)?;
     tool_json(&result)
 }
 
@@ -81,6 +81,6 @@ pub async fn statement_export(
     let resp = ctx
         .statement_download_url(options)
         .await
-        .map_err(Error::longport)?;
+        .map_err(Error::longbridge)?;
     tool_json(&resp)
 }

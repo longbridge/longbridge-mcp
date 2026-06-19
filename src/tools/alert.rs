@@ -102,7 +102,7 @@ async fn alert_set_enabled(
         .map_err(|_| McpError::invalid_params("invalid alert_id", None))?;
 
     let list_data = {
-        use longport::httpclient::{Json, Method};
+        use longbridge::httpclient::{Json, Method};
         let params: Vec<(&str, &str)> = vec![];
         let resp = client
             .request(Method::GET, "/v1/notify/reminders")

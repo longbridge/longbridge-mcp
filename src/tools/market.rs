@@ -1,5 +1,5 @@
-use longport::FundamentalContext;
-use longport::fundamental::types::AssetAllocationResponse;
+use longbridge::FundamentalContext;
+use longbridge::fundamental::types::AssetAllocationResponse;
 use reqwest::Method;
 use rmcp::ErrorData as McpError;
 use rmcp::model::CallToolResult;
@@ -62,7 +62,7 @@ pub struct IndexSymbolParam {
 
 fn trade_status_label(code: i64) -> &'static str {
     i32::try_from(code)
-        .map(longport::market::TradeStatus::from)
+        .map(longbridge::market::TradeStatus::from)
         .unwrap_or_default()
         .name()
 }
@@ -260,7 +260,7 @@ async fn etf_asset_allocation(
     let result = ctx
         .etf_asset_allocation(symbol)
         .await
-        .map_err(Error::longport)?;
+        .map_err(Error::longbridge)?;
     if result.info.is_empty() {
         Ok(None)
     } else {

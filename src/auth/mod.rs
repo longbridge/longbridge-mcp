@@ -8,7 +8,7 @@ use axum::response::Response;
 use rmcp::transport::streamable_http_server::session::never::NeverSessionManager;
 use rmcp::transport::streamable_http_server::{StreamableHttpServerConfig, StreamableHttpService};
 
-use crate::tools::{self, LongPort};
+use crate::tools::{self, Longbridge};
 
 /// Per-locale embedded translation files. Each entry is one
 /// `(language code, content of locales/<code>/<filename>)` pair.
@@ -174,7 +174,7 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route("/mcp/scopes.json", axum::routing::get(scopes_json));
 
     // Build an auth-wrapped MCP service for one mounting point. The same
-    // `LongPort` MCP server is mounted several times; the only thing that
+    // `Longbridge` MCP server is mounted several times; the only thing that
     // differs is the auth `mode`:
     //   - `AuthMode::Required` for the main endpoints (`/mcp` and root): a
     //     missing token yields 401, exactly as before this feature.
@@ -182,7 +182,7 @@ pub fn create_router(state: Arc<AppState>) -> Router {
     //     are allowed through into the `authenticate` reverse-auth flow.
     let make_mcp_with_auth = |base_url: String, mode: middleware::AuthMode| {
         let svc = StreamableHttpService::new(
-            move || Ok(LongPort),
+            move || Ok(Longbridge),
             Arc::new(NeverSessionManager::default()),
             StreamableHttpServerConfig::default()
                 .with_stateful_mode(false)

@@ -28,7 +28,7 @@ use rmcp::serde::Serialize;
 
 /// Returned by `topic_detail`. Full details of a single community topic.
 ///
-/// SDK-typed (`longport::content::OwnedTopic`) and serialized via `tool_json`.
+/// SDK-typed (`longbridge::content::OwnedTopic`) and serialized via `tool_json`.
 /// `created_at` / `updated_at` are emitted as RFC3339 strings.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct TopicDetailResponse {
@@ -98,7 +98,7 @@ pub struct TopicCreateResponse {
 
 /// Returned by `topic_create_reply`. The created reply.
 ///
-/// SDK-typed (`longport::content::TopicReply`) and serialized via `tool_json`.
+/// SDK-typed (`longbridge::content::TopicReply`) and serialized via `tool_json`.
 /// `created_at` is emitted as an RFC3339 string.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct TopicCreateReplyResponse {

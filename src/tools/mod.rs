@@ -23,7 +23,7 @@ const AUTHENTICATE_TOOL_NAME: &str = "authenticate";
 tokio::task_local! {
     /// The name of the tool currently executing, scoped around each tool call by
     /// [`measured_tool_call`]. Read by [`McpContext::create_http_client`] and
-    /// [`McpContext::create_config`] to tag every upstream LongPort request
+    /// [`McpContext::create_config`] to tag every upstream Longbridge request
     /// with an `x-mcp-tool` header (the MCP equivalent of the CLI's `x-cli-cmd`),
     /// so server-side stats can attribute requests per tool. Absent outside a
     /// tool call (e.g. server init), in which case no tag is added.
@@ -76,9 +76,9 @@ where
         .expect("output schema must be a valid JSON Schema with root type \"object\"")
 }
 
-/// LongPort MCP tool server (stateless).
+/// Longbridge MCP tool server (stateless).
 #[derive(Debug, Clone)]
-pub struct LongPort;
+pub struct Longbridge;
 
 pub(crate) fn tool_result(json: String) -> CallToolResult {
     // MCP spec §tool-result: a tool that declares an `outputSchema` MUST
@@ -107,7 +107,7 @@ pub struct McpContext {
     /// The originating MCP client's `User-Agent` (e.g. `claude-code/2.1.89 (cli)`),
     /// when the client sent one. Some clients (e.g. Codex) send none.
     pub client_user_agent: Option<String>,
-    /// Extra headers to forward to upstream LongPort services.
+    /// Extra headers to forward to upstream Longbridge services.
     pub extra_headers: Vec<(String, String)>,
 }
 
@@ -121,7 +121,7 @@ pub(crate) const QUOTE_CMD_PATH: &str = "/v1/quote/cmd";
 /// error are ignored — the server only needs the access-log entry. Extracted as
 /// its own awaitable function so the integration test can drive it against a
 /// local server deterministically.
-pub(crate) async fn send_quote_cmd(client: &longport::httpclient::HttpClient) {
+pub(crate) async fn send_quote_cmd(client: &longbridge::httpclient::HttpClient) {
     let _ = client
         .request(reqwest::Method::GET, QUOTE_CMD_PATH)
         .response::<String>()
@@ -129,7 +129,7 @@ pub(crate) async fn send_quote_cmd(client: &longport::httpclient::HttpClient) {
         .await;
 }
 
-/// Serializes tests that mutate the process-global `LONGPORT_HTTP_URL` env var
+/// Serializes tests that mutate the process-global `LONGBRIDGE_HTTP_URL` env var
 /// to redirect the SDK base URL at a local capture server. Multiple such tests
 /// run concurrently in one binary and would otherwise clobber each other's URL.
 ///
@@ -142,11 +142,11 @@ pub(crate) static HTTP_URL_ENV_LOCK: std::sync::LazyLock<tokio::sync::Mutex<()>>
 
 impl McpContext {
     /// This server's own identity as an RFC 9110 product token.
-    const SELF_USER_AGENT: &'static str = concat!("longport-mcp/", env!("CARGO_PKG_VERSION"));
+    const SELF_USER_AGENT: &'static str = concat!("longbridge-mcp/", env!("CARGO_PKG_VERSION"));
 
     /// Builds the upstream `User-Agent` as an RFC 9110 product-token chain: the
     /// originating MCP client's UA (when present) followed by this server's own
-    /// token, e.g. `claude-code/2.1.89 (cli) longport-mcp/0.4.6`. Acting as a
+    /// token, e.g. `claude-code/2.1.89 (cli) longbridge-mcp/0.4.6`. Acting as a
     /// proxy, we append our token rather than inventing a custom header, so the
     /// backend sees both the client and this server in a single standard field.
     /// Falls back to just our token when the client sent no UA.
@@ -157,21 +157,21 @@ impl McpContext {
         }
     }
 
-    pub fn create_config(&self) -> Arc<longport::Config> {
+    pub fn create_config(&self) -> Arc<longbridge::Config> {
         let mut config =
-            longport::Config::from_oauth(longport::oauth::OAuth::from_token(&self.token))
+            longbridge::Config::from_oauth(longbridge::oauth::OAuth::from_token(&self.token))
                 .dont_print_quote_packages()
                 .enable_overnight()
                 // Identify MCP-originated requests on the Context path (REST and
-                // WebSocket upgrades), mirroring how longport-cli tags itself.
+                // WebSocket upgrades), mirroring how longbridge-cli tags itself.
                 .header("user-agent", self.user_agent());
         if let Some(ref lang) = self.language {
             let lb_lang = if lang.contains("zh-CN") || lang.contains("zh-Hans") {
-                longport::Language::ZH_CN
+                longbridge::Language::ZH_CN
             } else if lang.contains("zh") {
-                longport::Language::ZH_HK
+                longbridge::Language::ZH_HK
             } else {
-                longport::Language::EN
+                longbridge::Language::EN
             };
             config = config.language(lb_lang);
         }
@@ -183,13 +183,13 @@ impl McpContext {
         Arc::new(config)
     }
 
-    pub fn create_http_client(&self) -> longport::httpclient::HttpClient {
-        let mut client = longport::httpclient::HttpClient::new(
-            longport::httpclient::HttpClientConfig::from_oauth(longport::oauth::OAuth::from_token(
-                &self.token,
-            )),
+    pub fn create_http_client(&self) -> longbridge::httpclient::HttpClient {
+        let mut client = longbridge::httpclient::HttpClient::new(
+            longbridge::httpclient::HttpClientConfig::from_oauth(
+                longbridge::oauth::OAuth::from_token(&self.token),
+            ),
         );
-        // NOTE: This is very important for passing headers to upstream LongPort services.
+        // NOTE: This is very important for passing headers to upstream Longbridge services.
         // Do not remove this unless you have a good reason and know exactly which headers to forward instead.
         for (key, value) in &self.extra_headers {
             client = client.header(key.as_str(), value.as_str());
@@ -225,9 +225,9 @@ impl McpContext {
     /// `QuoteContext::new(self.create_config())` at every quote tool entry point
     /// so the otherwise-unlogged WebSocket request is counted. The push receiver
     /// is dropped immediately, matching the existing `let (ctx, _) = …` callers.
-    pub fn create_quote_context(&self) -> longport::quote::QuoteContext {
+    pub fn create_quote_context(&self) -> longbridge::quote::QuoteContext {
         self.track_quote_cmd();
-        let (ctx, _) = longport::quote::QuoteContext::new(self.create_config());
+        let (ctx, _) = longbridge::quote::QuoteContext::new(self.create_config());
         ctx
     }
 
@@ -239,7 +239,7 @@ impl McpContext {
 }
 
 /// Decodes the JWT payload (no signature verification) and extracts `account_channel`
-/// from the `sub` claim, which LongPort encodes as a nested JSON string.
+/// from the `sub` claim, which Longbridge encodes as a nested JSON string.
 fn decode_jwt_account_channel(token: &str) -> Option<String> {
     let payload_b64 = token.split('.').nth(1)?;
     let bytes = base64url_decode(payload_b64)?;
@@ -289,7 +289,7 @@ fn base64url_decode(input: &str) -> Option<Vec<u8>> {
     Some(out)
 }
 
-/// Headers that must not be forwarded to upstream LongPort services.
+/// Headers that must not be forwarded to upstream Longbridge services.
 /// These are either hop-by-hop headers or MCP/HTTP-level headers that only
 /// make sense for the client↔MCP-server leg, not the MCP-server↔upstream leg.
 const SKIP_FORWARD_HEADERS: &[&str] = &[
@@ -326,7 +326,7 @@ fn collect_headers(headers: &axum::http::HeaderMap) -> Vec<(String, String)> {
         .collect()
 }
 
-/// Whether the current request carries LongPort credentials.
+/// Whether the current request carries Longbridge credentials.
 ///
 /// True when the auth middleware attached a `BearerToken` (i.e. the client sent
 /// an `Authorization: Bearer` header). Used to (a) gate the tool list shown to
@@ -382,7 +382,7 @@ fn extract_context(ctx: &RequestContext<RoleServer>) -> Result<McpContext, McpEr
         token: token.0.clone(),
         language,
         client_user_agent,
-        // NOTE: This is very important for passing headers to upstream LongPort services.
+        // NOTE: This is very important for passing headers to upstream Longbridge services.
         // Do not remove this unless you have a good reason and know exactly which headers to forward instead.
         extra_headers: collect_headers(&parts.headers),
     })
@@ -451,10 +451,10 @@ fn tools_agent_endpoint() -> &'static [rmcp::model::Tool] {
 ///
 /// Shared by `ServerHandler::call_tool` (dispatch) and `ServerHandler::get_tool`
 /// (task-support validation, called by rmcp on every `CallToolRequest`).
-fn cached_router() -> &'static rmcp::handler::server::router::tool::ToolRouter<LongPort> {
+fn cached_router() -> &'static rmcp::handler::server::router::tool::ToolRouter<Longbridge> {
     use rmcp::handler::server::router::tool::ToolRouter;
-    static ROUTER: std::sync::OnceLock<ToolRouter<LongPort>> = std::sync::OnceLock::new();
-    ROUTER.get_or_init(LongPort::tool_router)
+    static ROUTER: std::sync::OnceLock<ToolRouter<Longbridge>> = std::sync::OnceLock::new();
+    ROUTER.get_or_init(Longbridge::tool_router)
 }
 
 /// Recursively remove `"null"` from JSON Schema `type` arrays.
@@ -500,7 +500,7 @@ use crate::tools::trade::{
 };
 
 #[tool_router(vis = "pub(crate)")]
-impl LongPort {
+impl Longbridge {
     /// Authenticate this MCP session using a one-time authorization code.
     #[tool(
         title = "Authenticate",
@@ -510,7 +510,7 @@ impl LongPort {
             idempotent_hint = false,
             open_world_hint = true
         ),
-        description = "Authenticate when you have no LongPort credentials yet (e.g. your client could not complete the browser OAuth flow). The user generates a one-time authorization code at https://open.longportapp.com/connect and pastes it to you; pass it as `auth_code`. On success the server returns an access token to use as the Bearer credential on subsequent requests, unlocking the full tool set. If you are not authenticated and the user has not provided a code, direct them to https://open.longportapp.com/connect to generate one."
+        description = "Authenticate when you have no Longbridge credentials yet (e.g. your client could not complete the browser OAuth flow). The user generates a one-time authorization code at https://open.longbridge.com/connect and pastes it to you; pass it as `auth_code`. On success the server returns an access token to use as the Bearer credential on subsequent requests, unlocking the full tool set. If you are not authenticated and the user has not provided a code, direct them to https://open.longbridge.com/connect to generate one."
     )]
     async fn authenticate(
         &self,
@@ -3538,10 +3538,10 @@ impl LongPort {
 }
 
 #[tool_handler(
-    name = "longport-mcp",
-    instructions = "LongPort OpenAPI MCP Server - provides market data, trading, and financial analysis tools"
+    name = "longbridge-mcp",
+    instructions = "Longbridge OpenAPI MCP Server - provides market data, trading, and financial analysis tools"
 )]
-impl ServerHandler for LongPort {
+impl ServerHandler for Longbridge {
     // NOTE: `get_info` is intentionally NOT overridden — the `initialize`
     // override below delegates to the `#[tool_handler]` macro default and only
     // swaps `instructions` for unauthenticated `/agent` sessions, so the main
@@ -3557,7 +3557,7 @@ impl ServerHandler for LongPort {
     /// pre-feature `initialize` response is unchanged. Unauthenticated
     /// `/agent` sessions instead get instructions that explicitly frame the
     /// endpoint as a temporary authorization channel, so AI clients do not
-    /// mistake `<host>/agent` for the LongPort MCP service address itself.
+    /// mistake `<host>/agent` for the Longbridge MCP service address itself.
     async fn initialize(
         &self,
         request: rmcp::model::InitializeRequestParams,
@@ -3570,11 +3570,11 @@ impl ServerHandler for LongPort {
         let mut info = self.get_info();
         if is_agent_endpoint(&context) && !is_authenticated(&context) {
             info.instructions = Some(format!(
-                "LongPort MCP AUTHORIZATION endpoint. The `/agent` path is only a temporary \
-                 channel for completing authorization — it is NOT the LongPort MCP service \
+                "Longbridge MCP AUTHORIZATION endpoint. The `/agent` path is only a temporary \
+                 channel for completing authorization — it is NOT the Longbridge MCP service \
                  address. Call the `authenticate` tool with a one-time authorization code (the \
                  user can generate one at {}), then follow the tool result: connect to the main \
-                 LongPort MCP service (same host, without the `/agent` path) using the \
+                 Longbridge MCP service (same host, without the `/agent` path) using the \
                  returned `Authorization: Bearer` token.",
                 crate::tools::authenticate::connect_page_url()
             ));
@@ -3677,16 +3677,20 @@ mod tests {
     #[test]
     fn user_agent_chains_client_then_self() {
         let ua = ctx_with_ua(Some("claude-code/2.1.89 (cli)")).user_agent();
-        assert!(ua.starts_with("claude-code/2.1.89 (cli) longport-mcp/"));
+        assert!(ua.starts_with("claude-code/2.1.89 (cli) longbridge-mcp/"));
     }
 
     #[test]
     fn user_agent_falls_back_to_self_when_client_absent() {
-        assert!(ctx_with_ua(None).user_agent().starts_with("longport-mcp/"));
+        assert!(
+            ctx_with_ua(None)
+                .user_agent()
+                .starts_with("longbridge-mcp/")
+        );
         assert!(
             ctx_with_ua(Some("   "))
                 .user_agent()
-                .starts_with("longport-mcp/")
+                .starts_with("longbridge-mcp/")
         );
     }
 
@@ -3745,9 +3749,9 @@ mod tests {
         let client = {
             let _env_guard = super::HTTP_URL_ENV_LOCK.lock().await;
             // SAFETY: guarded by HTTP_URL_ENV_LOCK; set before build, cleared after.
-            unsafe { std::env::set_var("LONGPORT_HTTP_URL", format!("http://{addr}")) };
+            unsafe { std::env::set_var("LONGBRIDGE_HTTP_URL", format!("http://{addr}")) };
             let client = mctx.create_http_client();
-            unsafe { std::env::remove_var("LONGPORT_HTTP_URL") };
+            unsafe { std::env::remove_var("LONGBRIDGE_HTTP_URL") };
             client
         };
         let _ = client
@@ -3762,7 +3766,7 @@ mod tests {
             .clone()
             .expect("echo server did not receive a request");
         assert!(
-            ua.starts_with("claude-code/2.1.89 (cli) longport-mcp/"),
+            ua.starts_with("claude-code/2.1.89 (cli) longbridge-mcp/"),
             "unexpected upstream User-Agent: {ua}"
         );
     }
@@ -3848,9 +3852,9 @@ mod quote_cmd_tests {
         let client = {
             let _env_guard = HTTP_URL_ENV_LOCK.lock().await;
             // SAFETY: guarded by HTTP_URL_ENV_LOCK; set before build, cleared after.
-            unsafe { std::env::set_var("LONGPORT_HTTP_URL", format!("http://127.0.0.1:{port}")) };
+            unsafe { std::env::set_var("LONGBRIDGE_HTTP_URL", format!("http://127.0.0.1:{port}")) };
             let client = CURRENT_TOOL.sync_scope("depth", || mctx.create_http_client());
-            unsafe { std::env::remove_var("LONGPORT_HTTP_URL") };
+            unsafe { std::env::remove_var("LONGBRIDGE_HTTP_URL") };
             client
         };
 
@@ -3872,7 +3876,7 @@ mod quote_cmd_tests {
             "x-mcp-tool tracking header missing; request was:\n{request}"
         );
         let expected_ua = format!(
-            "user-agent: claude-test/1.0 (cli) longport-mcp/{}",
+            "user-agent: claude-test/1.0 (cli) longbridge-mcp/{}",
             env!("CARGO_PKG_VERSION")
         );
         assert!(
@@ -3938,7 +3942,7 @@ mod quote_cmd_tests {
     #[test]
     #[ignore]
     fn bench_list_tools_speedup() {
-        use super::{LongPort, list_tools, strip_null_from_type_arrays, tools_main_endpoint};
+        use super::{Longbridge, list_tools, strip_null_from_type_arrays, tools_main_endpoint};
         use std::hint::black_box;
         use std::time::Instant;
 
@@ -3968,7 +3972,7 @@ mod quote_cmd_tests {
         let start = Instant::now();
         for _ in 0..n {
             let _ = black_box(
-                LongPort::tool_router()
+                Longbridge::tool_router()
                     .list_all()
                     .into_iter()
                     .map(|mut tool| {

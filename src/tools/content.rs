@@ -1,4 +1,4 @@
-use longport::ContentContext;
+use longbridge::ContentContext;
 use rmcp::ErrorData as McpError;
 use rmcp::model::CallToolResult;
 use rmcp::schemars::JsonSchema;
@@ -60,7 +60,7 @@ pub async fn news(
     p: SymbolParam,
 ) -> Result<CallToolResult, McpError> {
     let ctx = ContentContext::new(mctx.create_config());
-    let result = ctx.news(p.symbol).await.map_err(Error::longport)?;
+    let result = ctx.news(p.symbol).await.map_err(Error::longbridge)?;
     tool_json(&result)
 }
 
@@ -69,7 +69,7 @@ pub async fn topic(
     p: SymbolParam,
 ) -> Result<CallToolResult, McpError> {
     let ctx = ContentContext::new(mctx.create_config());
-    let result = ctx.topics(p.symbol).await.map_err(Error::longport)?;
+    let result = ctx.topics(p.symbol).await.map_err(Error::longbridge)?;
     tool_json(&result)
 }
 
@@ -81,7 +81,7 @@ pub async fn topic_detail(
     let result = ctx
         .topic_detail(p.topic_id)
         .await
-        .map_err(Error::longport)?;
+        .map_err(Error::longbridge)?;
     tool_json(&result)
 }
 
@@ -90,14 +90,14 @@ pub async fn topic_replies(
     p: TopicRepliesParam,
 ) -> Result<CallToolResult, McpError> {
     let ctx = ContentContext::new(mctx.create_config());
-    let opts = longport::content::ListTopicRepliesOptions {
+    let opts = longbridge::content::ListTopicRepliesOptions {
         page: p.page,
         size: p.size,
     };
     let result = ctx
         .list_topic_replies(p.topic_id, opts)
         .await
-        .map_err(Error::longport)?;
+        .map_err(Error::longbridge)?;
     tool_json(&result)
 }
 
@@ -106,14 +106,14 @@ pub async fn topic_create(
     p: TopicCreateParam,
 ) -> Result<CallToolResult, McpError> {
     let ctx = ContentContext::new(mctx.create_config());
-    let opts = longport::content::CreateTopicOptions {
+    let opts = longbridge::content::CreateTopicOptions {
         title: p.title,
         body: p.body,
         topic_type: p.topic_type,
         tickers: p.symbols,
         hashtags: None,
     };
-    let id = ctx.create_topic(opts).await.map_err(Error::longport)?;
+    let id = ctx.create_topic(opts).await.map_err(Error::longbridge)?;
     tool_json(&serde_json::json!({ "id": id }))
 }
 
@@ -122,13 +122,13 @@ pub async fn topic_create_reply(
     p: TopicCreateReplyParam,
 ) -> Result<CallToolResult, McpError> {
     let ctx = ContentContext::new(mctx.create_config());
-    let opts = longport::content::CreateReplyOptions {
+    let opts = longbridge::content::CreateReplyOptions {
         body: p.body,
         reply_to_id: p.reply_to_id,
     };
     let result = ctx
         .create_topic_reply(p.topic_id, opts)
         .await
-        .map_err(Error::longport)?;
+        .map_err(Error::longbridge)?;
     tool_json(&result)
 }

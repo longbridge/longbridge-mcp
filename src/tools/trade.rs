@@ -1,4 +1,4 @@
-use longport::trade::{GetTodayExecutionsOptions, GetTodayOrdersOptions, TradeContext};
+use longbridge::trade::{GetTodayExecutionsOptions, GetTodayOrdersOptions, TradeContext};
 use rmcp::ErrorData as McpError;
 use rmcp::model::CallToolResult;
 use rmcp::schemars::JsonSchema;
@@ -144,19 +144,19 @@ pub async fn account_balance(
     let result = ctx
         .account_balance(p.currency.as_deref())
         .await
-        .map_err(Error::longport)?;
+        .map_err(Error::longbridge)?;
     tool_json(&result)
 }
 
 pub async fn stock_positions(mctx: &crate::tools::McpContext) -> Result<CallToolResult, McpError> {
     let (ctx, _) = TradeContext::new(mctx.create_config());
-    let result = ctx.stock_positions(None).await.map_err(Error::longport)?;
+    let result = ctx.stock_positions(None).await.map_err(Error::longbridge)?;
     tool_json(&result)
 }
 
 pub async fn fund_positions(mctx: &crate::tools::McpContext) -> Result<CallToolResult, McpError> {
     let (ctx, _) = TradeContext::new(mctx.create_config());
-    let result = ctx.fund_positions(None).await.map_err(Error::longport)?;
+    let result = ctx.fund_positions(None).await.map_err(Error::longbridge)?;
     tool_json(&result)
 }
 
@@ -165,7 +165,10 @@ pub async fn margin_ratio(
     p: SymbolParam,
 ) -> Result<CallToolResult, McpError> {
     let (ctx, _) = TradeContext::new(mctx.create_config());
-    let result = ctx.margin_ratio(p.symbol).await.map_err(Error::longport)?;
+    let result = ctx
+        .margin_ratio(p.symbol)
+        .await
+        .map_err(Error::longbridge)?;
     tool_json(&result)
 }
 
@@ -178,7 +181,7 @@ pub async fn today_orders(
         opts = opts.symbol(symbol);
     }
     let (ctx, _) = TradeContext::new(mctx.create_config());
-    let result = ctx.today_orders(opts).await.map_err(Error::longport)?;
+    let result = ctx.today_orders(opts).await.map_err(Error::longbridge)?;
     tool_json(&result)
 }
 
@@ -190,7 +193,7 @@ pub async fn order_detail(
     let result = ctx
         .order_detail(p.order_id)
         .await
-        .map_err(Error::longport)?;
+        .map_err(Error::longbridge)?;
     tool_json(&result)
 }
 
@@ -201,7 +204,7 @@ pub async fn cancel_order(
     let (ctx, _) = TradeContext::new(mctx.create_config());
     ctx.cancel_order(p.order_id)
         .await
-        .map_err(Error::longport)?;
+        .map_err(Error::longbridge)?;
     Ok(tool_result("order cancelled".to_string()))
 }
 
@@ -226,7 +229,7 @@ pub async fn today_executions(
         ctx.today_executions(exec_opts),
         ctx.today_orders(order_opts),
     )
-    .map_err(Error::longport)?;
+    .map_err(Error::longbridge)?;
 
     let side_map: HashMap<String, String> = orders
         .into_iter()
@@ -253,14 +256,14 @@ pub async fn history_orders(
 ) -> Result<CallToolResult, McpError> {
     let start = parse::parse_rfc3339(&p.start_at)?;
     let end = parse::parse_rfc3339(&p.end_at)?;
-    let mut opts = longport::trade::GetHistoryOrdersOptions::new()
+    let mut opts = longbridge::trade::GetHistoryOrdersOptions::new()
         .start_at(start)
         .end_at(end);
     if let Some(symbol) = p.symbol {
         opts = opts.symbol(symbol);
     }
     let (ctx, _) = TradeContext::new(mctx.create_config());
-    let result = ctx.history_orders(opts).await.map_err(Error::longport)?;
+    let result = ctx.history_orders(opts).await.map_err(Error::longbridge)?;
     tool_json(&result)
 }
 
@@ -273,10 +276,10 @@ pub async fn history_executions(
     let start = parse::parse_rfc3339(&p.start_at)?;
     let end = parse::parse_rfc3339(&p.end_at)?;
 
-    let mut exec_opts = longport::trade::GetHistoryExecutionsOptions::new()
+    let mut exec_opts = longbridge::trade::GetHistoryExecutionsOptions::new()
         .start_at(start)
         .end_at(end);
-    let mut order_opts = longport::trade::GetHistoryOrdersOptions::new()
+    let mut order_opts = longbridge::trade::GetHistoryOrdersOptions::new()
         .start_at(start)
         .end_at(end);
     if let Some(ref symbol) = p.symbol {
@@ -289,7 +292,7 @@ pub async fn history_executions(
         ctx.history_executions(exec_opts),
         ctx.history_orders(order_opts),
     )
-    .map_err(Error::longport)?;
+    .map_err(Error::longbridge)?;
 
     let side_map: HashMap<String, String> = orders
         .into_iter()
@@ -316,9 +319,9 @@ pub async fn cash_flow(
 ) -> Result<CallToolResult, McpError> {
     let start = parse::parse_rfc3339(&p.start_at)?;
     let end = parse::parse_rfc3339(&p.end_at)?;
-    let opts = longport::trade::GetCashFlowOptions::new(start, end);
+    let opts = longbridge::trade::GetCashFlowOptions::new(start, end);
     let (ctx, _) = TradeContext::new(mctx.create_config());
-    let result = ctx.cash_flow(opts).await.map_err(Error::longport)?;
+    let result = ctx.cash_flow(opts).await.map_err(Error::longbridge)?;
     tool_json(&result)
 }
 
@@ -326,8 +329,10 @@ pub async fn submit_order(
     mctx: &crate::tools::McpContext,
     p: SubmitOrderParam,
 ) -> Result<CallToolResult, McpError> {
-    use longport::Decimal;
-    use longport::trade::{OrderSide, OrderType, OutsideRTH, SubmitOrderOptions, TimeInForceType};
+    use longbridge::Decimal;
+    use longbridge::trade::{
+        OrderSide, OrderType, OutsideRTH, SubmitOrderOptions, TimeInForceType,
+    };
     use std::str::FromStr;
 
     let order_type = p
@@ -388,7 +393,7 @@ pub async fn submit_order(
     }
 
     let (ctx, _) = TradeContext::new(mctx.create_config());
-    let result = ctx.submit_order(opts).await.map_err(Error::longport)?;
+    let result = ctx.submit_order(opts).await.map_err(Error::longbridge)?;
     tool_json(&result)
 }
 
@@ -396,8 +401,8 @@ pub async fn replace_order(
     mctx: &crate::tools::McpContext,
     p: ReplaceOrderParam,
 ) -> Result<CallToolResult, McpError> {
-    use longport::Decimal;
-    use longport::trade::ReplaceOrderOptions;
+    use longbridge::Decimal;
+    use longbridge::trade::ReplaceOrderOptions;
     use std::str::FromStr;
 
     let quantity = Decimal::from_str(&p.quantity)
@@ -432,7 +437,7 @@ pub async fn replace_order(
         })?);
     }
     let (ctx, _) = TradeContext::new(mctx.create_config());
-    ctx.replace_order(opts).await.map_err(Error::longport)?;
+    ctx.replace_order(opts).await.map_err(Error::longbridge)?;
     Ok(tool_result("order replaced".to_string()))
 }
 
@@ -440,8 +445,8 @@ pub async fn estimate_max_purchase_quantity(
     mctx: &crate::tools::McpContext,
     p: EstimateMaxQtyParam,
 ) -> Result<CallToolResult, McpError> {
-    use longport::Decimal;
-    use longport::trade::{EstimateMaxPurchaseQuantityOptions, OrderSide, OrderType};
+    use longbridge::Decimal;
+    use longbridge::trade::{EstimateMaxPurchaseQuantityOptions, OrderSide, OrderType};
     use std::str::FromStr;
 
     // SDK FromStr is case-sensitive ("Buy"/"LO"). Normalize first so callers can
@@ -472,7 +477,7 @@ pub async fn estimate_max_purchase_quantity(
     let result = ctx
         .estimate_max_purchase_quantity(opts)
         .await
-        .map_err(Error::longport)?;
+        .map_err(Error::longbridge)?;
     tool_json(&result)
 }
 
@@ -486,7 +491,7 @@ pub async fn short_margin(mctx: &crate::tools::McpContext) -> Result<CallToolRes
 mod tests {
     use crate::serialize::to_tool_json;
 
-    /// Simulate the raw JSON that the LongPort SDK's `FundPositionsResponse`
+    /// Simulate the raw JSON that the Longbridge SDK's `FundPositionsResponse`
     /// would produce after serde serialization, then verify that `to_tool_json`
     /// transforms it correctly.
     #[allow(clippy::too_many_arguments)]

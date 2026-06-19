@@ -46,7 +46,7 @@ pub fn transform_json(input: &[u8]) -> Result<String, serde_json::Error> {
 }
 
 /// Return `true` iff `s` matches the `<PREFIX>/<MARKET>/<CODE>` counter_id
-/// pattern used internally by LongPort (e.g. `ST/US/AAPL`, `ETF/HK/2800`,
+/// pattern used internally by Longbridge (e.g. `ST/US/AAPL`, `ETF/HK/2800`,
 /// `IX/HK/HSI`, `OP/US/AAPL270115C300000`). Used to distinguish dynamic map
 /// keys that happen to carry a counter_id value from ordinary camelCase field
 /// names which must still go through snake_case conversion.

@@ -1,21 +1,21 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
-  "name": "com.longportapp/mcp",
+  "name": "com.longbridge/mcp",
   "description": "US/HK markets — 145 tools: quotes, options, orders, fundamentals, screener, IPO, alerts & DCA",
   "version": "0.5.3",
   "repository": {
-    "url": "https://github.com/longportapp/longport-mcp",
+    "url": "https://github.com/longbridge/longbridge-mcp",
     "source": "github"
   },
-  "websiteUrl": "https://longportapp.com",
+  "websiteUrl": "https://longbridge.com",
   "remotes": [
     {
       "type": "streamable-http",
-      "url": "https://mcp.longportapp.com",
+      "url": "https://openapi.longbridge.com/mcp",
       "headers": [
         {
           "name": "Authorization",
-          "description": "LongPort OAuth 2.1 bearer token in the form `Bearer <access_token>`. Clients should follow the authorization server URL returned by GET /.well-known/oauth-protected-resource (RFC 9728).",
+          "description": "Longbridge OAuth 2.1 bearer token in the form `Bearer <access_token>`. Clients should follow the authorization server URL returned by GET /.well-known/oauth-protected-resource (RFC 9728).",
           "isRequired": true,
           "isSecret": true
         }
@@ -25,14 +25,14 @@
   "packages": [
     {
       "registryType": "oci",
-      "identifier": "ghcr.io/longportapp/longport-mcp:0.5.3",
+      "identifier": "ghcr.io/longbridge/longbridge-mcp:0.5.3",
       "transport": {
         "type": "streamable-http",
         "url": "http://localhost:8000/mcp",
         "headers": [
           {
             "name": "Authorization",
-            "description": "LongPort OAuth 2.1 bearer token in the form `Bearer <access_token>`.",
+            "description": "Longbridge OAuth 2.1 bearer token in the form `Bearer <access_token>`.",
             "isRequired": true,
             "isSecret": true
           }
@@ -56,22 +56,22 @@
       ],
       "environmentVariables": [
         {
-          "name": "LONGPORT_HTTP_URL",
-          "description": "LongPort OpenAPI base URL. Used for OAuth metadata discovery.",
+          "name": "LONGBRIDGE_HTTP_URL",
+          "description": "Longbridge OpenAPI base URL. Used for OAuth metadata discovery.",
           "isRequired": false,
-          "default": "https://openapi.longportapp.com"
+          "default": "https://openapi.longbridge.com"
         },
         {
-          "name": "LONGPORT_QUOTE_WS_URL",
-          "description": "Quote WebSocket endpoint used by the embedded LongPort SDK.",
+          "name": "LONGBRIDGE_QUOTE_WS_URL",
+          "description": "Quote WebSocket endpoint used by the embedded Longbridge SDK.",
           "isRequired": false,
-          "default": "wss://openapi-quote.longportapp.com/v2"
+          "default": "wss://openapi-quote.longbridge.com/v2"
         },
         {
-          "name": "LONGPORT_TRADE_WS_URL",
-          "description": "Trade WebSocket endpoint used by the embedded LongPort SDK.",
+          "name": "LONGBRIDGE_TRADE_WS_URL",
+          "description": "Trade WebSocket endpoint used by the embedded Longbridge SDK.",
           "isRequired": false,
-          "default": "wss://openapi-trade.longportapp.com/v2"
+          "default": "wss://openapi-trade.longbridge.com/v2"
         }
       ]
     }
@@ -79,22 +79,22 @@
   "_meta": {
     "io.modelcontextprotocol.registry/publisher-provided": {
       "brand": {
-        "displayName": "LongPort",
-        "legalName": "LongPort",
+        "displayName": "Longbridge",
+        "legalName": "Long Bridge Securities",
         "tagline": "HK & US stocks, commission-free",
-        "website": "https://longportapp.com",
-        "developerPortal": "https://open.longportapp.com",
-        "documentation": "https://open.longportapp.com/docs",
+        "website": "https://longbridge.com",
+        "developerPortal": "https://open.longbridge.com",
+        "documentation": "https://open.longbridge.com/docs",
         "publisher": {
-          "name": "LongPort",
-          "url": "https://longportapp.com",
-          "github": "https://github.com/longportapp"
+          "name": "Longbridge",
+          "url": "https://longbridge.com",
+          "github": "https://github.com/longbridge"
         }
       },
       "localizedDescriptions": {
-        "en": "LongPort — official MCP server for the LongPort brokerage. 145 tools across real-time quotes, options, order routing, fundamentals, stock screener, shareholders, short selling, IPO, calendars, alerts, DCA and portfolio analytics for US / HK markets.",
-        "zh-CN": "LongPort 官方 MCP 服务：145 个工具覆盖美股 / 港股的实时行情、期权、下单路由、基本面、选股器、股东持仓、卖空数据、IPO 打新、财报日历、价格预警、定投计划与组合分析。",
-        "zh-HK": "LongPort 官方 MCP 伺服器：145 個工具覆蓋美股 / 港股的即時行情、期權、下單路由、基本面、選股器、股東持倉、賣空數據、IPO 打新、財報日曆、價格警示、定投計劃與組合分析。"
+        "en": "Longbridge — official MCP server for the Longbridge brokerage. 145 tools across real-time quotes, options, order routing, fundamentals, stock screener, shareholders, short selling, IPO, calendars, alerts, DCA and portfolio analytics for US / HK markets.",
+        "zh-CN": "长桥证券官方 MCP 服务：145 个工具覆盖美股 / 港股的实时行情、期权、下单路由、基本面、选股器、股东持仓、卖空数据、IPO 打新、财报日历、价格预警、定投计划与组合分析。",
+        "zh-HK": "長橋證券官方 MCP 伺服器：145 個工具覆蓋美股 / 港股的即時行情、期權、下單路由、基本面、選股器、股東持倉、賣空數據、IPO 打新、財報日曆、價格警示、定投計劃與組合分析。"
       },
       "icons": [
         {
@@ -111,7 +111,9 @@
         "brokerage"
       ],
       "keywords": [
-        "longport",
+        "longbridge",
+        "长桥",
+        "長橋",
         "brokerage",
         "stocks",
         "options",
@@ -158,9 +160,9 @@
       "authentication": {
         "type": "oauth2",
         "flow": "authorization_code",
-        "discoveryUrl": "https://openapi.longportapp.com/.well-known/oauth-authorization-server",
-        "resourceMetadataUrl": "https://mcp.longportapp.com/.well-known/oauth-protected-resource",
-        "docs": "https://open.longportapp.com/docs/getting-started#authentication-methods"
+        "discoveryUrl": "https://openapi.longbridge.com/.well-known/oauth-authorization-server",
+        "resourceMetadataUrl": "https://openapi.longbridge.com/.well-known/oauth-protected-resource",
+        "docs": "https://open.longbridge.com/docs/getting-started#authentication-methods"
       },
       "observability": {
         "prometheusMetricsEndpoint": "/metrics",
@@ -178,19 +180,19 @@
         "language": "Rust",
         "edition": "2024",
         "framework": "rmcp 1.4 + axum 0.8",
-        "sdk": "https://github.com/longportapp/openapi"
+        "sdk": "https://github.com/longbridge/openapi"
       },
       "license": {
         "spdxId": "MIT",
-        "url": "https://github.com/longportapp/longport-mcp/blob/main/LICENSE"
+        "url": "https://github.com/longbridge/longbridge-mcp/blob/main/LICENSE"
       },
       "links": {
-        "homepage": "https://longportapp.com",
-        "developerPortal": "https://open.longportapp.com",
-        "documentation": "https://open.longportapp.com/docs",
-        "source": "https://github.com/longportapp/longport-mcp",
-        "issues": "https://github.com/longportapp/longport-mcp/issues",
-        "changelog": "https://github.com/longportapp/longport-mcp/releases"
+        "homepage": "https://longbridge.com",
+        "developerPortal": "https://open.longbridge.com",
+        "documentation": "https://open.longbridge.com/docs",
+        "source": "https://github.com/longbridge/longbridge-mcp",
+        "issues": "https://github.com/longbridge/longbridge-mcp/issues",
+        "changelog": "https://github.com/longbridge/longbridge-mcp/releases"
       }
     }
   }
