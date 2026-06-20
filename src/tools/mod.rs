@@ -221,28 +221,12 @@ impl McpContext {
     }
 
     /// Return the cached `QuoteContext` for this token, creating it on first
-    /// use (under the concurrency semaphore).  Also fires the WS beacon so
-    /// the quote operation appears in server-side access logs.
+    /// Return the cached `QuoteContext` for this token, creating one on first
+    /// use. Also fires the WS beacon so the quote operation appears in
+    /// server-side access logs.
     pub async fn get_quote_context(&self) -> longbridge::quote::QuoteContext {
         self.track_quote_cmd();
-        crate::ws_pool::get_or_init(&self.token, self.create_config())
-            .await
-            .quote
-    }
-
-    /// Return cached `TradeContext` for this token, creating it on first use.
-    pub async fn get_trade_context(&self) -> longbridge::trade::TradeContext {
-        crate::ws_pool::get_or_init(&self.token, self.create_config())
-            .await
-            .trade
-    }
-
-    /// Return cached `FundamentalContext` for this token, creating it on first
-    /// use.
-    pub async fn get_fundamental_context(&self) -> longbridge::fundamental::FundamentalContext {
-        crate::ws_pool::get_or_init(&self.token, self.create_config())
-            .await
-            .fundamental
+        crate::ws_pool::get_or_init_quote(&self.token, self.create_config()).await
     }
 
     /// Extracts `account_channel` from the JWT bearer token's `sub` claim.

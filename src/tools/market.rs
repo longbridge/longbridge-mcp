@@ -255,7 +255,7 @@ async fn etf_asset_allocation(
     mctx: &crate::tools::McpContext,
     symbol: &str,
 ) -> Result<Option<AssetAllocationResponse>, McpError> {
-    let ctx = mctx.get_fundamental_context().await;
+    let ctx = longbridge::fundamental::FundamentalContext::new(mctx.create_config());
     let result = ctx
         .etf_asset_allocation(symbol)
         .await
