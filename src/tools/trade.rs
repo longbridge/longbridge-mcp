@@ -1,4 +1,4 @@
-use longbridge::trade::{GetTodayExecutionsOptions, GetTodayOrdersOptions};
+use longbridge::trade::{GetTodayExecutionsOptions, GetTodayOrdersOptions, TradeContext};
 use rmcp::ErrorData as McpError;
 use rmcp::model::CallToolResult;
 use rmcp::schemars::JsonSchema;
@@ -140,7 +140,7 @@ pub async fn account_balance(
     mctx: &crate::tools::McpContext,
     p: AccountBalanceParam,
 ) -> Result<CallToolResult, McpError> {
-    let (ctx, _) = longbridge::trade::TradeContext::new(mctx.create_config());
+    let (ctx, _) = TradeContext::new(mctx.create_config());
     let result = ctx
         .account_balance(p.currency.as_deref())
         .await
@@ -149,13 +149,13 @@ pub async fn account_balance(
 }
 
 pub async fn stock_positions(mctx: &crate::tools::McpContext) -> Result<CallToolResult, McpError> {
-    let (ctx, _) = longbridge::trade::TradeContext::new(mctx.create_config());
+    let (ctx, _) = TradeContext::new(mctx.create_config());
     let result = ctx.stock_positions(None).await.map_err(Error::longbridge)?;
     tool_json(&result)
 }
 
 pub async fn fund_positions(mctx: &crate::tools::McpContext) -> Result<CallToolResult, McpError> {
-    let (ctx, _) = longbridge::trade::TradeContext::new(mctx.create_config());
+    let (ctx, _) = TradeContext::new(mctx.create_config());
     let result = ctx.fund_positions(None).await.map_err(Error::longbridge)?;
     tool_json(&result)
 }
@@ -164,7 +164,7 @@ pub async fn margin_ratio(
     mctx: &crate::tools::McpContext,
     p: SymbolParam,
 ) -> Result<CallToolResult, McpError> {
-    let (ctx, _) = longbridge::trade::TradeContext::new(mctx.create_config());
+    let (ctx, _) = TradeContext::new(mctx.create_config());
     let result = ctx
         .margin_ratio(p.symbol)
         .await
@@ -180,7 +180,7 @@ pub async fn today_orders(
     if let Some(symbol) = p.symbol {
         opts = opts.symbol(symbol);
     }
-    let (ctx, _) = longbridge::trade::TradeContext::new(mctx.create_config());
+    let (ctx, _) = TradeContext::new(mctx.create_config());
     let result = ctx.today_orders(opts).await.map_err(Error::longbridge)?;
     tool_json(&result)
 }
@@ -189,7 +189,7 @@ pub async fn order_detail(
     mctx: &crate::tools::McpContext,
     p: OrderIdParam,
 ) -> Result<CallToolResult, McpError> {
-    let (ctx, _) = longbridge::trade::TradeContext::new(mctx.create_config());
+    let (ctx, _) = TradeContext::new(mctx.create_config());
     let result = ctx
         .order_detail(p.order_id)
         .await
@@ -201,7 +201,7 @@ pub async fn cancel_order(
     mctx: &crate::tools::McpContext,
     p: OrderIdParam,
 ) -> Result<CallToolResult, McpError> {
-    let (ctx, _) = longbridge::trade::TradeContext::new(mctx.create_config());
+    let (ctx, _) = TradeContext::new(mctx.create_config());
     ctx.cancel_order(p.order_id)
         .await
         .map_err(Error::longbridge)?;
@@ -224,7 +224,7 @@ pub async fn today_executions(
         exec_opts = exec_opts.order_id(order_id);
     }
 
-    let (ctx, _) = longbridge::trade::TradeContext::new(mctx.create_config());
+    let (ctx, _) = TradeContext::new(mctx.create_config());
     let (executions, orders) = tokio::try_join!(
         ctx.today_executions(exec_opts),
         ctx.today_orders(order_opts),
@@ -262,7 +262,7 @@ pub async fn history_orders(
     if let Some(symbol) = p.symbol {
         opts = opts.symbol(symbol);
     }
-    let (ctx, _) = longbridge::trade::TradeContext::new(mctx.create_config());
+    let (ctx, _) = TradeContext::new(mctx.create_config());
     let result = ctx.history_orders(opts).await.map_err(Error::longbridge)?;
     tool_json(&result)
 }
@@ -287,7 +287,7 @@ pub async fn history_executions(
         order_opts = order_opts.symbol(symbol.clone());
     }
 
-    let (ctx, _) = longbridge::trade::TradeContext::new(mctx.create_config());
+    let (ctx, _) = TradeContext::new(mctx.create_config());
     let (executions, orders) = tokio::try_join!(
         ctx.history_executions(exec_opts),
         ctx.history_orders(order_opts),
@@ -320,7 +320,7 @@ pub async fn cash_flow(
     let start = parse::parse_rfc3339(&p.start_at)?;
     let end = parse::parse_rfc3339(&p.end_at)?;
     let opts = longbridge::trade::GetCashFlowOptions::new(start, end);
-    let (ctx, _) = longbridge::trade::TradeContext::new(mctx.create_config());
+    let (ctx, _) = TradeContext::new(mctx.create_config());
     let result = ctx.cash_flow(opts).await.map_err(Error::longbridge)?;
     tool_json(&result)
 }
@@ -392,7 +392,7 @@ pub async fn submit_order(
         opts = opts.remark(v.clone());
     }
 
-    let (ctx, _) = longbridge::trade::TradeContext::new(mctx.create_config());
+    let (ctx, _) = TradeContext::new(mctx.create_config());
     let result = ctx.submit_order(opts).await.map_err(Error::longbridge)?;
     tool_json(&result)
 }
@@ -436,7 +436,7 @@ pub async fn replace_order(
             McpError::invalid_params(format!("invalid trailing_percent: {e}"), None)
         })?);
     }
-    let (ctx, _) = longbridge::trade::TradeContext::new(mctx.create_config());
+    let (ctx, _) = TradeContext::new(mctx.create_config());
     ctx.replace_order(opts).await.map_err(Error::longbridge)?;
     Ok(tool_result("order replaced".to_string()))
 }
@@ -473,7 +473,7 @@ pub async fn estimate_max_purchase_quantity(
                 .map_err(|e| McpError::invalid_params(format!("invalid price: {e}"), None))?,
         );
     }
-    let (ctx, _) = longbridge::trade::TradeContext::new(mctx.create_config());
+    let (ctx, _) = TradeContext::new(mctx.create_config());
     let result = ctx
         .estimate_max_purchase_quantity(opts)
         .await
