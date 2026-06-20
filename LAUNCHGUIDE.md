@@ -6,7 +6,7 @@ Trade US & HK stocks, manage positions, and analyse markets through your Longbri
 ## Description
 Longbridge MCP is the official Model Context Protocol server from [Longbridge](https://longbridge.com), a licensed brokerage operating across Hong Kong, the United States, Singapore, Japan and New Zealand. It exposes the Longbridge OpenAPI as **110 composable tools** so any MCP-capable AI assistant (Claude Desktop, Claude Code, Cursor, Cline, Windsurf) can read markets, route orders and analyse portfolios on the user's behalf.
 
-The server is hosted at `https://openapi.longbridge.com/mcp` (streamable-http), stateless, and uses OAuth 2.1 with RFC 9728 protected-resource-metadata — clients auto-discover the Longbridge authorization server, so end users don't configure API keys. Self-hosting is also supported via the `ghcr.io/longbridge/longbridge-mcp` Docker image.
+The server is hosted at `https://mcp.longbridge.com` (streamable-http), stateless, and uses OAuth 2.1 with RFC 9728 protected-resource-metadata — clients auto-discover the Longbridge authorization server, so end users don't configure API keys. Self-hosting is also supported via the `ghcr.io/longbridge/longbridge-mcp` Docker image.
 
 ## Setup Requirements
 No environment variables or API keys required for the hosted endpoint. Authentication is handled by an OAuth 2.1 flow that the MCP client kicks off automatically the first time a tool is invoked — the user logs in to their Longbridge account in the browser and grants access. No tokens to copy/paste, no secrets to configure.
