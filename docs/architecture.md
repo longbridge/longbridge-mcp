@@ -146,6 +146,23 @@ Two entry points:
 - **`to_tool_json(value)`** — For SDK types that implement `Serialize`. Zero intermediate allocation.
 - **`transform_json(bytes)`** — For raw HTTP JSON responses. Uses `serde_transcode` for streaming token-by-token transformation without parsing into `serde_json::Value`.
 
+## MCP Schema Resources
+
+Tool descriptors keep typed `outputSchema` values where available so OpenAI Apps
+and other validating MCP clients can reason about structured results. To reduce
+`tools/list` payload size, the descriptor schemas are compacted by stripping
+documentation-only JSON Schema keys (`$schema`, `title`, and `description`).
+
+The full verbose schemas are exposed as MCP resources using the Longbridge
+resource scheme:
+
+```
+lb://tools/{tool_name}/output-schema
+```
+
+For example, `lb://tools/depth/output-schema` returns the complete JSON Schema
+for the `depth` tool, including field descriptions.
+
 ## Tool Categories
 
 | Module | Count | Data Source | Description |
