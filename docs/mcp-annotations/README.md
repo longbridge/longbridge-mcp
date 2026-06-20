@@ -82,15 +82,31 @@ sign-off (all judged accurate, but they are the non-obvious ones):
 - **`withdrawals` / `deposits` / `bank_cards`** are **history/listing queries**
   (GET only); they do not initiate fund movements. Annotated read-only.
 
-## 3. Optional: `outputSchema` recommendation
+## 3. `outputSchema` status and compact descriptors
 
 The review also shows a non-blocking *"Recommended: Add an outputSchema"* notice
-on each tool. Currently **14** tools declare a typed `output_schema` (via
+on each tool. Currently **81** tools declare a typed `output_schema` (via
 `schema_for::<output::*>()`, defined in `src/tools/output.rs`); the remaining
-**132** do not.
+**65** do not.
 
-This is a recommendation, not a submission blocker. Adding output schemas for
-the rest is tracked separately — most return loosely-typed JSON proxied straight
-from the upstream Longbridge API, so each needs a typed `output::*` struct
-(matching the post-`to_tool_json` snake_case + RFC3339 shape) before its tool
-can reference it. See `src/tools/output.rs` for the established pattern.
+OpenAI Apps guidance expects tools that return `structuredContent` to declare an
+`outputSchema`, so the descriptor keeps typed schemas where they exist. To keep
+the large tool list manageable, the server compacts the `tools/list`
+`outputSchema` by removing documentation-only schema keys (`$schema`, `title`,
+and `description`) while preserving validation structure. Tools that already
+declare an `outputSchema` also keep compact top-level descriptions: duplicated
+`Returns ...` field-list prose is removed from the exposed descriptor, and a
+metadata lint test keeps those descriptions under 240 characters.
+
+The full verbose schemas remain available through MCP resources:
+
+```text
+lb://tools/{tool_name}/output-schema
+```
+
+For example, `lb://tools/depth/output-schema` returns the complete JSON Schema
+with field descriptions intact. Adding output schemas for the remaining tools is
+tracked separately — most return loosely-typed JSON proxied straight from the
+upstream Longbridge API, so each needs a typed `output::*` struct matching the
+post-`to_tool_json` snake_case + RFC3339 shape before its tool can reference it.
+See `src/tools/output.rs` for the established pattern.

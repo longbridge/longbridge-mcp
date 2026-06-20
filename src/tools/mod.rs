@@ -1,10 +1,13 @@
-use std::sync::Arc;
+use std::{borrow::Cow, sync::Arc};
 
 use rmcp::ErrorData as McpError;
 use rmcp::RoleServer;
 use rmcp::ServerHandler;
 use rmcp::handler::server::wrapper::Parameters;
-use rmcp::model::{CallToolResult, Content};
+use rmcp::model::{
+    CallToolResult, Content, ErrorData as McpErrorData, ListResourcesResult, RawResource,
+    ReadResourceRequestParams, ReadResourceResult, Resource, ResourceContents,
+};
 use rmcp::service::RequestContext;
 use rmcp::tool;
 use rmcp::tool_handler;
@@ -19,6 +22,10 @@ use crate::serialize::to_tool_json;
 /// Tied to `fn authenticate` via `measured_tool_call(AUTHENTICATE_TOOL_NAME, ...)`.
 /// Change this constant if the method is ever renamed so all three sites stay in sync.
 const AUTHENTICATE_TOOL_NAME: &str = "authenticate";
+const OUTPUT_SCHEMA_RESOURCE_PREFIX: &str = "lb://tools/";
+const OUTPUT_SCHEMA_RESOURCE_SUFFIX: &str = "/output-schema";
+const OUTPUT_SCHEMA_RESOURCE_MIME: &str = "application/schema+json";
+const TOOL_DESCRIPTION_MAX_CHARS: usize = 240;
 
 tokio::task_local! {
     /// The name of the tool currently executing, scoped around each tool call by
@@ -388,14 +395,11 @@ fn extract_context(ctx: &RequestContext<RoleServer>) -> Result<McpContext, McpEr
     })
 }
 
-/// Returns all registered MCP tools sorted by name.
+/// Returns all registered MCP tools with full schema metadata, sorted by name.
 ///
-/// Returns all tools, processed once and cached for the lifetime of the process.
-///
-/// Building the router (151 entries) and recursively traversing every JSON Schema
-/// is expensive; doing it on each `tools/list` request was the primary CPU hotspot.
-/// The result is immutable after startup, so a `OnceLock` is safe.
-fn all_tools_cached() -> &'static [rmcp::model::Tool] {
+/// This is used for documentation resources where verbose field descriptions
+/// are useful and do not need to live in the hot `tools/list` descriptor.
+fn all_tools_full_cached() -> &'static [rmcp::model::Tool] {
     static TOOLS: std::sync::OnceLock<Vec<rmcp::model::Tool>> = std::sync::OnceLock::new();
     TOOLS.get_or_init(|| {
         cached_router()
@@ -407,6 +411,28 @@ fn all_tools_cached() -> &'static [rmcp::model::Tool] {
                 if let serde_json::Value::Object(obj) = schema {
                     tool.input_schema = std::sync::Arc::new(obj);
                 }
+                tool
+            })
+            .collect()
+    })
+}
+
+/// Returns all registered MCP tools sorted by name.
+///
+/// Returns all tools, processed once and cached for the lifetime of the process.
+///
+/// Building the router (151 entries) and recursively traversing every JSON Schema
+/// is expensive; doing it on each `tools/list` request was the primary CPU hotspot.
+/// The result is immutable after startup, so a `OnceLock` is safe.
+fn all_tools_cached() -> &'static [rmcp::model::Tool] {
+    static TOOLS: std::sync::OnceLock<Vec<rmcp::model::Tool>> = std::sync::OnceLock::new();
+    TOOLS.get_or_init(|| {
+        all_tools_full_cached()
+            .iter()
+            .cloned()
+            .map(|mut tool| {
+                compact_output_schema_for_tool_list(&mut tool);
+                compact_tool_description_for_tool_list(&mut tool);
                 tool
             })
             .collect()
@@ -485,6 +511,200 @@ fn strip_null_from_type_arrays(value: &mut serde_json::Value) {
         }
         _ => {}
     }
+}
+
+/// Recursively remove documentation-only JSON Schema keys from tool descriptors.
+/// Validation keywords stay in `tools/list`; verbose descriptions remain
+/// available through `lb://tools/{tool}/output-schema` resources.
+fn strip_schema_documentation_keys(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(map) => {
+            map.remove("$schema");
+            map.remove("title");
+            map.remove("description");
+            for v in map.values_mut() {
+                strip_schema_documentation_keys(v);
+            }
+        }
+        serde_json::Value::Array(arr) => {
+            for v in arr.iter_mut() {
+                strip_schema_documentation_keys(v);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn compact_output_schema_for_tool_list(tool: &mut rmcp::model::Tool) {
+    let Some(schema) = tool.output_schema.as_ref() else {
+        return;
+    };
+    let mut schema = serde_json::Value::Object(schema.as_ref().clone());
+    strip_schema_documentation_keys(&mut schema);
+    if let serde_json::Value::Object(obj) = schema {
+        tool.output_schema = Some(std::sync::Arc::new(obj));
+    }
+}
+
+fn compact_tool_description_for_tool_list(tool: &mut rmcp::model::Tool) {
+    if tool.output_schema.is_none() {
+        return;
+    }
+    let Some(description) = tool.description.as_ref() else {
+        return;
+    };
+
+    let compacted = compact_typed_output_tool_description(description.as_ref());
+    if compacted != description.as_ref() {
+        tool.description = Some(Cow::Owned(compacted));
+    }
+}
+
+fn compact_typed_output_tool_description(description: &str) -> String {
+    let without_return_shapes = strip_output_shape_sentences(description);
+    trim_description_to_char_limit(&without_return_shapes, TOOL_DESCRIPTION_MAX_CHARS)
+}
+
+fn strip_output_shape_sentences(description: &str) -> String {
+    let mut kept = Vec::new();
+    for sentence in description_sentences(description) {
+        let sentence = sentence.trim();
+        if sentence.is_empty() {
+            continue;
+        }
+        let lower = sentence.to_ascii_lowercase();
+        if lower.starts_with("returns ")
+            || lower.starts_with("return ")
+            || lower.starts_with("unified data[]")
+            || lower.starts_with("us-only:")
+            || lower.starts_with("hk-only:")
+        {
+            continue;
+        }
+        kept.push(sentence.trim_end_matches('.'));
+    }
+
+    if kept.is_empty() {
+        description.trim().to_string()
+    } else {
+        format!("{}.", kept.join(". "))
+    }
+}
+
+fn trim_description_to_char_limit(description: &str, max_chars: usize) -> String {
+    let trimmed = description.trim();
+    if trimmed.chars().count() <= max_chars {
+        return trimmed.to_string();
+    }
+
+    let mut result = String::new();
+    for sentence in description_sentences(trimmed) {
+        let sentence = sentence.trim();
+        if sentence.is_empty() {
+            continue;
+        }
+        let candidate = if result.is_empty() {
+            format!("{}.", sentence.trim_end_matches('.'))
+        } else {
+            format!("{} {}.", result, sentence.trim_end_matches('.'))
+        };
+        if candidate.chars().count() > max_chars {
+            break;
+        }
+        result = candidate;
+    }
+    if !result.is_empty() {
+        return result;
+    }
+
+    let mut clipped: String = trimmed.chars().take(max_chars.saturating_sub(3)).collect();
+    clipped = clipped
+        .trim_end_matches(|c: char| c.is_whitespace() || c == ',' || c == ';' || c == ':')
+        .to_string();
+    format!("{clipped}...")
+}
+
+fn description_sentences(description: &str) -> Vec<&str> {
+    let mut sentences = Vec::new();
+    let mut start = 0;
+    for (idx, _) in description.match_indices(". ") {
+        let prefix = &description[..idx];
+        let token = prefix.split_whitespace().last().unwrap_or_default();
+        if matches!(token, "e.g" | "i.e") {
+            continue;
+        }
+        sentences.push(&description[start..idx]);
+        start = idx + 2;
+    }
+    let tail = description[start..].trim_end_matches('.');
+    if !tail.trim().is_empty() {
+        sentences.push(tail);
+    }
+    sentences
+}
+
+fn output_schema_resource_uri(tool_name: &str) -> String {
+    format!("{OUTPUT_SCHEMA_RESOURCE_PREFIX}{tool_name}{OUTPUT_SCHEMA_RESOURCE_SUFFIX}")
+}
+
+fn output_schema_tool_name(uri: &str) -> Option<&str> {
+    let tool_name = uri
+        .strip_prefix(OUTPUT_SCHEMA_RESOURCE_PREFIX)?
+        .strip_suffix(OUTPUT_SCHEMA_RESOURCE_SUFFIX)?;
+    (!tool_name.is_empty() && !tool_name.contains('/')).then_some(tool_name)
+}
+
+fn output_schema_resources() -> Vec<Resource> {
+    all_tools_full_cached()
+        .iter()
+        .filter_map(|tool| {
+            let schema = tool.output_schema.as_ref()?;
+            let uri = output_schema_resource_uri(&tool.name);
+            let size = serde_json::to_vec(schema.as_ref())
+                .ok()
+                .and_then(|bytes| u32::try_from(bytes.len()).ok());
+            let title = tool.title.clone().unwrap_or_else(|| tool.name.to_string());
+            let mut raw = RawResource::new(uri, format!("{}.output_schema", tool.name))
+                .with_title(format!("{title} Output Schema"))
+                .with_description(format!(
+                    "Full JSON Schema output contract for the `{}` tool.",
+                    tool.name
+                ))
+                .with_mime_type(OUTPUT_SCHEMA_RESOURCE_MIME);
+            if let Some(size) = size {
+                raw = raw.with_size(size);
+            }
+            Some(rmcp::model::Annotated::new(raw, None))
+        })
+        .collect()
+}
+
+fn read_output_schema_resource(uri: &str) -> Result<ReadResourceResult, McpError> {
+    let Some(tool_name) = output_schema_tool_name(uri) else {
+        return Err(McpErrorData::resource_not_found(
+            "unknown Longbridge resource URI",
+            Some(serde_json::json!({ "uri": uri })),
+        ));
+    };
+    let Some(schema) = all_tools_full_cached()
+        .iter()
+        .find(|tool| tool.name == tool_name)
+        .and_then(|tool| tool.output_schema.as_ref())
+    else {
+        return Err(McpErrorData::resource_not_found(
+            "unknown Longbridge output schema resource",
+            Some(serde_json::json!({ "uri": uri })),
+        ));
+    };
+    let text = serde_json::to_string_pretty(schema.as_ref()).map_err(|err| {
+        McpErrorData::internal_error(
+            "failed to serialize output schema resource",
+            Some(serde_json::json!({ "uri": uri, "error": err.to_string() })),
+        )
+    })?;
+    Ok(ReadResourceResult::new(vec![
+        ResourceContents::text(text, uri).with_mime_type(OUTPUT_SCHEMA_RESOURCE_MIME),
+    ]))
 }
 
 use crate::tools::quote::{
@@ -3542,14 +3762,28 @@ impl Longbridge {
     instructions = "Longbridge OpenAPI MCP Server - provides market data, trading, and financial analysis tools"
 )]
 impl ServerHandler for Longbridge {
-    // NOTE: `get_info` is intentionally NOT overridden — the `initialize`
-    // override below delegates to the `#[tool_handler]` macro default and only
-    // swaps `instructions` for unauthenticated `/agent` sessions, so the main
-    // endpoint's `initialize` response stays byte-for-byte identical to its
-    // pre-feature behaviour. The reverse-auth flow does not need a
-    // `tools.listChanged` push: the agent client obtains the token from
-    // `authenticate` and reconnects with the `Authorization` header, which
-    // re-initializes the session and re-fetches the full tool list.
+    // `get_info` mirrors the `#[tool_handler]` default tool metadata, plus the
+    // resources capability for `lb://tools/{name}/output-schema` documents. The
+    // reverse-auth flow does not need a `tools.listChanged` push: the agent
+    // client obtains the token from `authenticate` and reconnects with the
+    // `Authorization` header, which re-initializes the session and re-fetches
+    // the full tool list.
+
+    fn get_info(&self) -> rmcp::model::ServerInfo {
+        rmcp::model::ServerInfo::new(
+            rmcp::model::ServerCapabilities::builder()
+                .enable_tools()
+                .enable_resources()
+                .build(),
+        )
+        .with_server_info(rmcp::model::Implementation::new(
+            "longbridge-mcp",
+            env!("CARGO_PKG_VERSION"),
+        ))
+        .with_instructions(
+            "Longbridge OpenAPI MCP Server - provides market data, trading, and financial analysis tools",
+        )
+    }
 
     /// `initialize`, with endpoint-aware `instructions`.
     ///
@@ -3625,6 +3859,24 @@ impl ServerHandler for Longbridge {
             tools,
             ..Default::default()
         })
+    }
+
+    async fn list_resources(
+        &self,
+        _request: Option<rmcp::model::PaginatedRequestParams>,
+        _context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> Result<ListResourcesResult, rmcp::ErrorData> {
+        Ok(ListResourcesResult::with_all_items(
+            output_schema_resources(),
+        ))
+    }
+
+    async fn read_resource(
+        &self,
+        request: ReadResourceRequestParams,
+        _context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> Result<ReadResourceResult, rmcp::ErrorData> {
+        read_output_schema_resource(&request.uri)
     }
 }
 
@@ -3931,6 +4183,177 @@ mod quote_cmd_tests {
              /v1/quote/cmd beacon), not `QuoteContext::new(...)` directly. \
              Untracked constructor at:\n{}",
             offenders.join("\n")
+        );
+    }
+
+    fn schema_contains_key(value: &serde_json::Value, key: &str) -> bool {
+        match value {
+            serde_json::Value::Object(map) => {
+                map.contains_key(key) || map.values().any(|v| schema_contains_key(v, key))
+            }
+            serde_json::Value::Array(values) => values.iter().any(|v| schema_contains_key(v, key)),
+            _ => false,
+        }
+    }
+
+    #[test]
+    fn tool_list_output_schemas_are_compact_validation_contracts() {
+        let depth = super::list_tools()
+            .into_iter()
+            .find(|tool| tool.name == "depth")
+            .expect("depth tool must be registered");
+        let output_schema = depth
+            .output_schema
+            .expect("depth tool must keep an outputSchema in tools/list");
+        let output_schema = serde_json::Value::Object(output_schema.as_ref().clone());
+
+        assert!(
+            output_schema.get("properties").is_some(),
+            "compact outputSchema must keep validation structure"
+        );
+        for stripped_key in ["$schema", "title", "description"] {
+            assert!(
+                !schema_contains_key(&output_schema, stripped_key),
+                "`{stripped_key}` should move out of the tools/list outputSchema"
+            );
+        }
+    }
+
+    #[test]
+    fn tool_list_output_schema_tools_omit_redundant_return_field_lists() {
+        let screener_search = super::list_tools()
+            .into_iter()
+            .find(|tool| tool.name == "screener_search")
+            .expect("screener_search tool must be registered");
+
+        assert!(
+            screener_search.output_schema.is_some(),
+            "fixture must cover a typed-output tool"
+        );
+        assert!(
+            !screener_search
+                .description
+                .as_deref()
+                .unwrap_or_default()
+                .contains("Returns "),
+            "typed-output tools should not duplicate output field lists in top-level descriptions"
+        );
+    }
+
+    #[test]
+    fn tool_metadata_lint_keeps_typed_output_descriptions_compact() {
+        let offenders: Vec<String> = super::list_tools()
+            .into_iter()
+            .filter(|tool| tool.output_schema.is_some())
+            .filter_map(|tool| {
+                let description = tool.description.as_deref().unwrap_or_default();
+                let lower = description.to_ascii_lowercase();
+                let has_return_shape = (lower.contains("returns ")
+                    && (lower.contains("[]") || lower.contains("returns {")))
+                    || lower.contains("unified data[]")
+                    || lower.contains("us-only:")
+                    || lower.contains("hk-only:");
+                (description.chars().count() > 240 || has_return_shape).then(|| {
+                    format!(
+                        "{}: {} chars, return_shape={}",
+                        tool.name,
+                        description.chars().count(),
+                        has_return_shape
+                    )
+                })
+            })
+            .collect();
+
+        assert!(
+            offenders.is_empty(),
+            "typed-output tool descriptions should stay under 240 chars and avoid duplicated return field lists:\n{}",
+            offenders.join("\n")
+        );
+    }
+
+    #[test]
+    fn compact_tool_description_does_not_cut_inside_abbreviations() {
+        let valuation = super::list_tools()
+            .into_iter()
+            .find(|tool| tool.name == "valuation_comparison")
+            .expect("valuation_comparison tool must be registered");
+        let description = valuation.description.as_deref().unwrap_or_default();
+
+        assert!(
+            !description.ends_with("e.g."),
+            "description should not be truncated immediately after an abbreviation: {description}"
+        );
+        assert!(
+            !description.ends_with("e.g"),
+            "description should not be truncated inside an abbreviation: {description}"
+        );
+    }
+
+    #[test]
+    fn output_schema_resources_expose_full_lb_schema_documents() {
+        let resources = super::output_schema_resources();
+        let depth_resource = resources
+            .iter()
+            .find(|resource| resource.raw.uri == "lb://tools/depth/output-schema")
+            .expect("depth output schema resource must be listed");
+
+        assert_eq!(depth_resource.raw.name, "depth.output_schema");
+        assert_eq!(
+            depth_resource.raw.mime_type.as_deref(),
+            Some("application/schema+json")
+        );
+
+        let result = super::read_output_schema_resource("lb://tools/depth/output-schema")
+            .expect("depth output schema resource must be readable");
+        let [
+            rmcp::model::ResourceContents::TextResourceContents {
+                uri,
+                mime_type,
+                text,
+                ..
+            },
+        ] = result.contents.as_slice()
+        else {
+            panic!("expected one text resource content");
+        };
+
+        assert_eq!(uri, "lb://tools/depth/output-schema");
+        assert_eq!(mime_type.as_deref(), Some("application/schema+json"));
+        let schema: serde_json::Value =
+            serde_json::from_str(text.as_str()).expect("resource text must be JSON schema");
+        assert!(
+            schema_contains_key(&schema, "$schema"),
+            "resource should keep full schema metadata"
+        );
+        assert!(
+            schema_contains_key(&schema, "description"),
+            "resource should keep field descriptions"
+        );
+        assert!(
+            schema.get("properties").is_some(),
+            "resource should keep validation structure"
+        );
+    }
+
+    #[test]
+    fn unknown_output_schema_resource_returns_not_found() {
+        let err = super::read_output_schema_resource("lb://tools/not_a_tool/output-schema")
+            .expect_err("unknown output schema resource must fail");
+
+        assert_eq!(err.code, rmcp::model::ErrorCode::RESOURCE_NOT_FOUND);
+    }
+
+    #[test]
+    fn server_info_declares_tools_and_resources_capabilities() {
+        let info = <super::Longbridge as rmcp::ServerHandler>::get_info(&super::Longbridge);
+
+        assert!(
+            info.capabilities.tools.is_some(),
+            "tool capability must remain advertised"
+        );
+        assert!(
+            info.capabilities.resources.is_some(),
+            "lb:// schema documents require the resources capability"
         );
     }
 
