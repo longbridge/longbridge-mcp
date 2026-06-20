@@ -4,6 +4,7 @@ mod error;
 mod metrics;
 mod serialize;
 mod tools;
+mod ws_pool;
 
 use std::net::SocketAddr;
 use std::path::PathBuf;

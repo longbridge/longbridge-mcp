@@ -1,4 +1,3 @@
-use longbridge::FundamentalContext;
 use longbridge::fundamental::types::AssetAllocationResponse;
 use reqwest::Method;
 use rmcp::ErrorData as McpError;
@@ -256,7 +255,7 @@ async fn etf_asset_allocation(
     mctx: &crate::tools::McpContext,
     symbol: &str,
 ) -> Result<Option<AssetAllocationResponse>, McpError> {
-    let ctx = FundamentalContext::new(mctx.create_config());
+    let ctx = mctx.get_fundamental_context().await;
     let result = ctx
         .etf_asset_allocation(symbol)
         .await
