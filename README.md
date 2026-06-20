@@ -21,7 +21,7 @@ Official MCP server for the [Longbridge](https://longbridge.com) brokerage. **14
 - **Stateless architecture** -- each request carries a Bearer token forwarded directly to the Longbridge SDK; no server-side sessions or database
 - **OAuth 2.1 resource metadata** compliant with RFC 9728, pointing clients to Longbridge OAuth for authorization
 - **JSON response transformation** -- field names normalized to snake_case, timestamps converted to RFC 3339, internal counter_id values mapped to human-readable symbols
-- **Compact tool metadata** -- typed `outputSchema` descriptors stay in `tools/list` for compatible clients, while full verbose schemas are available as MCP resources under `lb://tools/{tool}/output-schema`
+- **Compact tool metadata** -- typed `outputSchema` descriptors stay in `tools/list` for compatible clients, redundant return-field prose is trimmed, and full verbose schemas are available as MCP resources under `lb://tools/{tool}/output-schema`
 - **Prometheus metrics** for monitoring tool calls, latency, and errors
 - **Configurable** via CLI arguments or a JSON config file (CLI takes precedence)
 

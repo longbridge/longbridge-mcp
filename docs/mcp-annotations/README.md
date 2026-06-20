@@ -93,7 +93,10 @@ OpenAI Apps guidance expects tools that return `structuredContent` to declare an
 `outputSchema`, so the descriptor keeps typed schemas where they exist. To keep
 the large tool list manageable, the server compacts the `tools/list`
 `outputSchema` by removing documentation-only schema keys (`$schema`, `title`,
-and `description`) while preserving validation structure.
+and `description`) while preserving validation structure. Tools that already
+declare an `outputSchema` also keep compact top-level descriptions: duplicated
+`Returns ...` field-list prose is removed from the exposed descriptor, and a
+metadata lint test keeps those descriptions under 240 characters.
 
 The full verbose schemas remain available through MCP resources:
 

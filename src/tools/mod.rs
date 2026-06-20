@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{borrow::Cow, sync::Arc};
 
 use rmcp::ErrorData as McpError;
 use rmcp::RoleServer;
@@ -25,6 +25,7 @@ const AUTHENTICATE_TOOL_NAME: &str = "authenticate";
 const OUTPUT_SCHEMA_RESOURCE_PREFIX: &str = "lb://tools/";
 const OUTPUT_SCHEMA_RESOURCE_SUFFIX: &str = "/output-schema";
 const OUTPUT_SCHEMA_RESOURCE_MIME: &str = "application/schema+json";
+const TOOL_DESCRIPTION_MAX_CHARS: usize = 240;
 
 tokio::task_local! {
     /// The name of the tool currently executing, scoped around each tool call by
@@ -431,6 +432,7 @@ fn all_tools_cached() -> &'static [rmcp::model::Tool] {
             .cloned()
             .map(|mut tool| {
                 compact_output_schema_for_tool_list(&mut tool);
+                compact_tool_description_for_tool_list(&mut tool);
                 tool
             })
             .collect()
@@ -542,6 +544,103 @@ fn compact_output_schema_for_tool_list(tool: &mut rmcp::model::Tool) {
     if let serde_json::Value::Object(obj) = schema {
         tool.output_schema = Some(std::sync::Arc::new(obj));
     }
+}
+
+fn compact_tool_description_for_tool_list(tool: &mut rmcp::model::Tool) {
+    if tool.output_schema.is_none() {
+        return;
+    }
+    let Some(description) = tool.description.as_ref() else {
+        return;
+    };
+
+    let compacted = compact_typed_output_tool_description(description.as_ref());
+    if compacted != description.as_ref() {
+        tool.description = Some(Cow::Owned(compacted));
+    }
+}
+
+fn compact_typed_output_tool_description(description: &str) -> String {
+    let without_return_shapes = strip_output_shape_sentences(description);
+    trim_description_to_char_limit(&without_return_shapes, TOOL_DESCRIPTION_MAX_CHARS)
+}
+
+fn strip_output_shape_sentences(description: &str) -> String {
+    let mut kept = Vec::new();
+    for sentence in description_sentences(description) {
+        let sentence = sentence.trim();
+        if sentence.is_empty() {
+            continue;
+        }
+        let lower = sentence.to_ascii_lowercase();
+        if lower.starts_with("returns ")
+            || lower.starts_with("return ")
+            || lower.starts_with("unified data[]")
+            || lower.starts_with("us-only:")
+            || lower.starts_with("hk-only:")
+        {
+            continue;
+        }
+        kept.push(sentence.trim_end_matches('.'));
+    }
+
+    if kept.is_empty() {
+        description.trim().to_string()
+    } else {
+        format!("{}.", kept.join(". "))
+    }
+}
+
+fn trim_description_to_char_limit(description: &str, max_chars: usize) -> String {
+    let trimmed = description.trim();
+    if trimmed.chars().count() <= max_chars {
+        return trimmed.to_string();
+    }
+
+    let mut result = String::new();
+    for sentence in description_sentences(trimmed) {
+        let sentence = sentence.trim();
+        if sentence.is_empty() {
+            continue;
+        }
+        let candidate = if result.is_empty() {
+            format!("{}.", sentence.trim_end_matches('.'))
+        } else {
+            format!("{} {}.", result, sentence.trim_end_matches('.'))
+        };
+        if candidate.chars().count() > max_chars {
+            break;
+        }
+        result = candidate;
+    }
+    if !result.is_empty() {
+        return result;
+    }
+
+    let mut clipped: String = trimmed.chars().take(max_chars.saturating_sub(3)).collect();
+    clipped = clipped
+        .trim_end_matches(|c: char| c.is_whitespace() || c == ',' || c == ';' || c == ':')
+        .to_string();
+    format!("{clipped}...")
+}
+
+fn description_sentences(description: &str) -> Vec<&str> {
+    let mut sentences = Vec::new();
+    let mut start = 0;
+    for (idx, _) in description.match_indices(". ") {
+        let prefix = &description[..idx];
+        let token = prefix.split_whitespace().last().unwrap_or_default();
+        if matches!(token, "e.g" | "i.e") {
+            continue;
+        }
+        sentences.push(&description[start..idx]);
+        start = idx + 2;
+    }
+    let tail = description[start..].trim_end_matches('.');
+    if !tail.trim().is_empty() {
+        sentences.push(tail);
+    }
+    sentences
 }
 
 fn output_schema_resource_uri(tool_name: &str) -> String {
@@ -4118,6 +4217,76 @@ mod quote_cmd_tests {
                 "`{stripped_key}` should move out of the tools/list outputSchema"
             );
         }
+    }
+
+    #[test]
+    fn tool_list_output_schema_tools_omit_redundant_return_field_lists() {
+        let screener_search = super::list_tools()
+            .into_iter()
+            .find(|tool| tool.name == "screener_search")
+            .expect("screener_search tool must be registered");
+
+        assert!(
+            screener_search.output_schema.is_some(),
+            "fixture must cover a typed-output tool"
+        );
+        assert!(
+            !screener_search
+                .description
+                .as_deref()
+                .unwrap_or_default()
+                .contains("Returns "),
+            "typed-output tools should not duplicate output field lists in top-level descriptions"
+        );
+    }
+
+    #[test]
+    fn tool_metadata_lint_keeps_typed_output_descriptions_compact() {
+        let offenders: Vec<String> = super::list_tools()
+            .into_iter()
+            .filter(|tool| tool.output_schema.is_some())
+            .filter_map(|tool| {
+                let description = tool.description.as_deref().unwrap_or_default();
+                let lower = description.to_ascii_lowercase();
+                let has_return_shape = (lower.contains("returns ")
+                    && (lower.contains("[]") || lower.contains("returns {")))
+                    || lower.contains("unified data[]")
+                    || lower.contains("us-only:")
+                    || lower.contains("hk-only:");
+                (description.chars().count() > 240 || has_return_shape).then(|| {
+                    format!(
+                        "{}: {} chars, return_shape={}",
+                        tool.name,
+                        description.chars().count(),
+                        has_return_shape
+                    )
+                })
+            })
+            .collect();
+
+        assert!(
+            offenders.is_empty(),
+            "typed-output tool descriptions should stay under 240 chars and avoid duplicated return field lists:\n{}",
+            offenders.join("\n")
+        );
+    }
+
+    #[test]
+    fn compact_tool_description_does_not_cut_inside_abbreviations() {
+        let valuation = super::list_tools()
+            .into_iter()
+            .find(|tool| tool.name == "valuation_comparison")
+            .expect("valuation_comparison tool must be registered");
+        let description = valuation.description.as_deref().unwrap_or_default();
+
+        assert!(
+            !description.ends_with("e.g."),
+            "description should not be truncated immediately after an abbreviation: {description}"
+        );
+        assert!(
+            !description.ends_with("e.g"),
+            "description should not be truncated inside an abbreviation: {description}"
+        );
     }
 
     #[test]

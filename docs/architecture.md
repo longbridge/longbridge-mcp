@@ -152,6 +152,9 @@ Tool descriptors keep typed `outputSchema` values where available so OpenAI Apps
 and other validating MCP clients can reason about structured results. To reduce
 `tools/list` payload size, the descriptor schemas are compacted by stripping
 documentation-only JSON Schema keys (`$schema`, `title`, and `description`).
+For tools that already declare an `outputSchema`, top-level tool descriptions
+are also compacted by removing duplicated return field lists and keeping the
+exposed description under 240 characters.
 
 The full verbose schemas are exposed as MCP resources using the Longbridge
 resource scheme:
