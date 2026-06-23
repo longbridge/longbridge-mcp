@@ -227,7 +227,6 @@ impl McpContext {
         tokio::spawn(async move { send_quote_cmd(&client).await });
     }
 
-    /// Return the cached `QuoteContext` for this token, creating it on first
     /// Return the cached `QuoteContext` for this token, creating one on first
     /// use. Also fires the WS beacon so the quote operation appears in
     /// server-side access logs.
@@ -4152,16 +4151,17 @@ mod quote_cmd_tests {
     }
 
     /// Guard: every quote tool must obtain its `QuoteContext` via
-    /// `mctx.create_quote_context()` (which fires the `/v1/quote/cmd` beacon),
+    /// `mctx.get_quote_context()` (which fires the `/v1/quote/cmd` beacon),
     /// never `QuoteContext::new(...)` directly. The sole sanctioned constructor
-    /// call lives in `mod.rs` (the helper itself), so every other tool file must
+    /// call lives outside `src/tools`, so every tool file must
     /// be free of `QuoteContext::new(`. This makes "every WS quote tool is
     /// tracked" an enforced invariant: a new tool that constructs its own
     /// `QuoteContext` fails this test.
     #[test]
     fn quote_tools_use_tracking_context_constructor() {
         let tools_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/tools");
-        // `mod.rs` defines `create_quote_context`, the one allowed constructor.
+        // `mod.rs` defines `get_quote_context`; quote tools should not construct
+        // quote contexts directly.
         let helper_file = tools_dir.join("mod.rs");
         let mut offenders = Vec::new();
         for file in rs_files(&tools_dir) {
@@ -4177,7 +4177,7 @@ mod quote_cmd_tests {
         }
         assert!(
             offenders.is_empty(),
-            "quote tools must use `mctx.create_quote_context()` (fires the \
+            "quote tools must use `mctx.get_quote_context()` (fires the \
              /v1/quote/cmd beacon), not `QuoteContext::new(...)` directly. \
              Untracked constructor at:\n{}",
             offenders.join("\n")

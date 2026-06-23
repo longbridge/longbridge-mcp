@@ -42,7 +42,6 @@ base64 = "0.22"
 bs58 = "0.5"
 axum-server = { version = "0.7", features = ["tls-rustls"] }
 serde-transcode = "1.1"
-dashmap = "6"
 anyhow = "1"
 rustls = { version = "0.23", features = ["ring"] }
-
+sha2 = "0.10"
