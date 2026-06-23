@@ -227,15 +227,13 @@ impl McpContext {
         tokio::spawn(async move { send_quote_cmd(&client).await });
     }
 
-    /// Build a `QuoteContext` and record the WS quote operation server-side via
-    /// [`track_quote_cmd`]. Use this instead of
-    /// `QuoteContext::new(self.create_config())` at every quote tool entry point
-    /// so the otherwise-unlogged WebSocket request is counted. The push receiver
-    /// is dropped immediately, matching the existing `let (ctx, _) = …` callers.
-    pub fn create_quote_context(&self) -> longbridge::quote::QuoteContext {
+    /// Return the cached `QuoteContext` for this token, creating it on first
+    /// Return the cached `QuoteContext` for this token, creating one on first
+    /// use. Also fires the WS beacon so the quote operation appears in
+    /// server-side access logs.
+    pub async fn get_quote_context(&self) -> longbridge::quote::QuoteContext {
         self.track_quote_cmd();
-        let (ctx, _) = longbridge::quote::QuoteContext::new(self.create_config());
-        ctx
+        crate::ws_pool::get_or_init_quote(&self.token, self.create_config()).await
     }
 
     /// Extracts `account_channel` from the JWT bearer token's `sub` claim.
