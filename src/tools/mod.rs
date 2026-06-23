@@ -5,8 +5,8 @@ use rmcp::RoleServer;
 use rmcp::ServerHandler;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{
-    CallToolResult, Content, ErrorData as McpErrorData, ListResourcesResult, RawResource,
-    ReadResourceRequestParams, ReadResourceResult, Resource, ResourceContents,
+    CallToolResult, Content, ErrorData as McpErrorData, JsonObject, ListResourcesResult, Meta,
+    RawResource, ReadResourceRequestParams, ReadResourceResult, Resource, ResourceContents,
 };
 use rmcp::service::RequestContext;
 use rmcp::tool;
@@ -26,6 +26,57 @@ const OUTPUT_SCHEMA_RESOURCE_PREFIX: &str = "lb://tools/";
 const OUTPUT_SCHEMA_RESOURCE_SUFFIX: &str = "/output-schema";
 const OUTPUT_SCHEMA_RESOURCE_MIME: &str = "application/schema+json";
 const TOOL_DESCRIPTION_MAX_CHARS: usize = 240;
+
+/// `_meta` key set on infrequently-used tools to advise a Claude API consumer to
+/// enable `defer_loading` for them (progressive disclosure via the tool search
+/// tool). The mark is advisory: MCP clients that do not recognize the key ignore
+/// it, so it is safe for every transport. The consumer reads this key and maps it
+/// to the `mcp_toolset` `defer_loading` configuration. Namespaced per the MCP
+/// `_meta` convention; adjust here if the consumer expects a different key.
+const DEFER_LOADING_META_KEY: &str = "longbridge.com/defer_loading";
+
+/// Core, high-frequency tools that stay eagerly loaded in `tools/list`. Every
+/// other tool is marked for deferred loading (see [`apply_defer_meta`]). This is
+/// the single source of truth for the eager/deferred split: new tools default to
+/// deferred unless added here, keeping the always-loaded context small.
+/// `authenticate` is intentionally absent — it is handled separately and must
+/// never be deferred (see [`apply_defer_meta`]).
+const EAGER_TOOLS: &[&str] = &[
+    // Realtime market data
+    "quote",
+    "depth",
+    "trades",
+    "intraday",
+    "candlesticks",
+    "history_candlesticks_by_date",
+    "static_info",
+    // Market status and helpers
+    "now",
+    "market_status",
+    "calc_indexes",
+    "capital_flow",
+    "trading_days",
+    "exchange_rate",
+    // Portfolio and trading
+    "account_balance",
+    "stock_positions",
+    "today_orders",
+    "submit_order",
+    "cancel_order",
+    "estimate_max_purchase_quantity",
+    "profit_analysis",
+    "watchlist",
+    // Research, content and discovery
+    "financial_report_latest",
+    "valuation",
+    "company",
+    "dividend",
+    "news",
+    "finance_calendar",
+    "top_movers",
+    "institution_rating",
+    "ipo_calendar",
+];
 
 tokio::task_local! {
     /// The name of the tool currently executing, scoped around each tool call by
@@ -433,6 +484,7 @@ fn all_tools_cached() -> &'static [rmcp::model::Tool] {
             .map(|mut tool| {
                 compact_output_schema_for_tool_list(&mut tool);
                 compact_tool_description_for_tool_list(&mut tool);
+                apply_defer_meta(&mut tool);
                 tool
             })
             .collect()
@@ -558,6 +610,27 @@ fn compact_tool_description_for_tool_list(tool: &mut rmcp::model::Tool) {
     if compacted != description.as_ref() {
         tool.description = Some(Cow::Owned(compacted));
     }
+}
+
+/// Mark infrequently-used tools with the [`DEFER_LOADING_META_KEY`] `_meta` hint
+/// so a Claude API consumer can enable `defer_loading` for them, surfacing only
+/// the eager core up front and loading the rest on demand via the tool search
+/// tool.
+///
+/// A tool is deferred unless its name is in [`EAGER_TOOLS`]. `authenticate` is
+/// never deferred: it is the sole tool on the `/agent` endpoint, and a toolset
+/// with every tool deferred leaves the consumer with no non-deferred tool (a
+/// hard error for the tool search tool).
+fn apply_defer_meta(tool: &mut rmcp::model::Tool) {
+    if tool.name == AUTHENTICATE_TOOL_NAME || EAGER_TOOLS.iter().any(|name| tool.name == *name) {
+        return;
+    }
+    let mut meta = JsonObject::new();
+    meta.insert(
+        DEFER_LOADING_META_KEY.to_string(),
+        serde_json::Value::Bool(true),
+    );
+    tool.meta = Some(Meta(meta));
 }
 
 fn compact_typed_output_tool_description(description: &str) -> String {
