@@ -264,8 +264,9 @@ pub async fn get_or_init_quote(
     })
 }
 
-/// Evict a cached entry when a token expires or auth fails.
-#[allow(dead_code)]
+/// Evict the cached `QuoteContext` for `token`. Call this after any error on
+/// a quote API so the next request creates a fresh WebSocket connection rather
+/// than reusing a potentially broken one.
 pub fn evict(token: &str) {
     POOL.remove_identity(&cache_key_for_token(token).identity);
 }

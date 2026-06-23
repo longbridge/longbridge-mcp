@@ -237,6 +237,13 @@ impl McpContext {
         crate::ws_pool::get_or_init_quote(&self.token, || self.create_config()).await
     }
 
+    /// Evict the cached `QuoteContext` for this token. Call this after any
+    /// Longbridge error on a quote API so the next request creates a fresh
+    /// WebSocket connection rather than reusing a broken one.
+    pub fn evict_quote_context(&self) {
+        crate::ws_pool::evict(&self.token);
+    }
+
     /// Extracts `account_channel` from the JWT bearer token's `sub` claim.
     /// Falls back to `"lb"` when the token cannot be decoded.
     pub fn account_channel(&self) -> String {
