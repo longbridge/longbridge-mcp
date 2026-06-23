@@ -49,33 +49,26 @@ const EAGER_TOOLS: &[&str] = &[
     "intraday",
     "candlesticks",
     "history_candlesticks_by_date",
-    "static_info",
     // Market status and helpers
-    "now",
     "market_status",
     "calc_indexes",
     "capital_flow",
     "trading_days",
-    "exchange_rate",
     // Portfolio and trading
     "account_balance",
     "stock_positions",
     "today_orders",
-    "submit_order",
-    "cancel_order",
     "estimate_max_purchase_quantity",
     "profit_analysis",
     "watchlist",
     // Research, content and discovery
     "financial_report_latest",
     "valuation",
-    "company",
     "dividend",
     "news",
     "finance_calendar",
     "top_movers",
     "institution_rating",
-    "ipo_calendar",
 ];
 
 tokio::task_local! {
