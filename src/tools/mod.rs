@@ -232,7 +232,9 @@ impl McpContext {
     /// server-side access logs.
     pub async fn get_quote_context(&self) -> longbridge::quote::QuoteContext {
         self.track_quote_cmd();
-        crate::ws_pool::get_or_init_quote(&self.token, self.create_config()).await
+        // Pass a lazy closure: create_config() is only called on a cache miss.
+        // Cache hits avoid the Arc<Config> allocation entirely.
+        crate::ws_pool::get_or_init_quote(&self.token, || self.create_config()).await
     }
 
     /// Extracts `account_channel` from the JWT bearer token's `sub` claim.
@@ -4159,13 +4161,21 @@ mod quote_cmd_tests {
     /// `QuoteContext` fails this test.
     #[test]
     fn quote_tools_use_tracking_context_constructor() {
-        let tools_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/tools");
-        // `mod.rs` defines `get_quote_context`; quote tools should not construct
-        // quote contexts directly.
-        let helper_file = tools_dir.join("mod.rs");
+        // Scan all of src/ so files outside src/tools/ (e.g. a future
+        // src/subscriptions.rs) are also caught.
+        // Allowed construction sites:
+        //   - src/ws_pool.rs       — the sanctioned pool that wraps QuoteContext::new
+        //   - src/tools/mod.rs     — this file (defines get_quote_context; comments
+        //                            reference QuoteContext::new() in doc strings)
+        let src_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let allowed: std::collections::HashSet<_> = [
+            src_dir.join("ws_pool.rs"),
+            src_dir.join("tools").join("mod.rs"),
+        ]
+        .into();
         let mut offenders = Vec::new();
-        for file in rs_files(&tools_dir) {
-            if file == helper_file {
+        for file in rs_files(&src_dir) {
+            if allowed.contains(&file) {
                 continue;
             }
             let src = std::fs::read_to_string(&file).unwrap();
@@ -4177,8 +4187,9 @@ mod quote_cmd_tests {
         }
         assert!(
             offenders.is_empty(),
-            "quote tools must use `mctx.get_quote_context()` (fires the \
-             /v1/quote/cmd beacon), not `QuoteContext::new(...)` directly. \
+            "QuoteContext::new() is only allowed in src/ws_pool.rs. \
+             All other code must use `mctx.get_quote_context()` so calls go \
+             through the connection pool and the /v1/quote/cmd beacon. \
              Untracked constructor at:\n{}",
             offenders.join("\n")
         );
