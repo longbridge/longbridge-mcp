@@ -227,13 +227,21 @@ impl McpContext {
         tokio::spawn(async move { send_quote_cmd(&client).await });
     }
 
-    /// Return the cached `QuoteContext` for this token, creating it on first
     /// Return the cached `QuoteContext` for this token, creating one on first
     /// use. Also fires the WS beacon so the quote operation appears in
     /// server-side access logs.
     pub async fn get_quote_context(&self) -> longbridge::quote::QuoteContext {
         self.track_quote_cmd();
-        crate::ws_pool::get_or_init_quote(&self.token, self.create_config()).await
+        // Pass a lazy closure: create_config() is only called on a cache miss.
+        // Cache hits avoid the Arc<Config> allocation entirely.
+        crate::ws_pool::get_or_init_quote(&self.token, || self.create_config()).await
+    }
+
+    /// Evict the cached `QuoteContext` for this token. Call this after any
+    /// Longbridge error on a quote API so the next request creates a fresh
+    /// WebSocket connection rather than reusing a broken one.
+    pub fn evict_quote_context(&self) {
+        crate::ws_pool::evict(&self.token);
     }
 
     /// Extracts `account_channel` from the JWT bearer token's `sub` claim.
@@ -4152,20 +4160,29 @@ mod quote_cmd_tests {
     }
 
     /// Guard: every quote tool must obtain its `QuoteContext` via
-    /// `mctx.create_quote_context()` (which fires the `/v1/quote/cmd` beacon),
+    /// `mctx.get_quote_context()` (which fires the `/v1/quote/cmd` beacon),
     /// never `QuoteContext::new(...)` directly. The sole sanctioned constructor
-    /// call lives in `mod.rs` (the helper itself), so every other tool file must
+    /// call lives outside `src/tools`, so every tool file must
     /// be free of `QuoteContext::new(`. This makes "every WS quote tool is
     /// tracked" an enforced invariant: a new tool that constructs its own
     /// `QuoteContext` fails this test.
     #[test]
     fn quote_tools_use_tracking_context_constructor() {
-        let tools_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/tools");
-        // `mod.rs` defines `create_quote_context`, the one allowed constructor.
-        let helper_file = tools_dir.join("mod.rs");
+        // Scan all of src/ so files outside src/tools/ (e.g. a future
+        // src/subscriptions.rs) are also caught.
+        // Allowed construction sites:
+        //   - src/ws_pool.rs       — the sanctioned pool that wraps QuoteContext::new
+        //   - src/tools/mod.rs     — this file (defines get_quote_context; comments
+        //                            reference QuoteContext::new() in doc strings)
+        let src_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let allowed: std::collections::HashSet<_> = [
+            src_dir.join("ws_pool.rs"),
+            src_dir.join("tools").join("mod.rs"),
+        ]
+        .into();
         let mut offenders = Vec::new();
-        for file in rs_files(&tools_dir) {
-            if file == helper_file {
+        for file in rs_files(&src_dir) {
+            if allowed.contains(&file) {
                 continue;
             }
             let src = std::fs::read_to_string(&file).unwrap();
@@ -4177,8 +4194,9 @@ mod quote_cmd_tests {
         }
         assert!(
             offenders.is_empty(),
-            "quote tools must use `mctx.create_quote_context()` (fires the \
-             /v1/quote/cmd beacon), not `QuoteContext::new(...)` directly. \
+            "QuoteContext::new() is only allowed in src/ws_pool.rs. \
+             All other code must use `mctx.get_quote_context()` so calls go \
+             through the connection pool and the /v1/quote/cmd beacon. \
              Untracked constructor at:\n{}",
             offenders.join("\n")
         );

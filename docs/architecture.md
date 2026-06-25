@@ -2,14 +2,14 @@
 
 ## Overview
 
-Longbridge MCP Server is a **stateless** Rust service that exposes Longbridge financial data and trading capabilities through the [Model Context Protocol](https://modelcontextprotocol.io/) (MCP). It translates MCP tool calls into Longbridge SDK and HTTP API calls, handling authentication, JSON response transformation, and metrics collection.
+Longbridge MCP Server is a Rust service with no durable session state that exposes Longbridge financial data and trading capabilities through the [Model Context Protocol](https://modelcontextprotocol.io/) (MCP). It translates MCP tool calls into Longbridge SDK and HTTP API calls, handling authentication, JSON response transformation, metrics collection, and a bounded process-local quote WebSocket context cache.
 
 ```
 ┌─────────────┐         ┌──────────────────────┐         ┌──────────────────┐
 │  MCP Client │  HTTP   │  Longbridge MCP      │  SDK /  │  Longbridge      │
 │ (Claude,    │ Bearer  │  Server              │  HTTP   │  OpenAPI         │
 │  etc.)      │────────▶│                      │────────▶│                  │
-│             │◀────────│  (stateless)         │◀────────│  (quote, trade,  │
+│             │◀────────│  (no durable state)  │◀────────│  (quote, trade,  │
 │             │  JSON   │                      │  JSON   │   content, etc.) │
 └─────────────┘         └──────────────────────┘         └──────────────────┘
                                │
@@ -23,7 +23,7 @@ Longbridge MCP Server is a **stateless** Rust service that exposes Longbridge fi
 
 ## Design Principles
 
-1. **Stateless** — No sessions, no database. Each request carries a Bearer token; the server creates SDK contexts on the fly and discards them after use.
+1. **No durable server state** — No sessions and no database. Each request carries a Bearer token. HTTP and trade contexts are created on demand; quote WebSocket contexts are cached per authenticated identity inside each process with an idle TTL and maximum size so concurrent quote tools share one upstream connection.
 
 2. **Direct OAuth** — The server does not proxy OAuth. It publishes [RFC 9728](https://datatracker.ietf.org/doc/html/rfc9728) Protected Resource Metadata pointing MCP clients directly to Longbridge's OAuth authorization server.
 
@@ -41,11 +41,11 @@ Longbridge MCP Server is a **stateless** Rust service that exposes Longbridge fi
 4. Tool handler:
    a. Extracts McpContext (token + Accept-Language) from request
    b. Creates Config via OAuth::from_token(token)
-   c. Creates QuoteContext / TradeContext / HttpClient as needed
+   c. Reuses or creates a cached QuoteContext, or creates TradeContext / HttpClient as needed
    d. Calls the Longbridge SDK or HTTP API
    e. Serializes the response through TransformSerializer
    f. Returns CallToolResult with transformed JSON
-   g. Config and contexts are dropped (connections closed)
+   g. HTTP/trade contexts are dropped; cached quote contexts stay until idle TTL, token rotation, explicit eviction, or capacity pressure
 
 5. Response flows back through rmcp → axum → MCP Client
 ```
@@ -213,12 +213,14 @@ The server reads configuration from CLI arguments (highest priority), a JSON con
 | `base_url` | Public URL for OAuth metadata (**required for public deployments**) |
 | `tls_cert` / `tls_key` | Enable HTTPS with PEM certificate and key |
 | `LONGBRIDGE_HTTP_URL` | Override Longbridge API endpoint (env var) |
+| `LONGBRIDGE_MCP_QUOTE_WS_IDLE_TTL_SECS` | Idle TTL for cached quote WebSocket contexts (default: 600) |
+| `LONGBRIDGE_MCP_QUOTE_WS_MAX_CONTEXTS` | Maximum cached quote WebSocket contexts per process (default: 1024) |
 
 ## Deployment
 
 The server is designed for containerized deployment:
 
 - Single static binary (no runtime dependencies beyond CA certificates)
-- No persistent state (no volumes needed for data)
+- No persistent state; the process-local quote WebSocket cache is bounded and disposable
 - Horizontal scaling: any number of instances behind a load balancer
 - Health check: `GET /metrics` returns 200
