@@ -230,7 +230,7 @@ pub async fn static_info(
 ) -> Result<CallToolResult, McpError> {
     let ctx = mctx.get_quote_context().await;
     let result = ctx.static_info(p.symbols).await.map_err(|e| {
-        mctx.evict_quote_context();
+        ctx.evict_on_error();
         Error::longbridge(e)
     })?;
     tool_json(&result)
@@ -288,7 +288,7 @@ pub async fn quote(
 ) -> Result<CallToolResult, McpError> {
     let ctx = mctx.get_quote_context().await;
     let result = ctx.quote(p.symbols).await.map_err(|e| {
-        mctx.evict_quote_context();
+        ctx.evict_on_error();
         Error::longbridge(e)
     })?;
     let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;
@@ -302,7 +302,7 @@ pub async fn option_quote(
 ) -> Result<CallToolResult, McpError> {
     let ctx = mctx.get_quote_context().await;
     let result = ctx.option_quote(p.symbols).await.map_err(|e| {
-        mctx.evict_quote_context();
+        ctx.evict_on_error();
         Error::longbridge(e)
     })?;
     tool_json(&result)
@@ -314,7 +314,7 @@ pub async fn warrant_quote(
 ) -> Result<CallToolResult, McpError> {
     let ctx = mctx.get_quote_context().await;
     let result = ctx.warrant_quote(p.symbols).await.map_err(|e| {
-        mctx.evict_quote_context();
+        ctx.evict_on_error();
         Error::longbridge(e)
     })?;
     tool_json(&result)
@@ -326,7 +326,7 @@ pub async fn depth(
 ) -> Result<CallToolResult, McpError> {
     let ctx = mctx.get_quote_context().await;
     let result = ctx.depth(p.symbol).await.map_err(|e| {
-        mctx.evict_quote_context();
+        ctx.evict_on_error();
         Error::longbridge(e)
     })?;
     tool_json(&result)
@@ -338,7 +338,7 @@ pub async fn brokers(
 ) -> Result<CallToolResult, McpError> {
     let ctx = mctx.get_quote_context().await;
     let result = ctx.brokers(p.symbol).await.map_err(|e| {
-        mctx.evict_quote_context();
+        ctx.evict_on_error();
         Error::longbridge(e)
     })?;
     tool_json(&result)
@@ -347,7 +347,7 @@ pub async fn brokers(
 pub async fn participants(mctx: &crate::tools::McpContext) -> Result<CallToolResult, McpError> {
     let ctx = mctx.get_quote_context().await;
     let result = ctx.participants().await.map_err(|e| {
-        mctx.evict_quote_context();
+        ctx.evict_on_error();
         Error::longbridge(e)
     })?;
     tool_json(&result)
@@ -359,7 +359,7 @@ pub async fn trades(
 ) -> Result<CallToolResult, McpError> {
     let ctx = mctx.get_quote_context().await;
     let result = ctx.trades(p.symbol, p.count).await.map_err(|e| {
-        mctx.evict_quote_context();
+        ctx.evict_on_error();
         Error::longbridge(e)
     })?;
     tool_json(&result)
@@ -375,7 +375,7 @@ pub async fn intraday(
     };
     let ctx = mctx.get_quote_context().await;
     let result = ctx.intraday(p.symbol, sessions).await.map_err(|e| {
-        mctx.evict_quote_context();
+        ctx.evict_on_error();
         Error::longbridge(e)
     })?;
     tool_json(&result)
@@ -397,7 +397,7 @@ pub async fn candlesticks(
         .candlesticks(p.symbol, period, p.count, adjust, sessions)
         .await
         .map_err(|e| {
-            mctx.evict_quote_context();
+            ctx.evict_on_error();
             Error::longbridge(e)
         })?;
     tool_json(&result)
@@ -421,7 +421,7 @@ pub async fn history_candlesticks_by_offset(
         )
         .await
         .map_err(|e| {
-            mctx.evict_quote_context();
+            ctx.evict_on_error();
             Error::longbridge(e)
         })?;
     tool_json(&result)
@@ -447,7 +447,7 @@ pub async fn history_candlesticks_by_date(
         .history_candlesticks_by_date(p.symbol, period, adjust, start, end, sessions)
         .await
         .map_err(|e| {
-            mctx.evict_quote_context();
+            ctx.evict_on_error();
             Error::longbridge(e)
         })?;
     tool_json(&result)
@@ -462,7 +462,7 @@ pub async fn trading_days(
     let end = parse::parse_date(&p.end)?;
     let ctx = mctx.get_quote_context().await;
     let result = ctx.trading_days(market, start, end).await.map_err(|e| {
-        mctx.evict_quote_context();
+        ctx.evict_on_error();
         Error::longbridge(e)
     })?;
     tool_json(&result)
@@ -477,7 +477,7 @@ pub async fn option_chain_expiry_date_list(
         .option_chain_expiry_date_list(p.symbol)
         .await
         .map_err(|e| {
-            mctx.evict_quote_context();
+            ctx.evict_on_error();
             Error::longbridge(e)
         })?;
     let strs: Vec<String> = dates
@@ -500,7 +500,7 @@ pub async fn option_chain_info_by_date(
         .option_chain_info_by_date(p.symbol, date)
         .await
         .map_err(|e| {
-            mctx.evict_quote_context();
+            ctx.evict_on_error();
             Error::longbridge(e)
         })?;
     tool_json(&result)
@@ -512,7 +512,7 @@ pub async fn capital_flow(
 ) -> Result<CallToolResult, McpError> {
     let ctx = mctx.get_quote_context().await;
     let result = ctx.capital_flow(p.symbol).await.map_err(|e| {
-        mctx.evict_quote_context();
+        ctx.evict_on_error();
         Error::longbridge(e)
     })?;
     tool_json(&result)
@@ -524,7 +524,7 @@ pub async fn capital_distribution(
 ) -> Result<CallToolResult, McpError> {
     let ctx = mctx.get_quote_context().await;
     let result = ctx.capital_distribution(p.symbol).await.map_err(|e| {
-        mctx.evict_quote_context();
+        ctx.evict_on_error();
         Error::longbridge(e)
     })?;
     let timestamp = result
@@ -550,7 +550,7 @@ pub async fn capital_distribution(
 pub async fn trading_session(mctx: &crate::tools::McpContext) -> Result<CallToolResult, McpError> {
     let ctx = mctx.get_quote_context().await;
     let result = ctx.trading_session().await.map_err(|e| {
-        mctx.evict_quote_context();
+        ctx.evict_on_error();
         Error::longbridge(e)
     })?;
     tool_json(&result)
@@ -563,7 +563,7 @@ pub async fn market_temperature(
     let market = parse::parse_market(&p.market)?;
     let ctx = mctx.get_quote_context().await;
     let result = ctx.market_temperature(market).await.map_err(|e| {
-        mctx.evict_quote_context();
+        ctx.evict_on_error();
         Error::longbridge(e)
     })?;
     tool_json(&result)
@@ -581,7 +581,7 @@ pub async fn history_market_temperature(
         .history_market_temperature(market, start, end)
         .await
         .map_err(|e| {
-            mctx.evict_quote_context();
+            ctx.evict_on_error();
             Error::longbridge(e)
         })?;
     tool_json(&result)
@@ -590,7 +590,7 @@ pub async fn history_market_temperature(
 pub async fn watchlist(mctx: &crate::tools::McpContext) -> Result<CallToolResult, McpError> {
     let ctx = mctx.get_quote_context().await;
     let result = ctx.watchlist().await.map_err(|e| {
-        mctx.evict_quote_context();
+        ctx.evict_on_error();
         Error::longbridge(e)
     })?;
     tool_json(&result)
@@ -602,7 +602,7 @@ pub async fn filings(
 ) -> Result<CallToolResult, McpError> {
     let ctx = mctx.get_quote_context().await;
     let result = ctx.filings(p.symbol).await.map_err(|e| {
-        mctx.evict_quote_context();
+        ctx.evict_on_error();
         Error::longbridge(e)
     })?;
     tool_json(&result)
@@ -611,7 +611,7 @@ pub async fn filings(
 pub async fn warrant_issuers(mctx: &crate::tools::McpContext) -> Result<CallToolResult, McpError> {
     let ctx = mctx.get_quote_context().await;
     let result = ctx.warrant_issuers().await.map_err(|e| {
-        mctx.evict_quote_context();
+        ctx.evict_on_error();
         Error::longbridge(e)
     })?;
     tool_json(&result)
@@ -675,7 +675,7 @@ pub async fn warrant_list(
         )
         .await
         .map_err(|e| {
-            mctx.evict_quote_context();
+            ctx.evict_on_error();
             Error::longbridge(e)
         })?;
     tool_json(&result)
@@ -711,7 +711,7 @@ pub async fn calc_indexes(
         .collect::<Result<_, _>>()?;
     let ctx = mctx.get_quote_context().await;
     let mut result = ctx.calc_indexes(p.symbols, indexes).await.map_err(|e| {
-        mctx.evict_quote_context();
+        ctx.evict_on_error();
         Error::longbridge(e)
     })?;
 
@@ -744,7 +744,7 @@ pub async fn create_watchlist_group(
     }
     let ctx = mctx.get_quote_context().await;
     let id = ctx.create_watchlist_group(req).await.map_err(|e| {
-        mctx.evict_quote_context();
+        ctx.evict_on_error();
         Error::longbridge(e)
     })?;
     tool_json(&serde_json::json!({ "id": id }))
@@ -757,7 +757,7 @@ pub async fn delete_watchlist_group(
     let ctx = mctx.get_quote_context().await;
     let id = p.id;
     ctx.delete_watchlist_group(id, p.purge).await.map_err(|e| {
-        mctx.evict_quote_context();
+        ctx.evict_on_error();
         Error::longbridge(e)
     })?;
     tool_json(&serde_json::json!({ "id": id, "deleted": true }))
@@ -783,7 +783,7 @@ pub async fn update_watchlist_group(
     }
     let ctx = mctx.get_quote_context().await;
     ctx.update_watchlist_group(req).await.map_err(|e| {
-        mctx.evict_quote_context();
+        ctx.evict_on_error();
         Error::longbridge(e)
     })?;
     tool_json(&serde_json::json!({ "id": id, "updated": true }))
@@ -800,7 +800,7 @@ pub async fn security_list(
     };
     let ctx = mctx.get_quote_context().await;
     let all = ctx.security_list(market, category).await.map_err(|e| {
-        mctx.evict_quote_context();
+        ctx.evict_on_error();
         Error::longbridge(e)
     })?;
 

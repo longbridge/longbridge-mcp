@@ -107,6 +107,35 @@ where
     Ok(tool_result(json))
 }
 
+/// A `QuoteContext` obtained from the pool, paired with its generation number.
+///
+/// Implements `Deref<Target = QuoteContext>` so call sites use it identically
+/// to a raw `QuoteContext`. After a Longbridge error, call `evict_on_error` to
+/// remove only this specific connection (identified by generation), preventing
+/// the cascading-eviction race where a concurrent error handler would otherwise
+/// delete a healthy replacement connection.
+pub struct QuoteCtxHandle {
+    pub ctx: longbridge::quote::QuoteContext,
+    token: String,
+    generation: u64,
+}
+
+impl QuoteCtxHandle {
+    /// Evict this connection from the pool only if no replacement has been
+    /// inserted since we obtained it. Safe to call concurrently: the generation
+    /// check ensures a healthy successor is never removed.
+    pub fn evict_on_error(&self) {
+        crate::ws_pool::evict_generation(&self.token, self.generation);
+    }
+}
+
+impl std::ops::Deref for QuoteCtxHandle {
+    type Target = longbridge::quote::QuoteContext;
+    fn deref(&self) -> &Self::Target {
+        &self.ctx
+    }
+}
+
 /// Per-request context extracted from HTTP headers.
 pub struct McpContext {
     pub token: String,
@@ -227,21 +256,23 @@ impl McpContext {
         tokio::spawn(async move { send_quote_cmd(&client).await });
     }
 
-    /// Return the cached `QuoteContext` for this token, creating one on first
-    /// use. Also fires the WS beacon so the quote operation appears in
-    /// server-side access logs.
-    pub async fn get_quote_context(&self) -> longbridge::quote::QuoteContext {
+    /// Return the cached `QuoteContext` for this token wrapped in a
+    /// [`QuoteCtxHandle`]. Also fires the WS beacon so the quote operation
+    /// appears in server-side access logs.
+    ///
+    /// Call [`QuoteCtxHandle::evict_on_error`] in error handlers so the pool
+    /// can create a fresh connection on the next attempt.
+    pub async fn get_quote_context(&self) -> QuoteCtxHandle {
         self.track_quote_cmd();
         // Pass a lazy closure: create_config() is only called on a cache miss.
         // Cache hits avoid the Arc<Config> allocation entirely.
-        crate::ws_pool::get_or_init_quote(&self.token, || self.create_config()).await
-    }
-
-    /// Evict the cached `QuoteContext` for this token. Call this after any
-    /// Longbridge error on a quote API so the next request creates a fresh
-    /// WebSocket connection rather than reusing a broken one.
-    pub fn evict_quote_context(&self) {
-        crate::ws_pool::evict(&self.token);
+        let (ctx, generation) =
+            crate::ws_pool::get_or_init_quote(&self.token, || self.create_config()).await;
+        QuoteCtxHandle {
+            ctx,
+            token: self.token.clone(),
+            generation,
+        }
     }
 
     /// Extracts `account_channel` from the JWT bearer token's `sub` claim.

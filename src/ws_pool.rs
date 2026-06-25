@@ -8,7 +8,8 @@
 
 use std::collections::HashMap;
 use std::fmt::Write as _;
-use std::sync::{Arc, LazyLock, Mutex, OnceLock};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
 use base64::{Engine as _, engine::general_purpose::URL_SAFE};
@@ -21,7 +22,14 @@ const IDLE_TTL_ENV: &str = "LONGBRIDGE_MCP_QUOTE_WS_IDLE_TTL_SECS";
 const MAX_ENTRIES_ENV: &str = "LONGBRIDGE_MCP_QUOTE_WS_MAX_CONTEXTS";
 
 static POOL: LazyLock<Pool<QuoteContext>> = LazyLock::new(|| Pool::new(PoolSettings::from_env()));
-static SWEEPER_STARTED: OnceLock<()> = OnceLock::new();
+/// Set to `true` only after the sweeper task is successfully spawned.
+/// Unlike a `OnceLock`, this allows retrying on the next call if the first
+/// call arrived before the Tokio runtime was available.
+static SWEEPER_STARTED: AtomicBool = AtomicBool::new(false);
+/// Monotonically increasing generation counter; incremented on every insert.
+/// Callers receive the generation of the entry they obtained so they can do
+/// generation-guarded eviction (see `evict_generation`).
+static NEXT_GEN: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone, Copy, Debug)]
 struct PoolSettings {
@@ -77,6 +85,11 @@ struct PoolEntry<T> {
     value: T,
     token_fingerprint: String,
     last_used: Instant,
+    /// Unique, monotonically increasing identifier for this specific connection.
+    /// Used by `evict_generation` to ensure a concurrent error handler does not
+    /// remove a healthy replacement connection created after the broken one was
+    /// evicted.
+    generation: u64,
 }
 
 /// Combined state protected by a single Mutex so `last_prune` is always
@@ -112,15 +125,21 @@ where
         }
     }
 
+    /// Returns `(value, generation)`.  The generation uniquely identifies this
+    /// specific connection instance; pass it to `evict_generation` on error to
+    /// avoid racing with a concurrent reconnect.
     fn get_or_insert_with(
         &self,
         key: PoolKey,
         token_fingerprint: String,
         init: impl FnOnce() -> T,
-    ) -> T {
-        self.get_or_insert_with_at(Instant::now(), key, token_fingerprint, init)
+    ) -> (T, u64) {
+        self.get_or_insert_with_gen_at(Instant::now(), key, token_fingerprint, init)
     }
 
+    /// Test-facing wrapper that discards the generation so existing unit tests
+    /// do not need to change.
+    #[cfg(test)]
     fn get_or_insert_with_at(
         &self,
         now: Instant,
@@ -128,6 +147,17 @@ where
         token_fingerprint: String,
         init: impl FnOnce() -> T,
     ) -> T {
+        self.get_or_insert_with_gen_at(now, key, token_fingerprint, init)
+            .0
+    }
+
+    fn get_or_insert_with_gen_at(
+        &self,
+        now: Instant,
+        key: PoolKey,
+        token_fingerprint: String,
+        init: impl FnOnce() -> T,
+    ) -> (T, u64) {
         let mut inner = self.inner.lock().unwrap_or_else(|err| err.into_inner());
 
         // Inline idle prune — time-gated to every idle_ttl/4 so the hot path
@@ -142,21 +172,21 @@ where
             inner.last_prune = now;
         }
 
-        if let Some(value) = inner.entries.get_mut(&key).and_then(|entry| {
+        if let Some((value, entry_gen)) = inner.entries.get_mut(&key).and_then(|entry| {
             if entry.token_fingerprint == token_fingerprint {
                 entry.last_used = now;
-                Some(entry.value.clone())
+                Some((entry.value.clone(), entry.generation))
             } else {
                 None
             }
         }) {
             crate::metrics::record_quote_ws_pool_event("hit", 1);
             crate::metrics::set_quote_ws_pool_entries(inner.entries.len());
-            return value;
+            return (value, entry_gen);
         }
 
-        if inner.entries.contains_key(&key) {
-            inner.entries.remove(&key);
+        // #7: use remove().is_some() instead of contains_key + remove (two lookups → one)
+        if inner.entries.remove(&key).is_some() {
             crate::metrics::record_quote_ws_pool_event("evict_rotated_token", 1);
         }
 
@@ -173,27 +203,18 @@ where
         // first-use requests for the SAME key are serialized here — preventing
         // duplicate WS connections for the same user, which is the desired behavior.
         let value = init();
+        let generation = NEXT_GEN.fetch_add(1, Ordering::Relaxed);
         inner.entries.insert(
             key,
             PoolEntry {
                 value: value.clone(),
                 token_fingerprint,
                 last_used: now,
+                generation,
             },
         );
         crate::metrics::set_quote_ws_pool_entries(inner.entries.len());
-        value
-    }
-
-    fn remove_identity(&self, identity: &str) {
-        let mut inner = self.inner.lock().unwrap_or_else(|err| err.into_inner());
-        let before = inner.entries.len();
-        inner.entries.retain(|key, _| key.identity != identity);
-        let removed = before.saturating_sub(inner.entries.len());
-        if removed > 0 {
-            crate::metrics::record_quote_ws_pool_event("evict_explicit", removed as u64);
-            crate::metrics::set_quote_ws_pool_entries(inner.entries.len());
-        }
+        (value, generation)
     }
 
     fn prune_idle_now(&self) {
@@ -212,7 +233,9 @@ where
         now: Instant,
     ) -> usize {
         let before = entries.len();
-        entries.retain(|_, entry| now.saturating_duration_since(entry.last_used) <= idle_ttl);
+        // Use `<` so entries are evicted once they reach idle_ttl, not kept for
+        // one extra prune window when age == idle_ttl exactly.
+        entries.retain(|_, entry| now.saturating_duration_since(entry.last_used) < idle_ttl);
         before.saturating_sub(entries.len())
     }
 
@@ -244,16 +267,21 @@ where
     }
 }
 
-/// Return the cached `QuoteContext` for `token`, creating one on first use.
+/// Return the cached `QuoteContext` for `token` and its generation.
 ///
 /// `make_config` is a lazy factory: it is only called on a cache miss so
 /// callers avoid building a `Config` (and its `Arc` allocation) on every
 /// cache hit. Pass `|| mctx.create_config()` rather than
 /// `mctx.create_config()`.
+///
+/// The returned `generation` uniquely identifies this specific connection
+/// instance. Pass it to `evict_generation` on error to avoid the cascading
+/// eviction race where a concurrent error handler removes a healthy replacement
+/// connection.
 pub async fn get_or_init_quote(
     token: &str,
     make_config: impl FnOnce() -> Arc<longbridge::Config>,
-) -> QuoteContext {
+) -> (QuoteContext, u64) {
     ensure_idle_sweeper_started();
 
     let key = cache_key_for_token(token);
@@ -264,30 +292,51 @@ pub async fn get_or_init_quote(
     })
 }
 
-/// Evict the cached `QuoteContext` for `token`. Call this after any error on
-/// a quote API so the next request creates a fresh WebSocket connection rather
-/// than reusing a potentially broken one.
-pub fn evict(token: &str) {
-    POOL.remove_identity(&cache_key_for_token(token).identity);
+/// Evict the cached `QuoteContext` only if it still has the given `generation`.
+///
+/// This prevents the cascading eviction race: if Thread A errors, evicts its
+/// broken connection, and immediately creates a healthy replacement, Thread B's
+/// subsequent error call will only evict the replacement if it carries the same
+/// generation — which it won't, because the replacement was assigned a new
+/// generation on insert. Thread B's eviction is therefore a no-op, and the
+/// healthy connection survives.
+pub fn evict_generation(token: &str, generation: u64) {
+    let key = cache_key_for_token(token);
+    let mut inner = POOL.inner.lock().unwrap_or_else(|err| err.into_inner());
+    if inner.entries.get(&key).map(|e| e.generation) == Some(generation) {
+        inner.entries.remove(&key);
+        crate::metrics::record_quote_ws_pool_event("evict_explicit", 1);
+        crate::metrics::set_quote_ws_pool_entries(inner.entries.len());
+    }
 }
 
 fn ensure_idle_sweeper_started() {
-    SWEEPER_STARTED.get_or_init(|| {
-        // Guard: tokio::spawn requires an active Tokio runtime. Skip silently
-        // when called from a non-async context (e.g. a sync unit test or a
-        // CLI path without a runtime). The time-gated inline prune in
-        // get_or_insert_with_at handles cleanup in the absence of the sweeper.
-        if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            let interval = sweep_interval(POOL.settings.idle_ttl);
-            handle.spawn(async move {
-                let mut ticker = tokio::time::interval(interval);
-                loop {
-                    ticker.tick().await;
-                    POOL.prune_idle_now();
-                }
-            });
-        }
-    });
+    // Use an AtomicBool instead of OnceLock so we can retry on the next call
+    // if the first call arrived before the Tokio runtime was available.
+    // OnceLock would permanently record "started" even when spawn was skipped,
+    // preventing any future attempt to start the sweeper.
+    if SWEEPER_STARTED.load(Ordering::Acquire) {
+        return;
+    }
+    // Only spawn (and record) if a Tokio runtime is currently active.
+    // If not, the time-gated inline prune handles cleanup; we retry on the next call.
+    let Ok(handle) = tokio::runtime::Handle::try_current() else {
+        return;
+    };
+    // Use compare-and-swap so only one thread wins the race to spawn.
+    if SWEEPER_STARTED
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_ok()
+    {
+        let interval = sweep_interval(POOL.settings.idle_ttl);
+        handle.spawn(async move {
+            let mut ticker = tokio::time::interval(interval);
+            loop {
+                ticker.tick().await;
+                POOL.prune_idle_now();
+            }
+        });
+    }
 }
 
 fn sweep_interval(idle_ttl: Duration) -> Duration {
