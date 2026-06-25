@@ -190,6 +190,19 @@ async fn main() -> anyhow::Result<()> {
         "tools registered"
     );
 
+    // The two client-facing endpoints differ only in which tools they expose.
+    let public_tools = crate::tools::v1_list_tools();
+    tracing::info!(
+        url = %format!("{}/mcp", config.base_url),
+        tools = tools.len(),
+        "full endpoint — direct users (all tools, incl. trading & DCA)"
+    );
+    tracing::info!(
+        url = %format!("{}/v1", config.base_url),
+        tools = public_tools.len(),
+        "restricted public endpoint — app directories (read-only analysis only)"
+    );
+
     if let (Some(cert), Some(key)) = (&config.tls_cert, &config.tls_key) {
         let tls_config = axum_server::tls_rustls::RustlsConfig::from_pem_file(cert, key).await?;
         let handle = axum_server::Handle::new();

@@ -13,7 +13,7 @@ use rmcp::tool;
 use rmcp::tool_handler;
 use rmcp::tool_router;
 
-use crate::auth::middleware::{AgentEndpoint, BearerToken};
+use crate::auth::middleware::{AgentEndpoint, BearerToken, RestrictedEndpoint};
 use crate::error::Error;
 use crate::serialize::to_tool_json;
 
@@ -357,6 +357,18 @@ fn is_agent_endpoint(ctx: &RequestContext<RoleServer>) -> bool {
         .unwrap_or(false)
 }
 
+/// Whether the request arrived on the restricted public `/v1` endpoint.
+///
+/// The auth middleware inserts [`RestrictedEndpoint`] for every request that
+/// proceeds on `/v1`. When true, `list_tools` exposes and `call_tool` accepts
+/// only the [`V1_PUBLIC_TOOLS`] allowlist.
+fn is_restricted_endpoint(ctx: &RequestContext<RoleServer>) -> bool {
+    ctx.extensions
+        .get::<axum::http::request::Parts>()
+        .map(|parts| parts.extensions.get::<RestrictedEndpoint>().is_some())
+        .unwrap_or(false)
+}
+
 fn extract_context(ctx: &RequestContext<RoleServer>) -> Result<McpContext, McpError> {
     let parts = ctx
         .extensions
@@ -469,6 +481,73 @@ fn tools_agent_endpoint() -> &'static [rmcp::model::Tool] {
             .cloned()
             .collect()
     })
+}
+
+/// Curated read-only allowlist exposed on the restricted public `/v1` endpoint.
+///
+/// Investment-analysis tools only. NEVER add trading, DCA, account, watchlist,
+/// alert, or any other personal/mutating tool here: `/v1` is the surface
+/// submitted to third-party app directories (OpenAI/Claude/Grok), which forbid
+/// investment-trade execution. A unit test asserts this list stays disjoint
+/// from the `trade.write`, `trade.read`, and `account.read` scopes and that
+/// every entry exists in the live tool registry.
+pub const V1_PUBLIC_TOOLS: &[&str] = &[
+    // Quotes / charts
+    "quote",
+    "candlesticks",
+    "depth",
+    "intraday",
+    "trades",
+    "calc_indexes",
+    "market_status",
+    // Fundamentals
+    "financial_statement",
+    "financial_report_latest",
+    "company",
+    "dividend",
+    "valuation",
+    "business_segments",
+    // Research
+    "institution_rating",
+    "consensus",
+    "forecast_eps",
+    "shareholder_top",
+    "short_positions",
+    // News / content
+    "news",
+    "news_search",
+    "filings",
+    // Market intelligence
+    "screener_search",
+    "top_movers",
+    "rank_list",
+    "finance_calendar",
+    // Watchlist (read-only query; group create/update/delete are excluded)
+    "watchlist",
+];
+
+/// Whether `name` is on the public `/v1` allowlist.
+fn is_v1_public_tool(name: &str) -> bool {
+    V1_PUBLIC_TOOLS.contains(&name)
+}
+
+/// Tools for the restricted public `/v1` endpoint: only [`V1_PUBLIC_TOOLS`].
+/// Computed once; every `tools/list` response clones from this slice.
+fn tools_v1_endpoint() -> &'static [rmcp::model::Tool] {
+    static V1: std::sync::OnceLock<Vec<rmcp::model::Tool>> = std::sync::OnceLock::new();
+    V1.get_or_init(|| {
+        all_tools_cached()
+            .iter()
+            .filter(|t| is_v1_public_tool(t.name.as_ref()))
+            .cloned()
+            .collect()
+    })
+}
+
+/// Tool descriptors exposed on the restricted public `/v1` endpoint
+/// (allowlist only). Used by the `/v1/tools.json` manifest handler.
+pub fn v1_list_tools() -> Vec<rmcp::model::Tool> {
+    tools_v1_endpoint().to_vec()
 }
 
 /// Returns the tool router, built once and cached for the lifetime of the process.
@@ -3810,6 +3889,17 @@ impl ServerHandler for Longbridge {
                  returned `Authorization: Bearer` token.",
                 crate::tools::authenticate::connect_page_url()
             ));
+        } else if is_restricted_endpoint(&context) {
+            // The public `/v1` endpoint describes only its analysis capabilities
+            // and does not mention trading. Keep the first sentence
+            // self-contained (clients surface the first ~512 chars).
+            info.instructions = Some(
+                "Longbridge MCP — market and investment analysis for US, HK, A-share, and SG \
+                 markets. Provides live quotes, candlestick charts, order-book depth, \
+                 fundamentals, valuations, analyst ratings and estimates, news, filings, and \
+                 screeners."
+                    .to_string(),
+            );
         }
         Ok(info)
     }
@@ -3837,6 +3927,19 @@ impl ServerHandler for Longbridge {
         request: rmcp::model::CallToolRequestParams,
         context: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> Result<rmcp::model::CallToolResult, rmcp::ErrorData> {
+        // Execution-layer gate for the restricted `/v1` endpoint: a tool hidden
+        // from `tools/list` must also be un-callable by name, or the listing
+        // filter is merely cosmetic. Trading/account tools are rejected here.
+        if is_restricted_endpoint(&context) && !is_v1_public_tool(request.name.as_ref()) {
+            return Err(McpError::invalid_request(
+                format!(
+                    "Tool `{}` is not available on this endpoint. \
+                     This endpoint exposes read-only market-analysis tools only.",
+                    request.name
+                ),
+                None,
+            ));
+        }
         let tcc = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
         cached_router().call(tcc).await
     }
@@ -3850,6 +3953,8 @@ impl ServerHandler for Longbridge {
         // the clone cost (Arc ref-bumps + String title copies), not filter work.
         let tools = if is_agent_endpoint(&context) && !is_authenticated(&context) {
             tools_agent_endpoint().to_vec()
+        } else if is_restricted_endpoint(&context) {
+            tools_v1_endpoint().to_vec()
         } else {
             tools_main_endpoint().to_vec()
         };
@@ -4040,6 +4145,54 @@ mod tests {
     #[test]
     fn empty_map_returns_empty() {
         assert!(collect_headers(&HeaderMap::new()).is_empty());
+    }
+
+    /// The public `/v1` allowlist must reference only live tools and must never
+    /// overlap the trading/account scopes. Guards against (a) a tool being
+    /// renamed/removed without updating the allowlist, and (b) a trading or
+    /// account tool being added to the allowlist by mistake — which would put a
+    /// forbidden capability on the endpoint submitted to OpenAI/Claude/Grok.
+    #[test]
+    fn v1_allowlist_is_live_and_disjoint_from_trading_scopes() {
+        use std::collections::HashSet;
+
+        let live = crate::tools::list_tools();
+        let by_name: std::collections::HashMap<&str, &rmcp::model::Tool> =
+            live.iter().map(|t| (t.name.as_ref(), t)).collect();
+        for name in super::V1_PUBLIC_TOOLS {
+            let tool = by_name.get(name).unwrap_or_else(|| {
+                panic!("V1 allowlist references unknown tool `{name}` (renamed or removed?)")
+            });
+            // Hard guard: every exposed `/v1` tool must be read-only. Catches any
+            // write tool (trading, watchlist/alert mutation, …) added by mistake,
+            // regardless of which OAuth scope it belongs to.
+            let read_only = tool.annotations.as_ref().and_then(|a| a.read_only_hint);
+            assert_eq!(
+                read_only,
+                Some(true),
+                "V1 allowlist tool `{name}` is not marked read_only_hint = true"
+            );
+        }
+
+        let allow: HashSet<&str> = super::V1_PUBLIC_TOOLS.iter().copied().collect();
+        let scopes: serde_json::Value =
+            serde_json::from_str(include_str!("../../data/scopes.json"))
+                .expect("scopes.json must be valid JSON");
+        let scope_array = scopes["scopes"].as_array().expect("scopes array");
+        for forbidden in ["trade.write", "trade.read", "account.read"] {
+            let tools = scope_array
+                .iter()
+                .find(|s| s["key"].as_str() == Some(forbidden))
+                .and_then(|s| s["tools"].as_array())
+                .unwrap_or_else(|| panic!("scope `{forbidden}` must exist with a tools array"));
+            for tool in tools {
+                let tool = tool.as_str().expect("tool name must be a string");
+                assert!(
+                    !allow.contains(tool),
+                    "V1 allowlist must not contain `{tool}` from forbidden scope `{forbidden}`"
+                );
+            }
+        }
     }
 }
 
