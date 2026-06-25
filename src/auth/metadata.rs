@@ -51,15 +51,51 @@ pub(crate) struct ProtectedResourceMetadata {
     scopes_supported: Vec<String>,
 }
 
+/// Scope value advertised for the restricted public `/v1` endpoint.
+///
+/// A client discovering auth from a `/v1` 401 copies `scopes_supported` into the
+/// `scope` parameter of the authorization request, so this `mcp-endpoint=v1`
+/// marker rides into the authorize URL. The Longbridge authorization server
+/// reads it and presents only the read-only consent set (no trading or account
+/// access). It is a marker, not a granular OAuth scope list — narrowing the
+/// granted permissions is done server-side off this marker.
+const V1_SCOPES_SUPPORTED: &[&str] = &["mcp-endpoint=v1"];
+
+fn build_resource_metadata(resource: String, scopes: Vec<String>) -> ProtectedResourceMetadata {
+    ProtectedResourceMetadata {
+        resource,
+        authorization_servers: vec![longbridge_oauth_url()],
+        scopes_supported: scopes,
+    }
+}
+
 pub async fn protected_resource_metadata(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> Json<ProtectedResourceMetadata> {
-    Json(ProtectedResourceMetadata {
-        resource: resource_url_from_headers(&headers, &state.base_url),
-        authorization_servers: vec![longbridge_oauth_url()],
-        scopes_supported: vec!["openapi".to_string()],
-    })
+    let resource = resource_url_from_headers(&headers, &state.base_url);
+    Json(build_resource_metadata(
+        resource,
+        vec!["openapi".to_string()],
+    ))
+}
+
+/// Protected-resource metadata for the restricted `/v1` endpoint (RFC 9728
+/// resource-specific document at `/.well-known/oauth-protected-resource/v1`).
+///
+/// The `resource` identifier is the `/v1` URL and `scopes_supported` is the
+/// read-only set, so a client that discovers auth from a `/v1` 401 requests
+/// only read-only scopes — keeping trading off the consent screen.
+pub async fn protected_resource_metadata_v1(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Json<ProtectedResourceMetadata> {
+    let resource = format!(
+        "{}/v1",
+        resource_url_from_headers(&headers, &state.base_url)
+    );
+    let scopes = V1_SCOPES_SUPPORTED.iter().map(|s| s.to_string()).collect();
+    Json(build_resource_metadata(resource, scopes))
 }
 
 #[derive(Serialize)]
