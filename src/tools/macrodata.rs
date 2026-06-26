@@ -21,7 +21,7 @@ pub struct MacroeconomicIndicatorsParam {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct MacroeconomicParam {
-    /// Indicator code from `macroeconomic_indicators`, e.g. `"USCPI"`.
+    /// Indicator code from `macrodata_indicators`, e.g. `"USCPI"`.
     pub indicator_code: String,
     /// Earliest release date to include (YYYY-MM-DD, e.g. `"2024-01-01"`).
     pub start_date: Option<String>,
@@ -62,7 +62,7 @@ fn strip_data_point(obj: &mut serde_json::Map<String, serde_json::Value>) {
     }
 }
 
-pub async fn macroeconomic_indicators(
+pub async fn macrodata_indicators(
     mctx: &crate::tools::McpContext,
     p: MacroeconomicIndicatorsParam,
 ) -> Result<CallToolResult, McpError> {
@@ -86,7 +86,7 @@ pub async fn macroeconomic_indicators(
     )]))
 }
 
-pub async fn macroeconomic(
+pub async fn macrodata(
     mctx: &crate::tools::McpContext,
     p: MacroeconomicParam,
 ) -> Result<CallToolResult, McpError> {
