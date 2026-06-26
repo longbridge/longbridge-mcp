@@ -368,7 +368,7 @@ fn is_agent_endpoint(ctx: &RequestContext<RoleServer>) -> bool {
 /// The restricted public endpoint version this request arrived on, if any.
 ///
 /// The auth middleware inserts [`RestrictedEndpoint`] (carrying a
-/// [`RestrictedVersion`]) for every request that proceeds on `/v1` or `/v2`.
+/// [`RestrictedVersion`]) for every request that proceeds on `/v2`.
 /// When `Some`, `list_tools` exposes and `call_tool` accepts only that
 /// version's allowlist.
 fn restricted_version(ctx: &RequestContext<RoleServer>) -> Option<RestrictedVersion> {
@@ -381,7 +381,6 @@ fn restricted_version(ctx: &RequestContext<RoleServer>) -> Option<RestrictedVers
 /// Whether `name` is on the active restricted endpoint's allowlist.
 fn is_restricted_tool_allowed(version: RestrictedVersion, name: &str) -> bool {
     match version {
-        RestrictedVersion::V1 => is_v1_public_tool(name),
         RestrictedVersion::V2 => is_v2_public_tool(name),
     }
 }
@@ -501,20 +500,17 @@ fn tools_agent_endpoint() -> &'static [rmcp::model::Tool] {
 }
 
 /// Endpoint version bit flags used by [`TOOL_ENDPOINTS`].
-const V1: u8 = 1 << 0;
-const V2: u8 = 1 << 1;
+const V2: u8 = 1 << 0;
 
 /// Single source of truth for restricted-endpoint membership of every
 /// registered tool — the per-tool version annotation.
 ///
-/// `/v1` and `/v2` are **whitelists**: a tool is exposed only when its flags
-/// include the matching bit. This is deliberately **default-out** — a tool
-/// absent from this table (or marked `0`) appears on neither restricted
-/// endpoint, so a newly added tool can never silently leak onto a
-/// directory-submitted surface.
+/// `/v2` is a **whitelist**: a tool is exposed only when its flags include the
+/// matching bit. This is deliberately **default-out** — a tool absent from this
+/// table (or marked `0`) appears on no restricted endpoint, so a newly added
+/// tool can never silently leak onto a directory-submitted surface.
 ///
-/// - `/v1` — read-only market-analysis surface (OpenAI/Claude/Grok submission).
-/// - `/v2` — broader surface that additionally exposes read-only
+/// - `/v2` — read-only market/fundamental/research analysis plus read-only
 ///   account/portfolio, read-only order/execution history, IPO market data,
 ///   watchlist, alerts, sharelist, and community tools. `/v2` still **never**
 ///   exposes trade execution (`submit_order`/`cancel_order`/`replace_order`),
@@ -522,40 +518,38 @@ const V2: u8 = 1 << 1;
 ///   `ipo_profit_loss`), or money movement (`deposits`/`withdrawals`/
 ///   `bank_cards`).
 ///
-/// Every `/v1` tool is also valid on `/v2`, so v1 entries carry `V1 | V2`.
-///
 /// Invariants enforced by unit tests: every name is live, every live tool is
-/// listed exactly once, `V1 ⊆ V2`, and the v2 set is disjoint from the
-/// trade-write / DCA / IPO-order / money-movement tools.
+/// listed exactly once, and the v2 set is disjoint from the trade-write / DCA /
+/// IPO-order / money-movement tools.
 const TOOL_ENDPOINTS: &[(&str, u8)] = &[
-    // v1 + v2 — read-only market / fundamental / research analysis.
-    ("business_segments", V1 | V2),
-    ("calc_indexes", V1 | V2),
-    ("candlesticks", V1 | V2),
-    ("company", V1 | V2),
-    ("consensus", V1 | V2),
-    ("depth", V1 | V2),
-    ("dividend", V1 | V2),
-    ("filings", V1 | V2),
-    ("finance_calendar", V1 | V2),
-    ("financial_report_latest", V1 | V2),
-    ("financial_statement", V1 | V2),
-    ("forecast_eps", V1 | V2),
-    ("institution_rating", V1 | V2),
-    ("intraday", V1 | V2),
-    ("market_status", V1 | V2),
-    ("news", V1 | V2),
-    ("news_search", V1 | V2),
-    ("quote", V1 | V2),
-    ("rank_list", V1 | V2),
-    ("screener_search", V1 | V2),
-    ("shareholder_top", V1 | V2),
-    ("short_positions", V1 | V2),
-    ("top_movers", V1 | V2),
-    ("trades", V1 | V2),
-    ("valuation", V1 | V2),
-    ("watchlist", V1 | V2),
-    // v2 only — broader read surface plus non-trade write tools (watchlist,
+    // v2 — read-only market / fundamental / research analysis.
+    ("business_segments", V2),
+    ("calc_indexes", V2),
+    ("candlesticks", V2),
+    ("company", V2),
+    ("consensus", V2),
+    ("depth", V2),
+    ("dividend", V2),
+    ("filings", V2),
+    ("finance_calendar", V2),
+    ("financial_report_latest", V2),
+    ("financial_statement", V2),
+    ("forecast_eps", V2),
+    ("institution_rating", V2),
+    ("intraday", V2),
+    ("market_status", V2),
+    ("news", V2),
+    ("news_search", V2),
+    ("quote", V2),
+    ("rank_list", V2),
+    ("screener_search", V2),
+    ("shareholder_top", V2),
+    ("short_positions", V2),
+    ("top_movers", V2),
+    ("trades", V2),
+    ("valuation", V2),
+    ("watchlist", V2),
+    // v2 — broader read surface plus non-trade write tools (watchlist,
     // alert, sharelist, community).
     ("account_balance", V2),
     ("ah_premium", V2),
@@ -693,24 +687,9 @@ fn endpoint_flags(name: &str) -> u8 {
         .unwrap_or(0)
 }
 
-/// Whether `name` is exposed on the restricted public `/v1` endpoint.
-fn is_v1_public_tool(name: &str) -> bool {
-    endpoint_flags(name) & V1 != 0
-}
-
 /// Whether `name` is exposed on the restricted public `/v2` endpoint.
 fn is_v2_public_tool(name: &str) -> bool {
     endpoint_flags(name) & V2 != 0
-}
-
-/// Tool names exposed on the `/v1` endpoint. Used by the `/v1/tools.json`
-/// manifest handler to prune the manifest to the allowlist.
-pub fn v1_tool_names() -> Vec<&'static str> {
-    TOOL_ENDPOINTS
-        .iter()
-        .filter(|(_, f)| f & V1 != 0)
-        .map(|(n, _)| *n)
-        .collect()
 }
 
 /// Tool names exposed on the `/v2` endpoint. Used by the `/v2/tools.json`
@@ -721,19 +700,6 @@ pub fn v2_tool_names() -> Vec<&'static str> {
         .filter(|(_, f)| f & V2 != 0)
         .map(|(n, _)| *n)
         .collect()
-}
-
-/// Tools for the restricted public `/v1` endpoint. Computed once; every
-/// `tools/list` response clones from this slice.
-fn tools_v1_endpoint() -> &'static [rmcp::model::Tool] {
-    static V1_TOOLS: std::sync::OnceLock<Vec<rmcp::model::Tool>> = std::sync::OnceLock::new();
-    V1_TOOLS.get_or_init(|| {
-        all_tools_cached()
-            .iter()
-            .filter(|t| is_v1_public_tool(t.name.as_ref()))
-            .cloned()
-            .collect()
-    })
 }
 
 /// Tools for the restricted public `/v2` endpoint. Computed once; every
@@ -747,12 +713,6 @@ fn tools_v2_endpoint() -> &'static [rmcp::model::Tool] {
             .cloned()
             .collect()
     })
-}
-
-/// Tool descriptors exposed on the restricted public `/v1` endpoint.
-/// Used by the `/v1/tools.json` manifest handler.
-pub fn v1_list_tools() -> Vec<rmcp::model::Tool> {
-    tools_v1_endpoint().to_vec()
 }
 
 /// Tool descriptors exposed on the restricted public `/v2` endpoint.
@@ -4105,13 +4065,6 @@ impl ServerHandler for Longbridge {
             // capabilities and do not mention trading. Keep the first sentence
             // self-contained (clients surface the first ~512 chars).
             info.instructions = Some(match version {
-                RestrictedVersion::V1 => {
-                    "Longbridge MCP — market and investment analysis for US, HK, A-share, and SG \
-                     markets. Provides live quotes, candlestick charts, order-book depth, \
-                     fundamentals, valuations, analyst ratings and estimates, news, filings, and \
-                     screeners."
-                        .to_string()
-                }
                 RestrictedVersion::V2 => {
                     "Longbridge MCP — market analysis and portfolio insight for US, HK, A-share, \
                      and SG markets. Provides live quotes, charts, order-book depth, fundamentals, \
@@ -4179,7 +4132,6 @@ impl ServerHandler for Longbridge {
             tools_agent_endpoint().to_vec()
         } else if let Some(version) = restricted_version(&context) {
             match version {
-                RestrictedVersion::V1 => tools_v1_endpoint().to_vec(),
                 RestrictedVersion::V2 => tools_v2_endpoint().to_vec(),
             }
         } else {
@@ -4420,53 +4372,8 @@ mod tests {
             assert!(
                 seen.contains(name.as_str()),
                 "live tool `{name}` is not classified in TOOL_ENDPOINTS \
-                 (add it with V1|V2, V2, or 0)"
+                 (add it with V2 or 0)"
             );
-        }
-    }
-
-    /// Every `/v1` tool must also be on `/v2`: the v2 surface is a superset of
-    /// the read-only analysis surface.
-    #[test]
-    fn v1_is_subset_of_v2() {
-        for name in super::v1_tool_names() {
-            assert!(
-                super::is_v2_public_tool(name),
-                "`{name}` is on /v1 but not /v2 — v1 must be a subset of v2"
-            );
-        }
-    }
-
-    /// The public `/v1` allowlist must be read-only and disjoint from the
-    /// trading/account scopes. Guards against a write/trading/account tool
-    /// landing on the endpoint submitted to OpenAI/Claude/Grok.
-    #[test]
-    fn v1_allowlist_is_read_only_and_disjoint_from_trading_scopes() {
-        use std::collections::HashSet;
-
-        let live = crate::tools::list_tools();
-        let by_name: std::collections::HashMap<&str, &rmcp::model::Tool> =
-            live.iter().map(|t| (t.name.as_ref(), t)).collect();
-        for name in super::v1_tool_names() {
-            let tool = by_name
-                .get(name)
-                .unwrap_or_else(|| panic!("/v1 allowlist references unknown tool `{name}`"));
-            let read_only = tool.annotations.as_ref().and_then(|a| a.read_only_hint);
-            assert_eq!(
-                read_only,
-                Some(true),
-                "/v1 allowlist tool `{name}` is not marked read_only_hint = true"
-            );
-        }
-
-        let allow: HashSet<&str> = super::v1_tool_names().into_iter().collect();
-        for forbidden in ["trade.write", "trade.read", "account.read"] {
-            for tool in scope_tools(forbidden) {
-                assert!(
-                    !allow.contains(tool.as_str()),
-                    "/v1 allowlist must not contain `{tool}` from forbidden scope `{forbidden}`"
-                );
-            }
         }
     }
 

@@ -23,8 +23,6 @@ pub struct AgentEndpoint;
 /// distinct tool allowlist and its own RFC 9728 resource-specific metadata.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RestrictedVersion {
-    /// `/v1` — read-only market-analysis surface.
-    V1,
     /// `/v2` — broader read surface (adds read-only account/portfolio,
     /// order/execution history, IPO market data, watchlist, alerts, sharelist,
     /// community) but still no trade execution, DCA, IPO orders, or money
@@ -38,14 +36,13 @@ impl RestrictedVersion {
     /// read-only consent set.
     pub fn metadata_path(self) -> &'static str {
         match self {
-            RestrictedVersion::V1 => "/.well-known/oauth-protected-resource/v1",
             RestrictedVersion::V2 => "/.well-known/oauth-protected-resource/v2",
         }
     }
 }
 
 /// Marker inserted into request extensions for requests that arrived on a
-/// restricted public endpoint (`/v1` or `/v2`). Its presence — and the
+/// restricted public endpoint (`/v2`). Its presence — and the
 /// [`RestrictedVersion`] it carries — tells downstream handlers
 /// (`ServerHandler::list_tools`, `ServerHandler::call_tool`) to expose and
 /// accept only that version's allowlist, never trade execution, DCA, IPO
@@ -92,7 +89,7 @@ pub enum AuthMode {
 ///   through with no `BearerToken` but tagged with [`AgentEndpoint`], letting
 ///   the handshake succeed and the `authenticate` tool be listed/called.
 ///
-/// When `restricted` is `Some` (a `/v1` or `/v2` public endpoint) a
+/// When `restricted` is `Some` (a `/v2` public endpoint) a
 /// [`RestrictedEndpoint`] marker carrying that [`RestrictedVersion`] is attached
 /// to every request that proceeds, so handlers expose and accept only that
 /// version's allowlist.
