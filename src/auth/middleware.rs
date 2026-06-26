@@ -19,18 +19,44 @@ pub struct BearerToken(pub String);
 #[derive(Clone, Debug)]
 pub struct AgentEndpoint;
 
-/// Marker inserted into request extensions for requests that arrived on the
-/// restricted public endpoint (`/v1`). Its presence tells downstream handlers
+/// Which restricted public endpoint a request arrived on. Each maps to a
+/// distinct tool allowlist and its own RFC 9728 resource-specific metadata.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RestrictedVersion {
+    /// `/v1` — read-only market-analysis surface.
+    V1,
+    /// `/v2` — broader read surface (adds read-only account/portfolio,
+    /// order/execution history, IPO market data, watchlist, alerts, sharelist,
+    /// community) but still no trade execution, DCA, IPO orders, or money
+    /// movement.
+    V2,
+}
+
+impl RestrictedVersion {
+    /// RFC 9728 protected-resource-metadata path advertised to clients that hit
+    /// a `401` on this endpoint, so the authorize URL requests the matching
+    /// read-only consent set.
+    pub fn metadata_path(self) -> &'static str {
+        match self {
+            RestrictedVersion::V1 => "/.well-known/oauth-protected-resource/v1",
+            RestrictedVersion::V2 => "/.well-known/oauth-protected-resource/v2",
+        }
+    }
+}
+
+/// Marker inserted into request extensions for requests that arrived on a
+/// restricted public endpoint (`/v1` or `/v2`). Its presence — and the
+/// [`RestrictedVersion`] it carries — tells downstream handlers
 /// (`ServerHandler::list_tools`, `ServerHandler::call_tool`) to expose and
-/// accept only the curated read-only analysis allowlist, never trading,
-/// DCA, or account tools.
+/// accept only that version's allowlist, never trade execution, DCA, IPO
+/// orders, or money-movement tools.
 ///
 /// Unlike [`AgentEndpoint`], this is inserted regardless of token presence: the
-/// `/v1` endpoint uses [`AuthMode::Required`], so a valid Bearer token is always
-/// present by the time the request reaches a handler, yet the exposed tool set
-/// must still be restricted.
-#[derive(Clone, Debug)]
-pub struct RestrictedEndpoint;
+/// restricted endpoints use [`AuthMode::Required`], so a valid Bearer token is
+/// always present by the time the request reaches a handler, yet the exposed
+/// tool set must still be restricted.
+#[derive(Clone, Copy, Debug)]
+pub struct RestrictedEndpoint(pub RestrictedVersion);
 
 /// Which endpoint a request arrived on, which decides how token-less requests
 /// are handled.
@@ -66,24 +92,24 @@ pub enum AuthMode {
 ///   through with no `BearerToken` but tagged with [`AgentEndpoint`], letting
 ///   the handshake succeed and the `authenticate` tool be listed/called.
 ///
-/// When `restricted` is set (the `/v1` public endpoint) a [`RestrictedEndpoint`]
-/// marker is attached to every request that proceeds, so handlers expose and
-/// accept only the public analysis allowlist.
+/// When `restricted` is `Some` (a `/v1` or `/v2` public endpoint) a
+/// [`RestrictedEndpoint`] marker carrying that [`RestrictedVersion`] is attached
+/// to every request that proceeds, so handlers expose and accept only that
+/// version's allowlist.
 pub async fn mcp_auth_layer(
     mut req: Request,
     next: Next,
     base_url: &str,
     mode: AuthMode,
-    restricted: bool,
+    restricted: Option<RestrictedVersion>,
 ) -> Response {
     let resource = crate::auth::metadata::resource_url_from_headers(req.headers(), base_url);
-    // The restricted `/v1` endpoint points at its own RFC 9728 resource-specific
+    // A restricted endpoint points at its own RFC 9728 resource-specific
     // metadata, which advertises read-only scopes only — so the authorize URL the
     // client builds never requests trading scopes.
-    let metadata_path = if restricted {
-        "/.well-known/oauth-protected-resource/v1"
-    } else {
-        "/.well-known/oauth-protected-resource"
+    let metadata_path = match restricted {
+        Some(version) => version.metadata_path(),
+        None => "/.well-known/oauth-protected-resource",
     };
     let www_authenticate = format!("Bearer resource_metadata=\"{resource}{metadata_path}\"");
 
@@ -119,10 +145,11 @@ pub async fn mcp_auth_layer(
     }
 
     // Tag the request so list_tools/call_tool restrict to the public allowlist.
-    // Inserted regardless of token presence: `/v1` is `AuthMode::Required`, so a
-    // token-less request has already been rejected with 401 above.
-    if restricted {
-        req.extensions_mut().insert(RestrictedEndpoint);
+    // Inserted regardless of token presence: restricted endpoints are
+    // `AuthMode::Required`, so a token-less request has already been rejected
+    // with 401 above.
+    if let Some(version) = restricted {
+        req.extensions_mut().insert(RestrictedEndpoint(version));
     }
 
     next.run(req).await
