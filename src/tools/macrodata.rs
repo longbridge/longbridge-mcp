@@ -21,7 +21,7 @@ pub struct MacroeconomicIndicatorsParam {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct MacroeconomicParam {
-    /// Indicator code from `macrodata_indicators`, e.g. `"USCPI"`.
+    /// Indicator code from `macrodata_indicators`, e.g. `"30771718"`.
     pub indicator_code: String,
     /// Earliest release date to include (YYYY-MM-DD, e.g. `"2024-01-01"`).
     pub start_date: Option<String>,
@@ -162,10 +162,10 @@ mod tests {
     #[test]
     fn macroeconomic_param_accepts_date_and_offset() {
         let p: MacroeconomicParam = serde_json::from_str(
-            r#"{"indicator_code":"USCPI","start_date":"2024-01-01","end_date":"2024-12-31","offset":100}"#,
+            r#"{"indicator_code":"30771718","start_date":"2024-01-01","end_date":"2024-12-31","offset":100}"#,
         )
         .unwrap();
-        assert_eq!(p.indicator_code, "USCPI");
+        assert_eq!(p.indicator_code, "30771718");
         assert_eq!(p.offset, Some(100));
     }
 }
