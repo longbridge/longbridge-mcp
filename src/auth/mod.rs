@@ -46,18 +46,21 @@ fn build_locales_node(sources: &[&[(&str, &str)]]) -> serde_json::Value {
     serde_json::Value::Object(locales)
 }
 
-/// Build the `/mcp/tools.json` (and `/v1/tools.json`) body.
+/// Build the `/mcp/tools.json` (and `/v1/tools.json`, `/v2/tools.json`) body.
 ///
 /// Order: tools → scopes → locales (relies on serde_json's `preserve_order`).
 /// When `allow` is `Some`, the tool list and every scope's `tools` array are
-/// pruned to that allowlist and scopes left with no tools are dropped — so the
-/// restricted `/v1` document never advertises trading or account capabilities.
+/// pruned to that allowlist and scopes left with no tools are dropped — so a
+/// restricted document never advertises a capability the endpoint blocks.
 /// Locales (a translation dictionary keyed by tool name) are carried verbatim.
 fn build_tools_json(allow: Option<&std::collections::HashSet<&'static str>>) -> serde_json::Value {
     let mut out = serde_json::Map::new();
 
     let tool_list = match allow {
-        Some(_) => tools::v1_list_tools(),
+        Some(allow) => tools::list_tools()
+            .into_iter()
+            .filter(|t| allow.contains(t.name.as_ref()))
+            .collect(),
         None => tools::list_tools(),
     };
     let tools: serde_json::Value =
@@ -100,10 +103,22 @@ async fn tools_json() -> axum::Json<&'static serde_json::Value> {
 async fn v1_tools_json() -> axum::Json<&'static serde_json::Value> {
     static V1_TOOLS_JSON: std::sync::LazyLock<serde_json::Value> = std::sync::LazyLock::new(|| {
         let allow: std::collections::HashSet<&'static str> =
-            tools::V1_PUBLIC_TOOLS.iter().copied().collect();
+            tools::v1_tool_names().into_iter().collect();
         build_tools_json(Some(&allow))
     });
     axum::Json(&*V1_TOOLS_JSON)
+}
+
+/// Restricted tool manifest for the public `/v2` endpoint: the broader
+/// allowlist (read-only account/portfolio + order history, but no trade
+/// execution, DCA, IPO orders, or money movement), with scopes pruned to match.
+async fn v2_tools_json() -> axum::Json<&'static serde_json::Value> {
+    static V2_TOOLS_JSON: std::sync::LazyLock<serde_json::Value> = std::sync::LazyLock::new(|| {
+        let allow: std::collections::HashSet<&'static str> =
+            tools::v2_tool_names().into_iter().collect();
+        build_tools_json(Some(&allow))
+    });
+    axum::Json(&*V2_TOOLS_JSON)
 }
 
 async fn scopes_json() -> axum::Json<&'static serde_json::Value> {
@@ -181,6 +196,11 @@ pub fn create_router(state: Arc<AppState>) -> Router {
             "/.well-known/oauth-protected-resource/v1",
             axum::routing::get(metadata::protected_resource_metadata_v1),
         )
+        // RFC 9728 resource-specific metadata for the restricted `/v2` endpoint.
+        .route(
+            "/.well-known/oauth-protected-resource/v2",
+            axum::routing::get(metadata::protected_resource_metadata_v2),
+        )
         .with_state(state.clone());
 
     // Serve the static server card at both the host-root path Smithery's docs
@@ -211,8 +231,10 @@ pub fn create_router(state: Arc<AppState>) -> Router {
     let tools_route: Router = Router::new()
         .route("/mcp/tools.json", axum::routing::get(tools_json))
         .route("/mcp/scopes.json", axum::routing::get(scopes_json))
-        // Restricted public manifest for the `/v1` endpoint (allowlist only).
-        .route("/v1/tools.json", axum::routing::get(v1_tools_json));
+        // Restricted public manifests for the `/v1` and `/v2` endpoints
+        // (allowlist only).
+        .route("/v1/tools.json", axum::routing::get(v1_tools_json))
+        .route("/v2/tools.json", axum::routing::get(v2_tools_json));
 
     // Build an auth-wrapped MCP service for one mounting point. The same
     // `Longbridge` MCP server is mounted several times; the only thing that
@@ -221,38 +243,35 @@ pub fn create_router(state: Arc<AppState>) -> Router {
     //     missing token yields 401, exactly as before this feature.
     //   - `AuthMode::Optional` for the `/agent` endpoint: token-less requests
     //     are allowed through into the `authenticate` reverse-auth flow.
-    let make_mcp_with_auth = |base_url: String, mode: middleware::AuthMode, restricted: bool| {
-        let svc = StreamableHttpService::new(
-            move || Ok(Longbridge),
-            Arc::new(NeverSessionManager::default()),
-            StreamableHttpServerConfig::default()
-                .with_stateful_mode(false)
-                .disable_allowed_hosts(),
-        );
-        tower::ServiceBuilder::new()
-            .layer(axum::middleware::from_fn(
-                move |req: axum::extract::Request, next: axum::middleware::Next| {
-                    let base_url = base_url.clone();
-                    async move {
-                        middleware::mcp_auth_layer(req, next, &base_url, mode, restricted).await
-                    }
-                },
-            ))
-            .service(svc)
-    };
+    let make_mcp_with_auth =
+        |base_url: String,
+         mode: middleware::AuthMode,
+         restricted: Option<middleware::RestrictedVersion>| {
+            let svc = StreamableHttpService::new(
+                move || Ok(Longbridge),
+                Arc::new(NeverSessionManager::default()),
+                StreamableHttpServerConfig::default()
+                    .with_stateful_mode(false)
+                    .disable_allowed_hosts(),
+            );
+            tower::ServiceBuilder::new()
+                .layer(axum::middleware::from_fn(
+                    move |req: axum::extract::Request, next: axum::middleware::Next| {
+                        let base_url = base_url.clone();
+                        async move {
+                            middleware::mcp_auth_layer(req, next, &base_url, mode, restricted).await
+                        }
+                    },
+                ))
+                .service(svc)
+        };
 
     // Main endpoints — Bearer required (token-less -> 401). Mounted at both
     // `/mcp` and root so deployments that strip or omit the `/mcp` prefix work.
-    let mcp_with_auth = make_mcp_with_auth(
-        state.base_url.clone(),
-        middleware::AuthMode::Required,
-        false,
-    );
-    let mcp_with_auth_root = make_mcp_with_auth(
-        state.base_url.clone(),
-        middleware::AuthMode::Required,
-        false,
-    );
+    let mcp_with_auth =
+        make_mcp_with_auth(state.base_url.clone(), middleware::AuthMode::Required, None);
+    let mcp_with_auth_root =
+        make_mcp_with_auth(state.base_url.clone(), middleware::AuthMode::Required, None);
     // Root mount, plus a thin front layer that serves the human landing page for
     // browser GETs to `/`. All programmatic MCP traffic passes straight through.
     let root_service = tower::ServiceBuilder::new()
@@ -260,15 +279,23 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .service(mcp_with_auth_root);
     // Optional-auth endpoint — same MCP server, but token-less requests are let
     // through so an OAuth-incapable client can call the `authenticate` tool.
-    let mcp_agent = make_mcp_with_auth(
+    let mcp_agent =
+        make_mcp_with_auth(state.base_url.clone(), middleware::AuthMode::Optional, None);
+    // Restricted public endpoints — Bearer required, but only the version's
+    // curated allowlist is listed and callable. `/v1` is the read-only
+    // analysis surface submitted to third-party app directories
+    // (OpenAI/Claude/Grok); `/v2` is the broader read surface (adds read-only
+    // account/portfolio + order history) with the same no-execution guarantee.
+    let mcp_v1 = make_mcp_with_auth(
         state.base_url.clone(),
-        middleware::AuthMode::Optional,
-        false,
+        middleware::AuthMode::Required,
+        Some(middleware::RestrictedVersion::V1),
     );
-    // Restricted public endpoint — Bearer required, but only the curated
-    // read-only analysis allowlist is listed and callable. This is the URL
-    // submitted to third-party app directories (OpenAI/Claude/Grok).
-    let mcp_v1 = make_mcp_with_auth(state.base_url.clone(), middleware::AuthMode::Required, true);
+    let mcp_v2 = make_mcp_with_auth(
+        state.base_url.clone(),
+        middleware::AuthMode::Required,
+        Some(middleware::RestrictedVersion::V2),
+    );
 
     Router::new()
         .merge(metadata_routes)
@@ -279,6 +306,7 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .merge(tools_route)
         .nest_service("/agent", mcp_agent)
         .nest_service("/v1", mcp_v1)
+        .nest_service("/v2", mcp_v2)
         .nest_service("/mcp", mcp_with_auth)
         // Also serve at root so deployments that omit the /mcp path prefix work.
         .fallback_service(root_service)
