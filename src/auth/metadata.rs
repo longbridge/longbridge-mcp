@@ -61,6 +61,15 @@ pub(crate) struct ProtectedResourceMetadata {
 /// granted permissions is done server-side off this marker.
 const V1_SCOPES_SUPPORTED: &[&str] = &["mcp-endpoint=v1"];
 
+/// Scope value advertised for the restricted public `/v2` endpoint.
+///
+/// Mirrors [`V1_SCOPES_SUPPORTED`]: a client discovering auth from a `/v2` 401
+/// copies this `mcp-endpoint=v2` marker into the authorization request's `scope`
+/// parameter, so the Longbridge authorization server can present the broader
+/// read-only consent set for `/v2` (account/portfolio + order history, but no
+/// trade execution, DCA, IPO orders, or money movement).
+const V2_SCOPES_SUPPORTED: &[&str] = &["mcp-endpoint=v2"];
+
 fn build_resource_metadata(resource: String, scopes: Vec<String>) -> ProtectedResourceMetadata {
     ProtectedResourceMetadata {
         resource,
@@ -95,6 +104,24 @@ pub async fn protected_resource_metadata_v1(
         resource_url_from_headers(&headers, &state.base_url)
     );
     let scopes = V1_SCOPES_SUPPORTED.iter().map(|s| s.to_string()).collect();
+    Json(build_resource_metadata(resource, scopes))
+}
+
+/// Protected-resource metadata for the restricted `/v2` endpoint (RFC 9728
+/// resource-specific document at `/.well-known/oauth-protected-resource/v2`).
+///
+/// Mirrors [`protected_resource_metadata_v1`]: the `resource` identifier is the
+/// `/v2` URL and `scopes_supported` is the `/v2` read-only marker, so a client
+/// that discovers auth from a `/v2` 401 requests the v2 consent set.
+pub async fn protected_resource_metadata_v2(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Json<ProtectedResourceMetadata> {
+    let resource = format!(
+        "{}/v2",
+        resource_url_from_headers(&headers, &state.base_url)
+    );
+    let scopes = V2_SCOPES_SUPPORTED.iter().map(|s| s.to_string()).collect();
     Json(build_resource_metadata(resource, scopes))
 }
 
