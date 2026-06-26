@@ -1,6 +1,6 @@
 [package]
 name = "longbridge-mcp"
-version = "0.5.2"
+version = "0.6.0"
 edition = "2024"
 
 [dependencies]
@@ -44,4 +44,4 @@ axum-server = { version = "0.7", features = ["tls-rustls"] }
 serde-transcode = "1.1"
 anyhow = "1"
 rustls = { version = "0.23", features = ["ring"] }
-
+sha2 = "0.10"

@@ -74,7 +74,7 @@ fn strip_strategy_keys(result: rmcp::model::CallToolResult) -> rmcp::model::Call
     let Ok(json) = serde_json::to_string(&d) else {
         return result;
     };
-    rmcp::model::CallToolResult::success(vec![rmcp::model::Content::text(json)])
+    crate::tools::tool_result(json)
 }
 
 /// Platform-recommended screener strategies.
@@ -348,9 +348,7 @@ pub async fn screener_search(
     // Strip filter_ prefix from indicators[].key so keys are consistent with
     // screener_indicators and conditions input (no filter_ prefix anywhere).
     let json = strip_filter_prefix_from_search_results(json);
-    Ok(rmcp::model::CallToolResult::success(vec![
-        rmcp::model::Content::text(json),
-    ]))
+    Ok(crate::tools::tool_result(json))
 }
 
 /// Strip "filter_" prefix from `indicators[].key` in screener_search results.
@@ -467,5 +465,5 @@ fn strip_filter_prefix_from_indicators(
     let Ok(json) = serde_json::to_string(&d) else {
         return result;
     };
-    rmcp::model::CallToolResult::success(vec![rmcp::model::Content::text(json)])
+    crate::tools::tool_result(json)
 }

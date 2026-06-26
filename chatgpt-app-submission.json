@@ -1,0 +1,400 @@
+{
+  "$schema": "https://developers.openai.com/apps-sdk/schemas/chatgpt-app-submission.v1.json",
+  "schema_version": 1,
+  "branding": {
+    "contact_email": null,
+    "customer_support": "https://longbridge.com/sg/support/",
+    "physical_address": null,
+    "privacy_policy": "https://longbridge.com/sg/support/topics/Other/privacy-policy",
+    "terms_of_service": "https://longbridge.com/sg/support/topics/us-trade/user-agreement",
+    "website": "https://longbridge.com"
+  },
+  "app_info": {
+    "display_name": "Longbridge",
+    "subtitle": "Investment market insights",
+    "description": "Longbridge helps users research US/HK markets through ChatGPT with read-only access to quotes, charts, order book data, fundamentals, analyst research, finance calendars, news, filings, stock screeners, market movers, ranking lists, short interest, and saved watchlists. The app-directory endpoint requires Longbridge OAuth credentials and does not expose trading, order routing, account-balance, or mutating tools.",
+    "category": "FINANCE"
+  },
+  "tools": {
+    "business_segments": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Retrieves current business segment revenue breakdown for a requested security without modifying any account or market data.",
+        "open_world_justification": "Queries Longbridge's external market and fundamentals backend for live security data.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "calc_indexes": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Calculates or retrieves selected market and valuation index values for supplied symbols without changing user or market state.",
+        "open_world_justification": "Uses Longbridge's external quote data service for live symbol metrics.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "candlesticks": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Fetches historical OHLCV candlestick data for a symbol using the requested period and session filters.",
+        "open_world_justification": "Reads market data from Longbridge's external quote service.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "company": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Retrieves company profile and business overview data for a security without changing records.",
+        "open_world_justification": "Queries Longbridge's external company information backend.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "consensus": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Retrieves analyst consensus estimates for a security without modifying analyst or user data.",
+        "open_world_justification": "Reads research data from Longbridge's external fundamentals service.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "depth": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Fetches order book depth for a symbol and does not place, cancel, or modify orders.",
+        "open_world_justification": "Reads live order book data from Longbridge's external quote service.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "dividend": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Retrieves dividend history for a security without changing shareholder, account, or company data.",
+        "open_world_justification": "Queries Longbridge's external fundamentals backend.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "filings": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Retrieves regulatory filing metadata and links for a symbol without changing any filings.",
+        "open_world_justification": "Reads filing data from Longbridge's external quote and content services.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "finance_calendar": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Retrieves calendar events such as earnings, dividends, IPOs, macro data, and market closures for the requested range.",
+        "open_world_justification": "Queries Longbridge's external finance calendar service for live event data.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "financial_report_latest": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Retrieves the latest financial report summary for a security without changing financial records.",
+        "open_world_justification": "Reads report data from Longbridge's external fundamentals backend.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "financial_statement": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Retrieves income statement, balance sheet, cash flow, or combined statement data for a security.",
+        "open_world_justification": "Queries Longbridge's external financial statement service.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "forecast_eps": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Retrieves EPS forecast and analyst estimate history without updating forecasts or user data.",
+        "open_world_justification": "Reads forecast data from Longbridge's external research backend.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "institution_rating": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Retrieves analyst rating summary and target price information for a security.",
+        "open_world_justification": "Reads institution rating data from Longbridge's external research service.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "intraday": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Fetches minute-by-minute intraday price and volume data for a symbol.",
+        "open_world_justification": "Reads live market data from Longbridge's external quote service.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "market_status": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Retrieves current trading status and timestamps for supported markets.",
+        "open_world_justification": "Queries Longbridge's external market status service.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "news": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Retrieves latest news articles related to a requested symbol without creating or publishing content.",
+        "open_world_justification": "Reads news content from Longbridge's external content service.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "news_search": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Searches news articles by keyword and returns matching article metadata.",
+        "open_world_justification": "Queries Longbridge's external search service for current news results.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "quote": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Fetches latest price quotes for supplied symbols and does not submit market actions.",
+        "open_world_justification": "Reads live quote data from Longbridge's external market data service.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "rank_list": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Retrieves ranked stock lists for a selected leaderboard key and optional market.",
+        "open_world_justification": "Reads leaderboard data from Longbridge's external market ranking service.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "screener_search": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Runs a stock screener query using filter parameters or a saved strategy and returns matching securities without saving changes.",
+        "open_world_justification": "Queries Longbridge's external stock screener service for live market results.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "shareholder_top": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Retrieves top shareholder information across reporting periods for a security.",
+        "open_world_justification": "Reads shareholder data from Longbridge's external fundamentals service.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "short_positions": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Retrieves historical short interest data for HK or US stocks without opening or closing positions.",
+        "open_world_justification": "Queries Longbridge's external short interest data service.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "top_movers": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Runs a market events query for unusually moving stocks and returns matching events without persisting changes.",
+        "open_world_justification": "Queries Longbridge's external market event service for live mover data and related news.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "trades": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Retrieves recent public trades for a symbol and does not submit or alter orders.",
+        "open_world_justification": "Reads live trade prints from Longbridge's external quote service.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "valuation": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Retrieves valuation metrics and peer comparison data for a security.",
+        "open_world_justification": "Reads valuation data from Longbridge's external fundamentals backend.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "watchlist": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Retrieves the authenticated user's watchlist groups and securities without creating, updating, or deleting watchlists.",
+        "open_world_justification": "Reads the user's saved watchlist data from Longbridge's external brokerage backend.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    }
+  },
+  "test_cases": [
+    {
+      "description": "Review live quote, order book, and trade activity for a US stock.",
+      "user_prompt": "Show me AAPL.US latest quote, top of book depth, and recent trades.",
+      "file_attachment_urls": null,
+      "tools_triggered": "quote, depth, trades",
+      "expected_output": "Returns the latest quote, current order book levels, and recent public trades for AAPL.US with timestamps and prices.",
+      "expected_output_url": null
+    },
+    {
+      "description": "Compare intraday and daily chart data for a Hong Kong stock.",
+      "user_prompt": "For 700.HK, get today's intraday line and the last 60 daily candles.",
+      "file_attachment_urls": null,
+      "tools_triggered": "intraday, candlesticks",
+      "expected_output": "Returns intraday minute data and daily OHLCV candles for 700.HK without placing any order.",
+      "expected_output_url": null
+    },
+    {
+      "description": "Build a fundamental snapshot for a security.",
+      "user_prompt": "Summarize TSLA.US fundamentals: company profile, latest financial report, valuation, analyst consensus, EPS forecast, institution ratings, top shareholders, and business segments.",
+      "file_attachment_urls": null,
+      "tools_triggered": "company, financial_report_latest, valuation, consensus, forecast_eps, institution_rating, shareholder_top, business_segments",
+      "expected_output": "Returns a read-only research summary using company, financial, valuation, analyst, shareholder, and segment data.",
+      "expected_output_url": null
+    },
+    {
+      "description": "Research news, filings, and upcoming calendar events.",
+      "user_prompt": "Find recent NVDA.US news and filings, search market news for AI chips, and check US earnings calendar events from 2026-07-01 to 2026-07-14.",
+      "file_attachment_urls": null,
+      "tools_triggered": "news, filings, news_search, finance_calendar",
+      "expected_output": "Returns recent symbol news, regulatory filing links, keyword news results, and matching finance calendar events in the requested date range.",
+      "expected_output_url": null
+    },
+    {
+      "description": "Use market discovery tools and the user's saved watchlist.",
+      "user_prompt": "Show my watchlist, quote the symbols in it, then find US top movers, hot US rank list entries, and screen US stocks with market cap above 100B.",
+      "file_attachment_urls": null,
+      "tools_triggered": "watchlist, quote, top_movers, rank_list, screener_search",
+      "expected_output": "Returns saved watchlist securities, latest quotes, market mover events, ranked stocks, and matching screener results without modifying watchlists or accounts.",
+      "expected_output_url": null
+    }
+  ],
+  "negative_test_cases": [
+    {
+      "description": "Do not trigger for trade execution requests.",
+      "user_prompt": "Buy 10 shares of AAPL.US at market price.",
+      "file_attachment_urls": null,
+      "tools_triggered": null,
+      "expected_output": "The app should not be invoked because the public app endpoint does not support placing trades or routing orders.",
+      "expected_output_url": null
+    },
+    {
+      "description": "Do not trigger for account-balance or position-management requests.",
+      "user_prompt": "Show my account cash balance and close all losing positions.",
+      "file_attachment_urls": null,
+      "tools_triggered": null,
+      "expected_output": "The app should not be invoked because account balance, position management, and mutating account actions are outside the submitted read-only analysis surface.",
+      "expected_output_url": null
+    },
+    {
+      "description": "Do not trigger for unrelated personal finance or tax advice without market lookup.",
+      "user_prompt": "Prepare my personal tax return and tell me which deductions I qualify for.",
+      "file_attachment_urls": null,
+      "tools_triggered": null,
+      "expected_output": "The app should not be invoked because the request is tax preparation, not Longbridge market research or watchlist lookup.",
+      "expected_output_url": null
+    }
+  ]
+}

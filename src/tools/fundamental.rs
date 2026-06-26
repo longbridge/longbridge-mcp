@@ -74,9 +74,7 @@ pub async fn institution_rating(
                 ],
             );
             let out = serde_json::to_string(&value).map_err(crate::error::Error::Serialize)?;
-            Ok(CallToolResult::success(vec![rmcp::model::Content::text(
-                out,
-            )]))
+            Ok(crate::tools::tool_result(out))
         }
         (Err(e), _) | (_, Err(e)) => Err(e),
     }

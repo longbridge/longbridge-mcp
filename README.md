@@ -21,12 +21,13 @@ Official MCP server for the [Longbridge](https://longbridge.com) brokerage. **14
 - **Stateless architecture** -- each request carries a Bearer token forwarded directly to the Longbridge SDK; no server-side sessions or database
 - **OAuth 2.1 resource metadata** compliant with RFC 9728, pointing clients to Longbridge OAuth for authorization
 - **JSON response transformation** -- field names normalized to snake_case, timestamps converted to RFC 3339, internal counter_id values mapped to human-readable symbols
+- **Compact tool metadata** -- typed `outputSchema` descriptors stay in `tools/list` for compatible clients, redundant return-field prose is trimmed, and full verbose schemas are available as MCP resources under `lb://tools/{tool}/output-schema`
 - **Prometheus metrics** for monitoring tool calls, latency, and errors
 - **Configurable** via CLI arguments or a JSON config file (CLI takes precedence)
 
 ## Connect from an MCP client
 
-Longbridge operates a hosted endpoint at `https://openapi.longbridge.com/mcp`, so most users don't need to run their own server — just point your MCP client at it and complete OAuth when prompted. Authorization is auto-discovered via RFC 9728.
+Longbridge operates a hosted endpoint at `https://mcp.longbridge.com`, so most users don't need to run their own server — just point your MCP client at it and complete OAuth when prompted. Authorization is auto-discovered via RFC 9728.
 
 ### Claude Desktop
 
@@ -36,7 +37,7 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
 {
   "mcpServers": {
     "longbridge": {
-      "url": "https://openapi.longbridge.com/mcp"
+      "url": "https://mcp.longbridge.com"
     }
   }
 }
@@ -47,7 +48,7 @@ Restart Claude Desktop. On first tool invocation it will open a browser to compl
 ### Claude Code
 
 ```bash
-claude mcp add --transport http longbridge https://openapi.longbridge.com/mcp
+claude mcp add --transport http longbridge https://mcp.longbridge.com
 ```
 
 ### Zed
@@ -58,7 +59,7 @@ Add to your Zed `settings.json` (open with `zed: open settings`):
 {
   "context_servers": {
     "longbridge": {
-      "url": "https://openapi.longbridge.com/mcp"
+      "url": "https://mcp.longbridge.com"
     }
   }
 }
@@ -68,7 +69,7 @@ On first use, Zed will open a browser to complete the Longbridge OAuth flow.
 
 ### Cursor / Cline / Windsurf / other MCP clients
 
-Point the client at `https://openapi.longbridge.com/mcp` using transport `streamable-http`. OAuth is auto-discovered via RFC 9728; no manual token required.
+Point the client at `https://mcp.longbridge.com` using transport `streamable-http`. OAuth is auto-discovered via RFC 9728; no manual token required.
 
 ---
 
@@ -133,6 +134,8 @@ These are **advanced settings** — most users do not need to change them. They 
 | `LONGBRIDGE_HTTP_URL` | `https://openapi.longbridge.com` | Longbridge API base URL (also used for OAuth metadata) |
 | `LONGBRIDGE_QUOTE_WS_URL` | `wss://openapi-quote.longbridge.com/v2` | Quote WebSocket endpoint |
 | `LONGBRIDGE_TRADE_WS_URL` | `wss://openapi-trade.longbridge.com/v2` | Trade WebSocket endpoint |
+| `LONGBRIDGE_MCP_QUOTE_WS_IDLE_TTL_SECS` | `600` | Idle seconds before a cached quote WebSocket context is evicted |
+| `LONGBRIDGE_MCP_QUOTE_WS_MAX_CONTEXTS` | `1024` | Maximum cached quote WebSocket contexts per server process |
 | `LONGBRIDGE_LOG_PATH` | *(none)* | SDK internal log path |
 
 ## Authentication
@@ -145,7 +148,7 @@ The one-liner in [Connect → Claude Code](#claude-code) gets you connected. Bel
 
 ```bash
 # Hosted — use this unless you have a reason not to
-claude mcp add --transport http longbridge https://openapi.longbridge.com/mcp
+claude mcp add --transport http longbridge https://mcp.longbridge.com
 
 # Local self-hosted instance (see Self-hosting above)
 claude mcp add --transport http longbridge-local http://localhost:8000/mcp

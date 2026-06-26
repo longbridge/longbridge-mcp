@@ -61,16 +61,10 @@ pub struct IndexSymbolParam {
 }
 
 fn trade_status_label(code: i64) -> &'static str {
-    match code {
-        101 => "Pre-Open",
-        102 | 103 | 105 | 202 | 203 => "Trading",
-        104 => "Lunch Break",
-        106 => "Post-Trading",
-        108 => "Closed",
-        201 => "Pre-Market",
-        204 => "Post-Market",
-        _ => "Unknown",
-    }
+    i32::try_from(code)
+        .map(longbridge::market::TradeStatus::from)
+        .unwrap_or_default()
+        .name()
 }
 
 pub async fn market_status(mctx: &crate::tools::McpContext) -> Result<CallToolResult, McpError> {
@@ -422,7 +416,7 @@ fn normalize_short_trades(
     let Ok(json) = serde_json::to_string(&d) else {
         return result;
     };
-    rmcp::model::CallToolResult::success(vec![rmcp::model::Content::text(json)])
+    crate::tools::tool_result(json)
 }
 
 /// Pagination cursor returned by `top_movers`; pass it back verbatim to fetch the next page.
@@ -544,7 +538,7 @@ fn strip_ib_prefix_from_rank_keys(
     let Ok(json) = serde_json::to_string(&d) else {
         return result;
     };
-    rmcp::model::CallToolResult::success(vec![rmcp::model::Content::text(json)])
+    crate::tools::tool_result(json)
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -594,4 +588,28 @@ pub async fn rank_list(
         ],
     )
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::trade_status_label;
+
+    #[test]
+    fn trade_status_label_matches_openapi_status() {
+        let cases = [
+            (101, "Closed"),
+            (103, "Morning Break"),
+            (106, "Mid-Day Break"),
+            (123, "Temporary Break"),
+            (202, "Trading"),
+            (204, "Closed"),
+            (206, "Pre-Market"),
+            (210, "Trading"),
+            (456, "Unknown"),
+        ];
+
+        for (code, expected) in cases {
+            assert_eq!(trade_status_label(code), expected, "code {code}");
+        }
+    }
 }
