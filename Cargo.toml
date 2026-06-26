@@ -7,7 +7,7 @@ edition = "2024"
 # TODO: switch back to crates.io after the next openapi release
 longbridge = { git = "https://github.com/longbridge/openapi.git", branch = "main" }
 rust_decimal = "1"
-rmcp = { version = "1.4", features = [
+rmcp = { version = "1.7", features = [
     "server",
     "transport-streamable-http-server",
     "transport-io",
