@@ -576,6 +576,27 @@
       "title": "市场状态",
       "description": "获取所有市场当前交易状态，返回 market_time[]{market, trade_status（Trading/Closed/Mid-Day Break/Pre-Market/Post-Market/Overnight 等）, timestamp}"
     },
+    "macrodata_indicators": {
+      "title": "宏观指标列表",
+      "description": "列出宏观经济指标。keyword 按指标名称搜索（如 \"CPI\"、\"非农\"、\"GDP\"）。可按国家代码过滤：US/CN/HK/EU/JP/SG，省略则返回全部。返回 {count, list[]{indicator_code, country, name, describe, periodicity, importance(1=低/2=中/3=高)}}。支持 offset/limit 分页。",
+      "properties": {
+        "keyword": "按指标名称关键词搜索，例如 `\"CPI\"`、`\"非农\"`",
+        "country": "按国家代码过滤：US（美国）、CN（中国大陆）、HK（香港）、EU（欧元区）、JP（日本）、SG（新加坡）",
+        "offset": "分页偏移量，默认 0",
+        "limit": "返回条数上限，默认 100，最大 1000"
+      }
+    },
+    "macrodata": {
+      "title": "宏观指标历史数据",
+      "description": "按指标代码（来自 macrodata_indicators）查询历史数据。指标代码不存在时返回错误。返回 {count, info{indicator_code, country, name, describe, periodicity, importance(1=低/2=中/3=高)}, data[]{period, release_at, actual_value, previous_value, forecast_value, unit}}。period 格式因发布周期而异：月度=\"YYYY-MM-DD\"、季度=\"YYYY-Qn\"（如 \"2024-Q1\"）、年度=\"YYYY-01-01\"。注意：actual_value 为空表示该期数据尚未发布（仅有 forecast_value）；data[] 为空表示该日期范围内无记录。支持 offset/limit 分页（每页最多 100 条）。",
+      "properties": {
+        "indicator_code": "指标代码，例如 `\"30771718\"`，来自 macrodata_indicators",
+        "start_date": "数据起始日期（`yyyy-mm-dd`，例如 `\"2024-01-01\"`）",
+        "end_date": "数据结束日期（`yyyy-mm-dd`，例如 `\"2024-12-31\"`）",
+        "offset": "分页偏移量，默认 0",
+        "limit": "返回条数上限，默认 100，最大 100"
+      }
+    },
     "market_temperature": {
       "title": "市场温度",
       "description": "获取当前市场情绪温度，返回 {temperature（0-100）, description, valuation（0-100）, sentiment（0-100）, timestamp}",

@@ -61,6 +61,7 @@ mod content;
 mod dca;
 mod fundamental;
 mod ipo;
+mod macrodata;
 mod market;
 mod output;
 mod portfolio;
@@ -598,6 +599,8 @@ const TOOL_ENDPOINTS: &[(&str, u8)] = &[
     ("ipo_detail", V2),
     ("ipo_listed", V2),
     ("ipo_subscriptions", V2),
+    ("macrodata", V2),
+    ("macrodata_indicators", V2),
     ("margin_ratio", V2),
     ("market_temperature", V2),
     ("now", V2),
@@ -1399,6 +1402,39 @@ impl Longbridge {
             quote::history_market_temperature(&mctx, p)
         })
         .await
+    }
+
+    /// List all supported macro-economic indicators.
+    #[tool(
+        title = "Macro Indicator List",
+        annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
+        description = "List macro-economic indicators. keyword: search by name (e.g. \"CPI\", \"非农\", \"GDP\"). country: US/CN/HK/EU/JP/SG (omit for all). Returns {count, list[]{indicator_code, country, name, describe, periodicity, importance(1=low/2=mid/3=high)}}. Supports offset/limit pagination."
+    )]
+    async fn macrodata_indicators(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<macrodata::MacroeconomicIndicatorsParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("macrodata_indicators", || {
+            macrodata::macrodata_indicators(&mctx, p)
+        })
+        .await
+    }
+
+    /// Get historical data for a macro-economic indicator.
+    #[tool(
+        title = "Macro Indicator Data",
+        annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
+        description = "Get historical data for a macro-economic indicator by its code (from macrodata_indicators). start_date/end_date accept YYYY-MM-DD. Returns {count, info{indicator_code, country, name, describe, periodicity, importance(1=low/2=mid/3=high)}, data[]{period, release_at, actual_value, previous_value, forecast_value, unit}}. period format varies by periodicity: monthly=\"YYYY-MM-DD\", quarterly=\"YYYY-Qn\" (e.g. \"2024-Q1\"), annual=\"YYYY-01-01\". Note: empty actual_value = not yet released (only forecast_value available); empty data[] = no records in range. Supports offset/limit pagination (max 100 per page). Returns error if indicator_code does not exist."
+    )]
+    async fn macrodata(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<macrodata::MacroeconomicParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("macrodata", || macrodata::macrodata(&mctx, p)).await
     }
 
     /// Get watchlist groups.
