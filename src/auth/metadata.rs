@@ -51,23 +51,14 @@ pub(crate) struct ProtectedResourceMetadata {
     scopes_supported: Vec<String>,
 }
 
-/// Scope value advertised for the restricted public `/v1` endpoint.
-///
-/// A client discovering auth from a `/v1` 401 copies `scopes_supported` into the
-/// `scope` parameter of the authorization request, so this `mcp-endpoint=v1`
-/// marker rides into the authorize URL. The Longbridge authorization server
-/// reads it and presents only the read-only consent set (no trading or account
-/// access). It is a marker, not a granular OAuth scope list — narrowing the
-/// granted permissions is done server-side off this marker.
-const V1_SCOPES_SUPPORTED: &[&str] = &["mcp-endpoint=v1"];
-
 /// Scope value advertised for the restricted public `/v2` endpoint.
 ///
-/// Mirrors [`V1_SCOPES_SUPPORTED`]: a client discovering auth from a `/v2` 401
-/// copies this `mcp-endpoint=v2` marker into the authorization request's `scope`
-/// parameter, so the Longbridge authorization server can present the broader
-/// read-only consent set for `/v2` (account/portfolio + order history, but no
-/// trade execution, DCA, IPO orders, or money movement).
+/// A client discovering auth from a `/v2` 401 copies this `mcp-endpoint=v2`
+/// marker into the authorization request's `scope` parameter, so the Longbridge
+/// authorization server can present the broader read-only consent set for `/v2`
+/// (account/portfolio + order history, but no trade execution, DCA, IPO orders,
+/// or money movement). It is a marker, not a granular OAuth scope list —
+/// narrowing the granted permissions is done server-side off this marker.
 const V2_SCOPES_SUPPORTED: &[&str] = &["mcp-endpoint=v2"];
 
 fn build_resource_metadata(resource: String, scopes: Vec<String>) -> ProtectedResourceMetadata {
@@ -89,30 +80,12 @@ pub async fn protected_resource_metadata(
     ))
 }
 
-/// Protected-resource metadata for the restricted `/v1` endpoint (RFC 9728
-/// resource-specific document at `/.well-known/oauth-protected-resource/v1`).
-///
-/// The `resource` identifier is the `/v1` URL and `scopes_supported` is the
-/// read-only set, so a client that discovers auth from a `/v1` 401 requests
-/// only read-only scopes — keeping trading off the consent screen.
-pub async fn protected_resource_metadata_v1(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-) -> Json<ProtectedResourceMetadata> {
-    let resource = format!(
-        "{}/v1",
-        resource_url_from_headers(&headers, &state.base_url)
-    );
-    let scopes = V1_SCOPES_SUPPORTED.iter().map(|s| s.to_string()).collect();
-    Json(build_resource_metadata(resource, scopes))
-}
-
 /// Protected-resource metadata for the restricted `/v2` endpoint (RFC 9728
 /// resource-specific document at `/.well-known/oauth-protected-resource/v2`).
 ///
-/// Mirrors [`protected_resource_metadata_v1`]: the `resource` identifier is the
-/// `/v2` URL and `scopes_supported` is the `/v2` read-only marker, so a client
-/// that discovers auth from a `/v2` 401 requests the v2 consent set.
+/// The `resource` identifier is the `/v2` URL and `scopes_supported` is the
+/// `/v2` read-only marker, so a client that discovers auth from a `/v2` 401
+/// requests the v2 consent set — keeping trade execution off the consent screen.
 pub async fn protected_resource_metadata_v2(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,

@@ -11,11 +11,167 @@
   },
   "app_info": {
     "display_name": "Longbridge",
-    "subtitle": "Investment market insights",
-    "description": "Longbridge helps users research US/HK markets through ChatGPT with read-only access to quotes, charts, order book data, fundamentals, analyst research, finance calendars, news, filings, stock screeners, market movers, ranking lists, short interest, and saved watchlists. The app-directory endpoint requires Longbridge OAuth credentials and does not expose trading, order routing, account-balance, or mutating tools.",
+    "subtitle": "Market insights & portfolio view",
+    "description": "Longbridge brings US, HK, A-share, and SG market research into ChatGPT: live quotes, candlestick charts, order-book depth and trades, fundamentals and financial statements, valuations, analyst ratings and estimates, finance calendars, news, filings, options and warrants, stock screeners, market movers, and ranking lists. With the user's Longbridge OAuth credentials it also provides read-only access to their account and portfolio (balances, positions, profit & loss, margin, cash flow, statements) and order and execution history, and lets them manage watchlists, price alerts, and community share lists. The endpoint never places, modifies, or cancels trades, never sets up recurring (DCA) investments, never submits IPO orders, and never moves money — no deposits, withdrawals, or bank-card access.",
     "category": "FINANCE"
   },
   "tools": {
+    "account_balance": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Get account cash balance and asset summary. It is a read-only view of the user's own account, portfolio, or order data and never places trades, moves funds, or modifies records.",
+        "open_world_justification": "Reads the authenticated user's account, portfolio, or order data from Longbridge's brokerage backend over the network.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "ah_premium": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Get A/H share premium historical K-line data. It only reads data and does not place orders or modify any account, watchlist, or stored state.",
+        "open_world_justification": "Queries Longbridge's external market-data and research services over the network for live data.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "ah_premium_intraday": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Get A/H share premium intraday time-share data. It only reads data and does not place orders or modify any account, watchlist, or stored state.",
+        "open_world_justification": "Queries Longbridge's external market-data and research services over the network for live data.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "alert_add": {
+      "annotations": {
+        "readOnlyHint": false,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Creates a price alert, a write to the user's alert settings, so it is not read-only. It never places trades or moves money.",
+        "open_world_justification": "Sends the change to the authenticated user's Longbridge account (watchlist, alert, or community list) over the network.",
+        "destructive_justification": "It adds or updates the user's own watchlist, alert, or community data but does not delete or overwrite unrelated records, and never trades, moves funds, or routes orders."
+      }
+    },
+    "alert_delete": {
+      "annotations": {
+        "readOnlyHint": false,
+        "openWorldHint": true,
+        "destructiveHint": true
+      },
+      "justifications": {
+        "read_only_justification": "Deletes a price alert, a write to the user's alert settings, so it is not read-only. It never places trades or moves money.",
+        "open_world_justification": "Sends the change to the authenticated user's Longbridge account (watchlist, alert, or community list) over the network.",
+        "destructive_justification": "This permanently deletes a price alert and cannot be undone without recreating it, so it carries a destructive hint; it still never trades or moves money."
+      }
+    },
+    "alert_disable": {
+      "annotations": {
+        "readOnlyHint": false,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Disables an existing price alert, changing alert state, so it is not read-only. It never places trades or moves money.",
+        "open_world_justification": "Sends the change to the authenticated user's Longbridge account (watchlist, alert, or community list) over the network.",
+        "destructive_justification": "It adds or updates the user's own watchlist, alert, or community data but does not delete or overwrite unrelated records, and never trades, moves funds, or routes orders."
+      }
+    },
+    "alert_enable": {
+      "annotations": {
+        "readOnlyHint": false,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Enables an existing price alert, changing alert state, so it is not read-only. It never places trades or moves money.",
+        "open_world_justification": "Sends the change to the authenticated user's Longbridge account (watchlist, alert, or community list) over the network.",
+        "destructive_justification": "It adds or updates the user's own watchlist, alert, or community data but does not delete or overwrite unrelated records, and never trades, moves funds, or routes orders."
+      }
+    },
+    "alert_list": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Get all configured price alerts. It only reads data and does not place orders or modify any account, watchlist, or stored state.",
+        "open_world_justification": "Queries Longbridge's external market-data and research services over the network for live data.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "anomaly": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Get market anomaly alerts (unusual price/volume changes). It only reads data and does not place orders or modify any account, watchlist, or stored state.",
+        "open_world_justification": "Queries Longbridge's external market-data and research services over the network for live data.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "broker_holding": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Get top broker holding data for a symbol (HK stocks only; sourced from HKEX CCASS participant disclosure). It only reads data and does not place orders or modify any account, watchlist, or stored state.",
+        "open_world_justification": "Queries Longbridge's external market-data and research services over the network for live data.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "broker_holding_daily": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Get daily holding history for a specific broker (by broker_id) in a symbol (HK stocks only; sourced from HKEX CCASS participant disclosure). It only reads data and does not place orders or modify any account, watchlist, or stored state.",
+        "open_world_justification": "Queries Longbridge's external market-data and research services over the network for live data.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "broker_holding_detail": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Get full broker holding detail list for a symbol (HK stocks only; sourced from HKEX CCASS participant disclosure). It only reads data and does not place orders or modify any account, watchlist, or stored state.",
+        "open_world_justification": "Queries Longbridge's external market-data and research services over the network for live data.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "brokers": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Get broker queue (HK stocks only). It only reads data and does not place orders or modify any account, watchlist, or stored state.",
+        "open_world_justification": "Queries Longbridge's external market-data and research services over the network for live data.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
     "business_segments": {
       "annotations": {
         "readOnlyHint": true,
@@ -23,8 +179,20 @@
         "destructiveHint": false
       },
       "justifications": {
-        "read_only_justification": "Retrieves current business segment revenue breakdown for a requested security without modifying any account or market data.",
-        "open_world_justification": "Queries Longbridge's external market and fundamentals backend for live security data.",
+        "read_only_justification": "Get current-period business segment revenue breakdown for a symbol (name, percent, total, currency). It only reads data and does not place orders or modify any account, watchlist, or stored state.",
+        "open_world_justification": "Queries Longbridge's external market-data and research services over the network for live data.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "business_segments_history": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Get historical business segment revenue trends (by period and category). It only reads data and does not place orders or modify any account, watchlist, or stored state.",
+        "open_world_justification": "Queries Longbridge's external market-data and research services over the network for live data.",
         "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
       }
     },
@@ -35,8 +203,8 @@
         "destructiveHint": false
       },
       "justifications": {
-        "read_only_justification": "Calculates or retrieves selected market and valuation index values for supplied symbols without changing user or market state.",
-        "open_world_justification": "Uses Longbridge's external quote data service for live symbol metrics.",
+        "read_only_justification": "Calculate financial indexes for symbols. It only reads data and does not place orders or modify any account, watchlist, or stored state.",
+        "open_world_justification": "Queries Longbridge's external market-data and research services over the network for live data.",
         "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
       }
     },
@@ -47,8 +215,44 @@
         "destructiveHint": false
       },
       "justifications": {
-        "read_only_justification": "Fetches historical OHLCV candlestick data for a symbol using the requested period and session filters.",
-        "open_world_justification": "Reads market data from Longbridge's external quote service.",
+        "read_only_justification": "Get candlestick data (OHLCV). It only reads data and does not place orders or modify any account, watchlist, or stored state.",
+        "open_world_justification": "Queries Longbridge's external market-data and research services over the network for live data.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "capital_distribution": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Get capital distribution for a symbol. It only reads data and does not place orders or modify any account, watchlist, or stored state.",
+        "open_world_justification": "Queries Longbridge's external market-data and research services over the network for live data.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "capital_flow": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Get capital inflow/outflow time series. It only reads data and does not place orders or modify any account, watchlist, or stored state.",
+        "open_world_justification": "Queries Longbridge's external market-data and research services over the network for live data.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "cash_flow": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Get cash flow records (deposits, withdrawals, dividends). It is a read-only view of the user's own account, portfolio, or order data and never places trades, moves funds, or modifies records.",
+        "open_world_justification": "Reads the authenticated user's account, portfolio, or order data from Longbridge's brokerage backend over the network.",
         "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
       }
     },
@@ -59,8 +263,8 @@
         "destructiveHint": false
       },
       "justifications": {
-        "read_only_justification": "Retrieves company profile and business overview data for a security without changing records.",
-        "open_world_justification": "Queries Longbridge's external company information backend.",
+        "read_only_justification": "Get company overview. It only reads data and does not place orders or modify any account, watchlist, or stored state.",
+        "open_world_justification": "Queries Longbridge's external market-data and research services over the network for live data.",
         "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
       }
     },
@@ -71,9 +275,57 @@
         "destructiveHint": false
       },
       "justifications": {
-        "read_only_justification": "Retrieves analyst consensus estimates for a security without modifying analyst or user data.",
-        "open_world_justification": "Reads research data from Longbridge's external fundamentals service.",
+        "read_only_justification": "Get financial consensus estimates. It only reads data and does not place orders or modify any account, watchlist, or stored state.",
+        "open_world_justification": "Queries Longbridge's external market-data and research services over the network for live data.",
         "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "constituent": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Get the constituents of an index or the asset allocation of an ETF. It only reads data and does not place orders or modify any account, watchlist, or stored state.",
+        "open_world_justification": "Queries Longbridge's external market-data and research services over the network for live data.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "corp_action": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Get corporate actions (splits, buybacks, name changes). It only reads data and does not place orders or modify any account, watchlist, or stored state.",
+        "open_world_justification": "Queries Longbridge's external market-data and research services over the network for live data.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "create_watchlist_group": {
+      "annotations": {
+        "readOnlyHint": false,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Creates a new watchlist group (optionally pre-populated with securities), a write to the user's saved watchlists, so it is not read-only. It never places trades or moves money.",
+        "open_world_justification": "Sends the change to the authenticated user's Longbridge account (watchlist, alert, or community list) over the network.",
+        "destructive_justification": "It adds or updates the user's own watchlist, alert, or community data but does not delete or overwrite unrelated records, and never trades, moves funds, or routes orders."
+      }
+    },
+    "delete_watchlist_group": {
+      "annotations": {
+        "readOnlyHint": false,
+        "openWorldHint": true,
+        "destructiveHint": true
+      },
+      "justifications": {
+        "read_only_justification": "Deletes a watchlist group, a write to the user's saved watchlists, so it is not read-only. It never places trades or moves money.",
+        "open_world_justification": "Sends the change to the authenticated user's Longbridge account (watchlist, alert, or community list) over the network.",
+        "destructive_justification": "This permanently deletes a watchlist group (optionally purging its securities from other groups) and cannot be undone without recreating it, so it carries a destructive hint; it still never trades or moves money."
       }
     },
     "depth": {
@@ -83,8 +335,8 @@
         "destructiveHint": false
       },
       "justifications": {
-        "read_only_justification": "Fetches order book depth for a symbol and does not place, cancel, or modify orders.",
-        "open_world_justification": "Reads live order book data from Longbridge's external quote service.",
+        "read_only_justification": "Get order book depth for a symbol. It only reads data and does not place orders or modify any account, watchlist, or stored state.",
+        "open_world_justification": "Queries Longbridge's external market-data and research services over the network for live data.",
         "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
       }
     },
@@ -95,8 +347,56 @@
         "destructiveHint": false
       },
       "justifications": {
-        "read_only_justification": "Retrieves dividend history for a security without changing shareholder, account, or company data.",
-        "open_world_justification": "Queries Longbridge's external fundamentals backend.",
+        "read_only_justification": "Get dividend history. It only reads data and does not place orders or modify any account, watchlist, or stored state.",
+        "open_world_justification": "Queries Longbridge's external market-data and research services over the network for live data.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "dividend_detail": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Get detailed dividend distribution scheme. It only reads data and does not place orders or modify any account, watchlist, or stored state.",
+        "open_world_justification": "Queries Longbridge's external market-data and research services over the network for live data.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "estimate_max_purchase_quantity": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Estimate maximum buy/sell quantity for a symbol. It is a read-only view of the user's own account, portfolio, or order data and never places trades, moves funds, or modifies records.",
+        "open_world_justification": "Reads the authenticated user's account, portfolio, or order data from Longbridge's brokerage backend over the network.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "exchange_rate": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Get exchange rates for all supported currencies. It only reads data and does not place orders or modify any account, watchlist, or stored state.",
+        "open_world_justification": "Queries Longbridge's external market-data and research services over the network for live data.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "executive": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Get company executive and board member information. It only reads data and does not place orders or modify any account, watchlist, or stored state.",
+        "open_world_justification": "Queries Longbridge's external market-data and research services over the network for live data.",
         "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
       }
     },
@@ -107,8 +407,8 @@
         "destructiveHint": false
       },
       "justifications": {
-        "read_only_justification": "Retrieves regulatory filing metadata and links for a symbol without changing any filings.",
-        "open_world_justification": "Reads filing data from Longbridge's external quote and content services.",
+        "read_only_justification": "Get regulatory filings (8-K, 10-Q, 10-K, etc.). It only reads data and does not place orders or modify any account, watchlist, or stored state.",
+        "open_world_justification": "Queries Longbridge's external market-data and research services over the network for live data.",
         "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
       }
     },
@@ -119,8 +419,20 @@
         "destructiveHint": false
       },
       "justifications": {
-        "read_only_justification": "Retrieves calendar events such as earnings, dividends, IPOs, macro data, and market closures for the requested range.",
-        "open_world_justification": "Queries Longbridge's external finance calendar service for live event data.",
+        "read_only_justification": "Get finance calendar events by category and date range. It only reads data and does not place orders or modify any account, watchlist, or stored state.",
+        "open_world_justification": "Queries Longbridge's external market-data and research services over the network for live data.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "financial_report": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Get financial reports (income statement, balance sheet, cash flow). It only reads data and does not place orders or modify any account, watchlist, or stored state.",
+        "open_world_justification": "Queries Longbridge's external market-data and research services over the network for live data.",
         "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
       }
     },
@@ -131,8 +443,20 @@
         "destructiveHint": false
       },
       "justifications": {
-        "read_only_justification": "Retrieves the latest financial report summary for a security without changing financial records.",
-        "open_world_justification": "Reads report data from Longbridge's external fundamentals backend.",
+        "read_only_justification": "Get the latest financial report summary for a security. It only reads data and does not place orders or modify any account, watchlist, or stored state.",
+        "open_world_justification": "Queries Longbridge's external market-data and research services over the network for live data.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "financial_report_snapshot": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Get financial report snapshot: report_desc (text summary), fo_revenue/fo_ebit/fo_eps (actual vs forecast with yoy/cmp), fr_* financial ratios (ROE, margins, assets, cash flow). It only reads data and does not place orders or modify any account, watchlist, or stored state.",
+        "open_world_justification": "Queries Longbridge's external market-data and research services over the network for live data.",
         "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
       }
     },
@@ -143,8 +467,8 @@
         "destructiveHint": false
       },
       "justifications": {
-        "read_only_justification": "Retrieves income statement, balance sheet, cash flow, or combined statement data for a security.",
-        "open_world_justification": "Queries Longbridge's external financial statement service.",
+        "read_only_justification": "Get financial statements (income statement, balance sheet, or cash flow) for a security. It only reads data and does not place orders or modify any account, watchlist, or stored state.",
+        "open_world_justification": "Queries Longbridge's external market-data and research services over the network for live data.",
         "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
       }
     },
@@ -155,8 +479,140 @@
         "destructiveHint": false
       },
       "justifications": {
-        "read_only_justification": "Retrieves EPS forecast and analyst estimate history without updating forecasts or user data.",
-        "open_world_justification": "Reads forecast data from Longbridge's external research backend.",
+        "read_only_justification": "Get EPS forecast and analyst estimate history. It only reads data and does not place orders or modify any account, watchlist, or stored state.",
+        "open_world_justification": "Queries Longbridge's external market-data and research services over the network for live data.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "fund_holder": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Get funds and ETFs that hold a given symbol. It only reads data and does not place orders or modify any account, watchlist, or stored state.",
+        "open_world_justification": "Queries Longbridge's external market-data and research services over the network for live data.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "fund_positions": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Get current fund positions. It is a read-only view of the user's own account, portfolio, or order data and never places trades, moves funds, or modifies records.",
+        "open_world_justification": "Reads the authenticated user's account, portfolio, or order data from Longbridge's brokerage backend over the network.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "history_candlesticks_by_date": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Get historical candlestick data by date range. It only reads data and does not place orders or modify any account, watchlist, or stored state.",
+        "open_world_justification": "Queries Longbridge's external market-data and research services over the network for live data.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "history_candlesticks_by_offset": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Get historical candlestick data by offset from a reference time. It only reads data and does not place orders or modify any account, watchlist, or stored state.",
+        "open_world_justification": "Queries Longbridge's external market-data and research services over the network for live data.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "history_executions": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Get historical trade executions between dates. It is a read-only view of the user's own account, portfolio, or order data and never places trades, moves funds, or modifies records.",
+        "open_world_justification": "Reads the authenticated user's account, portfolio, or order data from Longbridge's brokerage backend over the network.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "history_market_temperature": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Get historical market temperature time series. It only reads data and does not place orders or modify any account, watchlist, or stored state.",
+        "open_world_justification": "Queries Longbridge's external market-data and research services over the network for live data.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "history_orders": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Get historical orders between dates (excludes today). It is a read-only view of the user's own account, portfolio, or order data and never places trades, moves funds, or modifies records.",
+        "open_world_justification": "Reads the authenticated user's account, portfolio, or order data from Longbridge's brokerage backend over the network.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "industry_peers": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Hierarchical sub-sector tree for an industry group. It only reads data and does not place orders or modify any account, watchlist, or stored state.",
+        "open_world_justification": "Queries Longbridge's external market-data and research services over the network for live data.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "industry_rank": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Industry ranking list by market (US/HK/CN/SG) and indicator (0=领涨/1=今日走势/2=人气/3=市值/4=营收/5=营收增长率/6=净利润/7=净利润增长率). It only reads data and does not place orders or modify any account, watchlist, or stored state.",
+        "open_world_justification": "Queries Longbridge's external market-data and research services over the network for live data.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "industry_valuation": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Get industry valuation comparison for peers. It only reads data and does not place orders or modify any account, watchlist, or stored state.",
+        "open_world_justification": "Queries Longbridge's external market-data and research services over the network for live data.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "industry_valuation_dist": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Get industry PE/PB/PS valuation distribution. It only reads data and does not place orders or modify any account, watchlist, or stored state.",
+        "open_world_justification": "Queries Longbridge's external market-data and research services over the network for live data.",
         "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
       }
     },
@@ -167,8 +623,56 @@
         "destructiveHint": false
       },
       "justifications": {
-        "read_only_justification": "Retrieves analyst rating summary and target price information for a security.",
-        "open_world_justification": "Reads institution rating data from Longbridge's external research service.",
+        "read_only_justification": "Get institution rating summary. It only reads data and does not place orders or modify any account, watchlist, or stored state.",
+        "open_world_justification": "Queries Longbridge's external market-data and research services over the network for live data.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "institution_rating_detail": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Get detailed historical institution ratings and target price history. It only reads data and does not place orders or modify any account, watchlist, or stored state.",
+        "open_world_justification": "Queries Longbridge's external market-data and research services over the network for live data.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "institution_rating_history": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Get institution rating history. It only reads data and does not place orders or modify any account, watchlist, or stored state.",
+        "open_world_justification": "Queries Longbridge's external market-data and research services over the network for live data.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "institution_rating_industry_rank": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Get peers ranked by institution analyst ratings in the same industry. It only reads data and does not place orders or modify any account, watchlist, or stored state.",
+        "open_world_justification": "Queries Longbridge's external market-data and research services over the network for live data.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "institutional_views": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Get monthly institutional rating distribution timeline. It only reads data and does not place orders or modify any account, watchlist, or stored state.",
+        "open_world_justification": "Queries Longbridge's external market-data and research services over the network for live data.",
         "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
       }
     },
@@ -179,8 +683,80 @@
         "destructiveHint": false
       },
       "justifications": {
-        "read_only_justification": "Fetches minute-by-minute intraday price and volume data for a symbol.",
-        "open_world_justification": "Reads live market data from Longbridge's external quote service.",
+        "read_only_justification": "Get intraday minute-by-minute price/volume data. It only reads data and does not place orders or modify any account, watchlist, or stored state.",
+        "open_world_justification": "Queries Longbridge's external market-data and research services over the network for live data.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "invest_relation": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Get investor relations events and announcements. It only reads data and does not place orders or modify any account, watchlist, or stored state.",
+        "open_world_justification": "Queries Longbridge's external market-data and research services over the network for live data.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "ipo_calendar": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Show the IPO calendar. It only reads data and does not place orders or modify any account, watchlist, or stored state.",
+        "open_world_justification": "Queries Longbridge's external market-data and research services over the network for live data.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "ipo_detail": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Show IPO detail for a symbol. It only reads data and does not place orders or modify any account, watchlist, or stored state.",
+        "open_world_justification": "Queries Longbridge's external market-data and research services over the network for live data.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "ipo_listed": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "List recently listed IPO stocks (HK+US). It only reads data and does not place orders or modify any account, watchlist, or stored state.",
+        "open_world_justification": "Queries Longbridge's external market-data and research services over the network for live data.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "ipo_subscriptions": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "List IPO stocks in subscription/pre-filing stage (HK+US). It only reads data and does not place orders or modify any account, watchlist, or stored state.",
+        "open_world_justification": "Queries Longbridge's external market-data and research services over the network for live data.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "margin_ratio": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Get margin ratio for a symbol. It is a read-only view of the user's own account, portfolio, or order data and never places trades, moves funds, or modifies records.",
+        "open_world_justification": "Reads the authenticated user's account, portfolio, or order data from Longbridge's brokerage backend over the network.",
         "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
       }
     },
@@ -191,8 +767,20 @@
         "destructiveHint": false
       },
       "justifications": {
-        "read_only_justification": "Retrieves current trading status and timestamps for supported markets.",
-        "open_world_justification": "Queries Longbridge's external market status service.",
+        "read_only_justification": "Get current market trading status for all markets. It only reads data and does not place orders or modify any account, watchlist, or stored state.",
+        "open_world_justification": "Queries Longbridge's external market-data and research services over the network for live data.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "market_temperature": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Get current market sentiment temperature. It only reads data and does not place orders or modify any account, watchlist, or stored state.",
+        "open_world_justification": "Queries Longbridge's external market-data and research services over the network for live data.",
         "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
       }
     },
@@ -203,8 +791,8 @@
         "destructiveHint": false
       },
       "justifications": {
-        "read_only_justification": "Retrieves latest news articles related to a requested symbol without creating or publishing content.",
-        "open_world_justification": "Reads news content from Longbridge's external content service.",
+        "read_only_justification": "Get latest news articles for a symbol. It only reads data and does not place orders or modify any account, watchlist, or stored state.",
+        "open_world_justification": "Queries Longbridge's external market-data and research services over the network for live data.",
         "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
       }
     },
@@ -215,8 +803,152 @@
         "destructiveHint": false
       },
       "justifications": {
-        "read_only_justification": "Searches news articles by keyword and returns matching article metadata.",
-        "open_world_justification": "Queries Longbridge's external search service for current news results.",
+        "read_only_justification": "Search news articles by keyword. It only reads data and does not place orders or modify any account, watchlist, or stored state.",
+        "open_world_justification": "Queries Longbridge's external market-data and research services over the network for live data.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "now": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Get current UTC time as an RFC3339 string (e.g. It only reads data and does not place orders or modify any account, watchlist, or stored state.",
+        "open_world_justification": "Queries Longbridge's external market-data and research services over the network for live data.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "operating": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Get company operating metrics (HK stocks only). It only reads data and does not place orders or modify any account, watchlist, or stored state.",
+        "open_world_justification": "Queries Longbridge's external market-data and research services over the network for live data.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "option_chain_expiry_date_list": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Get option chain expiry dates for a symbol (e.g. It only reads data and does not place orders or modify any account, watchlist, or stored state.",
+        "open_world_justification": "Queries Longbridge's external market-data and research services over the network for live data.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "option_chain_info_by_date": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Get option chain for an expiry date. It only reads data and does not place orders or modify any account, watchlist, or stored state.",
+        "open_world_justification": "Queries Longbridge's external market-data and research services over the network for live data.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "option_quote": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Get option quotes (max 500 symbols). It only reads data and does not place orders or modify any account, watchlist, or stored state.",
+        "open_world_justification": "Queries Longbridge's external market-data and research services over the network for live data.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "option_volume": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Get real-time option call/put volume stats for a US stock. It only reads data and does not place orders or modify any account, watchlist, or stored state.",
+        "open_world_justification": "Queries Longbridge's external market-data and research services over the network for live data.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "option_volume_daily": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Get daily historical option stats for a US stock. It only reads data and does not place orders or modify any account, watchlist, or stored state.",
+        "open_world_justification": "Queries Longbridge's external market-data and research services over the network for live data.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "order_detail": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Get detailed information about a specific order. It is a read-only view of the user's own account, portfolio, or order data and never places trades, moves funds, or modifies records.",
+        "open_world_justification": "Reads the authenticated user's account, portfolio, or order data from Longbridge's brokerage backend over the network.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "participants": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Get HK market participant broker information. It only reads data and does not place orders or modify any account, watchlist, or stored state.",
+        "open_world_justification": "Queries Longbridge's external market-data and research services over the network for live data.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "profit_analysis": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Get portfolio profit and loss analysis summary. It is a read-only view of the user's own account, portfolio, or order data and never places trades, moves funds, or modifies records.",
+        "open_world_justification": "Reads the authenticated user's account, portfolio, or order data from Longbridge's brokerage backend over the network.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "profit_analysis_detail": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Get detailed profit and loss analysis for a specific symbol. It is a read-only view of the user's own account, portfolio, or order data and never places trades, moves funds, or modifies records.",
+        "open_world_justification": "Reads the authenticated user's account, portfolio, or order data from Longbridge's brokerage backend over the network.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "quant_run": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Run a quant indicator script against historical K-line data on the server. It only reads data and does not place orders or modify any account, watchlist, or stored state.",
+        "open_world_justification": "Queries Longbridge's external market-data and research services over the network for live data.",
         "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
       }
     },
@@ -227,8 +959,20 @@
         "destructiveHint": false
       },
       "justifications": {
-        "read_only_justification": "Fetches latest price quotes for supplied symbols and does not submit market actions.",
-        "open_world_justification": "Reads live quote data from Longbridge's external market data service.",
+        "read_only_justification": "Get latest price quotes. It only reads data and does not place orders or modify any account, watchlist, or stored state.",
+        "open_world_justification": "Queries Longbridge's external market-data and research services over the network for live data.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "rank_categories": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Get rank tab category configurations for the popularity leaderboard. It only reads data and does not place orders or modify any account, watchlist, or stored state.",
+        "open_world_justification": "Queries Longbridge's external market-data and research services over the network for live data.",
         "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
       }
     },
@@ -239,8 +983,32 @@
         "destructiveHint": false
       },
       "justifications": {
-        "read_only_justification": "Retrieves ranked stock lists for a selected leaderboard key and optional market.",
-        "open_world_justification": "Reads leaderboard data from Longbridge's external market ranking service.",
+        "read_only_justification": "Get ranked stock list by leaderboard tab key. It only reads data and does not place orders or modify any account, watchlist, or stored state.",
+        "open_world_justification": "Queries Longbridge's external market-data and research services over the network for live data.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "screener_indicators": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Get all available screener indicator keys with units and default value ranges. It only reads data and does not place orders or modify any account, watchlist, or stored state.",
+        "open_world_justification": "Queries Longbridge's external market-data and research services over the network for live data.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "screener_recommend_strategies": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "List platform-preset screener strategies. It only reads data and does not place orders or modify any account, watchlist, or stored state.",
+        "open_world_justification": "Queries Longbridge's external market-data and research services over the network for live data.",
         "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
       }
     },
@@ -251,8 +1019,68 @@
         "destructiveHint": false
       },
       "justifications": {
-        "read_only_justification": "Runs a stock screener query using filter parameters or a saved strategy and returns matching securities without saving changes.",
-        "open_world_justification": "Queries Longbridge's external stock screener service for live market results.",
+        "read_only_justification": "Screen stocks. It only reads data and does not place orders or modify any account, watchlist, or stored state.",
+        "open_world_justification": "Queries Longbridge's external market-data and research services over the network for live data.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "screener_strategy": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Inspect a screener strategy's filter conditions before running it. It only reads data and does not place orders or modify any account, watchlist, or stored state.",
+        "open_world_justification": "Queries Longbridge's external market-data and research services over the network for live data.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "screener_user_strategies": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "List the current user's saved screener strategies. It only reads data and does not place orders or modify any account, watchlist, or stored state.",
+        "open_world_justification": "Queries Longbridge's external market-data and research services over the network for live data.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "security_list": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Get security list for a market. It only reads data and does not place orders or modify any account, watchlist, or stored state.",
+        "open_world_justification": "Queries Longbridge's external market-data and research services over the network for live data.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "shareholder": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Get institutional shareholders for a symbol. It only reads data and does not place orders or modify any account, watchlist, or stored state.",
+        "open_world_justification": "Queries Longbridge's external market-data and research services over the network for live data.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "shareholder_detail": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Get a single shareholder's holding and trade history. It only reads data and does not place orders or modify any account, watchlist, or stored state.",
+        "open_world_justification": "Queries Longbridge's external market-data and research services over the network for live data.",
         "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
       }
     },
@@ -263,8 +1091,116 @@
         "destructiveHint": false
       },
       "justifications": {
-        "read_only_justification": "Retrieves top shareholder information across reporting periods for a security.",
-        "open_world_justification": "Reads shareholder data from Longbridge's external fundamentals service.",
+        "read_only_justification": "Get Top 20 major shareholders (institutions, individuals, insiders) across reporting periods. It only reads data and does not place orders or modify any account, watchlist, or stored state.",
+        "open_world_justification": "Queries Longbridge's external market-data and research services over the network for live data.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "sharelist_add": {
+      "annotations": {
+        "readOnlyHint": false,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Adds securities to a community share list, modifying the user's list, so it is not read-only. It never places trades or moves money.",
+        "open_world_justification": "Sends the change to the authenticated user's Longbridge account (watchlist, alert, or community list) over the network.",
+        "destructive_justification": "It adds or updates the user's own watchlist, alert, or community data but does not delete or overwrite unrelated records, and never trades, moves funds, or routes orders."
+      }
+    },
+    "sharelist_create": {
+      "annotations": {
+        "readOnlyHint": false,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Creates a community share list owned by the user, a write, so it is not read-only. It never places trades or moves money.",
+        "open_world_justification": "Sends the change to the authenticated user's Longbridge account (watchlist, alert, or community list) over the network.",
+        "destructive_justification": "It adds or updates the user's own watchlist, alert, or community data but does not delete or overwrite unrelated records, and never trades, moves funds, or routes orders."
+      }
+    },
+    "sharelist_delete": {
+      "annotations": {
+        "readOnlyHint": false,
+        "openWorldHint": true,
+        "destructiveHint": true
+      },
+      "justifications": {
+        "read_only_justification": "Deletes a community share list owned by the user, a write, so it is not read-only. It never places trades or moves money.",
+        "open_world_justification": "Sends the change to the authenticated user's Longbridge account (watchlist, alert, or community list) over the network.",
+        "destructive_justification": "This permanently deletes a community share list owned by the user and cannot be undone without recreating it, so it carries a destructive hint; it still never trades or moves money."
+      }
+    },
+    "sharelist_detail": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Get community sharelist detail by id. It only reads data and does not place orders or modify any account, watchlist, or stored state.",
+        "open_world_justification": "Queries Longbridge's external market-data and research services over the network for live data.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "sharelist_list": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "List user's own and subscribed community sharelists. It only reads data and does not place orders or modify any account, watchlist, or stored state.",
+        "open_world_justification": "Queries Longbridge's external market-data and research services over the network for live data.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "sharelist_popular": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Get popular/trending community sharelists. It only reads data and does not place orders or modify any account, watchlist, or stored state.",
+        "open_world_justification": "Queries Longbridge's external market-data and research services over the network for live data.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "sharelist_remove": {
+      "annotations": {
+        "readOnlyHint": false,
+        "openWorldHint": true,
+        "destructiveHint": true
+      },
+      "justifications": {
+        "read_only_justification": "Removes securities from a community share list, modifying the user's list, so it is not read-only. It never places trades or moves money.",
+        "open_world_justification": "Sends the change to the authenticated user's Longbridge account (watchlist, alert, or community list) over the network.",
+        "destructive_justification": "This permanently removes securities from a community share list and cannot be undone without recreating it, so it carries a destructive hint; it still never trades or moves money."
+      }
+    },
+    "sharelist_sort": {
+      "annotations": {
+        "readOnlyHint": false,
+        "openWorldHint": true,
+        "destructiveHint": true
+      },
+      "justifications": {
+        "read_only_justification": "Reorders securities in a community share list, modifying the user's list, so it is not read-only. It never places trades or moves money.",
+        "open_world_justification": "Sends the change to the authenticated user's Longbridge account (watchlist, alert, or community list) over the network.",
+        "destructive_justification": "This permanently overwrites the ordering of a community share list and cannot be undone without recreating it, so it carries a destructive hint; it still never trades or moves money."
+      }
+    },
+    "short_margin": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Get short margin deposit details for the current account. It is a read-only view of the user's own account, portfolio, or order data and never places trades, moves funds, or modifies records.",
+        "open_world_justification": "Reads the authenticated user's account, portfolio, or order data from Longbridge's brokerage backend over the network.",
         "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
       }
     },
@@ -275,8 +1211,92 @@
         "destructiveHint": false
       },
       "justifications": {
-        "read_only_justification": "Retrieves historical short interest data for HK or US stocks without opening or closing positions.",
-        "open_world_justification": "Queries Longbridge's external short interest data service.",
+        "read_only_justification": "Get short interest history (open short positions) for HK or US stocks. It only reads data and does not place orders or modify any account, watchlist, or stored state.",
+        "open_world_justification": "Queries Longbridge's external market-data and research services over the network for live data.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "short_trades": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Get daily short-sale volume history for HK or US stocks. It only reads data and does not place orders or modify any account, watchlist, or stored state.",
+        "open_world_justification": "Queries Longbridge's external market-data and research services over the network for live data.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "statement_export": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Get a pre-signed download URL for a statement data file (obtained from statement_list). It is a read-only view of the user's own account, portfolio, or order data and never places trades, moves funds, or modifies records.",
+        "open_world_justification": "Reads the authenticated user's account, portfolio, or order data from Longbridge's brokerage backend over the network.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "statement_list": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "List available account statements (daily/monthly). It is a read-only view of the user's own account, portfolio, or order data and never places trades, moves funds, or modifies records.",
+        "open_world_justification": "Reads the authenticated user's account, portfolio, or order data from Longbridge's brokerage backend over the network.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "static_info": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Get static info for securities. It only reads data and does not place orders or modify any account, watchlist, or stored state.",
+        "open_world_justification": "Queries Longbridge's external market-data and research services over the network for live data.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "stock_positions": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Get current stock positions across all channels. It is a read-only view of the user's own account, portfolio, or order data and never places trades, moves funds, or modifies records.",
+        "open_world_justification": "Reads the authenticated user's account, portfolio, or order data from Longbridge's brokerage backend over the network.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "today_executions": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Get today's trade executions (fills). It is a read-only view of the user's own account, portfolio, or order data and never places trades, moves funds, or modifies records.",
+        "open_world_justification": "Reads the authenticated user's account, portfolio, or order data from Longbridge's brokerage backend over the network.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "today_orders": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Get orders placed today. It is a read-only view of the user's own account, portfolio, or order data and never places trades, moves funds, or modifies records.",
+        "open_world_justification": "Reads the authenticated user's account, portfolio, or order data from Longbridge's brokerage backend over the network.",
         "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
       }
     },
@@ -287,8 +1307,92 @@
         "destructiveHint": false
       },
       "justifications": {
-        "read_only_justification": "Runs a market events query for unusually moving stocks and returns matching events without persisting changes.",
-        "open_world_justification": "Queries Longbridge's external market event service for live mover data and related news.",
+        "read_only_justification": "Get stocks whose price fluctuation exceeds the 20-trading-day standard deviation, with correlated news reasons. It only reads data and does not place orders or modify any account, watchlist, or stored state.",
+        "open_world_justification": "Queries Longbridge's external market-data and research services over the network for live data.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "topic": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Get discussion topics for a symbol. It only reads data and does not place orders or modify any account, watchlist, or stored state.",
+        "open_world_justification": "Queries Longbridge's external market-data and research services over the network for live data.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "topic_create": {
+      "annotations": {
+        "readOnlyHint": false,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Publishes a new community discussion topic, a write that posts user content, so it is not read-only. It never places trades or moves money.",
+        "open_world_justification": "Sends the change to the authenticated user's Longbridge account (watchlist, alert, or community list) over the network.",
+        "destructive_justification": "It adds or updates the user's own watchlist, alert, or community data but does not delete or overwrite unrelated records, and never trades, moves funds, or routes orders."
+      }
+    },
+    "topic_create_reply": {
+      "annotations": {
+        "readOnlyHint": false,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Publishes a reply to a community discussion topic, a write that posts user content, so it is not read-only. It never places trades or moves money.",
+        "open_world_justification": "Sends the change to the authenticated user's Longbridge account (watchlist, alert, or community list) over the network.",
+        "destructive_justification": "It adds or updates the user's own watchlist, alert, or community data but does not delete or overwrite unrelated records, and never trades, moves funds, or routes orders."
+      }
+    },
+    "topic_detail": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Get discussion topic detail by topic_id. It only reads data and does not place orders or modify any account, watchlist, or stored state.",
+        "open_world_justification": "Queries Longbridge's external market-data and research services over the network for live data.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "topic_replies": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Get replies to a discussion topic, paginated (page default 1, size default 20, range 1-50). It only reads data and does not place orders or modify any account, watchlist, or stored state.",
+        "open_world_justification": "Queries Longbridge's external market-data and research services over the network for live data.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "topic_search": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Search community topics/posts by keyword. It only reads data and does not place orders or modify any account, watchlist, or stored state.",
+        "open_world_justification": "Queries Longbridge's external market-data and research services over the network for live data.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "trade_stats": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Get trade statistics (buy/sell/neutral volume distribution). It only reads data and does not place orders or modify any account, watchlist, or stored state.",
+        "open_world_justification": "Queries Longbridge's external market-data and research services over the network for live data.",
         "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
       }
     },
@@ -299,9 +1403,45 @@
         "destructiveHint": false
       },
       "justifications": {
-        "read_only_justification": "Retrieves recent public trades for a symbol and does not submit or alter orders.",
-        "open_world_justification": "Reads live trade prints from Longbridge's external quote service.",
+        "read_only_justification": "Get recent trades (max 1000). It only reads data and does not place orders or modify any account, watchlist, or stored state.",
+        "open_world_justification": "Queries Longbridge's external market-data and research services over the network for live data.",
         "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "trading_days": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Get trading days for a market between dates. It only reads data and does not place orders or modify any account, watchlist, or stored state.",
+        "open_world_justification": "Queries Longbridge's external market-data and research services over the network for live data.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "trading_session": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Get trading session schedule for all markets. It only reads data and does not place orders or modify any account, watchlist, or stored state.",
+        "open_world_justification": "Queries Longbridge's external market-data and research services over the network for live data.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "update_watchlist_group": {
+      "annotations": {
+        "readOnlyHint": false,
+        "openWorldHint": true,
+        "destructiveHint": true
+      },
+      "justifications": {
+        "read_only_justification": "Renames a watchlist group or adds and removes its securities, modifying the user's saved watchlists, so it is not read-only. It never places trades or moves money.",
+        "open_world_justification": "Sends the change to the authenticated user's Longbridge account (watchlist, alert, or community list) over the network.",
+        "destructive_justification": "This permanently updates a watchlist group and can remove securities from it and cannot be undone without recreating it, so it carries a destructive hint; it still never trades or moves money."
       }
     },
     "valuation": {
@@ -311,8 +1451,80 @@
         "destructiveHint": false
       },
       "justifications": {
-        "read_only_justification": "Retrieves valuation metrics and peer comparison data for a security.",
-        "open_world_justification": "Reads valuation data from Longbridge's external fundamentals backend.",
+        "read_only_justification": "Get valuation overview with peer comparison. It only reads data and does not place orders or modify any account, watchlist, or stored state.",
+        "open_world_justification": "Queries Longbridge's external market-data and research services over the network for live data.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "valuation_comparison": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Stock valuation comparison. It only reads data and does not place orders or modify any account, watchlist, or stored state.",
+        "open_world_justification": "Queries Longbridge's external market-data and research services over the network for live data.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "valuation_history": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Get detailed valuation history time series. It only reads data and does not place orders or modify any account, watchlist, or stored state.",
+        "open_world_justification": "Queries Longbridge's external market-data and research services over the network for live data.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "valuation_rank": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Get daily valuation rank (PE/PB/PS/dividend yield industry percentile) for a security over a date range. It only reads data and does not place orders or modify any account, watchlist, or stored state.",
+        "open_world_justification": "Queries Longbridge's external market-data and research services over the network for live data.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "warrant_issuers": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Get HK warrant issuer information. It only reads data and does not place orders or modify any account, watchlist, or stored state.",
+        "open_world_justification": "Queries Longbridge's external market-data and research services over the network for live data.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "warrant_list": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Get filtered warrant list for an underlying symbol. It only reads data and does not place orders or modify any account, watchlist, or stored state.",
+        "open_world_justification": "Queries Longbridge's external market-data and research services over the network for live data.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "warrant_quote": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Get warrant quotes. It only reads data and does not place orders or modify any account, watchlist, or stored state.",
+        "open_world_justification": "Queries Longbridge's external market-data and research services over the network for live data.",
         "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
       }
     },
@@ -323,8 +1535,8 @@
         "destructiveHint": false
       },
       "justifications": {
-        "read_only_justification": "Retrieves the authenticated user's watchlist groups and securities without creating, updating, or deleting watchlists.",
-        "open_world_justification": "Reads the user's saved watchlist data from Longbridge's external brokerage backend.",
+        "read_only_justification": "Get all watchlist groups and their securities. It only reads data and does not place orders or modify any account, watchlist, or stored state.",
+        "open_world_justification": "Queries Longbridge's external market-data and research services over the network for live data.",
         "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
       }
     }
@@ -347,8 +1559,8 @@
       "expected_output_url": null
     },
     {
-      "description": "Build a fundamental snapshot for a security.",
-      "user_prompt": "Summarize TSLA.US fundamentals: company profile, latest financial report, valuation, analyst consensus, EPS forecast, institution ratings, top shareholders, and business segments.",
+      "description": "Build a fundamental and research snapshot for a security.",
+      "user_prompt": "Summarize TSLA.US: company profile, latest financial report, valuation, analyst consensus, EPS forecast, institution ratings, top shareholders, and business segments.",
       "file_attachment_urls": null,
       "tools_triggered": "company, financial_report_latest, valuation, consensus, forecast_eps, institution_rating, shareholder_top, business_segments",
       "expected_output": "Returns a read-only research summary using company, financial, valuation, analyst, shareholder, and segment data.",
@@ -363,37 +1575,37 @@
       "expected_output_url": null
     },
     {
-      "description": "Use market discovery tools and the user's saved watchlist.",
-      "user_prompt": "Show my watchlist, quote the symbols in it, then find US top movers, hot US rank list entries, and screen US stocks with market cap above 100B.",
+      "description": "Use market discovery tools and options data.",
+      "user_prompt": "Find US top movers and hot rank list entries, screen US stocks with market cap above 100B, and show AAPL.US option expiry dates with the nearest chain.",
       "file_attachment_urls": null,
-      "tools_triggered": "watchlist, quote, top_movers, rank_list, screener_search",
-      "expected_output": "Returns saved watchlist securities, latest quotes, market mover events, ranked stocks, and matching screener results without modifying watchlists or accounts.",
+      "tools_triggered": "top_movers, rank_list, screener_search, option_chain_expiry_date_list, option_chain_info_by_date",
+      "expected_output": "Returns market mover events, ranked stocks, screener matches, and option expiry dates with strikes and Greeks for the nearest expiry.",
       "expected_output_url": null
     }
   ],
   "negative_test_cases": [
     {
       "description": "Do not trigger for trade execution requests.",
-      "user_prompt": "Buy 10 shares of AAPL.US at market price.",
+      "user_prompt": "Buy 10 shares of AAPL.US at market price and then cancel my open TSLA.US order.",
       "file_attachment_urls": null,
       "tools_triggered": null,
-      "expected_output": "The app should not be invoked because the public app endpoint does not support placing trades or routing orders.",
+      "expected_output": "The app should not place or cancel orders; this endpoint does not expose trade execution or order routing.",
       "expected_output_url": null
     },
     {
-      "description": "Do not trigger for account-balance or position-management requests.",
-      "user_prompt": "Show my account cash balance and close all losing positions.",
+      "description": "Do not trigger for recurring-investment (DCA) setup.",
+      "user_prompt": "Set up a recurring weekly $100 investment into VOO.US.",
       "file_attachment_urls": null,
       "tools_triggered": null,
-      "expected_output": "The app should not be invoked because account balance, position management, and mutating account actions are outside the submitted read-only analysis surface.",
+      "expected_output": "The app should not create or modify recurring (DCA) investment plans; that capability is not part of this endpoint.",
       "expected_output_url": null
     },
     {
-      "description": "Do not trigger for unrelated personal finance or tax advice without market lookup.",
-      "user_prompt": "Prepare my personal tax return and tell me which deductions I qualify for.",
+      "description": "Do not trigger for money movement.",
+      "user_prompt": "Withdraw $5,000 from my account to my linked bank card.",
       "file_attachment_urls": null,
       "tools_triggered": null,
-      "expected_output": "The app should not be invoked because the request is tax preparation, not Longbridge market research or watchlist lookup.",
+      "expected_output": "The app should not move money; deposits, withdrawals, and bank-card access are outside the submitted surface.",
       "expected_output_url": null
     }
   ]
