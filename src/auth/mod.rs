@@ -98,17 +98,6 @@ async fn tools_json() -> axum::Json<&'static serde_json::Value> {
     axum::Json(&*TOOLS_JSON)
 }
 
-/// Restricted tool manifest for the public `/v1` endpoint: only the curated
-/// read-only analysis allowlist, with scopes pruned to match.
-async fn v1_tools_json() -> axum::Json<&'static serde_json::Value> {
-    static V1_TOOLS_JSON: std::sync::LazyLock<serde_json::Value> = std::sync::LazyLock::new(|| {
-        let allow: std::collections::HashSet<&'static str> =
-            tools::v1_tool_names().into_iter().collect();
-        build_tools_json(Some(&allow))
-    });
-    axum::Json(&*V1_TOOLS_JSON)
-}
-
 /// Restricted tool manifest for the public `/v2` endpoint: the broader
 /// allowlist (read-only account/portfolio + order history, but no trade
 /// execution, DCA, IPO orders, or money movement), with scopes pruned to match.
@@ -190,13 +179,8 @@ pub fn create_router(state: Arc<AppState>) -> Router {
             "/.well-known/oauth-protected-resource",
             axum::routing::get(metadata::protected_resource_metadata),
         )
-        // RFC 9728 resource-specific metadata for the restricted `/v1` endpoint:
+        // RFC 9728 resource-specific metadata for the restricted `/v2` endpoint:
         // advertises read-only scopes so the OAuth consent screen hides trading.
-        .route(
-            "/.well-known/oauth-protected-resource/v1",
-            axum::routing::get(metadata::protected_resource_metadata_v1),
-        )
-        // RFC 9728 resource-specific metadata for the restricted `/v2` endpoint.
         .route(
             "/.well-known/oauth-protected-resource/v2",
             axum::routing::get(metadata::protected_resource_metadata_v2),
@@ -231,9 +215,7 @@ pub fn create_router(state: Arc<AppState>) -> Router {
     let tools_route: Router = Router::new()
         .route("/mcp/tools.json", axum::routing::get(tools_json))
         .route("/mcp/scopes.json", axum::routing::get(scopes_json))
-        // Restricted public manifests for the `/v1` and `/v2` endpoints
-        // (allowlist only).
-        .route("/v1/tools.json", axum::routing::get(v1_tools_json))
+        // Restricted public manifest for the `/v2` endpoint (allowlist only).
         .route("/v2/tools.json", axum::routing::get(v2_tools_json));
 
     // Build an auth-wrapped MCP service for one mounting point. The same
@@ -281,16 +263,11 @@ pub fn create_router(state: Arc<AppState>) -> Router {
     // through so an OAuth-incapable client can call the `authenticate` tool.
     let mcp_agent =
         make_mcp_with_auth(state.base_url.clone(), middleware::AuthMode::Optional, None);
-    // Restricted public endpoints — Bearer required, but only the version's
-    // curated allowlist is listed and callable. `/v1` is the read-only
-    // analysis surface submitted to third-party app directories
-    // (OpenAI/Claude/Grok); `/v2` is the broader read surface (adds read-only
-    // account/portfolio + order history) with the same no-execution guarantee.
-    let mcp_v1 = make_mcp_with_auth(
-        state.base_url.clone(),
-        middleware::AuthMode::Required,
-        Some(middleware::RestrictedVersion::V1),
-    );
+    // Restricted public endpoint — Bearer required, but only the curated
+    // allowlist is listed and callable. `/v2` is the read surface submitted to
+    // third-party app directories (OpenAI/Claude/Grok): read-only market
+    // analysis plus read-only account/portfolio + order history, never trade
+    // execution, DCA, IPO orders, or money movement.
     let mcp_v2 = make_mcp_with_auth(
         state.base_url.clone(),
         middleware::AuthMode::Required,
@@ -305,7 +282,6 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .merge(metrics_route)
         .merge(tools_route)
         .nest_service("/agent", mcp_agent)
-        .nest_service("/v1", mcp_v1)
         .nest_service("/v2", mcp_v2)
         .nest_service("/mcp", mcp_with_auth)
         // Also serve at root so deployments that omit the /mcp path prefix work.

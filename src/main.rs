@@ -191,7 +191,6 @@ async fn main() -> anyhow::Result<()> {
     );
 
     // The client-facing endpoints differ only in which tools they expose.
-    let v1_tools = crate::tools::v1_list_tools();
     let v2_tools = crate::tools::v2_list_tools();
     tracing::info!(
         url = %format!("{}/mcp", config.base_url),
@@ -199,14 +198,9 @@ async fn main() -> anyhow::Result<()> {
         "full endpoint — direct users (all tools, incl. trading & DCA)"
     );
     tracing::info!(
-        url = %format!("{}/v1", config.base_url),
-        tools = v1_tools.len(),
-        "restricted public endpoint — app directories (read-only analysis only)"
-    );
-    tracing::info!(
         url = %format!("{}/v2", config.base_url),
         tools = v2_tools.len(),
-        "restricted public endpoint — broader read surface (no trade execution / DCA / IPO orders / money movement)"
+        "restricted public endpoint — app directories (read-only; no trade execution / DCA / IPO orders / money movement)"
     );
 
     if let (Some(cert), Some(key)) = (&config.tls_cert, &config.tls_key) {
