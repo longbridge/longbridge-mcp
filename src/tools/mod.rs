@@ -605,6 +605,8 @@ const TOOL_ENDPOINTS: &[(&str, u8)] = &[
     ("ipo_detail", V2),
     ("ipo_listed", V2),
     ("ipo_subscriptions", V2),
+    ("macrodata", V2),
+    ("macrodata_indicators", V2),
     ("margin_ratio", V2),
     ("market_temperature", V2),
     ("now", V2),
