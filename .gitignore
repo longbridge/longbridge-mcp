@@ -1,7 +1,14 @@
 /target
 .DS_Store
 docs/superpowers
-/tests
+/tests/reports/*.json
+/tests/reports/*.md
+!/tests/reports/.gitkeep
+!/tests/REGISTRY_CHECKLIST.md
+!/tests/DISTRIBUTION_CHANNELS.md
+!/tests/awesome-finance-opensource.md
+!/tests/watch-sponsors.json
 /.claude
 /.agents
 skills-lock.json
+scripts/__pycache__

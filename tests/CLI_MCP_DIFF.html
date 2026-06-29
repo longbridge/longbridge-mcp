@@ -1,0 +1,453 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>Longbridge CLI vs MCP 差异报告</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+
+:root {
+  --bg: #0f1116;
+  --panel: #161922;
+  --panel-2: #1d2130;
+  --border: #2a2f42;
+  --text: #e6e8ee;
+  --muted: #9aa4b2;
+  --accent: #7cb7ff;
+  --accent-2: #a78bfa;
+  --red: #ff6b6b;
+  --amber: #ffb454;
+  --green: #5ddb94;
+  --code-bg: #0a0c12;
+  --code-inline-bg: #1f2333;
+  --code-inline-fg: #ffb4de;
+}
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg: #f7f8fb;
+    --panel: #ffffff;
+    --panel-2: #eef1f7;
+    --border: #dde2ed;
+    --text: #1b1f2a;
+    --muted: #5c6578;
+    --accent: #1d6fd6;
+    --accent-2: #7c3aed;
+    --red: #c0392b;
+    --amber: #b47100;
+    --green: #118a4e;
+    --code-bg: #0f1116;
+    --code-inline-bg: #edf0fa;
+    --code-inline-fg: #b3266c;
+  }
+  pre { color: #e6e8ee; }
+}
+* { box-sizing: border-box; }
+html, body { background: var(--bg); color: var(--text); }
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+               "Hiragino Sans GB", "Microsoft YaHei", Helvetica, Arial, sans-serif;
+  line-height: 1.65;
+  font-size: 14.5px;
+}
+.wrap { max-width: 1280px; margin: 0 auto; padding: 32px 24px 96px; }
+h1 { font-size: 26px; margin: 0 0 12px; letter-spacing: 0.2px; }
+h2 { font-size: 20px; margin: 32px 0 12px; border-left: 4px solid var(--accent); padding-left: 10px; }
+h3 { font-size: 17px; margin: 20px 0 10px; color: var(--accent-2); }
+p, li { color: var(--text); }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+hr { border: none; border-top: 1px solid var(--border); margin: 28px 0; }
+code {
+  background: var(--code-inline-bg);
+  color: var(--code-inline-fg);
+  padding: 2px 6px;
+  border-radius: 5px;
+  font-family: "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  font-size: 12.5px;
+  word-break: break-word;
+}
+pre {
+  background: var(--code-bg);
+  padding: 14px 16px;
+  border-radius: 8px;
+  overflow: auto;
+  border: 1px solid var(--border);
+}
+pre code { background: transparent; color: inherit; padding: 0; font-size: 12.5px; }
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 14px 0 22px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  font-size: 13.5px;
+}
+thead th {
+  background: var(--panel-2);
+  text-align: left;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  font-weight: 600;
+  color: var(--muted);
+}
+tbody td {
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+tbody tr:last-child td { border-bottom: none; }
+tbody tr:hover { background: var(--panel-2); }
+tbody td:nth-child(1) { color: var(--muted); white-space: nowrap; }
+tbody td:nth-child(2) code { color: var(--accent); }
+tbody td:nth-child(4) { white-space: nowrap; text-align: center; }
+blockquote {
+  margin: 12px 0;
+  padding: 8px 14px;
+  border-left: 4px solid var(--accent-2);
+  background: var(--panel);
+  border-radius: 0 6px 6px 0;
+}
+ul, ol { padding-left: 24px; }
+li { margin: 4px 0; }
+.meta { color: var(--muted); font-size: 13px; margin: -4px 0 18px; }
+
+</style>
+</head>
+<body>
+<div class="wrap">
+<h1 id="longbridge-terminal-cli-vs-mcp">Longbridge Terminal CLI vs MCP 对照</h1>
+<ul>
+<li>日期: 2026-04-21</li>
+<li>CLI 仓库: <code>/Users/hogan/work/longbridge/developers/longbridge-terminal</code></li>
+<li>MCP 仓库: <code>/Users/hogan/work/longbridge/longbridge-mcp</code>（当前分支 <code>feat/change_description_compatible_input_params</code>）</li>
+</ul>
+<h2 id="_1">一句话结论</h2>
+<ul>
+<li>CLI 有 <strong>120</strong> 个 <code>cmd_*</code> 函数（含 4 个 dispatcher），MCP 有 <strong>107</strong> 个 tool 函数；两者覆盖度接近。</li>
+<li>CLI 走 SDK 和 Longbridge 私有 HTTP 几乎各半，额外用外部 HTTP 抓 SEC / 站点内容。</li>
+<li>MCP 定位是 Longbridge API 代理，不抓外部站点，因此 CLI 里依赖 SEC EDGAR / 富文本站点的命令（<code>insider_trades</code>、<code>investors_*</code>、<code>news_detail</code>、<code>filing_detail</code>）在 MCP 侧没有直接对应。</li>
+<li>真正<strong>业务上缺口</strong>的 MCP tool 可控制在 10 来个（见末尾"补齐建议"）。</li>
+</ul>
+<h2 id="cli-cmd_">CLI <code>cmd_*</code> 按传输方式分类</h2>
+<table>
+<thead>
+<tr>
+<th>分类</th>
+<th>数量</th>
+<th>占比</th>
+<th>代表命令</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>SDK</strong>（<code>longbridge::XxxContext</code>）</td>
+<td>49</td>
+<td>41%</td>
+<td><code>cmd_quote</code> / <code>cmd_submit_order</code> / <code>cmd_positions</code> / <code>cmd_kline</code> / <code>cmd_watchlist_list</code></td>
+</tr>
+<tr>
+<td><strong>Longbridge 私有 HTTP</strong>（<code>crate::openapi::http_client()</code> REST）</td>
+<td>56</td>
+<td>47%</td>
+<td><code>cmd_financial_report</code> / <code>cmd_dividend</code> / <code>cmd_sharelist_list</code> / <code>cmd_dca_list</code> / <code>cmd_alert_list</code></td>
+</tr>
+<tr>
+<td><strong>SDK + LB HTTP 混合</strong></td>
+<td>2</td>
+<td>2%</td>
+<td><code>cmd_filing_detail</code>（SEC + SDK）、<code>cmd_statement_export</code>（SDK get URL → HTTP 下载）</td>
+</tr>
+<tr>
+<td><strong>外部 HTTP</strong>（SEC EDGAR / 站点抓取）</td>
+<td>6</td>
+<td>5%</td>
+<td><code>cmd_insider_trades</code> / <code>cmd_investors_list</code> / <code>cmd_investor_changes</code> / <code>cmd_investor_holdings_by_cik</code> / <code>cmd_news_detail</code> / <code>cmd_topic_detail</code>（外链正文）</td>
+</tr>
+<tr>
+<td><strong>Dispatcher</strong>（仅转发到子命令）</td>
+<td>4</td>
+<td>3%</td>
+<td><code>cmd_dca</code> / <code>cmd_sharelist</code> / <code>cmd_watchlist</code> / <code>cmd_statement</code></td>
+</tr>
+<tr>
+<td><strong>本地只读</strong>（token / 连通检查）</td>
+<td>3</td>
+<td>2%</td>
+<td><code>cmd_auth_status</code> / <code>cmd_check</code></td>
+</tr>
+</tbody>
+</table>
+<p>SDK 和 LB HTTP 合计 <strong>91%</strong>（105 个），是 CLI 主要的能力来源。</p>
+<h2 id="mcp">MCP 按传输方式分类</h2>
+<table>
+<thead>
+<tr>
+<th>分类</th>
+<th>数量</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>SDK</td>
+<td>51</td>
+</tr>
+<tr>
+<td>LB HTTP</td>
+<td>54</td>
+</tr>
+<tr>
+<td>其他（<code>tool_json</code> 直接构造，如 <code>now</code>）</td>
+<td>2</td>
+</tr>
+</tbody>
+</table>
+<p>与 CLI 极度接近，说明 MCP 基本是 CLI SDK+HTTP 能力的 1:1 映射。</p>
+<h2 id="cli-mcp">CLI 有但 MCP 无（差集）</h2>
+<blockquote>
+<p>去除"同义/复数差异"（如 <code>fund_holders</code> vs <code>fund_holder</code>）和"CLI subcommand 被 MCP 拆成多个独立 tool"（如 <code>option quote</code> + <code>option chain</code>）。</p>
+</blockquote>
+<h3 id="_2">业务数据类（建议补齐）</h3>
+<table>
+<thead>
+<tr>
+<th>CLI 命令</th>
+<th>说明</th>
+<th>传输</th>
+<th>为什么 MCP 没有</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>buyback</code></td>
+<td>回购历史</td>
+<td>LB HTTP</td>
+<td>未实现</td>
+</tr>
+<tr>
+<td><code>rating_history</code></td>
+<td>评级历史</td>
+<td>LB HTTP</td>
+<td>未实现</td>
+</tr>
+<tr>
+<td><code>valuation_detail</code></td>
+<td>估值详情（含 peers 对比）</td>
+<td>LB HTTP</td>
+<td>MCP 用 <code>valuation_history</code>，数据结构不完全等价</td>
+</tr>
+<tr>
+<td><code>history_intraday</code></td>
+<td>指定日期的历史分时</td>
+<td>LB HTTP</td>
+<td>MCP 的 <code>intraday</code> 只返当日</td>
+</tr>
+<tr>
+<td><code>profit_analysis_by_market</code></td>
+<td>按市场拆分的盈亏</td>
+<td>LB HTTP</td>
+<td>未实现</td>
+</tr>
+<tr>
+<td><code>assets</code></td>
+<td>总资产概览（信息密度 &gt; <code>account_balance</code>）</td>
+<td>SDK（helper 聚合）</td>
+<td>MCP 仅有 <code>account_balance</code></td>
+</tr>
+<tr>
+<td><code>portfolio</code></td>
+<td>综合风险 + 持仓 + 资产视图</td>
+<td>SDK（helper 聚合）</td>
+<td>同上</td>
+</tr>
+</tbody>
+</table>
+<h3 id="mcp_1">依赖外部源（MCP 定位不适合）</h3>
+<table>
+<thead>
+<tr>
+<th>CLI 命令</th>
+<th>说明</th>
+<th>传输</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>insider_trades</code></td>
+<td>美股内部人交易</td>
+<td>SEC EDGAR XML</td>
+</tr>
+<tr>
+<td><code>investors_list</code></td>
+<td>13F 机构列表</td>
+<td>SEC EDGAR</td>
+</tr>
+<tr>
+<td><code>investor_changes</code></td>
+<td>13F 持仓变动</td>
+<td>SEC EDGAR</td>
+</tr>
+<tr>
+<td><code>investor_holdings_by_cik</code></td>
+<td>按 CIK 查持仓</td>
+<td>SEC EDGAR</td>
+</tr>
+<tr>
+<td><code>news_detail</code></td>
+<td>新闻正文</td>
+<td>长桥 CMS/外链</td>
+</tr>
+<tr>
+<td><code>filing_detail</code></td>
+<td>文件正文</td>
+<td>SEC 原始文档 + SDK 获取 URL</td>
+</tr>
+</tbody>
+</table>
+<p>这些 MCP 暂不考虑，AI agent 可用 WebFetch 等工具自行抓取。</p>
+<h3 id="cli">CLI 便利/聚合命令</h3>
+<table>
+<thead>
+<tr>
+<th>CLI 命令</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>topics_mine</code></td>
+<td>我发的主题（CLI 专用过滤）</td>
+</tr>
+<tr>
+<td><code>watchlist pin</code></td>
+<td>置顶股票（MCP <code>update_watchlist_group</code> 可能间接覆盖）</td>
+</tr>
+<tr>
+<td><code>dca calc_date</code></td>
+<td>下次扣款日计算</td>
+</tr>
+<tr>
+<td><code>dca set_reminder</code></td>
+<td>设置扣款前提醒</td>
+</tr>
+<tr>
+<td><code>subscriptions</code></td>
+<td>当前 WebSocket 订阅（MCP 无常驻 WS，无对应概念）</td>
+</tr>
+<tr>
+<td><code>check</code></td>
+<td>token + API 连通性自检（CLI 运维用）</td>
+</tr>
+<tr>
+<td><code>auth_status</code></td>
+<td>显示当前登录账号（CLI 运维用）</td>
+</tr>
+</tbody>
+</table>
+<h3 id="dispatchercli">Dispatcher（CLI 特有）</h3>
+<ul>
+<li><code>cmd_dca</code> / <code>cmd_sharelist</code> / <code>cmd_watchlist</code> / <code>cmd_statement</code> 都是"无子命令默认调 list"的语法糖，MCP 不需要 dispatcher（每个 action 一个 tool）。</li>
+</ul>
+<h2 id="mcp-cli">MCP 有但 CLI 无直接命令</h2>
+<p>数量不多，且多为"CLI 把多个 action 合并到一个 subcommand 层级下，MCP 拆成独立 tool"：</p>
+<table>
+<thead>
+<tr>
+<th>MCP tool</th>
+<th>CLI 对应</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>option_chain_expiry_date_list</code></td>
+<td>CLI <code>option chain --list-dates</code>（参数形式）</td>
+</tr>
+<tr>
+<td><code>option_chain_info_by_date</code></td>
+<td>CLI <code>option chain --date</code></td>
+</tr>
+<tr>
+<td><code>history_candlesticks_by_offset</code></td>
+<td>CLI <code>kline</code> 内部逻辑</td>
+</tr>
+<tr>
+<td><code>history_candlesticks_by_date</code></td>
+<td>CLI <code>kline history</code></td>
+</tr>
+<tr>
+<td><code>statement_download_url</code></td>
+<td>新增，CLI 里对应 <code>statement export</code> 的 step 1</td>
+</tr>
+</tbody>
+</table>
+<p>基本都是 API 层面的细分，不算功能缺失。</p>
+<h2 id="cli-120">已知的 CLI 命令完整清单（120 个）</h2>
+<pre><code>asset                : cmd_exchange_rate cmd_profit_analysis cmd_profit_analysis_by_market
+                       cmd_profit_analysis_detail
+auth                 : cmd_auth_status
+check                : cmd_check
+dca                  : cmd_dca cmd_list cmd_create cmd_update cmd_toggle cmd_records cmd_stats
+                       cmd_calc_date cmd_check cmd_set_reminder
+fundamental          : cmd_financial_report cmd_institution_rating cmd_institution_rating_detail
+                       cmd_dividend cmd_dividend_detail cmd_forecast_eps cmd_consensus cmd_valuation
+                       cmd_valuation_detail cmd_shareholders cmd_fund_holders cmd_finance_calendar
+                       cmd_company cmd_executive cmd_buyback cmd_industry_valuation
+                       cmd_industry_valuation_dist cmd_operating cmd_rating_history cmd_corp_action
+                       cmd_invest_relation
+insider_trades       : cmd_insider_trades
+investors            : cmd_investors_list cmd_investor_holdings_by_cik cmd_investor_changes
+news                 : cmd_news cmd_filings cmd_filing_detail cmd_topics cmd_topic_detail
+                       cmd_news_detail
+quote                : cmd_quote cmd_depth cmd_brokers cmd_trades cmd_intraday cmd_history_intraday
+                       cmd_kline cmd_kline_history cmd_static cmd_calc_index cmd_capital_flow
+                       cmd_capital_dist cmd_market_temp cmd_market_status cmd_security_list
+                       cmd_participants cmd_subscriptions cmd_option_quote cmd_option_chain
+                       cmd_warrant_quote cmd_warrant_list cmd_warrant_issuers cmd_trading_session
+                       cmd_trading_days cmd_anomaly cmd_constituent cmd_ah_premium_kline
+                       cmd_ah_premium_intraday cmd_broker_holding_top cmd_broker_holding_detail
+                       cmd_broker_holding_daily cmd_trade_stats
+sharelist            : cmd_sharelist cmd_list cmd_detail cmd_create cmd_delete cmd_add cmd_remove
+                       cmd_sort cmd_popular
+statement            : cmd_statement cmd_list cmd_export
+topic                : cmd_topic_detail_api cmd_topic_replies cmd_topics_mine cmd_create_topic
+                       cmd_create_reply
+trade                : cmd_portfolio cmd_assets cmd_positions cmd_fund_positions cmd_margin_ratio
+                       cmd_max_qty cmd_cash_flow cmd_orders cmd_executions cmd_order_detail
+                       cmd_submit_order cmd_replace_order cmd_cancel_order cmd_alert_list
+                       cmd_alert_add cmd_alert_set_enabled cmd_alert_delete
+watchlist            : cmd_watchlist cmd_list cmd_show cmd_create cmd_delete cmd_update cmd_pin
+</code></pre>
+<h2 id="mcp_2">补齐 MCP 的建议</h2>
+<p><strong>P0</strong>（AI agent 明显受益）</p>
+<ul>
+<li><code>assets</code> / <code>portfolio</code>（聚合视图，比零散 account_balance + stock_positions + margin_ratio 更适合 LLM 一次性拿到上下文）</li>
+<li><code>insider_trades</code>（if MCP 愿意扩展到外部数据源）</li>
+</ul>
+<p><strong>P1</strong>（数据补全）</p>
+<ul>
+<li><code>buyback</code>（回购历史）</li>
+<li><code>rating_history</code>（评级历史）</li>
+<li><code>valuation_detail</code>（估值详情含 peers）</li>
+<li><code>history_intraday</code>（指定历史日期的分时）</li>
+<li><code>profit_analysis_by_market</code>（按市场拆盈亏）</li>
+</ul>
+<p><strong>P2</strong>（CLI 便利，AI 场景不是刚需）</p>
+<ul>
+<li><code>topics_mine</code>、<code>watchlist_pin</code>、<code>dca_calc_date</code>、<code>dca_set_reminder</code></li>
+<li><code>check</code> / <code>auth_status</code>（MCP 有 <code>/metrics</code> 和 OAuth，不强需要）</li>
+<li>外部抓取类（<code>news_detail</code> / <code>filing_detail</code> / <code>investors_*</code>）不做，由 agent 用 WebFetch 覆盖</li>
+</ul>
+<h2 id="_3">附录：统计脚本</h2>
+<p>分析代码位于本次会话，基于以下模式识别：</p>
+<ul>
+<li><strong>SDK</strong>: 正则匹配 <code>crate::openapi::(quote|trade|statement|content|quote_limited|trade_limited)\(\)</code> 或 <code>crate::openapi::helpers::</code></li>
+<li><strong>LB HTTP</strong>: 文件导入了 <code>super::api::http_get/post/put/delete</code> 或本地定义 <code>fn http_get(...)</code> 且调用 <code>crate::openapi::http_client()</code></li>
+<li><strong>External</strong>: 匹配 <code>reqwest::Client::(new|builder)</code> 或 <code>sec_client()</code></li>
+<li><strong>Dispatcher</strong>: 函数体为 <code>match ... =&gt; cmd_xxx(...)</code></li>
+</ul>
+<p>脚本产出：CLI 共 120 个 <code>cmd_*</code> 函数，MCP 共 107 个 tool 函数。</p>
+</div>
+</body>
+</html>

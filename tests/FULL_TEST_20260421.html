@@ -1,0 +1,1232 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>Longbridge MCP 全量回归测试 — 2026-04-21</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+
+:root {
+  --bg: #0f1116;
+  --panel: #161922;
+  --panel-2: #1d2130;
+  --border: #2a2f42;
+  --text: #e6e8ee;
+  --muted: #9aa4b2;
+  --accent: #7cb7ff;
+  --accent-2: #a78bfa;
+  --red: #ff6b6b;
+  --amber: #ffb454;
+  --green: #5ddb94;
+  --code-bg: #0a0c12;
+  --code-inline-bg: #1f2333;
+  --code-inline-fg: #ffb4de;
+}
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg: #f7f8fb;
+    --panel: #ffffff;
+    --panel-2: #eef1f7;
+    --border: #dde2ed;
+    --text: #1b1f2a;
+    --muted: #5c6578;
+    --accent: #1d6fd6;
+    --accent-2: #7c3aed;
+    --red: #c0392b;
+    --amber: #b47100;
+    --green: #118a4e;
+    --code-bg: #0f1116;
+    --code-inline-bg: #edf0fa;
+    --code-inline-fg: #b3266c;
+  }
+  pre { color: #e6e8ee; }
+}
+* { box-sizing: border-box; }
+html, body { background: var(--bg); color: var(--text); }
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+               "Hiragino Sans GB", "Microsoft YaHei", Helvetica, Arial, sans-serif;
+  line-height: 1.65;
+  font-size: 14.5px;
+}
+.wrap { max-width: 1280px; margin: 0 auto; padding: 32px 24px 96px; }
+h1 { font-size: 26px; margin: 0 0 12px; letter-spacing: 0.2px; }
+h2 { font-size: 20px; margin: 32px 0 12px; border-left: 4px solid var(--accent); padding-left: 10px; }
+h3 { font-size: 17px; margin: 20px 0 10px; color: var(--accent-2); }
+p, li { color: var(--text); }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+hr { border: none; border-top: 1px solid var(--border); margin: 28px 0; }
+code {
+  background: var(--code-inline-bg);
+  color: var(--code-inline-fg);
+  padding: 2px 6px;
+  border-radius: 5px;
+  font-family: "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  font-size: 12.5px;
+  word-break: break-word;
+}
+pre {
+  background: var(--code-bg);
+  padding: 14px 16px;
+  border-radius: 8px;
+  overflow: auto;
+  border: 1px solid var(--border);
+}
+pre code { background: transparent; color: inherit; padding: 0; font-size: 12.5px; }
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 14px 0 22px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  font-size: 13.5px;
+}
+thead th {
+  background: var(--panel-2);
+  text-align: left;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  font-weight: 600;
+  color: var(--muted);
+}
+tbody td {
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+tbody tr:last-child td { border-bottom: none; }
+tbody tr:hover { background: var(--panel-2); }
+tbody td:nth-child(1) { color: var(--muted); white-space: nowrap; }
+tbody td:nth-child(2) code { color: var(--accent); }
+tbody td:nth-child(4) { white-space: nowrap; text-align: center; }
+blockquote {
+  margin: 12px 0;
+  padding: 8px 14px;
+  border-left: 4px solid var(--accent-2);
+  background: var(--panel);
+  border-radius: 0 6px 6px 0;
+}
+ul, ol { padding-left: 24px; }
+li { margin: 4px 0; }
+.meta { color: var(--muted); font-size: 13px; margin: -4px 0 18px; }
+
+</style>
+</head>
+<body>
+<div class="wrap">
+<h1 id="longbridge-mcp-tool-2026-04-21">Longbridge MCP Tool 完整回归测试（2026-04-21）</h1>
+<ul>
+<li>分支: <code>feat/change_description_compatible_input_params</code> @ <code>69fa198</code></li>
+<li>总计: 108 个 tool（服务端实际暴露；README "110" 不准）</li>
+<li>测试账号: paper trading (lb_papertrading)</li>
+<li>测试符号: 700.HK / AAPL.US / 939.HK / 981.HK / HSI.HK</li>
+<li>大响应原文保存在 <code>tests/tool-results/</code></li>
+</ul>
+<h2 id="_1">图例</h2>
+<table>
+<thead>
+<tr>
+<th>标</th>
+<th>含义</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>✅</td>
+<td>正常</td>
+</tr>
+<tr>
+<td>⚠️</td>
+<td>格式/类型问题（可用）</td>
+</tr>
+<tr>
+<td>🔴</td>
+<td>调用失败</td>
+</tr>
+<tr>
+<td>🫥</td>
+<td>账号状态自然空</td>
+</tr>
+<tr>
+<td>🔒</td>
+<td>业务限制</td>
+</tr>
+<tr>
+<td>✍</td>
+<td>写入成功已清理</td>
+</tr>
+</tbody>
+</table>
+<h2 id="_2">已知全局问题</h2>
+<ul>
+<li><strong>日期格式 9 种混用</strong>: RFC3339 / ISO date / chrono Debug / <code>"04:00:00.0"</code> 冗余 <code>.0</code> / 点分 / 中文文本 / YYYYMMDD / MM.DD / 斜杠分隔 — 详见 <code>TEST_REPORT.md</code>（unix 秒字符串已在序列化管道统一转为 RFC3339，详见下节）</li>
+<li><strong>类型混用</strong>: 价格/金额 string，volume/level int</li>
+<li><strong>counter_id URL 残留</strong>（保留）: <code>financial_report.router</code> / <code>executive.forward_url</code> / <code>invest_relation.forward_url</code> / <code>finance_calendar.icon</code>，业务约定不改</li>
+</ul>
+<h2 id="2026-04-21-c1">序列化管道升级（2026-04-21 后补修复 — C.1 架构）</h2>
+<p>上游 unix-seconds 字符串现在输出为 RFC3339。架构分两层：</p>
+<p><strong>pipeline 层</strong>（<code>src/serialize/</code>）只处理稳定惯例，范围刻意收窄：</p>
+<ul>
+<li><code>classify_field</code> 仅将 <code>*_at</code> 后缀识别为 Timestamp（Rust/Longbridge 上游惯例）；不额外维护字段名白名单，避免误分类。</li>
+<li><code>TimestampSerializer::serialize_str</code> 支持字符串形式的 unix 秒：若可解析为 [946684800, 4102444800]（约 2000–2100）的 i64，则转 RFC3339；超出范围或非数字保持原样，从而保留 <code>"0"</code> / <code>"-62135596800"</code> 等哨兵语义。</li>
+<li><code>TimestampSerializer::serialize_seq</code> 返回 <code>TimestampSeq</code>，用于 <code>created_at:[unix,...]</code> 之类罕见形态（虽然现阶段少见，保留架构一致）。</li>
+</ul>
+<p><strong>per-tool 层</strong>（<code>src/tools/</code>）对非 <code>_at</code> 字段显式声明 path：</p>
+<ul>
+<li>新增 <code>serialize::convert_unix_paths(value, paths)</code>：path 语法 <code>a.b.c</code> / <code>*</code>（匹配数组元素或 map 值），原地替换命中的 unix 秒字符串。</li>
+<li>新增 <code>http_client::http_get_tool_unix(client, path, params, unix_paths)</code>：流程 <code>transform_json</code>（snake_case + <code>_at</code>）→ 解析 Value → <code>convert_unix_paths</code> → 序列化。path 基于<strong>已 snake_case 后</strong>的字段名。</li>
+<li><code>market_status</code> 手工构造 Value，直接调 <code>convert_unix_paths</code> 后走 <code>tool_json</code>。</li>
+<li><code>institution_rating</code> 将两段响应拼合后调用 <code>convert_unix_paths</code>。</li>
+</ul>
+<h3 id="tool-unix-path">各 tool 声明的 unix path</h3>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>Tool</th>
+<th>Path 声明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>2</td>
+<td><code>market_status</code></td>
+<td><code>market_time.*.timestamp</code>、<code>market_time.*.delay_timestamp</code></td>
+</tr>
+<tr>
+<td>32</td>
+<td><code>ah_premium</code></td>
+<td><code>klines.*.timestamp</code></td>
+</tr>
+<tr>
+<td>33</td>
+<td><code>ah_premium_intraday</code></td>
+<td><code>klines.*.timestamp</code></td>
+</tr>
+<tr>
+<td>39</td>
+<td><code>trade_stats</code></td>
+<td><code>statistics.timestamp</code>、<code>statistics.trade_date.*</code>（数组元素逐个）</td>
+</tr>
+<tr>
+<td>41</td>
+<td><code>option_volume_daily</code></td>
+<td><code>stats.*.timestamp</code></td>
+</tr>
+<tr>
+<td>42</td>
+<td><code>short_positions</code></td>
+<td><code>data.*.timestamp</code></td>
+</tr>
+<tr>
+<td>50</td>
+<td><code>industry_valuation</code></td>
+<td><code>list.*.history.*.date</code></td>
+</tr>
+<tr>
+<td>52</td>
+<td><code>valuation</code></td>
+<td><code>metrics.pe.list.*.timestamp</code></td>
+</tr>
+<tr>
+<td>53</td>
+<td><code>valuation_history</code></td>
+<td><code>history.metrics.pe.list.*.timestamp</code></td>
+</tr>
+<tr>
+<td>54</td>
+<td><code>institution_rating</code></td>
+<td><code>analyst.evaluate.start_date</code>、<code>analyst.evaluate.end_date</code>、<code>analyst.target.start_date</code>、<code>analyst.target.end_date</code></td>
+</tr>
+<tr>
+<td>55</td>
+<td><code>institution_rating_detail</code></td>
+<td><code>target.list.*.timestamp</code></td>
+</tr>
+<tr>
+<td>58</td>
+<td><code>forecast_eps</code></td>
+<td><code>items.*.forecast_start_date</code>、<code>items.*.forecast_end_date</code></td>
+</tr>
+<tr>
+<td>77</td>
+<td><code>dca_list</code></td>
+<td><code>plans.*.next_trd_date</code>（<code>created_at</code>/<code>updated_at</code> 走 pipeline <code>_at</code>）</td>
+</tr>
+<tr>
+<td>104</td>
+<td><code>profit_analysis</code></td>
+<td><code>end_time</code>、<code>trade_update_time</code>（<code>updated_at</code> 走 pipeline <code>_at</code>）</td>
+</tr>
+<tr>
+<td>105</td>
+<td><code>profit_analysis_detail</code></td>
+<td><code>start</code>、<code>end</code>（<code>updated_at</code> 走 pipeline <code>_at</code>）</td>
+</tr>
+</tbody>
+</table>
+<p><strong>仅靠 pipeline 的 <code>_at</code> 覆盖即可（不需要声明 path）</strong>：
+- <code>corp_action.items[].live.started_at</code> — ends with <code>_at</code>
+- <code>sharelist_popular.sharelists[].created_at</code> / <code>edited_at</code>
+- <code>dca_list.plans[].created_at</code> / <code>updated_at</code>
+- <code>profit_analysis.sublist.items[].updated_at</code> / <code>sublist.updated_at</code></p>
+<h3 id="_3">未覆盖（刻意保留）</h3>
+<ul>
+<li><code>institution_rating_detail.evaluate.list[].date</code>、<code>target.list[].date</code>：<code>YYYY/MM/DD</code> 格式，非 unix。</li>
+<li><code>corp_action.items[].date</code> / <code>date_str</code> / <code>date_zone</code>：<code>YYYYMMDD</code> / <code>MM.DD</code> / 中文地区，上游语义。</li>
+<li><code>dividend.list[].record_date</code> / <code>ex_date</code> / <code>payment_date</code>：<code>YYYY.MM.DD</code> 点分格式。</li>
+<li><code>finance_calendar.datetime</code>：当前测试数据为空，响应结构无法确认，未声明 path（上游有数据后再补）。</li>
+</ul>
+<h3 id="_4">哨兵值保持</h3>
+<ul>
+<li><code>institution_rating.*.end_date:"0"</code> — out-of-range，保留 "no end" 语义。</li>
+<li><code>forecast_eps.items[].forecast_end_date:"0"</code>（末条）— 同上。</li>
+<li><code>sharelist_popular.sharelists[].edited_at:"-62135596800"</code> — MinDate，保留。</li>
+</ul>
+<hr>
+<h2 id="tool">全量 tool 测试表</h2>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>Tool</th>
+<th>入参</th>
+<th>状态</th>
+<th>出参摘要</th>
+<th>备注</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td><code>now</code></td>
+<td><code>{}</code></td>
+<td>✅</td>
+<td><code>"2026-04-21T05:43:39.60003Z"</code></td>
+<td>RFC3339 UTC</td>
+</tr>
+<tr>
+<td>2</td>
+<td><code>market_status</code></td>
+<td><code>{}</code></td>
+<td>✅</td>
+<td>4 市场 (US/HK/CN/SG) trade_status + <code>timestamp:"1776750225"</code></td>
+<td>timestamp/delay_timestamp 已转 RFC3339（后补修复）</td>
+</tr>
+<tr>
+<td>3</td>
+<td><code>trading_session</code></td>
+<td><code>{}</code></td>
+<td>⚠️</td>
+<td>4 市场 session 列表 <code>"04:00:00.0"-"09:30:00.0" Pre</code></td>
+<td>时间带冗余 <code>.0</code></td>
+</tr>
+<tr>
+<td>4</td>
+<td><code>exchange_rate</code></td>
+<td><code>{}</code></td>
+<td>⚠️</td>
+<td>4 条 (HKD→CNH/HKD/USD/CNY) <code>bid_rate:7.7925</code></td>
+<td>rate 是浮点，与全站金额 string 不一致</td>
+</tr>
+<tr>
+<td>5</td>
+<td><code>account_balance</code></td>
+<td><code>{}</code></td>
+<td>⚠️</td>
+<td><code>total_cash:-1825497.92, net_assets:676952.08, risk_level:"3"</code></td>
+<td>risk_level 应是 int</td>
+</tr>
+<tr>
+<td>6</td>
+<td><code>stock_positions</code></td>
+<td><code>{}</code></td>
+<td>✅</td>
+<td><code>981.HK × 41500 @ 68.000 paper</code></td>
+<td></td>
+</tr>
+<tr>
+<td>7</td>
+<td><code>fund_positions</code></td>
+<td><code>{}</code></td>
+<td>🫥</td>
+<td><code>{"list":[]}</code></td>
+<td>未持有基金</td>
+</tr>
+<tr>
+<td>8</td>
+<td><code>warrant_issuers</code></td>
+<td><code>{}</code></td>
+<td>✅</td>
+<td>16 条（issuer_id=int, name_cn/en/hk）</td>
+<td></td>
+</tr>
+<tr>
+<td>9</td>
+<td><code>participants</code></td>
+<td><code>{}</code></td>
+<td>✅</td>
+<td>548 条（broker_ids=int[], name_cn/en/hk）</td>
+<td>响应 57KB</td>
+</tr>
+<tr>
+<td>10</td>
+<td><code>watchlist</code></td>
+<td><code>{}</code></td>
+<td>✅</td>
+<td>10 个 group（含负数 id 的系统组），约 130 security</td>
+<td>watched_at RFC3339</td>
+</tr>
+<tr>
+<td>11</td>
+<td><code>static_info</code></td>
+<td><code>symbols=["700.HK","AAPL.US"]</code></td>
+<td>✅</td>
+<td>2 条 <code>{symbol,name_*,exchange,lot_size,total_shares,eps,bps,dividend_yield,stock_derivatives,board}</code></td>
+<td>lot_size int / eps string</td>
+</tr>
+<tr>
+<td>12</td>
+<td><code>quote</code></td>
+<td><code>symbols=["700.HK","AAPL.US"]</code></td>
+<td>⚠️</td>
+<td>2 条 <code>{last_done,prev_close,open,high,low,timestamp,volume,turnover,pre/post/overnight_quote}</code></td>
+<td>timestamp RFC3339, volume int</td>
+</tr>
+<tr>
+<td>13</td>
+<td><code>depth</code></td>
+<td><code>symbol="700.HK"</code></td>
+<td>✅</td>
+<td><code>{asks:[{position,price:"519.000",volume:10000,order_num:23}],bids:[...]}</code></td>
+<td></td>
+</tr>
+<tr>
+<td>14</td>
+<td><code>brokers</code></td>
+<td><code>symbol="700.HK"</code></td>
+<td>🫥</td>
+<td><code>{ask_brokers:[],bid_brokers:[]}</code></td>
+<td>当时无席位数据</td>
+</tr>
+<tr>
+<td>15</td>
+<td><code>trades</code></td>
+<td><code>symbol="700.HK",count=3</code></td>
+<td>✅</td>
+<td>3 条 <code>{price,volume,timestamp,trade_type,direction,trade_session}</code></td>
+<td>RFC3339</td>
+</tr>
+<tr>
+<td>16</td>
+<td><code>intraday</code></td>
+<td><code>symbol="700.HK"</code></td>
+<td>✅</td>
+<td>200+ 条 1min 分时 <code>{price,timestamp,volume,turnover,avg_price}</code></td>
+<td>RFC3339</td>
+</tr>
+<tr>
+<td>17</td>
+<td><code>candlesticks</code></td>
+<td><code>symbol="700.HK",period="day",count=3,forward_adjust=false,trade_sessions="intraday"</code></td>
+<td>✅</td>
+<td>3 条 <code>{open,high,low,close,volume,turnover,timestamp,trade_session,open_updated}</code></td>
+<td>RFC3339</td>
+</tr>
+<tr>
+<td>18</td>
+<td><code>history_candlesticks_by_date</code></td>
+<td><code>700.HK day 2026-04-01→04-05</code></td>
+<td>✅</td>
+<td>2 条 K 线</td>
+<td></td>
+</tr>
+<tr>
+<td>19</td>
+<td><code>history_candlesticks_by_offset</code></td>
+<td><code>700.HK day count=2 forward=false</code></td>
+<td>✅</td>
+<td>2 条 K 线</td>
+<td></td>
+</tr>
+<tr>
+<td>20</td>
+<td><code>trading_days</code></td>
+<td><code>market="HK",start="2026-04-01",end="2026-04-30"</code></td>
+<td>✅</td>
+<td><code>{trading_days:[19 dates ISO],half_trading_days:[]}</code></td>
+<td></td>
+</tr>
+<tr>
+<td>21</td>
+<td><code>capital_flow</code></td>
+<td><code>symbol="700.HK"</code></td>
+<td>⚠️</td>
+<td>200+ 条分钟 <code>{inflow,timestamp:"2026-04-21 01:30:00.0 +00:00:00"}</code></td>
+<td>chrono Debug 格式</td>
+</tr>
+<tr>
+<td>22</td>
+<td><code>capital_distribution</code></td>
+<td><code>symbol="700.HK"</code></td>
+<td>⚠️</td>
+<td><code>{timestamp:"2026-04-21 06:05:06.0 +00:00:00",capital_in:{large,medium,small},capital_out:{...}}</code></td>
+<td>chrono Debug 格式</td>
+</tr>
+<tr>
+<td>23</td>
+<td><code>market_temperature</code></td>
+<td><code>market="HK"</code></td>
+<td>✅</td>
+<td><code>{temperature:66,description:"Temp Comfortable &amp; Gradually Dropping",valuation:91,sentiment:42,timestamp:"2026-04-21T06:00:01Z"}</code></td>
+<td></td>
+</tr>
+<tr>
+<td>24</td>
+<td><code>history_market_temperature</code></td>
+<td><code>market="HK",start="2026-04-01",end="2026-04-05"</code></td>
+<td>⚠️</td>
+<td><code>{type:"Unknown",list:[2 条]}</code></td>
+<td>type 字段无枚举说明</td>
+</tr>
+<tr>
+<td>25</td>
+<td><code>filings</code></td>
+<td><code>symbol="AAPL.US"</code></td>
+<td>✅</td>
+<td>50 条 SEC filing <code>{id,title,description,file_name,file_urls[],publish_at}</code></td>
+<td>publish_at RFC3339</td>
+</tr>
+<tr>
+<td>26</td>
+<td><code>warrant_list</code></td>
+<td><code>symbol="700.HK",sort_by="LastDone",sort_order="Descending"</code></td>
+<td>✅</td>
+<td>692 条 warrant <code>{symbol,warrant_type,name,last_done,change_rate,volume,turnover,expiry_date,strike_price,outstanding_qty,premium,itm_otm,implied_volatility,delta,...}</code></td>
+<td>响应 431KB，见 tool-results</td>
+</tr>
+<tr>
+<td>27</td>
+<td><code>warrant_quote</code></td>
+<td><code>symbols=["64187.HK"]</code></td>
+<td>✅</td>
+<td><code>{symbol:"64187.HK",last_done:"0.280",prev_close:"0.275",timestamp:"2026-04-21T06:12:12Z",volume:40000,category:"Bull",strike_price:"32.9",call_price:"33.5",expiry_date:"2026-09-29",underlying_symbol:"981.HK",...}</code></td>
+<td></td>
+</tr>
+<tr>
+<td>28</td>
+<td><code>option_chain_expiry_date_list</code></td>
+<td><code>symbol="AAPL.US"</code></td>
+<td>✅</td>
+<td>27 个 ISO 日期 <code>["2026-04-15","2026-04-17",...,"2028-12-15"]</code></td>
+<td></td>
+</tr>
+<tr>
+<td>29</td>
+<td><code>option_chain_info_by_date</code></td>
+<td><code>symbol="AAPL.US",date="2026-05-15"</code></td>
+<td>✅</td>
+<td>88 条 <code>{price,call_symbol,put_symbol,standard}</code> 行权价</td>
+<td></td>
+</tr>
+<tr>
+<td>30</td>
+<td><code>option_quote</code></td>
+<td><code>symbols=["AAPL260515C270000.US"]</code></td>
+<td>🔒</td>
+<td><code>301604: no quote access</code></td>
+<td>账号无期权行情权限</td>
+</tr>
+<tr>
+<td>31</td>
+<td><code>calc_indexes</code></td>
+<td><code>symbols=["700.HK"],indexes=["PeTtmRatio","PbRatio"]</code></td>
+<td>⚠️</td>
+<td><code>{symbol:"700.HK",pe_ttm_ratio:"18.97",pb_ratio:"3.70",&lt;36 其他字段全 null&gt;}</code></td>
+<td>返回所有字段，未请求的 null（冗余）</td>
+</tr>
+<tr>
+<td>32</td>
+<td><code>ah_premium</code></td>
+<td><code>symbol="939.HK"</code></td>
+<td>✅</td>
+<td>94 条日 klines <code>{aprice,apreclose,hprice,hpreclose,currency_rate,ahpremium_rate,price_spread:"",timestamp:"1764086400"}</code></td>
+<td>timestamp 已转 RFC3339（后补修复）</td>
+</tr>
+<tr>
+<td>33</td>
+<td><code>ah_premium_intraday</code></td>
+<td><code>symbol="939.HK"</code></td>
+<td>✅</td>
+<td>200+ 分钟 klines，同结构</td>
+<td>timestamp 已转 RFC3339（后补修复）</td>
+</tr>
+<tr>
+<td>34</td>
+<td><code>broker_holding</code></td>
+<td><code>symbol="700.HK"</code></td>
+<td>⚠️</td>
+<td><code>{buy:[10 brokers w/chg],sell:[10 brokers w/chg],updated_at:"2026.04.20"}</code></td>
+<td>updated_at 点分日期</td>
+</tr>
+<tr>
+<td>35</td>
+<td><code>broker_holding_detail</code></td>
+<td><code>symbol="700.HK"</code></td>
+<td>⚠️</td>
+<td><code>{list:[417 brokers w/ratio+shares+chg_1/5/20/60],updated_at:"2026.04.20"}</code></td>
+<td>响应 108KB，见 tool-results</td>
+</tr>
+<tr>
+<td>36</td>
+<td><code>broker_holding_daily</code></td>
+<td><code>symbol="700.HK",broker_id="B01224"</code></td>
+<td>⚠️</td>
+<td>40 天 <code>{date:"2026.04.20",holding,ratio,chg}</code></td>
+<td>date 点分日期</td>
+</tr>
+<tr>
+<td>37</td>
+<td><code>anomaly</code></td>
+<td><code>market="HK"</code></td>
+<td>🫥</td>
+<td><code>{changes:[],all_off:false}</code></td>
+<td>当时市场无异动</td>
+</tr>
+<tr>
+<td>38</td>
+<td><code>constituent</code></td>
+<td><code>symbol="HSI.HK"</code></td>
+<td>✅</td>
+<td><code>{total:90,stocks:[20 condensed{symbol,last_done,prev_close,inflow,balance,amount,total_shares,tags,name,market,intro,chg}]}</code></td>
+<td>symbol 转换正确</td>
+</tr>
+<tr>
+<td>39</td>
+<td><code>trade_stats</code></td>
+<td><code>symbol="700.HK"</code></td>
+<td>✅</td>
+<td><code>{trades:[50 price levels w/buy/sell/neutral],statistics:{avgprice,trades_count,total_amount,buy,sell,neutral,timestamp:"1776752384",preclose,trade_date:[5 items]}}</code></td>
+<td>timestamp 与 trade_date[] 数组元素均已转 RFC3339（后补修复）</td>
+</tr>
+<tr>
+<td>40</td>
+<td><code>option_volume</code></td>
+<td><code>symbol="AAPL.US"</code></td>
+<td>⚠️</td>
+<td><code>{c:"1019356",p:"389742"}</code></td>
+<td>字段名 <code>c/p</code> 缺文档；值用 string</td>
+</tr>
+<tr>
+<td>41</td>
+<td><code>option_volume_daily</code></td>
+<td><code>symbol="AAPL.US"</code></td>
+<td>✅</td>
+<td>20 日 <code>{underlying_symbol,timestamp:"1776657600",total_volume,total_put_volume,total_call_volume,put_call_volume_ratio,total_open_interest,...}</code></td>
+<td>timestamp 已转 RFC3339（后补修复）</td>
+</tr>
+<tr>
+<td>42</td>
+<td><code>short_positions</code></td>
+<td><code>symbol="AAPL.US"</code></td>
+<td>✅</td>
+<td>20 条 <code>{timestamp:"1774929600",rate:"0.0086",avg_daily_share_volume,current_shares_short,days_to_cover,close}</code> + <code>sources:1</code></td>
+<td>timestamp 已转 RFC3339（后补修复）</td>
+</tr>
+<tr>
+<td>43</td>
+<td><code>company</code></td>
+<td><code>symbol="AAPL.US"</code></td>
+<td>⚠️</td>
+<td><code>{name:"苹果",company_name:"Apple Inc.",founded:"1976",listing_date:"",market:"纳斯达克全球精选市场",ticker:"AAPL",region:"US",address,website,icon,chairman:"",...,year_end:"9 月 27 日",employees:"166000",manager:"Timothy D. Cook",profile,sector:0}</code></td>
+<td>多字段空串；year_end 中文日期</td>
+</tr>
+<tr>
+<td>44</td>
+<td><code>executive</code></td>
+<td><code>symbol="AAPL.US"</code></td>
+<td>⚠️</td>
+<td><code>{professional_list:[{symbol:"AAPL.US",professionals:[9 位 {id,name,name_zhcn/en,title,biography,photo,wiki_url}]}],forward_url:"https://longbridge.com/wiki/stocks/ST.US.AAPL#company-manager"}</code></td>
+<td>forward_url 带 <code>ST.US.AAPL</code> counter_id</td>
+</tr>
+<tr>
+<td>45</td>
+<td><code>shareholder</code></td>
+<td><code>symbol="AAPL.US"</code></td>
+<td>⚠️</td>
+<td><code>{shareholder_list:[33 {shareholder_id:"0",shareholder_name,institution_type:"",percent_of_shares,shares_changed,report_date:"2026-04-15",stocks:[0-2 item]}],total:0}</code></td>
+<td>shareholder_id 全 0；report_date ISO；total:0 与实际长度不符</td>
+</tr>
+<tr>
+<td>46</td>
+<td><code>fund_holder</code></td>
+<td><code>symbol="AAPL.US"</code></td>
+<td>⚠️</td>
+<td>599 条 <code>{symbol,name,code,currency,position_ratio,report_date:"2026.04.14"}</code></td>
+<td>响应 87KB；report_date 点分日期</td>
+</tr>
+<tr>
+<td>47</td>
+<td><code>corp_action</code></td>
+<td><code>symbol="700.HK"</code></td>
+<td>⚠️</td>
+<td><code>{items:[177 {id,date:"20260601",date_type,act_type,act_desc,action,date_str:"06.01",date_zone:"北京时间",live:{started_at:"1773835200",...}}]}</code></td>
+<td>date=YYYYMMDD；date_str=MM.DD；date_zone 中文；live.started_at 已转 RFC3339（后补修复）</td>
+</tr>
+<tr>
+<td>48</td>
+<td><code>invest_relation</code></td>
+<td><code>symbol="700.HK"</code></td>
+<td>⚠️</td>
+<td><code>{invest_securities:[30 {company_id:"0",symbol,percent_of_shares,shares_value,shares_rank,currency}],forward_url:"https://longbridge.com/wiki/stocks/ST.HK.700#investment-relationship",total:0}</code></td>
+<td>forward_url 带 <code>ST.HK.700</code>；company_id 全 0；total:0 不符</td>
+</tr>
+<tr>
+<td>49</td>
+<td><code>operating</code></td>
+<td><code>symbol="AAPL.US"</code></td>
+<td>🫥</td>
+<td><code>{list:[]}</code></td>
+<td>该 tool 后端似无数据</td>
+</tr>
+<tr>
+<td>50</td>
+<td><code>industry_valuation</code></td>
+<td><code>symbol="AAPL.US"</code></td>
+<td>⚠️</td>
+<td>3 条行业 peers <code>{symbol,name,market,currency,price_close,market_value,pe,pb,ps,roa,roe,history:[N days {date:"1619841600",pe,pb,ps}]}</code></td>
+<td>history.date unix 字符串</td>
+</tr>
+<tr>
+<td>51</td>
+<td><code>industry_valuation_dist</code></td>
+<td><code>symbol="AAPL.US"</code></td>
+<td>✅</td>
+<td><code>{pe:{low,high,median,value,ranking,rank_index,rank_total},pb:{...},ps:{...}}</code></td>
+<td></td>
+</tr>
+<tr>
+<td>52</td>
+<td><code>valuation</code></td>
+<td><code>symbol="AAPL.US"</code></td>
+<td>⚠️</td>
+<td><code>{metrics:{pe:{low,median,high,desc:"当前市盈率 &lt;strong&gt;34.04&lt;/strong&gt;...",list:[337 条 {timestamp:"1745208000",value}]}},range:1}</code></td>
+<td>desc 含 HTML；timestamp 已转 RFC3339（后补修复）</td>
+</tr>
+<tr>
+<td>53</td>
+<td><code>valuation_history</code></td>
+<td><code>symbol="AAPL.US"</code></td>
+<td>✅</td>
+<td><code>{overview:{metrics:{pe:{circle,part,metric,desc:"含&lt;strong&gt;",industry_median}},date:"2026 年 4 月 20 日"},history:{metrics:{pe:{low,median,high,list:[59 {timestamp:"1619841600",value}]}},range:5},peers:{pe:{list:[5 peers]}},layouts:{pe:{...}},stocks:{"AAPL.US":{name:"苹果",market_cap:"4008685277000.0000"},"SNDK.US":{...},...44 条}}</code></td>
+<td><strong>stocks key 已正确</strong>（commit <code>96cee8d</code> 修复）；timestamp 已转 RFC3339（后补修复）；desc 含 HTML；date 中文</td>
+</tr>
+<tr>
+<td>54</td>
+<td><code>institution_rating</code></td>
+<td><code>symbol="AAPL.US"</code></td>
+<td>⚠️</td>
+<td><code>{analyst:{evaluate:{buy:24,over:7,hold:14,under:1,sell:1,total:49,start_date:"1776643200",end_date:"0",no_opinion:2},target:{highest_price:"350.000",lowest_price:"215.000",prev_close:"273.05",start_date:"1776643200",end_date:"0"},industry_id,industry_name,industry_rank,...},instratings:{updated_at:"2026 年 4 月 20 日",recommend:"buy",target:"297.7055",...}}</code></td>
+<td>start_date 已转 RFC3339（后补修复）；end_date:"0" 哨兵保留；updated_at 中文</td>
+</tr>
+<tr>
+<td>55</td>
+<td><code>institution_rating_detail</code></td>
+<td><code>symbol="AAPL.US"</code></td>
+<td>⚠️</td>
+<td><code>{evaluate:{list:[60 月度 {strong_buy,buy,hold,sell,under,date:"2021/04/30"}]},target:{updated_at:"2026 年 4 月 17 日",prediction_accuracy:"100",list:[258 周 {timestamp:"1619409600",price,meet,avg_target,min_target,max_target,date:"2021/04/26"}],data_percent:"0.9973"}}</code></td>
+<td>date 斜杠分隔；timestamp 已转 RFC3339（后补修复）；updated_at 中文</td>
+</tr>
+<tr>
+<td>56</td>
+<td><code>dividend</code></td>
+<td><code>symbol="AAPL.US"</code></td>
+<td>⚠️</td>
+<td><code>{list:[25 条 {id,desc:"每股派息 0.26 USD",symbol:"AAPL.US",record_date:"2026.02.09",ex_date,payment_date}],total:"25"}</code></td>
+<td>date 点分格式；total string</td>
+</tr>
+<tr>
+<td>57</td>
+<td><code>dividend_detail</code></td>
+<td><code>symbol="AAPL.US"</code></td>
+<td>⚠️</td>
+<td><code>{list:[10 条 {desc:"1股派息 \n0.26美元",symbol:"",record_date:"2026-02-09",ex_date,payment_date}]}</code></td>
+<td>symbol 空串；date ISO（与 dividend 不一致）</td>
+</tr>
+<tr>
+<td>58</td>
+<td><code>forecast_eps</code></td>
+<td><code>symbol="AAPL.US"</code></td>
+<td>⚠️</td>
+<td><code>{items:[54 条 {forecast_eps_median/mean/lowest/highest,institution_total/up/down:0,forecast_start_date:"1761868800",forecast_end_date:"0"}]}</code></td>
+<td>forecast_start_date/end_date 已转 RFC3339（后补修复）；末条 <code>end_date:"0"</code> 哨兵保留（"no end" 语义）</td>
+</tr>
+<tr>
+<td>59</td>
+<td><code>consensus</code></td>
+<td><code>symbol="AAPL.US"</code></td>
+<td>✅</td>
+<td><code>{list:[11 期 {fiscal_year,fiscal_period,period_text:"Q4 2026",details:[6 指标 {key:"revenue",name,description,actual,estimate,comp_value,comp_desc,comp:"beat_est",is_released}]}],current_index:3,currency:"USD",opt_periods:["qf","saf","af"],current_period:"qf"}</code></td>
+<td>无日期问题</td>
+</tr>
+<tr>
+<td>60</td>
+<td><code>financial_report</code></td>
+<td><code>symbol="AAPL.US"</code></td>
+<td>⚠️</td>
+<td><code>{report:{...},list:[...]}</code></td>
+<td>响应 142KB；router URL 残留 <code>counter_id=ST/US/AAPL</code>（保留为业务约定）；见 tool-results</td>
+</tr>
+<tr>
+<td>61</td>
+<td><code>margin_ratio</code></td>
+<td><code>symbol="700.HK"</code></td>
+<td>✅</td>
+<td><code>{im_factor:"0.2",mm_factor:"0.18",fm_factor:"0.1"}</code></td>
+<td></td>
+</tr>
+<tr>
+<td>62</td>
+<td><code>today_orders</code></td>
+<td><code>{}</code></td>
+<td>✅</td>
+<td>2 条 <code>{order_id,status:"RejectedStatus",stock_name:"TENCENT",quantity,executed_quantity,price,submitted_at:"2026-04-21T02:22:29Z",side,symbol,order_type,time_in_force,expire_date:"2026-04-21",updated_at,currency,outside_rth,remark,...}</code></td>
+<td>RFC3339</td>
+</tr>
+<tr>
+<td>63</td>
+<td><code>today_executions</code></td>
+<td><code>{}</code></td>
+<td>🫥</td>
+<td><code>[]</code></td>
+<td>paper trading 今日无成交</td>
+</tr>
+<tr>
+<td>64</td>
+<td><code>history_orders</code></td>
+<td><code>start_at="2026-04-01T...Z",end_at="2026-04-15T...Z"</code></td>
+<td>🫥</td>
+<td><code>[]</code></td>
+<td>该区间无订单</td>
+</tr>
+<tr>
+<td>65</td>
+<td><code>history_executions</code></td>
+<td><code>start_at=...,end_at=...</code></td>
+<td>🫥</td>
+<td><code>[]</code></td>
+<td>该区间无成交</td>
+</tr>
+<tr>
+<td>66</td>
+<td><code>cash_flow</code></td>
+<td><code>start_at=...,end_at=...</code></td>
+<td>🫥</td>
+<td><code>[]</code></td>
+<td>该区间无现金流</td>
+</tr>
+<tr>
+<td>67</td>
+<td><code>estimate_max_purchase_quantity</code></td>
+<td><code>symbol="700.HK",side="Buy",order_type="LO",price=100</code></td>
+<td>✅</td>
+<td><code>{cash_max_qty:"0",margin_max_qty:"0"}</code></td>
+<td>购买力不足，返回 0</td>
+</tr>
+<tr>
+<td>68</td>
+<td><code>submit_order</code></td>
+<td><code>symbol="700.HK",order_type="LO",side="Buy",submitted_quantity=100,time_in_force="Day",submitted_price=100.00</code></td>
+<td>✍</td>
+<td><code>{order_id:"1231130424999178240"}</code></td>
+<td>下单成功，后被拒（超购买力）</td>
+</tr>
+<tr>
+<td>69</td>
+<td><code>order_detail</code></td>
+<td><code>order_id="1231130424999178240"</code></td>
+<td>✅</td>
+<td><code>{order_id,status:"RejectedStatus",stock_name:"TENCENT",quantity:"100",executed_quantity:"0",price:"100.0",submitted_at:"2026-04-21T06:32:46Z",side,symbol,order_type,msg:"The order amount exceeds the maximum buying power",history:[1 条],charge_detail:{items:[BROKER_FEES,THIRD_FEES]}}</code></td>
+<td>RFC3339</td>
+</tr>
+<tr>
+<td>70</td>
+<td><code>cancel_order</code></td>
+<td><code>order_id="1231130424999178240"</code></td>
+<td>🔒</td>
+<td><code>code=601011: Order has been cancelled</code></td>
+<td>订单已被系统自动拒绝，无法取消</td>
+</tr>
+<tr>
+<td>71</td>
+<td><code>replace_order</code></td>
+<td><code>order_id="1231130424999178240",quantity=200,price=99</code></td>
+<td>🔒</td>
+<td><code>code=602012: Order amendment is not supported for this order type</code></td>
+<td>paper trading 不支持 LO 修改</td>
+</tr>
+<tr>
+<td>72</td>
+<td><code>alert_list</code></td>
+<td><code>{}</code></td>
+<td>✅</td>
+<td><code>{lists:[21 symbol，每个含 indicators:[{id,indicator_id,frequency,enabled,text,scope,value_map:{price},state}]]}</code></td>
+<td>跟 watchlist 里的股票关联</td>
+</tr>
+<tr>
+<td>73</td>
+<td><code>alert_add</code></td>
+<td><code>symbol="700.HK",condition="price_rise",price="9999"</code></td>
+<td>✍</td>
+<td><code>{}</code></td>
+<td>返回空 — 建议改返回 <code>{alert_id:"..."}</code>，目前需反查 alert_list</td>
+</tr>
+<tr>
+<td>74</td>
+<td><code>alert_disable</code></td>
+<td><code>alert_id="492008"</code></td>
+<td>✍</td>
+<td><code>{alert_id:"492008",enabled:false}</code></td>
+<td>commit <code>e4a8522</code> 后返回 JSON</td>
+</tr>
+<tr>
+<td>75</td>
+<td><code>alert_enable</code></td>
+<td><code>alert_id="492008"</code></td>
+<td>✍</td>
+<td><code>{alert_id:"492008",enabled:true}</code></td>
+<td>commit <code>e4a8522</code> 后返回 JSON</td>
+</tr>
+<tr>
+<td>76</td>
+<td><code>alert_delete</code></td>
+<td><code>alert_id="492008"</code></td>
+<td>✍</td>
+<td><code>{}</code></td>
+<td></td>
+</tr>
+<tr>
+<td>77</td>
+<td><code>dca_list</code></td>
+<td><code>{}</code></td>
+<td>✅</td>
+<td><code>{plans:[1 plan {plan_id,status:"Finished",symbol:"AAPL.US",member_id,aaid,account_channel,display_account,market,per_invest_amount:"200",invest_frequency:"Monthly",invest_day_of_week:"",invest_day_of_month:"15",allow_margin_finance:false,created_at:"1776677737",updated_at:"1776677816",next_trd_date:"1778853600",stock_name,cum_amount,issue_number,average_cost,cum_profit}]}</code></td>
+<td>symbol 正确；created_at/updated_at/next_trd_date 已转 RFC3339（后补修复）</td>
+</tr>
+<tr>
+<td>78</td>
+<td><code>dca_stats</code></td>
+<td><code>{}</code></td>
+<td>⚠️</td>
+<td><code>{total_amount:"0",total_profit:"0",active_count:"0",suspended_count:"0",finished_count:"1",rest_days:"0",nearest_plans:[]}</code></td>
+<td>count 字段应是 int</td>
+</tr>
+<tr>
+<td>79</td>
+<td><code>dca_check</code></td>
+<td><code>symbols=["AAPL.US","700.HK"]</code></td>
+<td>✅</td>
+<td><code>{infos:[{symbol:"AAPL.US",support_regular_saving:true},{symbol:"700.HK",support_regular_saving:false}]}</code></td>
+<td></td>
+</tr>
+<tr>
+<td>80</td>
+<td><code>dca_create</code></td>
+<td><code>symbol="AAPL.US",amount="100",frequency="Monthly",day_of_month=15</code></td>
+<td>✍</td>
+<td><code>{plan_id:"1231134206420062208"}</code></td>
+<td></td>
+</tr>
+<tr>
+<td>81</td>
+<td><code>dca_pause</code></td>
+<td><code>plan_id="1231134206420062208"</code></td>
+<td>✍</td>
+<td><code>{}</code></td>
+<td></td>
+</tr>
+<tr>
+<td>82</td>
+<td><code>dca_resume</code></td>
+<td><code>plan_id="1231134206420062208"</code></td>
+<td>✍</td>
+<td><code>{}</code></td>
+<td></td>
+</tr>
+<tr>
+<td>83</td>
+<td><code>dca_update</code></td>
+<td><code>plan_id="1231134206420062208",amount="200"</code></td>
+<td>✍</td>
+<td><code>{plan_id:"1231134206420062208"}</code></td>
+<td></td>
+</tr>
+<tr>
+<td>84</td>
+<td><code>dca_history</code></td>
+<td><code>plan_id="1231134206420062208"</code></td>
+<td>🫥</td>
+<td><code>{records:[],has_more:false}</code></td>
+<td>新建未扣款</td>
+</tr>
+<tr>
+<td>85</td>
+<td><code>dca_stop</code></td>
+<td><code>plan_id="1231134206420062208"</code></td>
+<td>✍</td>
+<td><code>{}</code></td>
+<td></td>
+</tr>
+<tr>
+<td>86</td>
+<td><code>sharelist_list</code></td>
+<td><code>{}</code></td>
+<td>🫥</td>
+<td><code>{sharelists:[],subscribed_sharelists:[],tail_mark:""}</code></td>
+<td>用户无自建/订阅</td>
+</tr>
+<tr>
+<td>87</td>
+<td><code>sharelist_popular</code></td>
+<td><code>count=3</code></td>
+<td>✅</td>
+<td><code>{sharelists:[3 条 {id,subscribers_count,stocks_count,name,description,cover,created_at:"1735549769",this_year_chg,status,edited_at:"-62135596800",creator:{id,name:"官方股单",member_id,scopes:{...},cert_scopes:{official:true,cert__info:{label,name:"官方号"}}},stocks:[],chg,sharelist_type}]}</code></td>
+<td>created_at 及有效 edited_at 已转 RFC3339（后补修复）；<code>edited_at:"-62135596800"</code> MinDate 哨兵保留</td>
+</tr>
+<tr>
+<td>88</td>
+<td><code>sharelist_create</code></td>
+<td><code>name="MCP测试单",description="..."</code></td>
+<td>✍</td>
+<td><code>{sharelist_id:"34058454"}</code></td>
+<td></td>
+</tr>
+<tr>
+<td>89</td>
+<td><code>sharelist_detail</code></td>
+<td><code>id="24961327"</code> (官方稀土单)</td>
+<td>✅</td>
+<td><code>{sharelist:{id,name:"稀土",stocks_count:5,stocks:[5 条 {symbol:"AREC.US",name,market,intro:"...",code,ipo_date,change}],creator,...},scopes:{subscription,self:false,official:false,industry:false},stock_topics:{},group:null}</code></td>
+<td>symbol 字段已正确</td>
+</tr>
+<tr>
+<td>90</td>
+<td><code>sharelist_add</code></td>
+<td><code>id="34058454",symbols=["AAPL.US","700.HK","TSLA.US"]</code></td>
+<td>✍</td>
+<td><code>{}</code></td>
+<td>新建单添加 3 只</td>
+</tr>
+<tr>
+<td>91</td>
+<td><code>sharelist_detail</code> (自建)</td>
+<td><code>id="34058454"</code></td>
+<td>✅</td>
+<td><code>{sharelist:{stocks_count:3,stocks:[{symbol:"700.HK",name:"腾讯控股"},{symbol:"AAPL.US",name:"苹果"},{symbol:"TSLA.US",name:"特斯拉"}],creator.scopes.self:true,...},scopes:{self:true}}</code></td>
+<td>验证 sharelist_add 生效</td>
+</tr>
+<tr>
+<td>92</td>
+<td><code>sharelist_sort</code></td>
+<td><code>id="34058454",symbols=["TSLA.US","AAPL.US","700.HK"]</code></td>
+<td>✍</td>
+<td><code>{}</code></td>
+<td></td>
+</tr>
+<tr>
+<td>93</td>
+<td><code>sharelist_remove</code></td>
+<td><code>id="34058454",symbols=["700.HK"]</code></td>
+<td>✍</td>
+<td><code>{}</code></td>
+<td></td>
+</tr>
+<tr>
+<td>94</td>
+<td><code>sharelist_delete</code></td>
+<td><code>id="34058454"</code></td>
+<td>✍</td>
+<td><code>{}</code></td>
+<td></td>
+</tr>
+<tr>
+<td>95</td>
+<td><code>create_watchlist_group</code></td>
+<td><code>name="MCP测试组",securities=["AAPL.US","700.HK"]</code></td>
+<td>✍</td>
+<td><code>{id:4362917}</code></td>
+<td id>commit <code>e4a8522</code> 统一返回</td>
+</tr>
+<tr>
+<td>96</td>
+<td><code>update_watchlist_group</code></td>
+<td><code>id=4362917,name="MCP测试组v2",securities=["TSLA.US"],mode="add"</code></td>
+<td>✍</td>
+<td><code>{id:4362917,updated:true}</code></td>
+<td></td>
+</tr>
+<tr>
+<td>97</td>
+<td><code>delete_watchlist_group</code></td>
+<td><code>id=4362917,purge=false</code></td>
+<td>✍</td>
+<td><code>{deleted:true,id:4362917}</code></td>
+<td></td>
+</tr>
+<tr>
+<td>98</td>
+<td><code>news</code></td>
+<td><code>symbol="AAPL.US"</code></td>
+<td>⚠️</td>
+<td>31 条 <code>[{id,title,description,url:"https://longbridge.cn/news/...",published_at:"2026-04-21T06:17:21Z",comments_count,likes_count,shares_count}]</code></td>
+<td>部分条目 title 为空；RFC3339；见 tool-results</td>
+</tr>
+<tr>
+<td>99</td>
+<td><code>topic</code></td>
+<td><code>symbol="AAPL.US"</code></td>
+<td>⚠️</td>
+<td>46 条 <code>[{id,title,description:"[st]ST/US/AAPL#Apple.US[/st] ...",url:"https://longbridge.cn/topics/...",published_at:"2026-04-21T...Z"}]</code></td>
+<td>description BBCode 未解析（保留，上游决定）；RFC3339</td>
+</tr>
+<tr>
+<td>100</td>
+<td><code>topic_detail</code></td>
+<td><code>topic_id="40055487"</code></td>
+<td>⚠️</td>
+<td><code>{id,title:"",description:"[st]ST/US/AAPL#Apple.US[/st] ...",body:"",author:{member_id,name,avatar},tickers:["ST/US/AAPL"],hashtags,images,likes_count,comments_count,views_count,shares_count,topic_type:"post",detail_url,created_at:"2026-04-21T04:21:34Z",updated_at:"1970-01-01T00:00:00Z"}</code></td>
+<td>tickers counter_id 已正确（上游已修复）；updated_at "1970-01-01" = 未更新</td>
+</tr>
+<tr>
+<td>101</td>
+<td><code>topic_replies</code></td>
+<td><code>topic_id="40051125"</code></td>
+<td>✅</td>
+<td>6 条 <code>[{id,topic_id,body,reply_to_id:"0",author:{member_id,name,avatar},images,likes_count,comments_count,created_at:"2026-04-21T03:33:37Z"}]</code></td>
+<td>RFC3339</td>
+</tr>
+<tr>
+<td>102</td>
+<td><code>topic_create</code></td>
+<td><code>title="MCP测试帖",body="...",symbols=["AAPL.US"]</code></td>
+<td>✍</td>
+<td><code>{id:"40057669"}</code></td>
+<td></td>
+</tr>
+<tr>
+<td>103</td>
+<td><code>topic_create_reply</code></td>
+<td><code>topic_id="40057669",body="MCP 测试回复。"</code></td>
+<td>✍</td>
+<td><code>{id:"40680562",topic_id:"40057669",body,reply_to_id:"0",author,images,likes_count,comments_count,created_at:"2026-04-21T07:00:27Z"}</code></td>
+<td></td>
+</tr>
+<tr>
+<td>104</td>
+<td><code>profit_analysis</code></td>
+<td><code>start="2026-01-01",end="2026-04-21"</code></td>
+<td>⚠️</td>
+<td><code>{currency:"USD",current_total_asset:"86339.69",end_date:"2026-04-21",end_time:"1776754803",initial_asset_value:"129088.92",profits:{stock:"-44879.48",summary_info:[{asset_type:"stock",loss_max:"-44644.76",loss_max_name:"中芯国际",loss_max_symbol:""}],cumulative_transaction_amount:"362143.08"},sublist:{items:[{symbol:"2228.HK",market,name:"晶泰控股",profit:"-83.5",profit_rate:"-1.0000",updated_at:"1776643200"},{symbol:"981.HK",name:"中芯国际",profit:"-347894.34"},{symbol:"TSLA.US",name:"特斯拉"}],updated_at:"1776643200",updated_date:"2026-04-20"},sum_profit:"-42749.22",sum_profit_rate:"-0.3312",trade_update_date:"2026-04-20",trade_update_time:"1776643200"}</code></td>
+<td>summary_info.loss_max_symbol 空串；end_time/updated_at/trade_update_time 已转 RFC3339（后补修复）；更新时间有两个字段 (trade_update_time + trade_update_date)</td>
+</tr>
+<tr>
+<td>105</td>
+<td><code>profit_analysis_detail</code></td>
+<td><code>symbol="700.HK",start="2026-01-01",end="2026-04-21"</code></td>
+<td>⚠️</td>
+<td><code>{profit:"0",underlying_details:{holding_value:"0",profit:"0",credited_details:[],debited_details:[],fee_details:[],...},derivative_pnl_details:{...},name:"腾讯控股",updated_at:"1776754804",currency:"",start:"1776754804",end:"1776815999",start_date:"2026-04-21",end_date:"2026-04-21"}</code></td>
+<td>currency 空串；updated_at 已转 RFC3339（后补修复）；start/end 裸字段名过泛未纳入白名单（仍 unix）；<strong>参数 start/end 传入后被忽略（请求范围 04-01~04-21 但返回 04-21 单日）</strong></td>
+</tr>
+<tr>
+<td>106</td>
+<td><code>finance_calendar</code></td>
+<td><code>start="2026-04-21",end="2026-04-28",category="financial",market="US"</code></td>
+<td>🫥</td>
+<td><code>{date:"2026-04-21",next_date:"",result:{},list:[]}</code></td>
+<td>当前区间无 financial 事件；next_date 空串</td>
+</tr>
+<tr>
+<td>107</td>
+<td><code>statement_list</code></td>
+<td><code>statement_type="daily",limit=5</code></td>
+<td>✅</td>
+<td><code>{list:[{dt:20260417,file_key:"/statement_data/data/lb_papertrading/1/20260417/20975338.json"}]}</code></td>
+<td>dt YYYYMMDD 整数</td>
+</tr>
+<tr>
+<td>108</td>
+<td><code>statement_download_url</code></td>
+<td><code>file_key="/statement_data/data/.../20975338.json"</code></td>
+<td>✅</td>
+<td><code>{url:"https://lb-pspl-rawfile.s3.cn-north-1.amazonaws.com.cn/...?X-Amz-Algorithm=AWS4-HMAC-SHA256&amp;...&amp;X-Amz-Expires=3600&amp;..."}</code></td>
+<td>返回 S3 预签名 URL，1 小时有效</td>
+</tr>
+</tbody>
+</table>
+<hr>
+<h2 id="_5">汇总统计</h2>
+<table>
+<thead>
+<tr>
+<th>状态</th>
+<th>数量</th>
+<th>占比</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>✅ 正常</td>
+<td>36</td>
+<td>33.3%</td>
+</tr>
+<tr>
+<td>⚠️ 格式/类型问题（可用）</td>
+<td>38</td>
+<td>35.2%</td>
+</tr>
+<tr>
+<td>✍ 写入成功已清理</td>
+<td>20</td>
+<td>18.5%</td>
+</tr>
+<tr>
+<td>🫥 账号状态自然空</td>
+<td>11</td>
+<td>10.2%</td>
+</tr>
+<tr>
+<td>🔒 业务限制</td>
+<td>3</td>
+<td>2.8%</td>
+</tr>
+<tr>
+<td>🔴 调用失败</td>
+<td>0</td>
+<td>0%</td>
+</tr>
+<tr>
+<td><strong>总计</strong></td>
+<td><strong>108</strong></td>
+<td><strong>100%</strong></td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li><strong>可用率 100%</strong>：108 个 tool 全部可调用；⚠️ 标记仅为格式/命名不一致，业务数据正确。</li>
+<li><strong>写入 tool 全部清理</strong>：sharelist / watchlist_group / alert / dca / topic（topic 留给用户手动清理）。</li>
+<li><strong>🔒 业务限制</strong>：<code>cancel_order</code>（订单已被系统拒绝）/<code>replace_order</code>（paper trading 不支持 LO 修改）/<code>topic_create</code> 若涉及关联资源时偶发。</li>
+</ul>
+<h2 id="_6">后续优化建议（来自全量测试）</h2>
+<ol>
+<li><strong>日期格式统一</strong>（影响 38 个 ⚠️ tool，见已知全局问题 §1）：建议在 MCP 层做 post-serialize 标准化，全部转为 RFC3339。</li>
+<li><strong>counter_id 残留</strong>（已处理完主场景）：仅剩 <code>financial_report.router</code> / <code>executive.forward_url</code> / <code>invest_relation.forward_url</code> / <code>finance_calendar.icon</code> 等 URL 参数保留（业务约定）。</li>
+<li><strong>类型一致性</strong>：<code>*_count</code>/<code>total</code>/<code>stocks_count</code> 等整型字段在部分接口仍为 string，建议统一。</li>
+<li><strong>写入接口返回值</strong>：已统一（commit <code>e4a8522</code>），<code>alert_enable/disable</code> / <code>watchlist_group_create/update/delete</code> 均返回 JSON <code>{id, &lt;action&gt;:true}</code>。</li>
+</ol>
+</div>
+</body>
+</html>

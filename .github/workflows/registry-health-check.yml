@@ -1,0 +1,62 @@
+name: Registry Health Check
+
+on:
+  schedule:
+    # Every Monday at 02:00 UTC
+    - cron: '0 2 * * 1'
+  workflow_dispatch:   # allow manual trigger from GitHub UI
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Run registry health check
+        id: registry
+        run: python scripts/check_registries.py
+        continue-on-error: true   # don't fail the job; we open an issue instead
+
+      - name: Run sponsor check
+        id: sponsor
+        run: python scripts/check_sponsors.py
+        continue-on-error: true
+
+      - name: Generate homepage
+        run: python scripts/generate_homepage.py
+
+      - name: Commit reports and homepage
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add tests/reports/ docs/index.html
+          git diff --staged --quiet && echo "Nothing to commit" || \
+            git commit -m "chore: registry health check $(date -u +%Y-%m-%d)" && \
+            git push
+
+      - name: Open issue on failures
+        if: steps.registry.outcome == 'failure'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const today = new Date().toISOString().slice(0,10);
+            const report = fs.existsSync(`tests/reports/registry-${today}.md`)
+              ? fs.readFileSync(`tests/reports/registry-${today}.md`, 'utf8').slice(0, 4000)
+              : 'Report not generated.';
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `🚨 Registry health check: failures detected (${today})`,
+              body: `## Summary\n\nSome registry URLs returned ❌ or ⚠️. See details below.\n\n<details><summary>Report</summary>\n\n\`\`\`\n${report}\n\`\`\`\n\n</details>\n\n[View full report](https://github.com/${context.repo.owner}/${context.repo.repo}/blob/main/tests/reports/registry-${today}.md)`,
+              labels: ['monitoring', 'registry'],
+            });

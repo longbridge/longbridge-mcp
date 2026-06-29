@@ -1,0 +1,530 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>金融开源导航 — Open Finance OSS</title>
+<style>
+:root {
+  --ground:   #0C1118;
+  --surface:  #131D2B;
+  --surface2: #192537;
+  --border:   #1E3050;
+  --text:     #D4DDE8;
+  --muted:    #6B8099;
+  --accent:   #00C4A7;
+  --amber:    #F5A22A;
+  --red:      #E05555;
+  --blue:     #5B9BD5;
+  --mono: 'Cascadia Code','Fira Code','SF Mono','Consolas','Menlo',monospace;
+  --sans: -apple-system,BlinkMacSystemFont,'Segoe UI','Helvetica Neue',sans-serif;
+  --sidebar: 230px;
+  --gap: 24px;
+}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth}
+body{background:var(--ground);color:var(--text);font-family:var(--sans);font-size:14px;line-height:1.6;display:flex;min-height:100vh}
+
+/* sidebar */
+#sidebar{width:var(--sidebar);min-width:var(--sidebar);position:fixed;top:0;left:0;bottom:0;background:var(--surface);border-right:1px solid var(--border);overflow-y:auto;z-index:100;display:flex;flex-direction:column}
+.sidebar-head{padding:20px 16px 16px;border-bottom:1px solid var(--border);flex-shrink:0}
+.sidebar-head .logo{font-family:var(--mono);font-size:11px;font-weight:700;color:var(--accent);letter-spacing:.12em;text-transform:uppercase}
+.sidebar-head .stat{font-size:11px;color:var(--muted);margin-top:4px}
+.sidebar-nav{padding:8px 0;overflow-y:auto;flex:1}
+.nav-item{display:flex;align-items:center;gap:8px;padding:5px 16px;text-decoration:none;color:var(--muted);font-size:12px;transition:color .15s,background .15s;border-left:2px solid transparent}
+.nav-item:hover,.nav-item.active{color:var(--text);background:var(--surface2);border-left-color:var(--accent)}
+.nav-item.active .nav-num{opacity:1}
+.nav-num{font-family:var(--mono);font-size:10px;color:var(--accent);opacity:.6;min-width:22px;flex-shrink:0}
+
+/* main */
+#main{margin-left:var(--sidebar);flex:1;min-width:0}
+.topbar{position:sticky;top:0;background:rgba(12,17,24,.95);backdrop-filter:blur(8px);border-bottom:1px solid var(--border);padding:12px var(--gap);display:flex;align-items:baseline;gap:16px;z-index:50}
+.topbar h1{font-family:var(--mono);font-size:15px;font-weight:700;color:var(--text);letter-spacing:-.02em}
+.topbar .tagline{font-size:12px;color:var(--muted)}
+.topbar .badges{margin-left:auto;display:flex;gap:8px}
+.badge{font-family:var(--mono);font-size:10px;padding:2px 7px;border-radius:3px;font-weight:600}
+.badge-teal{background:rgba(0,196,167,.12);color:var(--accent);border:1px solid rgba(0,196,167,.25)}
+.badge-amber{background:rgba(245,162,42,.12);color:var(--amber);border:1px solid rgba(245,162,42,.25)}
+
+#content{padding:var(--gap);max-width:1200px}
+
+.legend{display:flex;flex-wrap:wrap;gap:12px;padding:12px 16px;background:var(--surface);border:1px solid var(--border);border-radius:6px;margin-bottom:28px;font-size:12px;color:var(--muted)}
+.legend-item{display:flex;align-items:center;gap:5px}
+.legend-sep{width:1px;background:var(--border);align-self:stretch}
+
+/* sections */
+.section{margin-bottom:32px;animation:fadeUp .3s ease both}
+@keyframes fadeUp{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+.section-head{display:flex;align-items:baseline;gap:12px;margin-bottom:12px;padding-bottom:10px;border-bottom:1px solid var(--border)}
+.section-num{font-family:var(--mono);font-size:11px;color:var(--accent);opacity:.7;letter-spacing:.05em;flex-shrink:0}
+.section-title{font-family:var(--mono);font-size:16px;font-weight:700;color:var(--text);letter-spacing:-.03em}
+.section-en{font-size:11px;color:var(--muted);font-weight:400}
+.section-count{margin-left:auto;font-family:var(--mono);font-size:11px;color:var(--muted);flex-shrink:0}
+.section-note{font-size:11px;color:var(--muted);padding:8px 10px;background:rgba(19,29,43,.5);border-left:2px solid var(--border);margin-bottom:8px;border-radius:0 4px 4px 0}
+
+/* table */
+.proj-table{width:100%;border-collapse:collapse;font-size:13px}
+.proj-table th{font-family:var(--mono);font-size:10px;color:var(--muted);font-weight:600;letter-spacing:.08em;text-transform:uppercase;text-align:left;padding:6px 8px;background:var(--surface);border-bottom:1px solid var(--border)}
+.proj-table td{padding:7px 8px;border-bottom:1px solid rgba(30,48,80,.5);vertical-align:middle}
+.proj-table tr:last-child td{border-bottom:none}
+.proj-table tbody tr{background:var(--surface);transition:background .12s}
+.proj-table tbody tr:hover{background:var(--surface2)}
+.proj-table tbody tr:nth-child(even){background:rgba(19,29,43,.6)}
+.proj-table tbody tr:nth-child(even):hover{background:var(--surface2)}
+
+.proj-name{font-weight:600;color:var(--text);min-width:130px}
+.proj-name a{color:inherit;text-decoration:none;display:flex;align-items:center;gap:6px}
+.proj-name a:hover{color:var(--accent)}
+.archived-tag{font-size:9px;color:var(--red);font-family:var(--mono);opacity:.8;font-weight:400;border:1px solid rgba(224,85,85,.3);padding:0 3px;border-radius:2px}
+
+.proj-desc{color:var(--muted);font-size:12px;max-width:300px}
+
+/* stars */
+.stars-cell{white-space:nowrap;min-width:80px}
+.stars-num{font-family:var(--mono);font-size:12px;color:var(--amber);font-weight:600}
+.stars-bar{display:block;height:2px;background:var(--border);border-radius:2px;margin-top:3px;overflow:hidden}
+.stars-fill{display:block;height:100%;background:var(--amber);border-radius:2px;opacity:.6}
+
+/* lang */
+.lang-pill{font-family:var(--mono);font-size:10px;padding:2px 5px;border-radius:3px;background:rgba(30,48,80,.8);color:var(--muted);border:1px solid var(--border);white-space:nowrap}
+.lang-py {color:#4ec9b0;border-color:rgba(78,201,176,.2);background:rgba(78,201,176,.05)}
+.lang-js {color:#f0c674;border-color:rgba(240,198,116,.2);background:rgba(240,198,116,.05)}
+.lang-ts {color:#569cd6;border-color:rgba(86,156,214,.2);background:rgba(86,156,214,.05)}
+.lang-cs {color:#9b59b6;border-color:rgba(155,89,182,.2);background:rgba(155,89,182,.05)}
+.lang-cpp{color:#00b4d8;border-color:rgba(0,180,216,.2);background:rgba(0,180,216,.05)}
+.lang-go {color:#79c0ff;border-color:rgba(121,192,255,.2);background:rgba(121,192,255,.05)}
+.lang-rs {color:#e07b54;border-color:rgba(224,123,84,.2);background:rgba(224,123,84,.05)}
+.lang-java{color:#f89820;border-color:rgba(248,152,32,.2);background:rgba(248,152,32,.05)}
+.lang-php{color:#a78bfa;border-color:rgba(167,139,250,.2);background:rgba(167,139,250,.05)}
+.lang-rb {color:#cc342d;border-color:rgba(204,52,45,.2);background:rgba(204,52,45,.05)}
+
+/* market */
+.market-cn{font-size:10px;font-family:var(--mono);color:#f0c674;padding:1px 4px;border-radius:2px;border:1px solid rgba(240,198,116,.25);background:rgba(240,198,116,.07)}
+.market-crypto{font-size:10px;font-family:var(--mono);color:#a78bfa;padding:1px 4px;border-radius:2px;border:1px solid rgba(167,139,250,.25);background:rgba(167,139,250,.07)}
+
+/* api column */
+.api-y  {font-family:var(--mono);font-size:10px;padding:2px 5px;border-radius:3px;color:var(--accent);background:rgba(0,196,167,.08);border:1px solid rgba(0,196,167,.2)}
+.api-n  {font-family:var(--mono);font-size:10px;padding:2px 5px;border-radius:3px;color:var(--muted);background:rgba(30,48,80,.5);border:1px solid var(--border)}
+.api-opt{font-family:var(--mono);font-size:10px;padding:2px 5px;border-radius:3px;color:var(--amber);background:rgba(245,162,42,.08);border:1px solid rgba(245,162,42,.2)}
+
+/* contact column */
+.contact-p1{font-family:var(--mono);font-size:11px;font-weight:700;color:var(--accent)}
+.contact-p2{font-family:var(--mono);font-size:11px;font-weight:600;color:var(--blue)}
+.contact-p3{font-family:var(--mono);font-size:11px;color:var(--muted)}
+.contact-no{font-size:11px;color:rgba(107,128,153,.4)}
+
+@media (prefers-reduced-motion:reduce){.section{animation:none}}
+</style>
+</head>
+<body>
+
+<nav id="sidebar" aria-label="分类导航">
+  <div class="sidebar-head">
+    <div class="logo">▸ OSS Finance</div>
+    <div class="stat">37 类目 · 180+ 项目</div>
+  </div>
+  <div class="sidebar-nav" id="navLinks"></div>
+</nav>
+
+<div id="main">
+  <header class="topbar">
+    <h1>金融开源项目导航</h1>
+    <span class="tagline">GitHub Stars 2000+ 精选</span>
+    <div class="badges">
+      <span class="badge badge-teal">2026-06 更新</span>
+      <span class="badge badge-amber">持续收录中</span>
+    </div>
+  </header>
+  <div id="content">
+    <div class="legend">
+      <span class="legend-item">🌍 全球多市场</span>
+      <span class="legend-item">🇨🇳 仅A股</span>
+      <span class="legend-item">🇨🇳+ A/H/港股</span>
+      <span class="legend-item">⛓️ 加密/链上</span>
+      <span class="legend-item">⚠️ 已归档</span>
+      <div class="legend-sep"></div>
+      <span class="legend-item"><span class="api-y">需数据</span> 依赖三方数据接口</span>
+      <span class="legend-item"><span class="api-opt">可选</span> 可选接入</span>
+      <span class="legend-item"><span class="api-n">自包含</span> 无外部数据依赖</span>
+      <div class="legend-sep"></div>
+      <span class="legend-item"><span class="contact-p1">★★★</span> 高优联系</span>
+      <span class="legend-item"><span class="contact-p2">★★</span> 推荐联系</span>
+      <span class="legend-item"><span class="contact-p3">★</span> 可考虑</span>
+    </div>
+    <div id="sections"></div>
+  </div>
+</div>
+
+<script>
+const MAX_STARS = 112000;
+
+function parseStars(s){
+  if(!s)return 0;
+  s=s.replace(/[~,]/g,'').trim();
+  if(s.endsWith('k'))return parseFloat(s)*1000;
+  return parseInt(s)||0;
+}
+function langClass(l){
+  if(!l)return'';
+  const m=l.toLowerCase();
+  if(m.includes('python'))return'lang-py';
+  if(m.includes('typescript')||m==='ts')return'lang-ts';
+  if(m.includes('javascript')||m==='js')return'lang-js';
+  if(m.includes('rust'))return'lang-rs';
+  if((m==='go'||m.includes('/go')||m.startsWith('go/'))&&!m.includes('golang')||m==='go')return'lang-go';
+  if(m.includes('java')&&!m.includes('javascript'))return'lang-java';
+  if(m.includes('c#'))return'lang-cs';
+  if(m.includes('c++'))return'lang-cpp';
+  if(m.includes('php'))return'lang-php';
+  if(m.includes('ruby')||m==='rb')return'lang-rb';
+  return'';
+}
+function marketBadge(m){
+  if(!m)return'';
+  if(m.includes('⛓️')||m.includes('加密')||m.includes('crypto'))return'<span class="market-crypto">CRYPTO</span>';
+  if(m.includes('🇨🇳')&&(m.includes('+')||m.includes('H')||m.includes('港')))return'<span class="market-cn">CN+</span>';
+  if(m.includes('🇨🇳'))return'<span class="market-cn">A股</span>';
+  if(m.includes('🌍'))return'<span style="font-size:13px">🌍</span>';
+  return`<span style="font-size:12px">${m}</span>`;
+}
+function apiBadge(v){
+  if(v==='Y')return'<span class="api-y">需数据</span>';
+  if(v==='N')return'<span class="api-n">自包含</span>';
+  if(v==='opt')return'<span class="api-opt">可选</span>';
+  return'';
+}
+function contactBadge(v){
+  if(v==='P1')return'<span class="contact-p1" title="高优联系，Longbridge 数据赞助首选">★★★</span>';
+  if(v==='P2')return'<span class="contact-p2" title="推荐联系">★★</span>';
+  if(v==='P3')return'<span class="contact-p3" title="可考虑">★</span>';
+  return'<span class="contact-no">—</span>';
+}
+
+// api: Y=需要三方数据接口  N=自包含  opt=可选
+// contact: P1=高优联系  P2=推荐  P3=可考虑  no=不推荐
+const CATS=[
+  {n:"01",zh:"交易终端",en:"Trading Terminals",projects:[
+    {name:"OpenBB",stars:"69k",lang:"Python",market:"🌍",url:"https://github.com/OpenBB-finance/OpenBB",desc:"Bloomberg 开源替代，AI 驱动投资研究，多数据源扩展",api:"Y",contact:"P1"},
+    {name:"FinceptTerminal",stars:"26k",lang:"C++/Python",market:"🌍",url:"https://github.com/Fincept-Corporation/FinceptTerminal",desc:"C++20+Qt6 原生桌面终端，2026 年 Trending 爆红",api:"Y",contact:"P2"},
+    {name:"StockSharp",stars:"7k",lang:"C#",market:"🌍",url:"https://github.com/StockSharp/StockSharp",desc:"企业级 .NET 算法交易平台，图形化策略设计器",api:"Y",contact:"P3"},
+  ]},
+  {n:"02",zh:"量化回测框架",en:"Quant Backtesting",projects:[
+    {name:"vnpy / vn.py",stars:"25k",lang:"Python",market:"🌍",url:"https://github.com/vnpy/vnpy",desc:"国内最流行量化平台，CTP/XTP/IB 多接口，社区活跃",api:"Y",contact:"P1"},
+    {name:"backtrader",stars:"22k",lang:"Python",market:"🌍",url:"https://github.com/mementum/backtrader",desc:"事件驱动回测，150+ 指标，不再活跃维护",api:"Y",contact:"P2"},
+    {name:"zipline",stars:"20k",lang:"Python",market:"🌍",url:"https://github.com/quantopian/zipline",desc:"Quantopian 出品 ⚠️ 已归档，与 pyfolio/alphalens 配套",api:"Y",contact:"P3"},
+    {name:"abu（阿布量化）",stars:"12k",lang:"Python",market:"🇨🇳+",url:"https://github.com/bbfamily/abu",desc:"A股/美股/BTC，深度整合 ML，配套书籍",api:"Y",contact:"P2"},
+    {name:"Lean (QuantConnect)",stars:"10k",lang:"C#/Python",market:"🌍",url:"https://github.com/QuantConnect/Lean",desc:"QuantConnect 引擎，多资产回测与实盘",api:"Y",contact:"P2"},
+    {name:"backtesting.py",stars:"8k",lang:"Python",market:"🌍",url:"https://github.com/kernc/backtesting.py",desc:"极简 API，Bokeh 交互结果，快速原型验证",api:"Y",contact:"P3"},
+    {name:"rqalpha",stars:"6.4k",lang:"Python",market:"🇨🇳",url:"https://github.com/ricequant/rqalpha",desc:"米宽科技，仅支持 A 股/国内期货期权",api:"Y",contact:"P2"},
+    {name:"WonderTrader",stars:"6.2k",lang:"C++/Python",market:"🇨🇳",url:"https://github.com/wondertrader/wondertrader",desc:"国产 C++ 高性能引擎，对接 CTP/XTP",api:"Y",contact:"P2"},
+    {name:"PyAlgoTrade",stars:"4.6k",lang:"Python",market:"🌍",url:"https://github.com/gbeced/pyalgotrade",desc:"早期流行回测框架 ⚠️ 不再维护",api:"Y",contact:"P3"},
+    {name:"vectorbt",stars:"4k",lang:"Python",market:"🌍",url:"https://github.com/polakowo/vectorbt",desc:"NumPy/Numba 向量化引擎，秒级千策略参数扫描",api:"Y",contact:"P2"},
+    {name:"nautilus_trader",stars:"4k",lang:"Python/Rust",market:"🌍",url:"https://github.com/nautechsystems/nautilus_trader",desc:"Rust 核心，超低延迟，生产级部署",api:"Y",contact:"P1"},
+    {name:"zvt",stars:"4.2k",lang:"Python",market:"🇨🇳",url:"https://github.com/zvtvz/zvt",desc:"模块化框架，A/H 股数据源，设计清晰易扩展",api:"Y",contact:"P2"},
+    {name:"finmarketpy",stars:"3.7k",lang:"Python",market:"🌍",url:"https://github.com/cuemacro/finmarketpy",desc:"外汇和宏观量化分析，Bloomberg/Quandl 数据源",api:"Y",contact:"P3"},
+    {name:"pybroker",stars:"3.4k",lang:"Python",market:"🌍",url:"https://github.com/edtechre/pybroker",desc:"ML 策略原生支持，Walkforward 验证，Bootstrap 统计",api:"Y",contact:"P3"},
+    {name:"pysystemtrade",stars:"3k",lang:"Python",market:"🌍",url:"https://github.com/pst-group/pysystemtrade",desc:"《系统化交易》作者，期货系统化权威实现",api:"Y",contact:"P3"},
+    {name:"TradeMaster",stars:"2.8k",lang:"Python",market:"🌍",url:"https://github.com/TradeMaster-NTU/TradeMaster",desc:"南洋理工，RL 量化交易平台",api:"Y",contact:"P3"},
+    {name:"bt",stars:"2.7k",lang:"Python",market:"🌍",url:"https://github.com/pmorissette/bt",desc:"可组合 Algo 模块，快速构建测试策略",api:"Y",contact:"no"},
+    {name:"ffn",stars:"2.4k",lang:"Python",market:"🌍",url:"https://github.com/pmorissette/ffn",desc:"量化金融函数库，业绩评估/数据转换",api:"Y",contact:"no"},
+  ]},
+  {n:"03",zh:"股票市场数据",en:"Market Data",note:"🇨🇳 仅A股项目不支持国际市场",projects:[
+    {name:"yfinance",stars:"17k",lang:"Python",market:"🌍",url:"https://github.com/ranaroussi/yfinance",desc:"Yahoo Finance 数据，事实标准，股票/ETF/期权",api:"Y",contact:"P2"},
+    {name:"tushare",stars:"13k",lang:"Python",market:"🇨🇳",url:"https://github.com/waditu/tushare",desc:"国内最早 A 股工具，升级为 Tushare Pro",api:"Y",contact:"P2"},
+    {name:"AKShare",stars:"11.6k",lang:"Python",market:"🇨🇳+",url:"https://github.com/akfamily/akshare",desc:"免费 A/H/美股数据，聚合数十个数据源",api:"Y",contact:"P2"},
+    {name:"alpha_vantage",stars:"4.5k",lang:"Python",market:"🌍",url:"https://github.com/RomelTorres/alpha_vantage",desc:"Alpha Vantage 封装，150+ 指标，免费 API Key",api:"Y",contact:"P3"},
+    {name:"efinance",stars:"3.8k",lang:"Python",market:"🇨🇳",url:"https://github.com/1quant/efinance",desc:"极简 A 股数据，东方财富数据源",api:"Y",contact:"P2"},
+    {name:"adata",stars:"2.1k",lang:"Python",market:"🇨🇳",url:"https://github.com/1nchaos/adata",desc:"免费 A 股量化数据库，多源融合，动态代理保障",api:"Y",contact:"P2"},
+  ]},
+  {n:"04",zh:"技术分析",en:"Technical Analysis",projects:[
+    {name:"TA-Lib (Python)",stars:"10k",lang:"Python/C",market:"🌍",url:"https://github.com/TA-Lib/ta-lib-python",desc:"业界标准，150+ 指标，C 底层极高性能",api:"N",contact:"P3"},
+    {name:"pandas-ta",stars:"5k",lang:"Python",market:"🌍",url:"https://github.com/twopirllc/pandas-ta",desc:"纯 Python，130+ 指标，无需 TA-Lib 依赖",api:"N",contact:"P3"},
+    {name:"ta",stars:"4k",lang:"Python",market:"🌍",url:"https://github.com/bukosabino/ta",desc:"Pandas/NumPy 技术分析库，4 大类指标",api:"N",contact:"P3"},
+  ]},
+  {n:"05",zh:"算法/自动化交易",en:"Algorithmic Trading",projects:[
+    {name:"freqtrade",stars:"50k",lang:"Python",market:"⛓️",url:"https://github.com/freqtrade/freqtrade",desc:"最流行加密交易机器人，AI/ML 策略优化",api:"Y",contact:"P3"},
+    {name:"CCXT",stars:"42k",lang:"JS/Python/PHP",market:"⛓️",url:"https://github.com/ccxt/ccxt",desc:"统一加密交易所 API，100+ 交易所，三语言",api:"Y",contact:"P3"},
+    {name:"Hummingbot",stars:"19k",lang:"Python",market:"⛓️",url:"https://github.com/hummingbot/hummingbot",desc:"做市/套利框架，50+ CEX/DEX",api:"Y",contact:"P3"},
+    {name:"Qlib (Microsoft)",stars:"18k",lang:"Python",market:"🌍",url:"https://github.com/microsoft/qlib",desc:"微软 AI 量化平台，端到端 ML 流水线",api:"Y",contact:"P2"},
+    {name:"FinRL",stars:"11.5k",lang:"Python",market:"🌍",url:"https://github.com/AI4Finance-Foundation/FinRL",desc:"首个系统化 DRL 量化框架，多资产场景",api:"Y",contact:"P3"},
+    {name:"Superalgos",stars:"5.5k",lang:"JavaScript",market:"⛓️",url:"https://github.com/Superalgos/Superalgos",desc:"可视化无代码加密策略平台，节点画布设计",api:"Y",contact:"P3"},
+    {name:"jesse",stars:"6.5k",lang:"Python",market:"⛓️",url:"https://github.com/jesse-ai/jesse",desc:"加密交易框架，AI 助手调试，回测转实盘",api:"Y",contact:"P3"},
+    {name:"catalyst",stars:"2.4k",lang:"Python",market:"⛓️",url:"https://github.com/enigmampc/catalyst",desc:"基于 Zipline 的加密回测库 ⚠️ 已归档 2022",api:"Y",contact:"no"},
+    {name:"OctoBot",stars:"3.5k",lang:"Python",market:"⛓️",url:"https://github.com/Drakkar-Software/OctoBot",desc:"高度可扩展加密机器人，插件架构",api:"Y",contact:"P3"},
+  ]},
+  {n:"06",zh:"投资组合与风险管理",en:"Portfolio & Risk",projects:[
+    {name:"PyPortfolioOpt",stars:"5.8k",lang:"Python",market:"🌍",url:"https://github.com/robertmartin8/PyPortfolioOpt",desc:"均值方差/Black-Litterman/HRP 优化模型",api:"opt",contact:"P2"},
+    {name:"pyfolio",stars:"5k",lang:"Python",market:"🌍",url:"https://github.com/quantopian/pyfolio",desc:"Quantopian 出品，生成专业撕裂报告 Tear Sheet",api:"Y",contact:"P2"},
+    {name:"QuantStats",stars:"4k",lang:"Python",market:"🌍",url:"https://github.com/ranaroussi/quantstats",desc:"一键生成 Sharpe/Sortino/Calmar HTML 报告",api:"Y",contact:"P2"},
+    {name:"Riskfolio-Lib",stars:"3k",lang:"Python",market:"🌍",url:"https://github.com/dcajasn/Riskfolio-Lib",desc:"26 种凸风险度量，Black-Litterman，因子模型",api:"opt",contact:"P2"},
+  ]},
+  {n:"07",zh:"期权与衍生品",en:"Options & Derivatives",projects:[
+    {name:"QuantLib",stars:"5k",lang:"C++",market:"🌍",url:"https://github.com/lballabio/QuantLib",desc:"业界最权威量化金融库，期权/利率/信用风险建模",api:"N",contact:"no"},
+    {name:"tf-quant-finance",stars:"5k",lang:"Python",market:"🌍",url:"https://github.com/google/tf-quant-finance",desc:"Google 出品，TensorFlow GPU 批量期权定价",api:"N",contact:"no"},
+    {name:"QuantLib-SWIG",stars:"2k",lang:"Python/Java",market:"🌍",url:"https://github.com/lballabio/QuantLib-SWIG",desc:"QuantLib 多语言绑定，Python/Java/R/C#",api:"N",contact:"no"},
+  ]},
+  {n:"08",zh:"加密货币交易",en:"Crypto Trading",note:"freqtrade/CCXT/Hummingbot/jesse/OctoBot 亦在【算法交易】分类中收录",projects:[
+    {name:"freqtrade",stars:"50k",lang:"Python",market:"⛓️",url:"https://github.com/freqtrade/freqtrade",desc:"最流行开源加密交易机器人",api:"Y",contact:"P3"},
+    {name:"CCXT",stars:"42k",lang:"JS/Python/PHP",market:"⛓️",url:"https://github.com/ccxt/ccxt",desc:"100+ 交易所统一 API",api:"Y",contact:"P3"},
+    {name:"Hummingbot",stars:"19k",lang:"Python",market:"⛓️",url:"https://github.com/hummingbot/hummingbot",desc:"做市/套利，50+ CEX/DEX",api:"Y",contact:"P3"},
+    {name:"catalyst",stars:"2.4k",lang:"Python",market:"⛓️",url:"https://github.com/enigmampc/catalyst",desc:"Zipline 加密分支 ⚠️ 已归档",api:"Y",contact:"no"},
+    {name:"jesse",stars:"6.5k",lang:"Python",market:"⛓️",url:"https://github.com/jesse-ai/jesse",desc:"加密回测与实盘框架",api:"Y",contact:"P3"},
+    {name:"OctoBot",stars:"3.5k",lang:"Python",market:"⛓️",url:"https://github.com/Drakkar-Software/OctoBot",desc:"插件架构，高度可扩展",api:"Y",contact:"P3"},
+    {name:"Superalgos",stars:"5.5k",lang:"JavaScript",market:"⛓️",url:"https://github.com/Superalgos/Superalgos",desc:"可视化无代码策略设计",api:"Y",contact:"P3"},
+    {name:"zenbot",stars:"8.3k",lang:"Node.js",market:"⛓️",url:"https://github.com/DeviaVir/zenbot",desc:"命令行 TA 交易机器人 ⚠️ 已归档 2020",api:"Y",contact:"no"},
+  ]},
+  {n:"09",zh:"财务基本面分析",en:"Fundamental Analysis",projects:[
+    {name:"OpenBB",stars:"69k",lang:"Python",market:"🌍",url:"https://github.com/OpenBB-finance/OpenBB",desc:"最完整开源投资研究平台，详见第一节",api:"Y",contact:"P1"},
+    {name:"machine-learning-for-trading",stars:"17k",lang:"Python",market:"🌍",url:"https://github.com/stefan-jansen/machine-learning-for-trading",desc:"《ML 与算法交易》配套代码，因子/NLP/DL 实践",api:"Y",contact:"P2"},
+    {name:"financepy",stars:"2k",lang:"Python",market:"🌍",url:"https://github.com/domokane/FinancePy",desc:"固定收益/股权衍生品/外汇/信用产品定价库",api:"N",contact:"no"},
+  ]},
+  {n:"10",zh:"金融可视化",en:"Financial Visualization",projects:[
+    {name:"D3.js",stars:"112k",lang:"JavaScript",market:"🌍",url:"https://github.com/d3/d3",desc:"金融图表库基础底层，所有主流图表库的构建基石",api:"N",contact:"no"},
+    {name:"Apache Superset",stars:"70k",lang:"Python/TS",market:"🌍",url:"https://github.com/apache/superset",desc:"最流行开源 BI，构建金融数据看板",api:"N",contact:"P3"},
+    {name:"Grafana",stars:"74.7k",lang:"TypeScript/Go",market:"🌍",url:"https://github.com/grafana/grafana",desc:"可观测性平台，tick 数据监控，交易系统实时大盘",api:"N",contact:"P3"},
+    {name:"Apache ECharts",stars:"66.6k",lang:"TypeScript",market:"🌍",url:"https://github.com/apache/echarts",desc:"国内金融前端主流图表引擎，内置 K 线/蜡烛图",api:"N",contact:"P2"},
+    {name:"Metabase",stars:"40k",lang:"Clojure/JS",market:"🌍",url:"https://github.com/metabase/metabase",desc:"零代码 BI，中小券商/基金内部报表",api:"N",contact:"no"},
+    {name:"Redash",stars:"28k",lang:"Python/React",market:"🌍",url:"https://github.com/getredash/redash",desc:"SQL 驱动数据报表，量化团队自建内部工具",api:"N",contact:"no"},
+    {name:"TanStack Table",stars:"28.1k",lang:"TypeScript",market:"🌍",url:"https://github.com/tanstack/table",desc:"无头表格引擎，持仓表/订单簿首选",api:"N",contact:"no"},
+    {name:"Recharts",stars:"27.3k",lang:"JavaScript",market:"🌍",url:"https://github.com/recharts/recharts",desc:"React+D3 声明式图表，Dashboard 最常用",api:"N",contact:"P3"},
+    {name:"Plotly Dash",stars:"24.3k",lang:"Python",market:"🌍",url:"https://github.com/plotly/dash",desc:"Python 交互式 Dashboard，量化研究结果展示",api:"opt",contact:"P3"},
+    {name:"bokeh",stars:"19.7k",lang:"Python/JS",market:"🌍",url:"https://github.com/bokeh/bokeh",desc:"流式大数据渲染，backtesting.py 默认可视化后端",api:"opt",contact:"P3"},
+    {name:"pyecharts",stars:"15.8k",lang:"Python",market:"🌍",url:"https://github.com/pyecharts/pyecharts",desc:"ECharts Python 封装，Jupyter 内联渲染 K 线图",api:"opt",contact:"P2"},
+    {name:"lightweight-charts",stars:"15k",lang:"TypeScript",market:"🌍",url:"https://github.com/tradingview/lightweight-charts",desc:"TradingView 出品，45KB，Canvas 高帧率",api:"N",contact:"P2"},
+    {name:"ApexCharts",stars:"15.1k",lang:"JavaScript",market:"🌍",url:"https://github.com/apexcharts/apexcharts.js",desc:"SVG 图表，内置蜡烛图，React/Vue/Angular 封装",api:"N",contact:"P3"},
+    {name:"nivo",stars:"13.6k",lang:"JavaScript",market:"🌍",url:"https://github.com/plouc/nivo",desc:"React+D3，精美风格，金融分析报告前端",api:"N",contact:"no"},
+    {name:"Perspective (FINOS)",stars:"10.4k",lang:"TS/Rust/C++",market:"🌍",url:"https://github.com/finos/perspective",desc:"FINOS 出品，WebAssembly，浏览器百万行数据分析",api:"N",contact:"P3"},
+    {name:"AG Grid",stars:"10.4k",lang:"TypeScript",market:"🌍",url:"https://github.com/ag-grid/ag-grid",desc:"企业级数据表格，百万行虚拟滚动，交易终端必备",api:"N",contact:"P3"},
+    {name:"uPlot",stars:"10.2k",lang:"JavaScript",market:"🌍",url:"https://github.com/leeoniya/uplot",desc:"极小极快时序/OHLC，50KB，高频 tick 数据展示",api:"N",contact:"P3"},
+    {name:"Panel (HoloViz)",stars:"5.1k",lang:"Python",market:"🌍",url:"https://github.com/holoviz/panel",desc:"Python Dashboard 框架，打包任意可视化库为 Web App",api:"opt",contact:"P3"},
+    {name:"Vega-Lite",stars:"5.3k",lang:"TypeScript",market:"🌍",url:"https://github.com/vega/vega-lite",desc:"JSON 声明式可视化语法，研究报告图表快速构建",api:"N",contact:"no"},
+    {name:"Observable Plot",stars:"4.8k",lang:"JavaScript",market:"🌍",url:"https://github.com/observablehq/plot",desc:"D3 团队出品，探索性数据分析",api:"N",contact:"no"},
+    {name:"KLineChart",stars:"3.9k",lang:"TypeScript",market:"🌍",url:"https://github.com/klinecharts/KLineChart",desc:"轻量级 K 线，40KB gzip，零依赖，国产替代",api:"N",contact:"P2"},
+    {name:"react-stockcharts",stars:"4k",lang:"JavaScript",market:"🌍",url:"https://github.com/rrag/react-stockcharts",desc:"React+D3 K 线组件 ⚠️ 已归档，继任 react-financial-charts",api:"N",contact:"no"},
+    {name:"mplfinance",stars:"4k",lang:"Python",market:"🌍",url:"https://github.com/matplotlib/mplfinance",desc:"Matplotlib 官方金融可视化扩展",api:"N",contact:"P3"},
+    {name:"trading-vue-js",stars:"2.2k",lang:"Vue",market:"🌍",url:"https://github.com/tvjsx/trading-vue-js",desc:"Vue K 线图 ⚠️ 已归档",api:"N",contact:"no"},
+    {name:"finplot",stars:"2k",lang:"Python",market:"🌍",url:"https://github.com/highfellow/finplot",desc:"PyQtGraph，低延迟实时渲染，桌面交易分析工具",api:"N",contact:"P3"},
+  ]},
+  {n:"11",zh:"精选资源列表",en:"Curated Lists",projects:[
+    {name:"awesome-quant",stars:"20k",lang:"—",market:"🌍",url:"https://github.com/wilsonfreitas/awesome-quant",desc:"量化金融最全资源列表，Python/R/Julia/Matlab/C++",api:"N",contact:"no"},
+    {name:"financial-machine-learning",stars:"8.7k",lang:"—",market:"🌍",url:"https://github.com/firmai/financial-machine-learning",desc:"NYU 教授整理，金融 ML 工具与应用，每日更新",api:"N",contact:"no"},
+    {name:"awesome-systematic-trading (papers)",stars:"8.2k",lang:"—",market:"🌍",url:"https://github.com/paperswithbacktest/awesome-systematic-trading",desc:"97 个量化库 + 40+ 学术验证策略，含 Sharpe 排序",api:"N",contact:"no"},
+    {name:"awesome-systematic-trading (wz)",stars:"8.4k",lang:"—",market:"🌍",url:"https://github.com/wangzhe3224/awesome-systematic-trading",desc:"系统化交易精选，多资产类别，论文/书籍/工具",api:"N",contact:"no"},
+    {name:"awesome-ai-in-finance",stars:"3.5k",lang:"—",market:"🌍",url:"https://github.com/georgezouq/awesome-ai-in-finance",desc:"LLM/DL 在金融市场应用精选列表",api:"N",contact:"no"},
+    {name:"EliteQuant",stars:"3.8k",lang:"—",market:"🌍",url:"https://github.com/EliteQuant/EliteQuant",desc:"量化建模/交易/组合管理在线资源精选",api:"N",contact:"no"},
+    {name:"awesome-crypto-trading-bots",stars:"2.1k",lang:"—",market:"⛓️",url:"https://github.com/botcrypto-io/awesome-crypto-trading-bots",desc:"加密交易机器人精选，机器人/TA库/数据提供商",api:"N",contact:"no"},
+    {name:"best-of-crypto",stars:"2k",lang:"—",market:"⛓️",url:"https://github.com/LukasMasuch/best-of-crypto",desc:"3100+ 开源加密项目排行榜，每周更新",api:"N",contact:"no"},
+    {name:"best-of-algorithmic-trading",stars:"3k",lang:"—",market:"🌍",url:"https://github.com/merovinh/best-of-algorithmic-trading",desc:"110+ 算法交易项目排行，310k+ 综合 Stars",api:"N",contact:"no"},
+  ]},
+  {n:"12",zh:"AI/LLM 金融应用",en:"AI & LLM in Finance",projects:[
+    {name:"TradingAgents",stars:"87k",lang:"Python",market:"🌍",url:"https://github.com/TauricResearch/TradingAgents",desc:"多智能体 LLM 交易框架，模拟团队协作",api:"Y",contact:"P1"},
+    {name:"ai-hedge-fund",stars:"60.5k",lang:"Python",market:"🌍",url:"https://github.com/virattt/ai-hedge-fund",desc:"模拟巴菲特/芒格/格雷厄姆等大师 Agent 协作分析",api:"Y",contact:"P1"},
+    {name:"Kronos",stars:"27.8k",lang:"Python",market:"🌍",url:"https://github.com/shiyu-coder/Kronos",desc:"K线基础模型，120亿根K线预训练，需海量行情数据",api:"Y",contact:"P1"},
+    {name:"AI-Trader (HKUDS)",stars:"19.9k",lang:"Python",market:"🌍",url:"https://github.com/HKUDS/AI-Trader",desc:"港大全自动 Agent 交易平台，集体智能协同",api:"Y",contact:"P1"},
+    {name:"FinGPT",stars:"20k",lang:"Python",market:"🌍",url:"https://github.com/AI4Finance-Foundation/FinGPT",desc:"BloombergGPT 开源替代，情绪分析/预测/研报",api:"Y",contact:"P1"},
+    {name:"stable-baselines3",stars:"13.1k",lang:"Python",market:"🌍",url:"https://github.com/DLR-RM/stable-baselines3",desc:"DLR 出品，PPO/SAC/TD3 等 RL 算法，FinRL 标准后端",api:"N",contact:"no"},
+    {name:"Vibe-Trading (HKUDS)",stars:"13k",lang:"Python",market:"🌍",url:"https://github.com/HKUDS/Vibe-Trading",desc:"自然语言 AI 工作台，452 Alpha 因子，6 种回测引擎",api:"Y",contact:"P1"},
+    {name:"Qbot",stars:"17.2k",lang:"Python",market:"🇨🇳+",url:"https://github.com/UFund-Me/Qbot",desc:"AI 自动量化机器人，RL/DL，偏国内市场",api:"Y",contact:"P2"},
+    {name:"FinRobot",stars:"6.4k",lang:"Python",market:"🌍",url:"https://github.com/AI4Finance-Foundation/FinRobot",desc:"LLM+RL+量化分析 AI Agent 平台",api:"Y",contact:"P2"},
+    {name:"gym-anytrading",stars:"2.3k",lang:"Python",market:"🌍",url:"https://github.com/AminHP/gym-anytrading",desc:"OpenAI Gym 金融交易 RL 环境，ForexEnv/StocksEnv",api:"Y",contact:"no"},
+    {name:"FinBERT",stars:"2.1k",lang:"Python",market:"🌍",url:"https://github.com/ProsusAI/finBERT",desc:"金融文本预训练情绪分析模型，财经新闻/研报",api:"N",contact:"no"},
+  ]},
+  {n:"13",zh:"Alpha 因子研究",en:"Factor Research",projects:[
+    {name:"alphalens",stars:"4.3k",lang:"Python",market:"🌍",url:"https://github.com/quantopian/alphalens",desc:"Quantopian，IC/IC 衰减/分组收益因子分析工具",api:"Y",contact:"P2"},
+  ]},
+  {n:"14",zh:"高频交易",en:"High-Frequency Trading",projects:[
+    {name:"hftbacktest",stars:"4.2k",lang:"Python/Rust",market:"🌍",url:"https://github.com/nkaz001/hftbacktest",desc:"Level 2/3 Tick 精确回测，考虑队列位置与延迟",api:"Y",contact:"P2"},
+  ]},
+  {n:"15",zh:"券商 API 接口",en:"Broker APIs",projects:[
+    {name:"ib_insync",stars:"3.2k",lang:"Python",market:"🌍",url:"https://github.com/erdewit/ib_insync",desc:"IB TWS Python 封装 ⚠️ 已归档，fork ib_async 延续",api:"Y",contact:"P3"},
+    {name:"robin_stocks",stars:"2.1k",lang:"Python",market:"🌍",url:"https://github.com/jmfernandes/robin_stocks",desc:"Robinhood 非官方 Python 接口，股票/期权/加密",api:"Y",contact:"P3"},
+  ]},
+  {n:"16",zh:"个人财务管理",en:"Personal Finance",projects:[
+    {name:"maybe-finance/maybe",stars:"44k",lang:"Ruby",market:"🌍",url:"https://github.com/maybe-finance/maybe",desc:"耗资百万开发后开源，净值追踪/预算/投资",api:"opt",contact:"P3"},
+    {name:"frappe/erpnext",stars:"36.1k",lang:"Python",market:"🌍",url:"https://github.com/frappe/erpnext",desc:"最流行开源 ERP，完整会计模块",api:"N",contact:"no"},
+    {name:"actualbudget/actual",stars:"27.2k",lang:"TypeScript",market:"🌍",url:"https://github.com/actualbudget/actual",desc:"本地优先个人预算，YNAB 免费替代",api:"N",contact:"no"},
+    {name:"Firefly III",stars:"23.8k",lang:"PHP",market:"🌍",url:"https://github.com/firefly-iii/firefly-iii",desc:"最流行自托管个人财务管理，多账户多货币",api:"N",contact:"no"},
+    {name:"bigcapitalhq/bigcapital",stars:"3.5k",lang:"TypeScript",market:"🌍",url:"https://github.com/bigcapitalhq/bigcapital",desc:"开源财务会计系统，复式记账，QuickBooks 替代",api:"N",contact:"no"},
+  ]},
+  {n:"17",zh:"财富/投资组合追踪",en:"Wealth & Portfolio Tracking",projects:[
+    {name:"Ghostfolio",stars:"8.6k",lang:"TypeScript",market:"🌍",url:"https://github.com/ghostfolio/ghostfolio",desc:"开源财富管理，股票/ETF/加密，Angular 全栈，自托管",api:"Y",contact:"P2"},
+    {name:"Wealthfolio",stars:"7.7k",lang:"Rust/Tauri",market:"🌍",url:"https://github.com/wealthfolio/wealthfolio",desc:"本地优先桌面投资组合追踪，Monte Carlo/FIRE",api:"Y",contact:"P2"},
+    {name:"rotki",stars:"3.9k",lang:"Python/Vue",market:"🌍",url:"https://github.com/rotki/rotki",desc:"隐私优先，100+ CEX/DeFi，加密资产税务报告",api:"Y",contact:"no"},
+  ]},
+  {n:"18",zh:"机构量化工具",en:"Institutional Quant Tools",projects:[
+    {name:"gs-quant",stars:"10.9k",lang:"Python",market:"🌍",url:"https://github.com/goldmansachs/gs-quant",desc:"高盛开源量化工具包，衍生品定价/希腊字母/风险管理",api:"Y",contact:"no"},
+  ]},
+  {n:"19",zh:"金融数据库",en:"Financial Databases",projects:[
+    {name:"FinanceDatabase",stars:"6.7k",lang:"Python",market:"🌍",url:"https://github.com/JerBouma/FinanceDatabase",desc:"30万+ 证券代码，多维度筛选，选股池构建",api:"N",contact:"P2"},
+    {name:"FinanceToolkit",stars:"3.5k",lang:"Python",market:"🌍",url:"https://github.com/JerBouma/FinanceToolkit",desc:"200+ 财务比率，透明计算方法，多资产类别",api:"Y",contact:"P2"},
+    {name:"arctic (Man Group)",stars:"3.1k",lang:"Python",market:"🌍",url:"https://github.com/man-group/arctic",desc:"Man Group 高性能时序存储 ⚠️ 维护模式，迁移至 ArcticDB",api:"N",contact:"no"},
+    {name:"ArcticDB (Man Group)",stars:"2.2k",lang:"Python/C++",market:"🌍",url:"https://github.com/man-group/ArcticDB",desc:"Man Group+Bloomberg，C++ 引擎，DataFrame→S3/LMDB",api:"N",contact:"no"},
+  ]},
+  {n:"20",zh:"Java 生态",en:"Java Ecosystem",projects:[
+    {name:"ta4j",stars:"2.4k",lang:"Java",market:"🌍",url:"https://github.com/ta4j/ta4j",desc:"Java 最完整技术分析库，内置回测，多线程并行",api:"N",contact:"P3"},
+  ]},
+  {n:"21",zh:"个人财务与会计",en:"Personal Finance & Accounting",note:"纯文本记账（Plain Text Accounting）生态",projects:[
+    {name:"Ledger-CLI",stars:"5.9k",lang:"C++",market:"🌍",url:"https://github.com/ledger/ledger",desc:"纯文本复式记账鼻祖，2003年起，零数据库依赖",api:"N",contact:"no"},
+    {name:"hledger",stars:"4.5k",lang:"Haskell",market:"🌍",url:"https://github.com/simonmichael/hledger",desc:"Ledger 重写版，CLI/TUI/Web，PTA 最活跃实现",api:"N",contact:"no"},
+    {name:"beancount",stars:"3k",lang:"Python",market:"🌍",url:"https://github.com/beancount/beancount",desc:"严格数据完整性，V3 C++ 核心，配合 Fava Web UI",api:"N",contact:"no"},
+    {name:"paisa",stars:"3.1k",lang:"Go",market:"🌍",url:"https://github.com/ananthakumaran/paisa",desc:"基于 Ledger/hledger 的本地财务管理器",api:"N",contact:"no"},
+    {name:"fava",stars:"2.4k",lang:"Python",market:"🌍",url:"https://github.com/beancount/fava",desc:"Beancount 官方 Web UI，图表/流水/收支报告",api:"N",contact:"no"},
+  ]},
+  {n:"22",zh:"Go 语言生态",en:"Go Ecosystem",projects:[
+    {name:"ticker",stars:"6k",lang:"Go",market:"🌍",url:"https://github.com/achannarasappa/ticker",desc:"终端实时行情追踪，YAML 配置自选股",api:"Y",contact:"P2"},
+    {name:"GoCryptoTrader",stars:"2.2k",lang:"Go",market:"⛓️",url:"https://github.com/thrasher-corp/gocryptotrader",desc:"Go 加密交易框架，30+ 交易所",api:"Y",contact:"P3"},
+    {name:"mop",stars:"2.2k",lang:"Go",market:"🌍",url:"https://github.com/mop-tracker/mop",desc:"开发者终端股票行情追踪器",api:"Y",contact:"P3"},
+  ]},
+  {n:"23",zh:"AI 每日分析与自动化报告",en:"AI Daily Analysis",projects:[
+    {name:"Kronos",stars:"27.8k",lang:"Python",market:"🌍",url:"https://github.com/shiyu-coder/Kronos",desc:"K线基础模型，120亿根K线预训练，AAAI 2026",api:"Y",contact:"P1"},
+    {name:"AI-Trader (HKUDS)",stars:"19.9k",lang:"Python",market:"🌍",url:"https://github.com/HKUDS/AI-Trader",desc:"港大全自动 Agent 交易平台，集体智能协同",api:"Y",contact:"P1"},
+    {name:"Vibe-Trading (HKUDS)",stars:"13k",lang:"Python",market:"🌍",url:"https://github.com/HKUDS/Vibe-Trading",desc:"AI 量化工作台，452 Alpha 因子，6 种回测引擎",api:"Y",contact:"P1"},
+    {name:"daily_stock_analysis",stars:"49.6k",lang:"Python/TS",market:"🌍",url:"https://github.com/ZhuLinsen/daily_stock_analysis",desc:"LLM 每日分析，A/H/US/JP/KR，飞书/企微/TG 推送",api:"Y",contact:"P1"},
+    {name:"TradingAgents-CN",stars:"29k",lang:"Python",market:"🇨🇳+",url:"https://github.com/hsliuping/TradingAgents-CN",desc:"TradingAgents 中文版，FastAPI+Vue3，研报导出",api:"Y",contact:"P1"},
+    {name:"Stock-Prediction-Models",stars:"9.4k",lang:"Python",market:"🌍",url:"https://github.com/huseinzol05/Stock-Prediction-Models",desc:"18 种 DL 模型 + 23 种 RL Agent ⚠️ 已归档 2023",api:"Y",contact:"no"},
+  ]},
+  {n:"24",zh:"FIX 协议与撮合引擎",en:"FIX Protocol & Matching Engines",projects:[
+    {name:"QuickFIX",stars:"2.5k",lang:"C++",market:"🌍",url:"https://github.com/quickfix/quickfix",desc:"业界最广泛使用 FIX 协议引擎，FIX 4.0-5.0 全版本",api:"N",contact:"no"},
+    {name:"quickfixgo/quickfix",stars:"2k",lang:"Go",market:"🌍",url:"https://github.com/quickfixgo/quickfix",desc:"QuickFIX Go 实现，完整验收测试套件",api:"N",contact:"no"},
+    {name:"exchange-core",stars:"2.5k",lang:"Java",market:"🌍",url:"https://github.com/exchange-core/exchange-core",desc:"LMAX Disruptor+Eclipse Collections，500万 ops/秒",api:"N",contact:"no"},
+  ]},
+  {n:"25",zh:"加密货币数据 Feed",en:"Crypto Data Feeds",projects:[
+    {name:"python-binance",stars:"7k",lang:"Python",market:"⛓️",url:"https://github.com/sammchardy/python-binance",desc:"最流行非官方 Binance SDK，REST+WebSocket",api:"Y",contact:"P3"},
+    {name:"cryptofeed",stars:"2.7k",lang:"Python",market:"⛓️",url:"https://github.com/bmoscon/cryptofeed",desc:"统一 WebSocket 数据订阅，直写 Redis/Kafka/InfluxDB",api:"Y",contact:"P3"},
+    {name:"binance-connector-python",stars:"2.6k",lang:"Python",market:"⛓️",url:"https://github.com/binance/binance-connector-python",desc:"Binance 官方轻量 Python SDK",api:"Y",contact:"P3"},
+  ]},
+  {n:"26",zh:"DeFi 与链上开发",en:"DeFi & On-chain",projects:[
+    {name:"ethers.js",stars:"8.7k",lang:"JavaScript",market:"⛓️",url:"https://github.com/ethers-io/ethers.js",desc:"Ethereum JS 库+钱包，DeFi 前端事实标准",api:"Y",contact:"no"},
+    {name:"foundry",stars:"10k",lang:"Rust",market:"⛓️",url:"https://github.com/foundry-rs/foundry",desc:"Rust 超快 Ethereum 开发工具包，取代 Hardhat 趋势",api:"N",contact:"no"},
+    {name:"hardhat",stars:"7.6k",lang:"TypeScript",market:"⛓️",url:"https://github.com/NomicFoundation/hardhat",desc:"Ethereum 合约编译/部署/测试/调试一体化",api:"N",contact:"no"},
+    {name:"wagmi",stars:"6.7k",lang:"TypeScript",market:"⛓️",url:"https://github.com/wevm/wagmi",desc:"React Hooks for Ethereum，钱包连接/合约读写",api:"Y",contact:"no"},
+    {name:"uniswap/v3-core",stars:"5k",lang:"Solidity",market:"⛓️",url:"https://github.com/Uniswap/v3-core",desc:"Uniswap V3 集中流动性 AMM 合约",api:"N",contact:"no"},
+    {name:"viem",stars:"3.4k",lang:"TypeScript",market:"⛓️",url:"https://github.com/wevm/viem",desc:"轻量高性能 TS Ethereum 客户端，与 wagmi v2 集成",api:"Y",contact:"no"},
+    {name:"graph-node",stars:"3.1k",lang:"Rust",market:"⛓️",url:"https://github.com/graphprotocol/graph-node",desc:"The Graph 链上数据索引节点，GraphQL 查询",api:"Y",contact:"no"},
+    {name:"ethereum-etl",stars:"3.1k",lang:"Python",market:"⛓️",url:"https://github.com/blockchain-etl/ethereum-etl",desc:"区块链数据 ETL，输出 CSV/BigQuery",api:"Y",contact:"no"},
+    {name:"web3.py",stars:"5.5k",lang:"Python",market:"⛓️",url:"https://github.com/ethereum/web3.py",desc:"Ethereum 官方 Python 接口，合约/事件/ENS",api:"Y",contact:"no"},
+    {name:"zenbot",stars:"8.3k",lang:"Node.js",market:"⛓️",url:"https://github.com/DeviaVir/zenbot",desc:"加密 TA 交易机器人 ⚠️ 已归档 2020",api:"Y",contact:"no"},
+    {name:"brownie",stars:"2.5k",lang:"Python",market:"⛓️",url:"https://github.com/eth-brownie/brownie",desc:"以太坊合约开发框架 ⚠️ 已归档",api:"N",contact:"no"},
+  ]},
+  {n:"27",zh:"宏观经济数据",en:"Macro & Economic Data",projects:[
+    {name:"pandas-datareader",stars:"3.2k",lang:"Python",market:"🌍",url:"https://github.com/pydata/pandas-datareader",desc:"多数据源读取，FRED/World Bank/Fama-French/OECD",api:"Y",contact:"P3"},
+    {name:"QuantEcon.py",stars:"2.4k",lang:"Python",market:"🌍",url:"https://github.com/QuantEcon/QuantEcon.py",desc:"诺奖得主 Sargent 团队，计量经济学/动态规划",api:"N",contact:"no"},
+  ]},
+  {n:"28",zh:"券商 API 接口（补充）",en:"Broker APIs (More)",projects:[
+    {name:"alpaca-trade-api",stars:"1.8k",lang:"Python",market:"🌍",url:"https://github.com/alpacahq/alpaca-trade-api-python",desc:"Alpaca 免佣金美股接口，与回测框架集成良好",api:"Y",contact:"no"},
+  ]},
+  {n:"29",zh:"时序数据库",en:"Time Series Databases",projects:[
+    {name:"timescaledb",stars:"23k",lang:"C/SQL",market:"🌍",url:"https://github.com/timescale/timescaledb",desc:"PostgreSQL 时序扩展，金融 tick 数据存储首选",api:"N",contact:"P3"},
+    {name:"questdb",stars:"15k",lang:"Java",market:"🌍",url:"https://github.com/questdb/questdb",desc:"列式存储+SIMD，DB-Engines 增速最快时序数据库",api:"N",contact:"P3"},
+  ]},
+  {n:"30",zh:"Rust 生态",en:"Rust Ecosystem",projects:[
+    {name:"barter-rs",stars:"2.2k",lang:"Rust",market:"🌍",url:"https://github.com/barter-rs/barter-rs",desc:"事件驱动 Rust 量化框架，Tokio 异步，强类型安全",api:"Y",contact:"P2"},
+  ]},
+  {n:"31",zh:"ML 量化研究",en:"ML Quant Research",projects:[
+    {name:"mlfinlab",stars:"4.4k",lang:"Python",market:"🌍",url:"https://github.com/hudson-and-thames/mlfinlab",desc:"Hudson&Thames，《金融机器学习》Lopez de Prado 算法实现",api:"Y",contact:"P2"},
+  ]},
+  {n:"32",zh:"统计与计量经济学",en:"Statistics & Econometrics",projects:[
+    {name:"Bayesian Methods for Hackers",stars:"28k",lang:"Python",market:"🌍",url:"https://github.com/CamDavidsonPilon/Probabilistic-Programming-and-Bayesian-Methods-for-Hackers",desc:"贝叶斯方法开源教学书，计算视角，PyMC 配套",api:"N",contact:"no"},
+    {name:"statsmodels",stars:"11.4k",lang:"Python",market:"🌍",url:"https://github.com/statsmodels/statsmodels",desc:"Python 计量经济学标准库，ARIMA/VAR/GARCH/OLS",api:"N",contact:"no"},
+    {name:"PyMC",stars:"9.6k",lang:"Python",market:"🌍",url:"https://github.com/pymc-devs/pymc",desc:"贝叶斯统计建模，MCMC/变分推断，金融风险建模",api:"N",contact:"no"},
+  ]},
+  {n:"33",zh:"SEC 文件解析",en:"SEC Filing Tools",projects:[
+    {name:"edgartools",stars:"2.5k",lang:"Python",market:"🌍",url:"https://github.com/dgunning/edgartools",desc:"SEC EDGAR 全类型解析，10-K/10-Q/13F/Form 4",api:"Y",contact:"P3"},
+  ]},
+  {n:"34",zh:"高性能交易基础设施",en:"HFT Infrastructure",projects:[
+    {name:"Polars",stars:"35.6k",lang:"Rust/Python",market:"🌍",url:"https://github.com/pola-rs/polars",desc:"Rust DataFrame 引擎，多线程+SIMD，量化数据处理替代 pandas",api:"N",contact:"P3"},
+    {name:"LMAX Disruptor",stars:"18.2k",lang:"Java",market:"🌍",url:"https://github.com/LMAX-Exchange/disruptor",desc:"LMAX 无锁环形缓冲区，exchange-core 核心依赖",api:"N",contact:"no"},
+    {name:"Aeron",stars:"8.7k",lang:"Java/C++",market:"🌍",url:"https://github.com/aeron-io/aeron",desc:"Real Logic 超低延迟 UDP 传输，~18μs，HFT 传输层标准",api:"N",contact:"no"},
+    {name:"simple-binary-encoding",stars:"3.4k",lang:"Java/C++",market:"🌍",url:"https://github.com/real-logic/simple-binary-encoding",desc:"FIX SBE 标准参考实现，金融消息编解码行业标准",api:"N",contact:"no"},
+    {name:"Chronicle-Map",stars:"2.9k",lang:"Java",market:"🌍",url:"https://github.com/OpenHFT/Chronicle-Map",desc:"OpenHFT 堆外共享内存 K/V，跨进程访问",api:"N",contact:"no"},
+    {name:"Chronicle-Queue",stars:"3.5k",lang:"Java",market:"🌍",url:"https://github.com/OpenHFT/Chronicle-Queue",desc:"OpenHFT 微秒级持久化消息队列，百万 TPS",api:"N",contact:"no"},
+  ]},
+  {n:"35",zh:"支付与核心银行基础设施",en:"Payments & Core Banking",projects:[
+    {name:"hyperswitch",stars:"42k",lang:"Rust",market:"🌍",url:"https://github.com/juspay/hyperswitch",desc:"Rust 开源支付编排，200+ 处理器，PCI 合规，自托管",api:"Y",contact:"no"},
+    {name:"apache/fineract",stars:"2.1k",lang:"Java",market:"🌍",url:"https://github.com/apache/fineract",desc:"Apache 核心银行平台，400+ 金融机构使用，普惠金融",api:"N",contact:"no"},
+  ]},
+  {n:"36",zh:"金融情绪分析",en:"Financial Sentiment",projects:[
+    {name:"vaderSentiment",stars:"4.9k",lang:"Python",market:"🌍",url:"https://github.com/cjhutto/vaderSentiment",desc:"规则+词典情感分析，无需训练，财经新闻/社区情绪打分",api:"N",contact:"no"},
+    {name:"pytrends",stars:"3.6k",lang:"Python",market:"🌍",url:"https://github.com/GeneralMills/pytrends",desc:"Google Trends 接口，搜索热度为另类信号 ⚠️ 已归档 2025",api:"Y",contact:"no"},
+  ]},
+  {n:"37",zh:"企业财务与 ERP",en:"Enterprise Finance & ERP",projects:[
+    {name:"odoo/odoo",stars:"49.1k",lang:"Python/JS",market:"🌍",url:"https://github.com/odoo/odoo",desc:"最流行开源 ERP，完整会计模块，12M+ 用户",api:"N",contact:"no"},
+    {name:"akaunting/akaunting",stars:"9.9k",lang:"PHP",market:"🌍",url:"https://github.com/akaunting/akaunting",desc:"小企业在线会计，发票/账单/多币种，Xero 替代",api:"N",contact:"no"},
+    {name:"Dolibarr/dolibarr",stars:"7.2k",lang:"PHP",market:"🌍",url:"https://github.com/Dolibarr/dolibarr",desc:"开源 ERP+CRM，发票/订单/库存/会计，百万级用户",api:"N",contact:"no"},
+  ]},
+];
+
+// Build nav
+const nav=document.getElementById('navLinks');
+CATS.forEach(cat=>{
+  const a=document.createElement('a');
+  a.className='nav-item';
+  a.href=`#cat-${cat.n}`;
+  a.innerHTML=`<span class="nav-num">${cat.n}</span>${cat.zh}`;
+  nav.appendChild(a);
+});
+
+// Build sections
+const container=document.getElementById('sections');
+CATS.forEach((cat,i)=>{
+  const sec=document.createElement('section');
+  sec.className='section';
+  sec.id=`cat-${cat.n}`;
+  sec.style.animationDelay=`${i*0.025}s`;
+
+  sec.innerHTML=`
+    <div class="section-head">
+      <span class="section-num">${cat.n}</span>
+      <div><span class="section-title">${cat.zh}</span><span class="section-en"> / ${cat.en}</span></div>
+      <span class="section-count">${cat.projects.length} 项目</span>
+    </div>
+    ${cat.note?`<div class="section-note">${cat.note}</div>`:''}
+    <table class="proj-table">
+      <thead>
+        <tr>
+          <th>项目</th>
+          <th>Stars</th>
+          <th>语言</th>
+          <th>市场</th>
+          <th>三方接口</th>
+          <th>值得联系</th>
+          <th>简介</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${cat.projects.map(p=>{
+          const num=parseStars(p.stars);
+          const pct=Math.min(100,(num/MAX_STARS)*100);
+          const isArchived=p.desc&&p.desc.includes('⚠️');
+          return`<tr>
+            <td class="proj-name"><a href="${p.url}" target="_blank" rel="noopener">${p.name}${isArchived?'<span class="archived-tag">ARCHIVED</span>':''}</a></td>
+            <td class="stars-cell"><span class="stars-num">${p.stars}</span><span class="stars-bar"><span class="stars-fill" style="width:${pct}%"></span></span></td>
+            <td><span class="lang-pill ${langClass(p.lang)}">${p.lang}</span></td>
+            <td>${marketBadge(p.market)}</td>
+            <td>${apiBadge(p.api)}</td>
+            <td>${contactBadge(p.contact)}</td>
+            <td class="proj-desc">${p.desc}</td>
+          </tr>`;
+        }).join('')}
+      </tbody>
+    </table>`;
+  container.appendChild(sec);
+});
+
+// Active nav on scroll
+const allSections=document.querySelectorAll('.section');
+const navItems=document.querySelectorAll('.nav-item');
+const obs=new IntersectionObserver(entries=>{
+  entries.forEach(e=>{
+    if(e.isIntersecting){
+      navItems.forEach(n=>n.classList.remove('active'));
+      const id=e.target.id.replace('cat-','');
+      const active=document.querySelector(`.nav-item[href="#cat-${id}"]`);
+      if(active)active.classList.add('active');
+    }
+  });
+},{threshold:0.15});
+allSections.forEach(s=>obs.observe(s));
+</script>
+</body>
+</html>

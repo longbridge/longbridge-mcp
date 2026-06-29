@@ -1,0 +1,23 @@
+# Continue Hub source-control block — Longbridge MCP
+#
+# 提交流程（hub.continue.dev 用的是 per-publisher 仓库同步模型，不是单一 PR 池）：
+#
+#   1. 用 Longbridge GitHub org 在 hub.continue.dev 注册一个 organization（一次性，需 owner）
+#   2. fork 模板：https://github.com/continuedev/continue-hub-template
+#      建议改名 `continue-hub` 放到 `longbridge` org 下
+#   3. 把本文件放到 fork 的 `blocks/public/longbridge.yaml`
+#   4. 在 hub.continue.dev 的 Settings → Source Control 关联那个 fork 的 GitHub repo
+#   5. push 到 main → Continue Hub 自动同步，几分钟内出现在 hub.continue.dev/longbridge
+#
+# 详细步骤：https://docs.continue.dev/hub/source-control
+#
+# 状态：待 hub.continue.dev org 创建 + 关联 GitHub fork。
+
+name: longbridge
+version: 0.1.7
+schema: v1
+
+mcpServers:
+  - name: Longbridge MCP
+    type: streamable-http
+    url: https://mcp.longbridge.com

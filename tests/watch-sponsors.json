@@ -1,0 +1,11 @@
+{
+  "_comment": "Manually maintained list of projects Longbridge sponsors or has a partnership with. Add entries here in addition to ★★★ projects auto-detected from awesome-finance-opensource.md.",
+  "sponsors": [
+    {
+      "name": "OpenBB",
+      "github_url": "https://github.com/OpenBB-finance/OpenBB",
+      "repo": "OpenBB-finance/OpenBB",
+      "notes": "Official data provider integration"
+    }
+  ]
+}

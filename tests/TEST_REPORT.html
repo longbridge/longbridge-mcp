@@ -1,0 +1,757 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>Longbridge MCP Tool 验证报告 — 2026-04-20</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+
+:root {
+  --bg: #0f1116;
+  --panel: #161922;
+  --panel-2: #1d2130;
+  --border: #2a2f42;
+  --text: #e6e8ee;
+  --muted: #9aa4b2;
+  --accent: #7cb7ff;
+  --accent-2: #a78bfa;
+  --red: #ff6b6b;
+  --amber: #ffb454;
+  --green: #5ddb94;
+  --code-bg: #0a0c12;
+  --code-inline-bg: #1f2333;
+  --code-inline-fg: #ffb4de;
+}
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg: #f7f8fb;
+    --panel: #ffffff;
+    --panel-2: #eef1f7;
+    --border: #dde2ed;
+    --text: #1b1f2a;
+    --muted: #5c6578;
+    --accent: #1d6fd6;
+    --accent-2: #7c3aed;
+    --red: #c0392b;
+    --amber: #b47100;
+    --green: #118a4e;
+    --code-bg: #0f1116;
+    --code-inline-bg: #edf0fa;
+    --code-inline-fg: #b3266c;
+  }
+  pre { color: #e6e8ee; }
+}
+* { box-sizing: border-box; }
+html, body { background: var(--bg); color: var(--text); }
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+               "Hiragino Sans GB", "Microsoft YaHei", Helvetica, Arial, sans-serif;
+  line-height: 1.65;
+  font-size: 14.5px;
+}
+.wrap { max-width: 1280px; margin: 0 auto; padding: 32px 24px 96px; }
+h1 { font-size: 26px; margin: 0 0 12px; letter-spacing: 0.2px; }
+h2 { font-size: 20px; margin: 32px 0 12px; border-left: 4px solid var(--accent); padding-left: 10px; }
+h3 { font-size: 17px; margin: 20px 0 10px; color: var(--accent-2); }
+p, li { color: var(--text); }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+hr { border: none; border-top: 1px solid var(--border); margin: 28px 0; }
+code {
+  background: var(--code-inline-bg);
+  color: var(--code-inline-fg);
+  padding: 2px 6px;
+  border-radius: 5px;
+  font-family: "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  font-size: 12.5px;
+  word-break: break-word;
+}
+pre {
+  background: var(--code-bg);
+  padding: 14px 16px;
+  border-radius: 8px;
+  overflow: auto;
+  border: 1px solid var(--border);
+}
+pre code { background: transparent; color: inherit; padding: 0; font-size: 12.5px; }
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 14px 0 22px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  font-size: 13.5px;
+}
+thead th {
+  background: var(--panel-2);
+  text-align: left;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  font-weight: 600;
+  color: var(--muted);
+}
+tbody td {
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+tbody tr:last-child td { border-bottom: none; }
+tbody tr:hover { background: var(--panel-2); }
+tbody td:nth-child(1) { color: var(--muted); white-space: nowrap; }
+tbody td:nth-child(2) code { color: var(--accent); }
+tbody td:nth-child(4) { white-space: nowrap; text-align: center; }
+blockquote {
+  margin: 12px 0;
+  padding: 8px 14px;
+  border-left: 4px solid var(--accent-2);
+  background: var(--panel);
+  border-radius: 0 6px 6px 0;
+}
+ul, ol { padding-left: 24px; }
+li { margin: 4px 0; }
+.meta { color: var(--muted); font-size: 13px; margin: -4px 0 18px; }
+
+</style>
+</head>
+<body>
+<div class="wrap">
+<h1 id="longbridge-mcp-tool">Longbridge MCP Tool 验证报告</h1>
+<ul>
+<li>日期: 2026-04-20</li>
+<li>版本: longbridge-mcp <code>main @ 0408f57</code></li>
+<li>测试方式: Claude Code 直连 MCP，逐 tool 调用并收集入参/出参</li>
+<li>覆盖: <strong>108 / 108 tool = 100%</strong>（服务端实际暴露 108 个；README 的 "110" 计数不准）</li>
+<li>2026-04-21 补测末尾 2 个 (<code>ah_premium_intraday</code>、<code>profit_analysis_detail</code>) 完成全覆盖</li>
+<li>原始响应大文件备份: <code>tests/tool-results/20260420-163821/</code></li>
+</ul>
+<h2 id="_1">测试符号来源</h2>
+<ul>
+<li>watchlist 返回的真实 symbol（700.HK、AAPL.US、981.HK、NVDA.US 等）</li>
+<li>持仓：<code>981.HK</code> paper trading</li>
+<li>主力测试 symbol：700.HK、AAPL.US、939.HK、NIO.SG、HSI.HK</li>
+</ul>
+<h2 id="_2">核心发现</h2>
+<h3 id="p0-counter_id">✅ P0 — counter_id 残留（已处理完）</h3>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>字段 / 位置</th>
+<th>原文</th>
+<th>处理</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td><code>topic_detail.tickers</code> 数组</td>
+<td><code>["ST/US/TSLA","ST/US/AVGO",...]</code></td>
+<td>✅ 已在上游接口修复</td>
+</tr>
+<tr>
+<td>2</td>
+<td><code>topic/topic_detail/news.description</code> 正文 BBCode</td>
+<td><code>[st]ST/US/AAPL#Apple.US[/st]</code></td>
+<td>⏭ 不修复（保留富文本语义）</td>
+</tr>
+<tr>
+<td>3</td>
+<td><code>valuation_history.stocks</code> object key</td>
+<td><code>s_t/_u_s/_a_a_p_l</code></td>
+<td>✅ commit <code>96cee8d</code></td>
+</tr>
+<tr>
+<td>4</td>
+<td><code>financial_report.*.router</code> URL query</td>
+<td><code>lb://page/stock/pk?counter_id=ST/US/AAPL</code></td>
+<td>⏭ 不修复（App 深链由客户端约定）</td>
+</tr>
+<tr>
+<td>5</td>
+<td><code>executive.forward_url</code> / <code>invest_relation.forward_url</code> 路径段</td>
+<td><code>...stocks/ST.US.AAPL#...</code>（点号形式）</td>
+<td>⏭ 不修复（Wiki 路径由站点约定）</td>
+</tr>
+<tr>
+<td>6</td>
+<td><code>finance_calendar[].icon</code> 图标 URL 路径段</td>
+<td><code>.../ticker/ST/US/AGNCM.png</code></td>
+<td>⏭ 不修复（CDN 资源路径按 counter_id 组织，替换会 404）</td>
+</tr>
+</tbody>
+</table>
+<h3 id="p0-9-unix">🟡 P0 — 日期/时间格式共 <strong>9 种</strong>混用（unix 字符串已修复）</h3>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>格式示例</th>
+<th>典型 tool</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td><code>"2026-04-17T20:00:01Z"</code> RFC3339</td>
+<td>now / quote / trades / intraday / candlesticks / market_temperature / filings / news / order 相关 / topic_replies / topic_detail.created_at</td>
+</tr>
+<tr>
+<td>2</td>
+<td><code>"2026-05-15"</code> ISO date</td>
+<td>trading_days / option_chain_expiry_date_list / dividend_detail / profit_analysis.start_date + end_date + updated_date / shareholder.report_date</td>
+</tr>
+<tr>
+<td>~~3~~</td>
+<td>~~<code>"1776671654"</code> unix seconds <strong>字符串</strong>~~</td>
+<td>✅ 已统一转 RFC3339（详见下方"已修复：unix 字符串 → RFC3339"）。<strong>未覆盖</strong>：裸 <code>date</code> / <code>start</code> / <code>end</code> 字段（字段名过泛未纳入白名单）：<code>industry_valuation.history[].date</code> / <code>profit_analysis_detail.start</code> / <code>.end</code> / <code>finance_calendar.datetime</code></td>
+</tr>
+<tr>
+<td>4</td>
+<td><code>"2026-04-20 01:30:00.0 +00:00:00"</code> chrono Debug</td>
+<td>capital_flow / capital_distribution</td>
+</tr>
+<tr>
+<td>5</td>
+<td><code>"04:00:00.0"</code> 带多余 <code>.0</code></td>
+<td>trading_session.begin_time / end_time</td>
+</tr>
+<tr>
+<td>6</td>
+<td><code>"2026.02.09"</code> 点分日期</td>
+<td>dividend / broker_holding.updated_at / broker_holding_detail.updated_at / broker_holding_daily.list[].date / fund_holder.report_date</td>
+</tr>
+<tr>
+<td>7</td>
+<td><code>"2026 年 4 月 17 日"</code> 中文文本日期</td>
+<td>institution_rating.instratings.updated_at / valuation_history.overview.date</td>
+</tr>
+<tr>
+<td>8</td>
+<td><code>"20260601"</code> 紧凑 YYYYMMDD</td>
+<td>corp_action.date</td>
+</tr>
+<tr>
+<td>9</td>
+<td><code>"06.01"</code> 部分日期 MM.DD / <code>"2026.04.01 (美东)"</code> 带中文时区后缀</td>
+<td>corp_action.date_str / finance_calendar.date</td>
+</tr>
+<tr>
+<td>10</td>
+<td><code>"2021/04/30"</code> 斜杠分隔日期</td>
+<td>institution_rating_detail.evaluate.list[].date</td>
+</tr>
+</tbody>
+</table>
+<h4 id="unix-rfc3339c1-pipeline-per-tool-path">✅ 已修复：unix 字符串 → RFC3339（C.1 架构：pipeline + per-tool path）</h4>
+<p><strong>pipeline 层</strong>（<code>src/serialize/</code>）只处理稳定惯例：</p>
+<ul>
+<li><code>classify_field</code> 仅将 <code>*_at</code> 后缀认作 Timestamp（不维护其他字段名白名单，避免误分类）。</li>
+<li><code>TimestampSerializer::serialize_str</code> 支持字符串 unix 秒：只在 [946684800, 4102444800]（约 2000–2100）内转换，<code>"0"</code> / <code>"-62135596800"</code> 等哨兵保留原样。</li>
+<li><code>TimestampSerializer::serialize_seq → TimestampSeq</code> 让 <code>_at</code> 字段即使拿到数组也能逐元素转换。</li>
+</ul>
+<p><strong>per-tool 层</strong>（<code>src/tools/</code>）针对非 <code>_at</code> 字段显式声明 path：</p>
+<ul>
+<li><code>serialize::convert_unix_paths(value, paths)</code> — path 语法 <code>a.b.c</code> / <code>*</code>，原地就地替换。</li>
+<li><code>http_client::http_get_tool_unix(client, path, params, unix_paths)</code> — 流程为 <code>transform_json</code>（snake_case + <code>_at</code>）→ 解析 Value → <code>convert_unix_paths</code> → 序列化。</li>
+</ul>
+<p><strong>涉及的 tool 与 path 声明</strong>：</p>
+<table>
+<thead>
+<tr>
+<th>Tool</th>
+<th>path</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>market_status</code></td>
+<td><code>market_time.*.timestamp</code>, <code>market_time.*.delay_timestamp</code></td>
+</tr>
+<tr>
+<td><code>ah_premium</code> / <code>ah_premium_intraday</code></td>
+<td><code>klines.*.timestamp</code></td>
+</tr>
+<tr>
+<td><code>trade_stats</code></td>
+<td><code>statistics.timestamp</code>, <code>statistics.trade_date.*</code></td>
+</tr>
+<tr>
+<td><code>option_volume_daily</code></td>
+<td><code>stats.*.timestamp</code></td>
+</tr>
+<tr>
+<td><code>short_positions</code></td>
+<td><code>data.*.timestamp</code></td>
+</tr>
+<tr>
+<td><code>industry_valuation</code></td>
+<td><code>list.*.history.*.date</code></td>
+</tr>
+<tr>
+<td><code>valuation</code></td>
+<td><code>metrics.pe.list.*.timestamp</code></td>
+</tr>
+<tr>
+<td><code>valuation_history</code></td>
+<td><code>history.metrics.pe.list.*.timestamp</code></td>
+</tr>
+<tr>
+<td><code>institution_rating</code></td>
+<td><code>analyst.evaluate.{start,end}_date</code>, <code>analyst.target.{start,end}_date</code></td>
+</tr>
+<tr>
+<td><code>institution_rating_detail</code></td>
+<td><code>target.list.*.timestamp</code></td>
+</tr>
+<tr>
+<td><code>forecast_eps</code></td>
+<td><code>items.*.forecast_{start,end}_date</code></td>
+</tr>
+<tr>
+<td><code>dca_list</code></td>
+<td><code>plans.*.next_trd_date</code></td>
+</tr>
+<tr>
+<td><code>profit_analysis</code></td>
+<td><code>end_time</code>, <code>trade_update_time</code></td>
+</tr>
+<tr>
+<td><code>profit_analysis_detail</code></td>
+<td><code>start</code>, <code>end</code></td>
+</tr>
+</tbody>
+</table>
+<p>仅 pipeline <code>_at</code> 就够的（无 path 声明）：<code>sharelist_popular.*.{created,edited}_at</code>、<code>corp_action.items.*.live.started_at</code>、<code>dca_list.plans.*.{created,updated}_at</code>、<code>profit_analysis.sublist.*</code>。</p>
+<p><strong>空值反模式（保留语义，由客户端识别）</strong>
+- <code>"0"</code> 字符串表示"无"：<code>institution_rating.end_date</code> / <code>forecast_eps.forecast_end_date</code> — 范围外，保持原串，语义为 "no end"。
+- <code>""</code> 空串表示"无"：<code>dividend_detail.symbol</code>、<code>company.listing_date</code>、<code>institution_rating.instratings.evaluate.date</code>、<code>sharelist_detail.stocks[].ipo_date</code>
+- <code>"-62135596800"</code> Rust/Go zero-time（公元 1 年）：<code>sharelist_popular.edited_at</code> — 范围外，保持原串。
+- <code>"1970-01-01T00:00:00Z"</code> Unix epoch 字符串：<code>topic_detail.updated_at</code></p>
+<p>特别严重（剩余）：
+- <code>dividend</code> 用点分日期、<code>dividend_detail</code> 用 ISO date — <strong>同一领域两 tool 格式不一致</strong>；
+- <code>profit_analysis_detail</code> 同一对象内 <code>start_date:"2026-04-21"</code> (ISO) 和 <code>start:"1776754804"</code> (unix，未修) 共存，字段命名过泛未纳入白名单；
+- 十余处 <code>updated_at</code> 字段依然多种格式（中文文本、点分、ISO date），唯 unix 字符串形已统一转 RFC3339。</p>
+<p><strong>建议</strong>
+1. 全部 timestamp 用 RFC3339（带 <code>Z</code> 或 <code>+08:00</code>）；✅ <strong>unix 秒字符串已统一</strong>
+2. 纯日期用 ISO date <code>YYYY-MM-DD</code>；
+3. 中文文本日期、点分/斜杠/紧凑日期应上游统一；
+4. 时区用单独字段表示，不要在 date 后面拼接 <code>(美东)</code> 这种文本。
+5. 空值全部用 <code>null</code>，消除 <code>""</code> / <code>"1970-01-01T00:00:00Z"</code> 这些占位（<code>"0"</code> / <code>"-62135596800"</code> 已由序列化层原样保留，保留语义）。</p>
+<h3 id="p0">✅ P0 — 响应格式不统一（部分已修复）</h3>
+<table>
+<thead>
+<tr>
+<th>Tool</th>
+<th>修复前</th>
+<th>修复后</th>
+<th>状态</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>alert_disable</code></td>
+<td><code>"alert 491759 disabled"</code></td>
+<td><code>{"alert_id":"491759","enabled":false}</code></td>
+<td>✅ 已修复</td>
+</tr>
+<tr>
+<td><code>alert_enable</code></td>
+<td><code>"alert 491759 enabled"</code></td>
+<td><code>{"alert_id":"491759","enabled":true}</code></td>
+<td>✅ 已修复</td>
+</tr>
+<tr>
+<td><code>create_watchlist_group</code></td>
+<td>裸 int <code>4362235</code></td>
+<td><code>{"id":4362235}</code></td>
+<td>✅ 已修复</td>
+</tr>
+<tr>
+<td><code>update_watchlist_group</code></td>
+<td><code>"watchlist group updated"</code></td>
+<td><code>{"id":4362235,"updated":true}</code></td>
+<td>✅ 已修复</td>
+</tr>
+<tr>
+<td><code>delete_watchlist_group</code></td>
+<td><code>"watchlist group deleted"</code></td>
+<td><code>{"id":4362235,"deleted":true}</code></td>
+<td>✅ 已修复</td>
+</tr>
+</tbody>
+</table>
+<p><strong>剩余同类问题</strong>（未修）:
+- <code>cancel_order</code> → <code>"order cancelled"</code> 纯文本
+- <code>replace_order</code> → <code>"order replaced"</code> 纯文本
+- <code>valuation.pe.desc</code> / <code>valuation_history.overview.metrics.pe.desc</code> 内嵌 HTML <code>&lt;strong&gt;</code> 标签，API 与渲染耦合。</p>
+<h3 id="p1">🟡 P1 — 类型不一致</h3>
+<ul>
+<li>价格/金额字段几乎全部 string，而 volume/quantity 是 int；同一对象常混合（<code>price:"522.500"</code> vs <code>volume:100</code>）。</li>
+<li><code>market_status</code>：<code>sub_status:20900</code> (int) + <code>timestamp</code> 现在是 RFC3339 字符串（已后补修复）。</li>
+<li><code>exchange_rate.bid_rate:1.1465</code> 是浮点数字，但其他金额都是字符串。</li>
+<li><code>account_balance.risk_level:"3"</code>、<code>dividend.total:"25"</code>、<code>dca_stats.active_count:"0"</code> — 计数/级别字段应为 int。</li>
+<li><strong><code>warrant_issuers.issuer_id:1</code></strong> 是 int；<strong><code>alert_list.indicators[].id:"491196"</code></strong> 是 string — id 类型不统一。</li>
+</ul>
+<h3 id="p1_1">🟡 P1 — 冗余 / 描述问题</h3>
+<ul>
+<li><strong><code>calc_indexes</code></strong> 返回所有 40+ 字段（未请求的全 null），冗余且难读。建议只返回请求字段。</li>
+<li><strong><code>option_volume</code> 字段名过短</strong>：<code>c</code> / <code>p</code>（推测 call / put），无文档说明。</li>
+<li><strong><code>history_market_temperature.type:"Unknown"</code></strong> 无枚举定义。</li>
+<li><strong><code>dividend_detail</code> 条目 <code>symbol:""</code></strong> 空串 — 应填实际 symbol。</li>
+<li><strong><code>shareholder[].shareholder_id:"0"</code></strong> 所有条目都是 "0"，字段无用。</li>
+<li><strong><code>invest_relation[].company_id:"0"</code></strong> 同上；<strong><code>invest_relation.total:0</code> 但 list 有 30 条</strong> — 字段语义含糊。</li>
+</ul>
+<h3 id="p1-mcp">🟡 P1 — MCP 参数序列化兼容性</h3>
+<p>Claude Code 作为 MCP 客户端时，以下参数类型<strong>稳定地</strong>序列化失败（服务器收到字符串形态），建议服务端容错接受 JSON 字符串 + 二次解析：</p>
+<table>
+<thead>
+<tr>
+<th>参数类型</th>
+<th>影响 tool</th>
+<th>失败模式</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>items: string</code> 数组</td>
+<td><code>option_quote.symbols</code> / <code>warrant_quote.symbols</code> / <code>dca_check.symbols</code> / <code>sharelist_add/sort/remove.symbols</code></td>
+<td><code>expected a sequence</code></td>
+</tr>
+<tr>
+<td><code>i64</code> 整数</td>
+<td><code>update_watchlist_group.id</code> / <code>delete_watchlist_group.id</code></td>
+<td><code>expected i64</code></td>
+</tr>
+<tr>
+<td><code>usize</code> 整数（偶发）</td>
+<td><code>trades.count</code> / <code>option_volume_daily.count</code> / <code>sharelist_list.count</code></td>
+<td><code>expected usize/u32</code></td>
+</tr>
+</tbody>
+</table>
+<p>（同一会话内 <code>quote.symbols</code>、<code>calc_indexes.symbols</code> 有时成功、有时失败，完全不确定；<code>submit_order.submitted_quantity</code> 字符串却能正常工作。）</p>
+<h3 id="_3">✅ 已做对</h3>
+<ul>
+<li>交易类（order/execution/cash_flow/submit/cancel）的 <code>submitted_at</code>/<code>updated_at</code>/<code>trade_done_at</code> 均为标准 RFC3339。</li>
+<li>主要行情 tool 的 <code>timestamp</code> 已 RFC3339。</li>
+<li><code>watchlist</code> / <code>static_info</code> / <code>quote</code> / <code>stock_positions</code> / <code>news</code> / <code>filings</code> / <code>alert_list</code> / <code>security_list</code> / <code>option_chain_info_by_date</code> / <code>shareholder</code> / <code>fund_holder</code> / <code>constituent</code> / <code>sharelist_detail</code> 等均已 symbol 化。</li>
+<li>OAuth + <code>Mcp-Session-Id</code> 会话保持正常。</li>
+<li>订单、DCA、alert、sharelist、watchlist group、topic 生命周期 API 设计合理（create 返回 id、后续用 id 操作）。</li>
+<li>大部分 enum 字段（market / trade_session / status / side）取值规范。</li>
+</ul>
+<h2 id="tool">按 tool 分类汇总</h2>
+<h3 id="60">✅ 正常（格式 &amp; 转换均符合预期，60 个）</h3>
+<p><strong>Quote</strong>: <code>now</code>, <code>static_info</code>, <code>quote</code>, <code>depth</code>, <code>brokers</code>, <code>participants</code>, <code>trades</code>, <code>intraday</code>, <code>candlesticks</code>, <code>history_candlesticks_by_date</code>, <code>history_candlesticks_by_offset</code>, <code>trading_days</code>, <code>option_chain_expiry_date_list</code>, <code>option_chain_info_by_date</code>, <code>market_temperature</code>, <code>history_market_temperature</code>, <code>watchlist</code>, <code>filings</code>, <code>warrant_issuers</code>, <code>warrant_list</code>, <code>security_list</code></p>
+<p><strong>Trade</strong>: <code>margin_ratio</code>, <code>today_orders</code>, <code>order_detail</code>, <code>today_executions</code>, <code>history_orders</code>, <code>history_executions</code>, <code>cash_flow</code>, <code>estimate_max_purchase_quantity</code>, <code>submit_order</code>, <code>cancel_order</code></p>
+<p><strong>Portfolio</strong>: <code>stock_positions</code>, <code>fund_positions</code>, <code>account_balance</code>, <code>exchange_rate</code></p>
+<p><strong>Fundamental</strong>: <code>company</code>, <code>consensus</code>, <code>shareholder</code> (除 shareholder_id)</p>
+<p><strong>Market</strong>: <code>constituent</code>, <code>anomaly</code>, <code>broker_holding_daily</code> (除 date 格式)</p>
+<p><strong>Content</strong>: <code>news</code>, <code>topic_replies</code></p>
+<p><strong>Alert</strong>: <code>alert_list</code>, <code>alert_add</code>, <code>alert_delete</code></p>
+<p><strong>DCA</strong>: <code>dca_list</code>, <code>dca_stats</code>, <code>dca_create</code>, <code>dca_pause</code>, <code>dca_resume</code>, <code>dca_update</code>, <code>dca_history</code>, <code>dca_stop</code></p>
+<p><strong>Sharelist</strong>: <code>sharelist_list</code>, <code>sharelist_popular</code> (除 zero-time), <code>sharelist_detail</code> (除 ipo_date 空串), <code>sharelist_create</code>, <code>sharelist_delete</code></p>
+<p><strong>Option Volume</strong>: <code>option_volume_daily</code> (除 timestamp)</p>
+<p><strong>Short</strong>: <code>short_positions</code> (除 timestamp)</p>
+<p><strong>Statement</strong>: <code>statement_list</code></p>
+<h3 id="25">⚠️ 含问题（25 个）</h3>
+<table>
+<thead>
+<tr>
+<th>Tool</th>
+<th>问题</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>~~<code>market_status</code>~~</td>
+<td>~~timestamp/delay_timestamp 用 unix 字符串~~ ✅ 已转 RFC3339（后补修复）</td>
+</tr>
+<tr>
+<td><code>capital_flow</code></td>
+<td>timestamp 用 chrono Debug 格式</td>
+</tr>
+<tr>
+<td><code>capital_distribution</code></td>
+<td>同上</td>
+</tr>
+<tr>
+<td><code>trading_session</code></td>
+<td>begin_time/end_time 带多余 <code>.0</code> 尾缀</td>
+</tr>
+<tr>
+<td><code>calc_indexes</code></td>
+<td>返回所有字段（含未请求的全 null），冗余</td>
+</tr>
+<tr>
+<td><code>financial_report</code></td>
+<td>router URL 残留 <code>counter_id=ST/US/AAPL</code></td>
+</tr>
+<tr>
+<td><code>dividend</code></td>
+<td>日期点分格式 <code>"2026.02.09"</code></td>
+</tr>
+<tr>
+<td><code>dividend_detail</code></td>
+<td>symbol 字段空串</td>
+</tr>
+<tr>
+<td><code>institution_rating</code></td>
+<td>start_date 已转 RFC3339（后补修复）；<code>end_date:"0"</code> 哨兵保留；instratings.updated_at 中文文本；evaluate.date 空串</td>
+</tr>
+<tr>
+<td><code>institution_rating_detail</code></td>
+<td>evaluate.list[].date 斜杠分隔；target.list[].timestamp 已转 RFC3339（后补修复）；target.updated_at 中文文本</td>
+</tr>
+<tr>
+<td><code>forecast_eps</code></td>
+<td>forecast_start_date / forecast_end_date 已转 RFC3339（后补修复）；末条 <code>end_date:"0"</code> 哨兵保留（"no end" 语义）</td>
+</tr>
+<tr>
+<td><code>valuation</code></td>
+<td>list[].timestamp 已转 RFC3339（后补修复）；desc 含 HTML</td>
+</tr>
+<tr>
+<td><code>valuation_history</code></td>
+<td>stocks object key <code>"s_t/_u_s/_a_a_p_l"</code> counter_id 转换失败（<code>96cee8d</code> 已修）；list[].timestamp 已转 RFC3339（后补修复）；desc 含 HTML；overview.date 中文文本</td>
+</tr>
+<tr>
+<td><code>executive</code></td>
+<td>forward_url 带 <code>ST.US.AAPL</code> 路径（非标准 symbol）</td>
+</tr>
+<tr>
+<td><code>corp_action</code></td>
+<td>date=YYYYMMDD；date_str=MM.DD；live.started_at 已转 RFC3339（后补修复）；date_zone=中文</td>
+</tr>
+<tr>
+<td>~~<code>ah_premium</code> / <code>ah_premium_intraday</code>~~</td>
+<td>~~klines[].timestamp unix 字符串（intraday 为分钟级）~~ ✅ 已转 RFC3339（后补修复）</td>
+</tr>
+<tr>
+<td>~~<code>trade_stats</code>~~</td>
+<td>~~statistics.timestamp + trade_date[] unix 字符串~~ ✅ 已转 RFC3339（后补修复，数组元素逐个转换）</td>
+</tr>
+<tr>
+<td><code>broker_holding</code> / <code>broker_holding_detail</code></td>
+<td>updated_at 点分日期</td>
+</tr>
+<tr>
+<td><code>broker_holding_daily</code></td>
+<td>list[].date 点分日期</td>
+</tr>
+<tr>
+<td><code>profit_analysis</code> / <code>profit_analysis_detail</code></td>
+<td>updated_at/end_time/trade_update_time 已转 RFC3339（后补修复）；<code>profit_analysis_detail.start</code>/<code>.end</code> 裸字段仍为 unix（字段名过泛未纳入白名单，同对象 start_date/end_date 为 ISO date）</td>
+</tr>
+<tr>
+<td>~~<code>sharelist_popular</code>~~</td>
+<td>~~created_at/edited_at unix 字符串~~ ✅ 有效值已转 RFC3339（后补修复）；<code>edited_at:"-62135596800"</code> zero-time 哨兵保留</td>
+</tr>
+<tr>
+<td><code>finance_calendar</code></td>
+<td>date="2026.04.01 (美东)"；datetime unix 字符串（<code>datetime</code> 未在白名单内，保留）；icon URL 带 ST/US/xxx 形式</td>
+</tr>
+<tr>
+<td><code>fund_holder</code></td>
+<td>report_date 点分日期</td>
+</tr>
+<tr>
+<td><code>industry_valuation</code></td>
+<td>history[].date unix 字符串（裸 <code>date</code> 字段过泛，未纳入白名单；同名字段其他 tool 中为 <code>YYYY/MM/DD</code> / <code>YYYYMMDD</code>）</td>
+</tr>
+<tr>
+<td><code>invest_relation</code></td>
+<td>forward_url 带 <code>ST.HK.700</code> 形式；company_id 全 0；total 字段与 list 长度不一致</td>
+</tr>
+<tr>
+<td><code>topic</code> / <code>topic_detail</code></td>
+<td>description 内嵌 <code>[st]ST/US/...[/st]</code>；topic_detail.tickers 全 counter_id；topic_detail.updated_at="1970-01-01T00:00:00Z"；topic_replies.created_at 正常</td>
+</tr>
+<tr>
+<td><code>option_volume</code></td>
+<td>字段名 <code>c</code>/<code>p</code> 缺文档</td>
+</tr>
+<tr>
+<td>~~<code>alert_disable</code> / <code>alert_enable</code>~~</td>
+<td>~~返回纯文本而非 JSON~~ ✅ 已修复</td>
+</tr>
+<tr>
+<td>~~<code>create_watchlist_group</code>~~</td>
+<td>~~返回裸 int 而非对象~~ ✅ 已修复</td>
+</tr>
+<tr>
+<td>~~<code>update_watchlist_group</code> / <code>delete_watchlist_group</code>~~</td>
+<td>~~返回纯文本~~ ✅ 已修复</td>
+</tr>
+</tbody>
+</table>
+<h3 id="mcp-bug-9">✅ 被 MCP 序列化 bug 阻塞（9 个，已修复）</h3>
+<p>commit <code>02dbaaa fix(tools): tolerant deserializers for array/int/bool params</code>：</p>
+<table>
+<thead>
+<tr>
+<th>参数类型</th>
+<th>影响的 tool</th>
+<th>修复前错误</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Vec&lt;String&gt;</code></td>
+<td><code>option_quote</code>、<code>warrant_quote</code>、<code>dca_check</code>、<code>sharelist_add</code>、<code>sharelist_sort</code>、<code>sharelist_remove</code></td>
+<td><code>invalid type: string "[\"X\"]", expected a sequence</code></td>
+</tr>
+<tr>
+<td><code>i64</code></td>
+<td><code>update_watchlist_group</code>、<code>delete_watchlist_group</code></td>
+<td><code>invalid type: string "4360498", expected i64</code></td>
+</tr>
+<tr>
+<td><code>bool</code></td>
+<td><code>delete_watchlist_group.purge</code>（回归测试发现）</td>
+<td><code>invalid type: string "true", expected a boolean</code></td>
+</tr>
+</tbody>
+</table>
+<p><strong>修复方式</strong>: 在 <code>src/tools/tolerant.rs</code> 新增 <code>deserialize_with</code> helpers，遇到 JSON-encoded 字符串自动二次 parse。Schema 输出不变。已实际调用验证：
+- <code>warrant_quote(symbols=["64187.HK"])</code> → 返回完整 quote
+- <code>dca_check(symbols=["AAPL.US","700.HK"])</code> → 返回 support flag
+- <code>sharelist_add/sort/remove</code> 生命周期全通
+- <code>update_watchlist_group</code> / <code>delete_watchlist_group</code> → 正常 JSON 响应</p>
+<h3 id="tool_1">🫥 返回空数据的 tool</h3>
+<p><strong>A. 账号 / 数据状态自然为空</strong>（非 bug，仅记录）</p>
+<table>
+<thead>
+<tr>
+<th>Tool</th>
+<th>返回</th>
+<th>原因</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>fund_positions</code></td>
+<td><code>{"list":[]}</code></td>
+<td>该账号未持有基金</td>
+</tr>
+<tr>
+<td><code>brokers(700.HK)</code></td>
+<td><code>{"ask_brokers":[],"bid_brokers":[]}</code></td>
+<td>港股盘前/盘后或无经纪队列数据</td>
+</tr>
+<tr>
+<td><code>anomaly(market=HK)</code></td>
+<td><code>{"changes":[],"all_off":false}</code></td>
+<td>当时市场无异动</td>
+</tr>
+<tr>
+<td><code>operating(AAPL.US)</code></td>
+<td><code>{"list":[]}</code></td>
+<td>该 tool 后端似乎无数据（所有 symbol 都可能为空，建议再挑其他 symbol 验证）</td>
+</tr>
+<tr>
+<td><code>history_orders</code> / <code>history_executions</code> / <code>cash_flow</code>（2026-04-01→04-15）</td>
+<td><code>[]</code></td>
+<td>paper trading 账号该期间无订单 / 成交 / 现金流</td>
+</tr>
+<tr>
+<td><code>dca_list</code></td>
+<td><code>{"plans":[]}</code></td>
+<td>无 DCA 计划（创建后再查会有）</td>
+</tr>
+<tr>
+<td><code>dca_history(plan_id=X)</code></td>
+<td><code>{"records":[],"has_more":false}</code></td>
+<td>新建计划尚未到扣款日</td>
+</tr>
+<tr>
+<td><code>sharelist_list</code></td>
+<td><code>{"sharelists":[],"subscribed_sharelists":[],"tail_mark":""}</code></td>
+<td>该账号未创建/订阅股单（<code>sharelist_popular</code> 有公开股单数据）</td>
+</tr>
+<tr>
+<td><code>statement_list</code>（初测 2026-04-20）</td>
+<td><code>{"list":[]}</code></td>
+<td>paper trading 当日无对账单；<strong>次日 2026-04-21 再测已有数据</strong></td>
+</tr>
+</tbody>
+</table>
+<p><strong>B. 写入类成功后返回 <code>{}</code></strong>（约定，通过 HTTP 200 区分成功/失败）</p>
+<ul>
+<li><code>alert_delete</code>、<code>dca_pause/resume/stop</code>、<code>sharelist_add/sort/remove/delete</code> 均返回 <code>{}</code></li>
+<li>创建类则返回含 id 的对象：<code>sharelist_create → {sharelist_id}</code>、<code>dca_create → {plan_id}</code>、<code>submit_order → {order_id}</code>、<code>create_watchlist_group → {id}</code>（commit <code>e4a8522</code> 后）、<code>topic_create → {id}</code></li>
+</ul>
+<p><strong>C. ⚠️ 可疑空返回（建议跟进）</strong></p>
+<table>
+<thead>
+<tr>
+<th>Tool</th>
+<th>返回</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>alert_add(symbol=..., condition=..., price=...)</code></td>
+<td><code>{}</code></td>
+<td>与其他创建类不一致 — 按照约定应返回 <code>{alert_id: "..."}</code>，目前用户只能通过 <code>alert_list</code> 反查刚创建的 id。建议改为返回新建 alert id</td>
+</tr>
+</tbody>
+</table>
+<h3 id="_4">⏭️ 未测 / 重新验证后的定性</h3>
+<table>
+<thead>
+<tr>
+<th>Tool</th>
+<th>原因</th>
+<th>是否 bug</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>~~<code>statement_export</code>~~</td>
+<td>已移除 — 该命令是 CLI 独有（做了下载+分 section 渲染），不适合作为 MCP tool。替换为 <code>statement_download_url</code></td>
+<td>✅ 已解决</td>
+</tr>
+<tr>
+<td><code>statement_download_url</code></td>
+<td>新增。调用 SDK <code>AssetContext::statement_download_url</code>，返回 <code>{url}</code> 预签名 S3 地址（1 小时有效）</td>
+<td>✅ 实测通过</td>
+</tr>
+<tr>
+<td><code>replace_order</code></td>
+<td>2026-04-21 用 LO + ELO 两种订单类型重测，都返回 <code>602012: Order amendment is not supported for this order type</code>。paper trading 账号似乎完全不支持 amendment</td>
+<td>⚠️ 业务限制（paper trading）</td>
+</tr>
+</tbody>
+</table>
+<h3 id="_5">🧹 残留测试资源</h3>
+<ul>
+<li><strong>需你手动清理</strong>：</li>
+<li><code>watchlist_group id=4360498</code> 名为 <code>mcp_test_20260420</code>（delete 调用因序列化 bug 失败）</li>
+<li><code>topic id=40036798</code> + <code>reply 40643840</code>（你说会手动删）</li>
+<li><strong>已清理</strong>：测试 sharelist、alert、dca plan、submit_order（被拒）</li>
+</ul>
+<h2 id="_6">建议的修复优先级</h2>
+<ol>
+<li><strong>🔴 P0 日期/时间统一</strong>: 所有 timestamp → RFC3339；纯日期 → ISO date；时区字段独立；空值 → null。</li>
+<li>~~🔴 P0 counter_id URL/BBCode 残留~~ ✅ <strong>已处理完</strong>：</li>
+<li><code>topic_detail.tickers</code> ✅ 上游接口修复；</li>
+<li><code>valuation_history.stocks</code> key ✅ commit <code>96cee8d</code>；</li>
+<li><code>description</code> BBCode / <code>router</code> / <code>forward_url</code> / <code>icon</code> ⏭ 保留原形态（App 深链 / Wiki 路径 / CDN 资源路径均由客户端或站点约定）。</li>
+<li>~~🟡 P1 <code>alert_enable</code> / <code>alert_disable</code> 改返回 JSON~~ ✅ <strong>已修复</strong></li>
+<li>~~🟡 P1 <code>create_watchlist_group</code> 返回对象~~ ✅ <strong>已修复</strong>（同 commit 也修了 <code>update/delete_watchlist_group</code>）</li>
+<li><strong>🟡 P1 <code>calc_indexes</code> 只返请求字段</strong>；<code>option_volume.c/p</code> 改成 <code>call_volume/put_volume</code>。</li>
+<li>~~🟡 P1 服务端容错 MCP 字符串数组/整数~~ ✅ <strong>已处理完</strong>：commit <code>02dbaaa</code>。</li>
+</ol>
+<h2 id="_7">附录</h2>
+<ul>
+<li>详细逐 tool 入参/出参在会话记录中已打印。</li>
+<li>溢出大响应备份在 <code>tests/tool-results/20260420-163821/</code>：<code>financial_report</code>(144KB)、<code>participants</code>(65KB)、<code>security_list</code>(1017KB)、<code>warrant_list</code>(426KB)。</li>
+<li>配套自动化 Python 测试脚本：<code>tests/test_tools_full.py</code>。</li>
+</ul>
+</div>
+</body>
+</html>
