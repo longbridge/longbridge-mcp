@@ -110,7 +110,7 @@
 | 48 | mcphub.dev | https://mcphub.dev/submit | 提交表单标注 "coming soon"，后端 GitHub repo 404，暂无法提交 | 🔴 高 | 待上线 | - |
 | 49 | FindMCPServers | https://findmcpservers.com/submit | Web form，2026-05-21 已提交 | 🔴 高 | 已提交 | - |
 | 50 | MCP Server Hub (.net) | https://mcpserverhub.net/submit | Web form，2026-05-21 已提交 | 🔴 高 | 已提交 | - |
-| 51 | AIBase MCP | https://mcp.aibase.com/submit | Web form，需登录 AIBase 账号，2026-05-21 已提交 | 🔴 高 | 已提交 | - |
+| 51 | AIBase MCP | https://mcp.aibase.com/submit | Web form，需登录 AIBase 账号，2026-05-21 已提交；2026-06-29 已驳回 | 🔴 高 | 已驳回 | ❌ |
 | 52 | MCPHub.ai | https://github.com/lightconetech/mcp-gateway/issues/9 | 无公开提交入口，提交 GitHub issue #9（2026-05-21，联系 @shenli3514）；2026-06-09 跟进| 🟡 中 | 已提交 | - |
 | 53 | MCP-Awesome.com | https://mcp-awesome.com | GitHub 仓库不存在（404），可能是私有或纯前端站，暂无法提交 | 🟡 中 | 待查 | - |
 | 54 | MCP Server Hub (.com) | https://github.com/mcpserverhub/mcpservers/pull/1 | GitHub PR #1（2026-05-21）；2026-06-09 跟进| 🟡 中 | 已提交 | - |
