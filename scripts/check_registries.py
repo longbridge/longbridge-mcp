@@ -11,12 +11,26 @@ import re
 import sys
 import json
 import datetime
-import urllib.request
-import urllib.error
 from pathlib import Path
+
+try:
+    import requests as _requests
+    _USE_REQUESTS = True
+except ImportError:
+    import urllib.request
+    import urllib.error
+    _USE_REQUESTS = False
 
 KEYWORDS = ["longbridge", "长桥", "longbridge-mcp", "com.longbridge"]
 TIMEOUT = 15
+
+# Sites that block all automated requests (JS challenge / bot protection).
+# These are verified manually and skipped in automated checks.
+MANUAL_CHECK_DOMAINS = [
+    "mcpmarket.com",   # Vercel Security Checkpoint, JS challenge required
+    "cursor.directory", # JS-rendered, blocks bots
+    "lobehub.com",      # JS-rendered, blocks bots
+]
 HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -74,18 +88,33 @@ def check_url(url: str):
     """Return dict with reachable, has_keyword, status_code, error."""
     result = {"reachable": False, "has_keyword": False, "status_code": None, "error": None}
     try:
-        req = urllib.request.Request(url, headers=HEADERS)
-        with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
-            result["status_code"] = resp.status
-            result["reachable"] = resp.status < 400
-            body = resp.read(1024 * 512).decode("utf-8", errors="replace").lower()
-            result["has_keyword"] = any(kw.lower() in body for kw in KEYWORDS)
-    except urllib.error.HTTPError as e:
-        result["status_code"] = e.code
-        # 403/429 means the site is up but blocks bots — treat as reachable
-        result["reachable"] = e.code in (403, 429, 401)
-        result["error"] = f"HTTP {e.code}"
+        if _USE_REQUESTS:
+            resp = _requests.get(url, headers=HEADERS, timeout=TIMEOUT,
+                                 allow_redirects=True, stream=False)
+            result["status_code"] = resp.status_code
+            # 403/429 = bot-blocked but site is up; treat as reachable
+            result["reachable"] = resp.status_code < 400 or resp.status_code in (403, 429, 401)
+            if result["reachable"]:
+                body = resp.text[:1024 * 512].lower()
+                result["has_keyword"] = any(kw.lower() in body for kw in KEYWORDS)
+        else:
+            import urllib.request, urllib.error, ssl
+            try:
+                import certifi
+                ctx = ssl.create_default_context(cafile=certifi.where())
+            except ImportError:
+                ctx = ssl.create_default_context()
+            req = urllib.request.Request(url, headers=HEADERS)
+            with urllib.request.urlopen(req, timeout=TIMEOUT, context=ctx) as resp:
+                result["status_code"] = resp.status
+                result["reachable"] = resp.status < 400
+                body = resp.read(1024 * 512).decode("utf-8", errors="replace").lower()
+                result["has_keyword"] = any(kw.lower() in body for kw in KEYWORDS)
     except Exception as e:
+        code = getattr(e, "response", None)
+        if code is not None:
+            result["status_code"] = code.status_code
+            result["reachable"] = code.status_code in (403, 429, 401)
         result["error"] = str(e)[:120]
     return result
 
@@ -120,6 +149,16 @@ def main():
     ok = warn = fail = 0
     for i, entry in enumerate(all_entries, 1):
         print(f"  [{i}/{total}] {entry['url'][:80]}", end=" ", flush=True)
+        # Skip sites that require JS challenge — mark as manual
+        domain = entry["url"].split("/")[2] if "/" in entry["url"] else ""
+        if any(d in domain for d in MANUAL_CHECK_DOMAINS):
+            icon = "🔧"
+            entry.update({"reachable": None, "has_keyword": None,
+                          "status_code": None, "error": "manual check required"})
+            entry["icon"] = icon
+            print(icon, "(manual)")
+            rows.append(entry)
+            continue
         r = check_url(entry["url"])
         icon = status_icon(r)
         print(icon)
@@ -130,6 +169,8 @@ def main():
             ok += 1
         elif icon == "⚠️":
             warn += 1
+        elif icon == "🔧":
+            pass  # manual, not counted as failure
         else:
             fail += 1
 
