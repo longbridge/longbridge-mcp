@@ -115,7 +115,7 @@
 | 52 | **Skills Directory** | https://www.skillsdirectory.com | 网页表单 + 安全审核 | 73,665 skills，50+ 安全规则扫描 | ✅ 已上线（https://www.skillsdirectory.com/skills/longbridge-longbridge）|
 | 53 | **Skillstore** | https://skillstore.io | `/submit` + 安全审核 | Anthropic Verified 徽章 | ✅ 已上线（https://skillstore.io/zh-hans/skills/longbridge-longbridge，PR #1919 已合并）|
 | 54 | **Agentpedia** | https://agentpedia.codes | 社区提交 | 548+ skills，35 分类 | 🔄 已提交（https://github.com/devanshug2307/antigravity-discussions/discussions/110）|
-| 55 | **MCP.Directory** | https://mcp.directory/skills | `/submit-skill` | 4,400+ skills，1,653+ 发布者 | 🔄 已提交（待审核）|
+| 55 | **MCP.Directory** | https://mcp.directory/skills/longbridge | `/submit-skill` | 4,400+ skills，1,653+ 发布者 | ✅ 已上线（2026-06-29）|
 | 56 | **MCP Servers Skills** | https://mcpservers.org/agent-skills | `/submit` | Anthropic/MS/GitHub 官方收录 | ✅ 已上线（https://mcpservers.org/zh-CN/servers/longbridge/skills）|
 | 57 | **AI Agents Directory** | https://aiagentsdirectory.com/skills | `/submit-agent` | 3,001 skills | 🔄 已提交（待审核）|
 | 58 | **Claude Marketplace** | https://claude-marketplace.com | "Submit a skill" | 122 skills + 2,798 MCP | 🔄 已提交（待审核）|
