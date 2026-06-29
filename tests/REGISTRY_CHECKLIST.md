@@ -89,7 +89,7 @@
 
 | # | 网站名称 | 地址 | 提交方式 | 提交状态 | 是否提交成功 |
 |---|----------|------|----------|----------|--------------|
-| 35 | MCP.Directory | https://mcp.directory/skills/longbridge | 网页 form；支持一键安装 Cursor/Claude/VS Code/ChatGPT；自动从 repo 读取工具元数据；2026-06-29 skill 审核通过 | 已上线 | ✅ |
+| 35 | MCP.Directory | https://mcp.directory | 网页 form；支持一键安装 Cursor/Claude/VS Code/ChatGPT；自动从 repo 读取工具元数据 | 已提交（2026-05-29）| - |
 | 36 | MCPFind | https://mcpfind.org/servers/com-longbridge-mcp | 从官方 MCP Registry 自动同步，已收录（v0.3.1，待同步至 v0.3.2） | 已上线 | ✅ |
 | 37 | MCPfinder.dev | https://mcpfinder.dev | 从官方 MCP Registry + Glama + Smithery 自动同步，无需单独提交 | 已上线 | ✅ |
 | 38 | MCP Hunt | https://mcphunt.com | 域名停放待售，不可用；改提交至 MCPHunter (https://www.mcphunter.com)，HTTP 201 接受 | 已提交 | - |
