@@ -94,7 +94,7 @@
 | 37 | MCPfinder.dev | https://mcpfinder.dev | 从官方 MCP Registry + Glama + Smithery 自动同步，无需单独提交 | 已上线 | ✅ |
 | 38 | MCP Hunt | https://mcphunt.com | 域名停放待售，不可用；改提交至 MCPHunter (https://www.mcphunter.com)，HTTP 201 接受 | 已提交 | - |
 | 39 | MCPServerFinder | https://www.mcpserverfinder.com | 仅支持邮件提交 `info@mcpserverfinder.com`，邮件已起草待发送 | 已发送 | - |
-| 40 | mcp-server-directory.com | https://github.com/ankittyagi140/mcp-server-directory/issues/25 | 网站 TLS 故障，改走 GitHub issue #25（2026-05-20）；2026-06-09 跟进 | 已提交 | - |
+| 40 | mcp-server-directory.com | https://github.com/ankittyagi140/mcp-server-directory/issues/25 | 域名已停止运营，不可用 | 不适用 | - |
 | 41 | MCPServerDirectory.org | https://mcpserverdirectory.org | 域名已失效（NXDOMAIN），不可用 | 不适用 | - |
 | 42 | AI Agents List | https://aiagentslist.com/mcp-servers | 付费提交（$19/$29），不划算 | 不适用 | - |
 | 43 | MCP Index | https://mcpindex.net/en | 网站无法访问（2026-05-22 确认），可能已关闭 | 不适用 | - |
