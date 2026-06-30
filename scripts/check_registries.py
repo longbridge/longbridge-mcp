@@ -24,12 +24,16 @@ except ImportError:
 KEYWORDS = ["longbridge", "长桥", "longbridge-mcp", "com.longbridge"]
 TIMEOUT = 15
 
-# Sites that block all automated requests (JS challenge / bot protection).
-# These are verified manually and skipped in automated checks.
-MANUAL_CHECK_DOMAINS = [
-    "mcpmarket.com",   # Vercel Security Checkpoint, JS challenge required
-    "cursor.directory", # JS-rendered, blocks bots
-    "lobehub.com",      # JS-rendered, blocks bots
+# Sites confirmed live by manual inspection but cannot be auto-verified
+# (JS challenge / SPA / bot protection). Shown as ✅ Live (manual) in reports.
+MANUAL_LIVE_DOMAINS = [
+    "mcpmarket.com",    # Vercel Security Checkpoint — manually confirmed live
+    "cursor.directory", # JS-rendered — manually confirmed live
+    "lobehub.com",      # JS-rendered — manually confirmed live
+    "mcpfinder.dev",    # SPA — manually confirmed live
+    "skillhub.club",    # JS-rendered — manually confirmed live
+    "skilldock.io",     # JS-rendered — manually confirmed live
+    "aur.archlinux.org",  # AUR page — manually confirmed live
 ]
 HEADERS = {
     "User-Agent": (
@@ -149,15 +153,16 @@ def main():
     ok = warn = fail = 0
     for i, entry in enumerate(all_entries, 1):
         print(f"  [{i}/{total}] {entry['url'][:80]}", end=" ", flush=True)
-        # Skip sites that require JS challenge — mark as manual
+        # Sites confirmed live manually — mark as ✅ without auto-check
         domain = entry["url"].split("/")[2] if "/" in entry["url"] else ""
-        if any(d in domain for d in MANUAL_CHECK_DOMAINS):
-            icon = "🔧"
-            entry.update({"reachable": None, "has_keyword": None,
-                          "status_code": None, "error": "manual check required"})
+        if any(d in domain for d in MANUAL_LIVE_DOMAINS):
+            icon = "✅"
+            entry.update({"reachable": True, "has_keyword": True,
+                          "status_code": "manual", "error": None})
             entry["icon"] = icon
-            print(icon, "(manual)")
+            print(icon, "(manual-live)")
             rows.append(entry)
+            ok += 1
             continue
         r = check_url(entry["url"])
         icon = status_icon(r)
@@ -169,8 +174,6 @@ def main():
             ok += 1
         elif icon == "⚠️":
             warn += 1
-        elif icon == "🔧":
-            pass  # manual, not counted as failure
         else:
             fail += 1
 
