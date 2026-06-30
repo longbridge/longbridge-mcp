@@ -54,7 +54,19 @@ SOURCES = [
     ROOT / "tests" / "REGISTRY_CHECKLIST.md",
     ROOT / "tests" / "DISTRIBUTION_CHANNELS.md",
 ]
-REPORT_DIR = ROOT / "tests" / "reports"
+REPORT_DIR  = ROOT / "tests" / "reports"
+CHECK_URLS_FILE = ROOT / "tests" / "check-urls.json"
+
+
+def load_check_url_overrides():
+    """Load submission-URL → check-URL mapping from tests/check-urls.json."""
+    if CHECK_URLS_FILE.exists():
+        data = json.loads(CHECK_URLS_FILE.read_text(encoding="utf-8"))
+        return data.get("overrides", {})
+    return {}
+
+
+CHECK_URL_OVERRIDES = load_check_url_overrides()
 
 
 PENDING_MARKERS = ["已提交", "审核中", "已发送", "待审核", "🔄"]
@@ -112,8 +124,96 @@ def extract_urls(md_text: str):
     return results
 
 
+GH_PR_RE = re.compile(r"github\.com/([^/]+/[^/]+)/pull/(\d+)$")
+GH_ISSUE_RE = re.compile(r"github\.com/([^/]+/[^/]+)/issues/(\d+)$")
+GH_REPO_RE = re.compile(r"github\.com/([^/]+/[^/]+)$")
+
+
+def check_github_pr(repo: str, pr_num: str):
+    """Check if a GitHub PR is merged, then verify the repo README."""
+    api = f"https://api.github.com/repos/{repo}/pulls/{pr_num}"
+    try:
+        resp = _requests.get(api, headers={**HEADERS, "Accept": "application/vnd.github+json"},
+                             timeout=TIMEOUT)
+        if resp.status_code != 200:
+            return {"reachable": False, "has_keyword": False,
+                    "status_code": resp.status_code, "error": f"PR API {resp.status_code}"}
+        data = resp.json()
+        merged = data.get("merged", False)
+        state  = data.get("state", "open")
+        if not merged:
+            # PR exists but not merged yet → still pending
+            return {"reachable": True, "has_keyword": False,
+                    "status_code": resp.status_code,
+                    "error": f"PR {state} (not merged)"}
+        # Merged: check the target branch README for Longbridge keyword
+        base_branch = data.get("base", {}).get("ref", "main")
+        raw_url = f"https://raw.githubusercontent.com/{repo}/{base_branch}/README.md"
+        r2 = _requests.get(raw_url, headers=HEADERS, timeout=TIMEOUT)
+        has_kw = any(kw.lower() in r2.text.lower() for kw in KEYWORDS) if r2.status_code == 200 else False
+        return {"reachable": True, "has_keyword": has_kw,
+                "status_code": r2.status_code, "error": None}
+    except Exception as e:
+        return {"reachable": False, "has_keyword": False, "status_code": None, "error": str(e)[:80]}
+
+
+def check_github_issue(repo: str, issue_num: str):
+    """Check if a GitHub issue is closed (accepted), then verify repo README."""
+    api = f"https://api.github.com/repos/{repo}/issues/{issue_num}"
+    try:
+        resp = _requests.get(api, headers={**HEADERS, "Accept": "application/vnd.github+json"},
+                             timeout=TIMEOUT)
+        if resp.status_code != 200:
+            return {"reachable": False, "has_keyword": False,
+                    "status_code": resp.status_code, "error": f"Issue API {resp.status_code}"}
+        data = resp.json()
+        state = data.get("state", "open")
+        if state != "closed":
+            return {"reachable": True, "has_keyword": False,
+                    "status_code": resp.status_code,
+                    "error": f"Issue {state} (not closed)"}
+        # Closed: check README
+        raw_url = f"https://raw.githubusercontent.com/{repo}/main/README.md"
+        r2 = _requests.get(raw_url, headers=HEADERS, timeout=TIMEOUT)
+        has_kw = any(kw.lower() in r2.text.lower() for kw in KEYWORDS) if r2.status_code == 200 else False
+        return {"reachable": True, "has_keyword": has_kw,
+                "status_code": r2.status_code, "error": None}
+    except Exception as e:
+        return {"reachable": False, "has_keyword": False, "status_code": None, "error": str(e)[:80]}
+
+
+def check_github_repo(repo: str):
+    """Check a plain GitHub repo URL — look for Longbridge in README."""
+    raw_url = f"https://raw.githubusercontent.com/{repo}/main/README.md"
+    try:
+        resp = _requests.get(raw_url, headers=HEADERS, timeout=TIMEOUT)
+        if resp.status_code != 200:
+            raw_url = raw_url.replace("/main/", "/master/")
+            resp = _requests.get(raw_url, headers=HEADERS, timeout=TIMEOUT)
+        has_kw = any(kw.lower() in resp.text.lower() for kw in KEYWORDS) if resp.status_code == 200 else False
+        return {"reachable": resp.status_code < 400, "has_keyword": has_kw,
+                "status_code": resp.status_code, "error": None}
+    except Exception as e:
+        return {"reachable": False, "has_keyword": False, "status_code": None, "error": str(e)[:80]}
+
+
 def check_url(url: str):
     """Return dict with reachable, has_keyword, status_code, error."""
+    # GitHub PR: check merge status then target branch
+    m = GH_PR_RE.search(url)
+    if m and _USE_REQUESTS:
+        return check_github_pr(m.group(1), m.group(2))
+
+    # GitHub Issue: check closed status then README
+    m = GH_ISSUE_RE.search(url)
+    if m and _USE_REQUESTS:
+        return check_github_issue(m.group(1), m.group(2))
+
+    # Plain GitHub repo: check README directly
+    m = GH_REPO_RE.search(url)
+    if m and _USE_REQUESTS and "raw.githubusercontent.com" not in url:
+        return check_github_repo(m.group(1))
+
     result = {"reachable": False, "has_keyword": False, "status_code": None, "error": None}
     try:
         if _USE_REQUESTS:
@@ -190,14 +290,18 @@ def main():
             ok += 1
             continue
 
-        r = check_url(entry["url"])
+        # Use override check URL if defined (submission URL → target site URL)
+        check_target = CHECK_URL_OVERRIDES.get(entry["url"], entry["url"])
+        entry["check_url"] = check_target
+
+        r = check_url(check_target)
         icon = status_icon(r)
 
         # Pending entry just became live → flag as 🆕
         if entry.get("current_status") == "pending" and icon == "✅":
             icon = "🆕"
             newly_live += 1
-            print(icon, "(newly live!)")
+            print(icon, f"(newly live! checked: {check_target[:60]})")
         else:
             print(icon)
 
