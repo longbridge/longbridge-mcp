@@ -57,8 +57,16 @@ SOURCES = [
 REPORT_DIR = ROOT / "tests" / "reports"
 
 
+PENDING_MARKERS = ["已提交", "审核中", "已发送", "待审核", "🔄"]
+
 def extract_urls(md_text: str):
-    """Return list of (name, url, status) from markdown tables."""
+    """Return list of entries from markdown tables.
+
+    Each entry has:
+      name, url, current_status ("live" | "pending")
+    live    = row contains ✅
+    pending = row contains 已提交/审核中 markers (no ✅)
+    """
     results = []
     url_re = re.compile(r"https?://[^\s|)\]>\"']+")
     row_re = re.compile(r"^\|(.+)\|$")
@@ -75,9 +83,17 @@ def extract_urls(md_text: str):
         if all(re.match(r"^[-:]+$", c.replace(" ", "")) for c in cells if c):
             continue
 
-        # Look for ✅ in any cell
         row_text = " ".join(cells)
-        if "✅" not in row_text:
+
+        # Determine row status
+        is_live = "✅" in row_text
+        is_pending = not is_live and any(p in row_text for p in PENDING_MARKERS)
+
+        if not is_live and not is_pending:
+            continue
+
+        # Skip rows explicitly marked as not applicable / defunct
+        if any(s in row_text for s in ["不适用", "已驳回", "已废弃", "❌"]):
             continue
 
         # Extract first URL in the row
@@ -86,9 +102,12 @@ def extract_urls(md_text: str):
             continue
 
         url = url_match.group(0).rstrip(".,;)")
-        # Best-effort name: first non-empty cell, strip markdown bold
         name = re.sub(r"[*_~`\[\]]", "", cells[0]).strip() or url
-        results.append({"name": name, "url": url})
+        results.append({
+            "name": name,
+            "url": url,
+            "current_status": "live" if is_live else "pending",
+        })
 
     return results
 
@@ -155,9 +174,10 @@ def main():
     print(f"Total: {total} URLs")
 
     rows = []
-    ok = warn = fail = 0
+    ok = warn = fail = newly_live = 0
     for i, entry in enumerate(all_entries, 1):
         print(f"  [{i}/{total}] {entry['url'][:80]}", end=" ", flush=True)
+
         # Sites/URLs confirmed live manually — mark as ✅ without auto-check
         domain = entry["url"].split("/")[2] if "/" in entry["url"] else ""
         if entry["url"] in MANUAL_LIVE_URLS or any(d in domain for d in MANUAL_LIVE_DOMAINS):
@@ -169,13 +189,22 @@ def main():
             rows.append(entry)
             ok += 1
             continue
+
         r = check_url(entry["url"])
         icon = status_icon(r)
-        print(icon)
+
+        # Pending entry just became live → flag as 🆕
+        if entry.get("current_status") == "pending" and icon == "✅":
+            icon = "🆕"
+            newly_live += 1
+            print(icon, "(newly live!)")
+        else:
+            print(icon)
+
         entry.update(r)
         entry["icon"] = icon
         rows.append(entry)
-        if icon == "✅":
+        if icon in ("✅", "🆕"):
             ok += 1
         elif icon == "⚠️":
             warn += 1
@@ -193,7 +222,8 @@ def main():
         "",
         f"| Status | Count |",
         f"|--------|-------|",
-        f"| ✅ Reachable + has Longbridge info | {ok} |",
+        f"| ✅ Live (confirmed) | {ok} |",
+        f"| 🆕 Newly live — was pending/submitted | {newly_live} |",
         f"| ⚠️ Reachable but no Longbridge keyword | {warn} |",
         f"| ❌ Unreachable | {fail} |",
         f"| Total checked | {total} |",
@@ -225,7 +255,7 @@ def main():
     )
 
     print(f"\nReport: {md_path}")
-    print(f"Summary: ✅{ok}  ⚠️{warn}  ❌{fail}")
+    print(f"Summary: ✅{ok}  🆕{newly_live}(newly live)  ⚠️{warn}  ❌{fail}")
 
     # Exit non-zero if any failures so CI can flag it
     if fail > 0:
