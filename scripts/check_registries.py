@@ -35,6 +35,11 @@ MANUAL_LIVE_DOMAINS = [
     "skilldock.io",     # JS-rendered — manually confirmed live
     "aur.archlinux.org",  # AUR page — manually confirmed live
 ]
+
+# Specific URLs (not full domains) confirmed live manually.
+MANUAL_LIVE_URLS = [
+    "https://smithery.ai/skills/longbridge-official/longbridge",
+]
 HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -153,9 +158,9 @@ def main():
     ok = warn = fail = 0
     for i, entry in enumerate(all_entries, 1):
         print(f"  [{i}/{total}] {entry['url'][:80]}", end=" ", flush=True)
-        # Sites confirmed live manually — mark as ✅ without auto-check
+        # Sites/URLs confirmed live manually — mark as ✅ without auto-check
         domain = entry["url"].split("/")[2] if "/" in entry["url"] else ""
-        if any(d in domain for d in MANUAL_LIVE_DOMAINS):
+        if entry["url"] in MANUAL_LIVE_URLS or any(d in domain for d in MANUAL_LIVE_DOMAINS):
             icon = "✅"
             entry.update({"reachable": True, "has_keyword": True,
                           "status_code": "manual", "error": None})
