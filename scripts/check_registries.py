@@ -190,15 +190,21 @@ def check_github_issue(repo: str, issue_num: str):
 
 def check_github_repo(repo: str):
     """Check a plain GitHub repo URL — look for Longbridge in README."""
-    raw_url = f"https://raw.githubusercontent.com/{repo}/main/README.md"
+    candidates = [
+        f"https://raw.githubusercontent.com/{repo}/main/README.md",
+        f"https://raw.githubusercontent.com/{repo}/main/readme.md",
+        f"https://raw.githubusercontent.com/{repo}/master/README.md",
+        f"https://raw.githubusercontent.com/{repo}/master/readme.md",
+    ]
     try:
-        resp = _requests.get(raw_url, headers=HEADERS, timeout=TIMEOUT)
-        if resp.status_code != 200:
-            raw_url = raw_url.replace("/main/", "/master/")
+        for raw_url in candidates:
             resp = _requests.get(raw_url, headers=HEADERS, timeout=TIMEOUT)
-        has_kw = any(kw.lower() in resp.text.lower() for kw in KEYWORDS) if resp.status_code == 200 else False
-        return {"reachable": resp.status_code < 400, "has_keyword": has_kw,
-                "status_code": resp.status_code, "error": None}
+            if resp.status_code == 200:
+                has_kw = any(kw.lower() in resp.text.lower() for kw in KEYWORDS)
+                return {"reachable": True, "has_keyword": has_kw,
+                        "status_code": resp.status_code, "error": None}
+        return {"reachable": False, "has_keyword": False,
+                "status_code": 404, "error": "README not found"}
     except Exception as e:
         return {"reachable": False, "has_keyword": False, "status_code": None, "error": str(e)[:80]}
 
