@@ -39,6 +39,7 @@ MANUAL_LIVE_DOMAINS = [
 # Specific URLs (not full domains) confirmed live manually.
 MANUAL_LIVE_URLS = [
     "https://smithery.ai/skills/longbridge-official/longbridge",
+    "https://www.tensorblock.co/mcp/servers/github-longbridge-longbridge-mcp-7482daa0",
 ]
 HEADERS = {
     "User-Agent": (
@@ -114,7 +115,12 @@ def extract_urls(md_text: str):
             continue
 
         url = url_match.group(0).rstrip(".,;)")
-        name = re.sub(r"[*_~`\[\]]", "", cells[0]).strip() or url
+        # cells[0] is often a row number (#); try cells[1] first as the name
+        raw_name = cells[1] if len(cells) > 1 else cells[0]
+        # If cells[1] looks like a number or is empty, fall back to cells[0]
+        if not raw_name.strip() or raw_name.strip().isdigit():
+            raw_name = cells[0]
+        name = re.sub(r"[*_~`\[\]]", "", raw_name).strip() or url
         results.append({
             "name": name,
             "url": url,
@@ -295,14 +301,18 @@ def main():
         entry["check_url"] = check_target
 
         r = check_url(check_target)
-        icon = status_icon(r)
 
-        # Pending entry just became live → flag as 🆕
-        if entry.get("current_status") == "pending" and icon == "✅":
-            icon = "🆕"
-            newly_live += 1
-            print(icon, f"(newly live! checked: {check_target[:60]})")
+        if entry.get("current_status") == "pending":
+            if r["reachable"] and r["has_keyword"]:
+                icon = "🆕"   # was pending, now detected live
+                newly_live += 1
+                print(icon, f"(newly live! checked: {check_target[:60]})")
+            else:
+                icon = "🔄"   # still pending — don't show ⚠️ / ❌
+                error_hint = r.get("error") or ""
+                print(icon, f"({error_hint})" if error_hint else "(pending)")
         else:
+            icon = status_icon(r)
             print(icon)
 
         entry.update(r)
@@ -310,6 +320,8 @@ def main():
         rows.append(entry)
         if icon in ("✅", "🆕"):
             ok += 1
+        elif icon == "🔄":
+            pass  # pending — not a failure
         elif icon == "⚠️":
             warn += 1
         else:
