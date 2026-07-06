@@ -27,6 +27,17 @@ pub async fn financial_report(
     mctx: &crate::tools::McpContext,
     p: FinancialReportParam,
 ) -> Result<CallToolResult, McpError> {
+    if p.kind.is_none()
+        && crate::tools::support::us_market::is_us_fundamental(mctx, &p.symbol).await
+    {
+        let ctx = longbridge::fundamental::FundamentalContext::new(mctx.create_config());
+        let report = p.report_type.unwrap_or_else(|| "annual".to_string());
+        let result = ctx
+            .us_financial_overview(p.symbol, report)
+            .await
+            .map_err(crate::error::Error::longbridge)?;
+        return crate::tools::tool_json(&result);
+    }
     let client = mctx.create_http_client();
     let cid = symbol_to_counter_id(&p.symbol);
     let kind = p.kind.unwrap_or_else(|| "ALL".to_string());
@@ -370,6 +381,19 @@ pub async fn financial_statement(
     mctx: &crate::tools::McpContext,
     p: FinancialStatementParam,
 ) -> Result<CallToolResult, McpError> {
+    if crate::tools::support::us_market::is_us_fundamental(mctx, &p.symbol).await {
+        let ctx = longbridge::fundamental::FundamentalContext::new(mctx.create_config());
+        let kind = p.kind.unwrap_or_else(|| "ALL".to_string()).to_uppercase();
+        let report = p
+            .report
+            .unwrap_or_else(|| "annual".to_string())
+            .to_lowercase();
+        let result = ctx
+            .us_financial_statement_v3(p.symbol, kind, report)
+            .await
+            .map_err(crate::error::Error::longbridge)?;
+        return crate::tools::tool_json(&result);
+    }
     let client = mctx.create_http_client();
     let cid = symbol_to_counter_id(&p.symbol);
     let kind = p.kind.unwrap_or_else(|| "ALL".to_string()).to_uppercase();
