@@ -393,6 +393,49 @@ fn is_restricted_tool_allowed(version: RestrictedVersion, name: &str) -> bool {
     }
 }
 
+/// Tools whose underlying SDK method is US-DC-only (calls
+/// `.dc_restrict(DcRegion::Us)` internally, confirmed against the SDK
+/// source) — hidden from accounts in the AP region. This is a completely
+/// separate mechanism from the `/v1`/`/v2` restricted-endpoint allowlists
+/// above; it applies only on the main (`/mcp`) and authenticated `/agent`
+/// endpoints and never touches `TOOL_ENDPOINTS`/`is_v2_public_tool`.
+const US_ONLY_TOOLS: &[&str] = &[
+    "profit_analysis_realized",
+    "financial_report_key_metrics",
+    "etf_docs",
+];
+
+/// Tools whose underlying SDK method is AP-DC-only (calls
+/// `.dc_restrict(DcRegion::Ap)` / checks `DcRegion::Ap` internally, confirmed
+/// against the SDK source: broker queue/holding data and the entire
+/// recurring-investment (DCA) API) — hidden from accounts in the US region.
+const AP_ONLY_TOOLS: &[&str] = &[
+    "brokers",
+    "broker_holding",
+    "broker_holding_detail",
+    "broker_holding_daily",
+    "operating",
+    "dca_list",
+    "dca_create",
+    "dca_update",
+    "dca_pause",
+    "dca_resume",
+    "dca_stop",
+    "dca_history",
+    "dca_stats",
+    "dca_check",
+];
+
+/// True when `name` is restricted to the DC region opposite `region` — i.e.
+/// it should be hidden from `tools/list` and rejected by `call_tool` for an
+/// account in `region`.
+fn is_hidden_for_dc_region(name: &str, region: longbridge::DcRegion) -> bool {
+    match region {
+        longbridge::DcRegion::Us => AP_ONLY_TOOLS.contains(&name),
+        longbridge::DcRegion::Ap => US_ONLY_TOOLS.contains(&name),
+    }
+}
+
 fn extract_context(ctx: &RequestContext<RoleServer>) -> Result<McpContext, McpError> {
     let parts = ctx
         .extensions
@@ -4229,6 +4272,24 @@ impl ServerHandler for Longbridge {
                 None,
             ));
         }
+        // DC-region execution gate, independent of the /v1/v2 restricted-endpoint
+        // check above: on the main (`/mcp`) and authenticated `/agent` endpoints,
+        // a tool hidden from `tools/list` for this account's region must also be
+        // un-callable by name, or the listing filter is merely cosmetic.
+        if restricted_version(&context).is_none()
+            && let Ok(mctx) = extract_context(&context)
+        {
+            let region = mctx.dc_region().await;
+            if is_hidden_for_dc_region(request.name.as_ref(), region) {
+                return Err(McpError::invalid_request(
+                    format!(
+                        "Tool `{}` is not available for accounts in the {region} data center.",
+                        request.name
+                    ),
+                    None,
+                ));
+            }
+        }
         let tcc = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
         cached_router().call(tcc).await
     }
@@ -4247,7 +4308,12 @@ impl ServerHandler for Longbridge {
                 RestrictedVersion::V2 => tools_v2_endpoint().to_vec(),
             }
         } else {
-            tools_main_endpoint().to_vec()
+            let mut tools = tools_main_endpoint().to_vec();
+            if let Ok(mctx) = extract_context(&context) {
+                let region = mctx.dc_region().await;
+                tools.retain(|t| !is_hidden_for_dc_region(t.name.as_ref(), region));
+            }
+            tools
         };
         Ok(rmcp::model::ListToolsResult {
             tools,
@@ -4537,6 +4603,55 @@ mod tests {
                 "/v2 allowlist must not contain hard-excluded tool `{tool}`"
             );
         }
+    }
+
+    #[test]
+    fn dc_region_tool_lists_reference_live_tools() {
+        use std::collections::HashSet;
+
+        let live: HashSet<String> = crate::tools::list_tools()
+            .iter()
+            .map(|t| t.name.to_string())
+            .collect();
+
+        for name in super::US_ONLY_TOOLS.iter().chain(super::AP_ONLY_TOOLS) {
+            assert!(
+                live.contains(*name),
+                "US_ONLY_TOOLS/AP_ONLY_TOOLS references unknown tool `{name}` (renamed or removed?)"
+            );
+        }
+    }
+
+    #[test]
+    fn dc_region_hiding_is_symmetric_and_disjoint() {
+        use longbridge::DcRegion;
+
+        for name in super::US_ONLY_TOOLS {
+            assert!(
+                super::is_hidden_for_dc_region(name, DcRegion::Ap),
+                "US-only tool `{name}` must be hidden for AP accounts"
+            );
+            assert!(
+                !super::is_hidden_for_dc_region(name, DcRegion::Us),
+                "US-only tool `{name}` must not be hidden for US accounts"
+            );
+        }
+        for name in super::AP_ONLY_TOOLS {
+            assert!(
+                super::is_hidden_for_dc_region(name, DcRegion::Us),
+                "AP-only tool `{name}` must be hidden for US accounts"
+            );
+            assert!(
+                !super::is_hidden_for_dc_region(name, DcRegion::Ap),
+                "AP-only tool `{name}` must not be hidden for AP accounts"
+            );
+        }
+        assert!(
+            super::US_ONLY_TOOLS
+                .iter()
+                .all(|n| !super::AP_ONLY_TOOLS.contains(n)),
+            "US_ONLY_TOOLS and AP_ONLY_TOOLS must be disjoint"
+        );
     }
 }
 
