@@ -250,6 +250,13 @@ impl McpContext {
     pub fn account_channel(&self) -> String {
         decode_jwt_account_channel(&self.token).unwrap_or_else(|| "lb".to_string())
     }
+
+    /// The DC region (`Us` or `Ap`) this session's credentials resolve to,
+    /// derived from the bearer token — no network round-trip for token-based
+    /// sessions (see `longbridge_httpcli::DcRegion::from_credential`).
+    pub async fn dc_region(&self) -> longbridge::DcRegion {
+        self.create_http_client().dc_region().await
+    }
 }
 
 /// Decodes the JWT payload (no signature verification) and extracts `account_channel`

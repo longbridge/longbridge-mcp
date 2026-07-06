@@ -5,7 +5,8 @@ edition = "2024"
 
 [dependencies]
 # TODO: switch back to crates.io after the next openapi release
-longbridge = { git = "https://github.com/longbridge/openapi.git", branch = "main" }
+# TODO: switch back to `branch = "main"` once longbridge/openapi#555 (US market APIs) merges
+longbridge = { git = "https://github.com/longbridge/openapi.git", branch = "feat/us-market-apis" }
 rust_decimal = "1"
 rmcp = { version = "1.4", features = [
     "server",
