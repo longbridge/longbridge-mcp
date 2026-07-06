@@ -585,6 +585,7 @@ const TOOL_ENDPOINTS: &[(&str, u8)] = &[
     ("exchange_rate", V2),
     ("executive", V2),
     ("financial_report", V2),
+    ("financial_report_key_metrics", V2),
     ("financial_report_snapshot", V2),
     ("fund_holder", V2),
     ("fund_positions", V2),
@@ -3347,6 +3348,29 @@ impl Longbridge {
         let mctx = extract_context(&ctx)?;
         measured_tool_call("financial_statement", || {
             fundamental::financial_statement(&mctx, p)
+        })
+        .await
+    }
+
+    /// Get key financial metrics for a US symbol.
+    #[tool(
+        title = "Financial Report Key Metrics (US)",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = true
+        ),
+        description = "Get key financial metrics (fin-keyfactor) for a US symbol. US accounts only; errors with DcRegionRestricted for HK/CN/SG accounts."
+    )]
+    async fn financial_report_key_metrics(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<fundamental::SymbolReportParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("financial_report_key_metrics", || {
+            fundamental::financial_report_key_metrics(&mctx, p)
         })
         .await
     }

@@ -489,6 +489,14 @@
         "report_type": "报告期：`af`（年度）、`saf`（半年度）、`q1` / `q2` / `q3`（季度）、`qf`（季度全量）"
       }
     },
+    "financial_report_key_metrics": {
+      "title": "关键财务指标（美股）",
+      "description": "获取美股标的的关键财务指标（fin-keyfactor）。仅限美股账户；港股/沪深/新加坡账户调用会返回 DcRegionRestricted 错误",
+      "properties": {
+        "symbol": "证券代码，例如 `\"AAPL.US\"`",
+        "report": "报告期：`\"annual\"`（默认）或 `\"quarterly\"`"
+      }
+    },
     "forecast_eps": {
       "title": "EPS 预测",
       "description": "获取 EPS 预测及分析师预期历史，返回 items[]{forecast_start_date, forecast_end_date, eps_estimate, eps_actual, surprise_pct, analyst_count}",

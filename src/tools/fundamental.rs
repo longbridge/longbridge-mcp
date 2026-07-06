@@ -410,6 +410,29 @@ pub async fn financial_statement(
     .await
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct SymbolReportParam {
+    /// Security symbol, e.g. "AAPL.US"
+    pub symbol: String,
+    /// Report period: "annual" (default) or "quarterly"
+    pub report: Option<String>,
+}
+
+/// Get key financial metrics for a US symbol. US accounts only — no HK
+/// equivalent exists for this interface.
+pub async fn financial_report_key_metrics(
+    mctx: &crate::tools::McpContext,
+    p: SymbolReportParam,
+) -> Result<CallToolResult, McpError> {
+    let ctx = longbridge::fundamental::FundamentalContext::new(mctx.create_config());
+    let report = p.report.unwrap_or_else(|| "annual".to_string());
+    let result = ctx
+        .us_key_financial_metrics(p.symbol, report)
+        .await
+        .map_err(crate::error::Error::longbridge)?;
+    crate::tools::tool_json(&result)
+}
+
 /// Get latest financial report summary for a security.
 pub async fn financial_report_latest(
     mctx: &crate::tools::McpContext,
