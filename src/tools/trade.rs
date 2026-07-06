@@ -151,7 +151,17 @@ pub async fn account_balance(
 pub async fn stock_positions(mctx: &crate::tools::McpContext) -> Result<CallToolResult, McpError> {
     let (ctx, _) = TradeContext::new(mctx.create_config());
     let result = ctx.stock_positions(None).await.map_err(Error::longbridge)?;
-    tool_json(&result)
+    let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;
+    if mctx.dc_region().await == longbridge::DcRegion::Us
+        && let Ok(us_overview) = ctx.us_asset_overview().await
+        && let (Some(obj), Ok(us_value)) = (
+            value.as_object_mut(),
+            serde_json::to_value(&us_overview).map_err(Error::Serialize),
+        )
+    {
+        obj.insert("us_asset_overview".to_string(), us_value);
+    }
+    tool_json(&value)
 }
 
 pub async fn fund_positions(mctx: &crate::tools::McpContext) -> Result<CallToolResult, McpError> {
