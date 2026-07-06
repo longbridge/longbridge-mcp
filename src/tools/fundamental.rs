@@ -112,18 +112,24 @@ pub async fn dividend(
 ) -> Result<CallToolResult, McpError> {
     if crate::tools::support::us_market::is_us_fundamental(mctx, &p.symbol).await {
         let ctx = longbridge::fundamental::FundamentalContext::new(mctx.create_config());
+        const PCT_KEYS: &[&str] = &["dividend_yield", "dividend_yield_ttm"];
         if crate::counter::is_etf(&p.symbol) {
             let result = ctx
                 .us_etf_dividend_info(p.symbol)
                 .await
                 .map_err(crate::error::Error::longbridge)?;
-            return crate::tools::tool_json(&result);
+            let mut value =
+                serde_json::to_value(&result).map_err(crate::error::Error::Serialize)?;
+            crate::tools::support::us_normalize::normalize_pct_fields(&mut value, PCT_KEYS);
+            return crate::tools::tool_json(&value);
         }
         let result = ctx
             .us_company_dividends(p.symbol)
             .await
             .map_err(crate::error::Error::longbridge)?;
-        return crate::tools::tool_json(&result);
+        let mut value = serde_json::to_value(&result).map_err(crate::error::Error::Serialize)?;
+        crate::tools::support::us_normalize::normalize_pct_fields(&mut value, PCT_KEYS);
+        return crate::tools::tool_json(&value);
     }
     let client = mctx.create_http_client();
     let cid = symbol_to_counter_id(&p.symbol);

@@ -109,42 +109,103 @@ fn time_in_force_label(code: i64) -> &'static str {
     }
 }
 
+/// Internal/backend-routing fields with no meaning to a tool caller, plus the
+/// account holder's real name — `order`/`order_histories` on the US order
+/// endpoints are untyped `serde_json::Value` passthrough (unlike the
+/// strongly-typed HK/AP order struct), so whatever fields the backend
+/// includes reach this function unfiltered; PII must be stripped explicitly
+/// rather than relying on a fixed struct shape to exclude it.
+const ORDER_INTERNAL_FIELDS: &[&str] = &[
+    "button_control",
+    "current_millisecond",
+    "deductions_status",
+    "free_status",
+    "platform_deductions_status",
+    "force_only_rth",
+    "limit_depth_level",
+    "tag",
+    "trend",
+    "trigger_count",
+    "trigger_status",
+    "trigger_at",
+    "account_channel",
+    // Internal bookkeeping IDs with no meaning to a caller.
+    "aaid",
+    "org_id",
+    "ploy_type",
+    // Exchange tick-size metadata, not order-specific data — observed as a
+    // large nested table on every order (e.g. bid_size_list), unrelated to
+    // this order's own price/quantity.
+    "bid_size_list",
+    "ticker_size",
+    // Duplicates `symbol` (the underlying counter code without the market
+    // suffix).
+    "code",
+    // Backend settlement/routing metadata, not user-facing order data.
+    "settlement_account",
+    "display_account",
+    "op_entrust_way",
+    "op_entrust_way_name",
+    "settlement_channel",
+    "short_sell_type",
+    "activate_rth",
+    // PII: the account holder's real name. Never surface this in tool output.
+    "real_name",
+    "en_name",
+];
+
+/// Internal fields on a single `order_histories[]` entry — a state-transition
+/// log line, not an order — with no meaning to a caller.
+const ORDER_HISTORY_ENTRY_INTERNAL_FIELDS: &[&str] = &[
+    "is_manually",
+    "exec_type",
+    "opp_party_id",
+    "trd_match_id",
+    "operator",
+    "op_entrust_way",
+    "cxl_rej_response_to",
+    "withdrawal_reason",
+    "opp_name",
+    "exec_id",
+];
+
+fn drop_empty(map: &mut serde_json::Map<String, Value>) {
+    map.retain(|_, val| {
+        !matches!(val, Value::Null)
+            && !matches!(val, Value::String(s) if s.is_empty())
+            && !matches!(val, Value::Array(a) if a.is_empty())
+    });
+}
+
+/// Normalizes one `order_histories[]` entry in place: strips a trailing
+/// "Status" suffix from `status`, renames `time` to `occurred_at` (so the
+/// generic `_at`-suffix unix-timestamp conversion in `to_tool_json` picks it
+/// up), and removes internal fields.
+fn normalize_order_history_entry(entry: &mut Value) {
+    let Value::Object(map) = entry else { return };
+    for key in ORDER_HISTORY_ENTRY_INTERNAL_FIELDS {
+        map.remove(*key);
+    }
+    if let Some(status) = map.get("status").and_then(Value::as_str)
+        && let Some(stripped) = status.strip_suffix("Status")
+    {
+        map.insert("status".to_string(), Value::String(stripped.to_string()));
+    }
+    if let Some(t) = map.remove("time") {
+        map.insert("occurred_at".to_string(), t);
+    }
+    drop_empty(map);
+}
+
 /// Normalizes a single US order JSON object in place: numeric `action`/
 /// `time_in_force` codes become readable strings, a trailing "Status" suffix
-/// is stripped from `status` (e.g. "RejectedStatus" -> "Rejected"), and
-/// internal/frontend-only fields are removed. Safe to call on any object;
-/// no-ops on fields that are absent.
+/// is stripped from `status` (e.g. "RejectedStatus" -> "Rejected"), nested
+/// `order_histories[]` entries are normalized the same way, and internal/PII
+/// fields are removed. Safe to call on any object; no-ops on fields that are
+/// absent.
 pub fn normalize_us_order(v: &mut Value) {
-    const INTERNAL_FIELDS: &[&str] = &[
-        "button_control",
-        "current_millisecond",
-        "deductions_status",
-        "free_status",
-        "platform_deductions_status",
-        "force_only_rth",
-        "limit_depth_level",
-        "tag",
-        "trend",
-        "trigger_count",
-        "trigger_status",
-        "trigger_at",
-        "account_channel",
-        // Internal bookkeeping IDs with no meaning to a caller.
-        "aaid",
-        "org_id",
-        "ploy_type",
-        // Exchange tick-size metadata, not order-specific data — observed as a
-        // large nested table on every order (e.g. bid_size_list), unrelated to
-        // this order's own price/quantity.
-        "bid_size_list",
-        "ticker_size",
-        // Duplicates `symbol` (the underlying counter code without the market
-        // suffix).
-        "code",
-    ];
-
     let Value::Object(map) = v else { return };
-    for key in INTERNAL_FIELDS {
+    for key in ORDER_INTERNAL_FIELDS {
         map.remove(*key);
     }
     if let Some(code) = map.get("action").and_then(Value::as_i64) {
@@ -164,11 +225,37 @@ pub fn normalize_us_order(v: &mut Value) {
     {
         map.insert("status".to_string(), Value::String(stripped.to_string()));
     }
-    map.retain(|_, val| {
-        !matches!(val, Value::Null)
-            && !matches!(val, Value::String(s) if s.is_empty())
-            && !matches!(val, Value::Array(a) if a.is_empty())
-    });
+    if let Some(Value::Array(histories)) = map.get_mut("order_histories") {
+        for entry in histories.iter_mut() {
+            normalize_order_history_entry(entry);
+        }
+    }
+    drop_empty(map);
+}
+
+/// Strips a trailing `%` from the named string fields (recursively) and
+/// parses the remainder as a decimal number, e.g. `"1.85%"` -> `1.85`.
+/// Applied to `dividend_yield`/`dividend_yield_ttm` on the US dividend tools.
+pub fn normalize_pct_fields(v: &mut Value, keys: &[&str]) {
+    match v {
+        Value::Object(map) => {
+            for key in keys {
+                if let Some(n) = map
+                    .get(*key)
+                    .and_then(Value::as_str)
+                    .and_then(|s| s.trim_end_matches('%').parse::<f64>().ok())
+                    .and_then(Number::from_f64)
+                {
+                    map.insert((*key).to_string(), Value::Number(n));
+                }
+            }
+            for val in map.values_mut() {
+                normalize_pct_fields(val, keys);
+            }
+        }
+        Value::Array(arr) => arr.iter_mut().for_each(|x| normalize_pct_fields(x, keys)),
+        _ => {}
+    }
 }
 
 #[cfg(test)]
@@ -259,5 +346,81 @@ mod tests {
         assert!(v.get("ploy_type").is_none());
         assert!(v.get("ticker_size").is_none());
         assert!(v.get("bid_size_list").is_none());
+    }
+
+    #[test]
+    fn normalize_us_order_strips_pii_and_settlement_metadata() {
+        // Shape observed from a real staging order_detail response.
+        let mut v = json!({
+            "symbol": "AAPL.US",
+            "real_name": "John Doe",
+            "en_name": "Doe John",
+            "settlement_account": "4DH07862",
+            "display_account": "4DH07862",
+            "op_entrust_way": 0,
+            "op_entrust_way_name": "APP",
+            "settlement_channel": "settlement_apex_us",
+            "short_sell_type": 7,
+            "activate_rth": 0
+        });
+        normalize_us_order(&mut v);
+        assert_eq!(v["symbol"], json!("AAPL.US"));
+        assert!(v.get("real_name").is_none());
+        assert!(v.get("en_name").is_none());
+        assert!(v.get("settlement_account").is_none());
+        assert!(v.get("display_account").is_none());
+        assert!(v.get("op_entrust_way").is_none());
+        assert!(v.get("op_entrust_way_name").is_none());
+        assert!(v.get("settlement_channel").is_none());
+        assert!(v.get("short_sell_type").is_none());
+        assert!(v.get("activate_rth").is_none());
+    }
+
+    #[test]
+    fn normalize_us_order_normalizes_nested_order_histories() {
+        let mut v = json!({
+            "symbol": "NVDA260608C210000.US",
+            "order_histories": [{
+                "status": "RejectedStatus",
+                "time": "1780925402",
+                "price": "0.9000",
+                "is_manually": false,
+                "exec_type": 7,
+                "opp_party_id": "",
+                "exec_id": "536ALONGU1"
+            }]
+        });
+        normalize_us_order(&mut v);
+        let entry = &v["order_histories"][0];
+        assert_eq!(entry["status"], json!("Rejected"));
+        assert_eq!(entry["occurred_at"], json!("1780925402"));
+        assert!(entry.get("time").is_none());
+        assert!(entry.get("is_manually").is_none());
+        assert!(entry.get("exec_type").is_none());
+        assert!(entry.get("opp_party_id").is_none());
+        assert!(entry.get("exec_id").is_none());
+        assert_eq!(entry["price"], json!("0.9000"));
+    }
+
+    #[test]
+    fn normalize_pct_fields_strips_percent_sign_and_parses_float() {
+        let mut v = json!({
+            "dividend_yield": "1.85%",
+            "dividend_yield_ttm": "1.7%",
+            "other": "unchanged",
+            "nested": {"dividend_yield": "2%"}
+        });
+        normalize_pct_fields(&mut v, &["dividend_yield", "dividend_yield_ttm"]);
+        assert_eq!(v["dividend_yield"], json!(1.85));
+        assert_eq!(v["dividend_yield_ttm"], json!(1.7));
+        assert_eq!(v["other"], json!("unchanged"));
+        assert_eq!(v["nested"]["dividend_yield"], json!(2.0));
+    }
+
+    #[test]
+    fn normalize_pct_fields_leaves_empty_string_untouched() {
+        let mut v = json!({"dividend_yield": ""});
+        normalize_pct_fields(&mut v, &["dividend_yield"]);
+        assert_eq!(v["dividend_yield"], json!(""));
     }
 }
