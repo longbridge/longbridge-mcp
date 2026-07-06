@@ -1708,7 +1708,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get orders placed today. Returns orders[]{order_id, symbol, side, order_type, status, quantity, price, submitted_at, executed_quantity, executed_price}. Pass symbol to filter."
+        description = "Get orders placed today. Returns orders[]{order_id, symbol, side, order_type, status, quantity, price, submitted_at, executed_quantity, executed_price}. Pass symbol to filter. US accounts only: us_status (all/pending/history), us_action (Buy/Sell), us_page, us_limit filter/paginate via a separate US order endpoint."
     )]
     async fn today_orders(
         &self,

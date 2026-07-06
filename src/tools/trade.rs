@@ -27,6 +27,14 @@ pub struct AccountBalanceParam {
 pub struct TodayOrdersParam {
     /// Filter by symbol, e.g. "700.HK". Omit to return all today's orders.
     pub symbol: Option<String>,
+    /// US accounts only: "all" (default, includes rejected), "pending", "history" (filled only).
+    pub us_status: Option<String>,
+    /// US accounts only: filter by side, "Buy" or "Sell". Omit for all.
+    pub us_action: Option<String>,
+    /// US accounts only: page number (default 1).
+    pub us_page: Option<i32>,
+    /// US accounts only: page size (default 20).
+    pub us_limit: Option<i32>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -186,11 +194,41 @@ pub async fn today_orders(
     mctx: &crate::tools::McpContext,
     p: TodayOrdersParam,
 ) -> Result<CallToolResult, McpError> {
+    let (ctx, _) = TradeContext::new(mctx.create_config());
+    if mctx.dc_region().await == longbridge::DcRegion::Us {
+        let query_type = match p.us_status.as_deref() {
+            Some("pending") => 1,
+            Some("history") => 2,
+            _ => 0,
+        };
+        let side = match p.us_action.as_deref() {
+            Some(s) if s.eq_ignore_ascii_case("buy") => longbridge::trade::OrderSide::Buy,
+            Some(s) if s.eq_ignore_ascii_case("sell") => longbridge::trade::OrderSide::Sell,
+            _ => longbridge::trade::OrderSide::Unknown,
+        };
+        let now = time::OffsetDateTime::now_utc().unix_timestamp();
+        let opts = longbridge::trade::GetUSHistoryOrders {
+            symbol: p.symbol,
+            side,
+            start_at: now - 90 * 24 * 3600,
+            end_at: now,
+            query_type,
+            page: p.us_page.unwrap_or(1),
+            limit: p.us_limit.unwrap_or(20),
+        };
+        let result = ctx.us_query_orders(opts).await.map_err(Error::longbridge)?;
+        let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;
+        if let Some(orders) = value.get_mut("orders").and_then(|v| v.as_array_mut()) {
+            for order in orders {
+                crate::tools::support::us_normalize::normalize_us_order(order);
+            }
+        }
+        return tool_json(&value);
+    }
     let mut opts = GetTodayOrdersOptions::new();
     if let Some(symbol) = p.symbol {
         opts = opts.symbol(symbol);
     }
-    let (ctx, _) = TradeContext::new(mctx.create_config());
     let result = ctx.today_orders(opts).await.map_err(Error::longbridge)?;
     tool_json(&result)
 }
@@ -266,13 +304,32 @@ pub async fn history_orders(
 ) -> Result<CallToolResult, McpError> {
     let start = parse::parse_rfc3339(&p.start_at)?;
     let end = parse::parse_rfc3339(&p.end_at)?;
+    let (ctx, _) = TradeContext::new(mctx.create_config());
+    if mctx.dc_region().await == longbridge::DcRegion::Us {
+        let opts = longbridge::trade::GetUSHistoryOrders {
+            symbol: p.symbol,
+            side: longbridge::trade::OrderSide::Unknown,
+            start_at: start.unix_timestamp(),
+            end_at: end.unix_timestamp(),
+            query_type: 2,
+            page: 1,
+            limit: 20,
+        };
+        let result = ctx.us_query_orders(opts).await.map_err(Error::longbridge)?;
+        let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;
+        if let Some(orders) = value.get_mut("orders").and_then(|v| v.as_array_mut()) {
+            for order in orders {
+                crate::tools::support::us_normalize::normalize_us_order(order);
+            }
+        }
+        return tool_json(&value);
+    }
     let mut opts = longbridge::trade::GetHistoryOrdersOptions::new()
         .start_at(start)
         .end_at(end);
     if let Some(symbol) = p.symbol {
         opts = opts.symbol(symbol);
     }
-    let (ctx, _) = TradeContext::new(mctx.create_config());
     let result = ctx.history_orders(opts).await.map_err(Error::longbridge)?;
     tool_json(&result)
 }
