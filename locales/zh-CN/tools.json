@@ -169,10 +169,9 @@
     },
     "order_detail": {
       "title": "委托详情",
-      "description": "查询单个委托详情，返回 {order_id, symbol, status, side, order_type, quantity, price, executed_quantity, executed_price, submitted_at, time_in_force, msg}。仅限美股账户：传入 attached=true 可返回该委托的附属（子）委托而非主委托",
+      "description": "查询单个委托详情，返回 {order_id, symbol, status, side, order_type, quantity, price, executed_quantity, executed_price, submitted_at, time_in_force, msg}",
       "properties": {
-        "order_id": "委托单号",
-        "attached": "仅限美股账户：为 true 且该委托存在附属委托时，返回附属委托而非主委托"
+        "order_id": "委托单号"
       }
     },
     "today_executions": {
@@ -185,10 +184,9 @@
     },
     "today_orders": {
       "title": "当日委托",
-      "description": "查询当日委托，返回 orders[]{order_id, symbol, side, order_type, status, quantity, price, submitted_at, executed_quantity, executed_price}。仅限美股账户：us_status（all/pending/history）、us_action（Buy/Sell）、us_page、us_limit 通过独立的美股委托接口筛选/分页",
+      "description": "查询当日委托，返回 orders[]{order_id, symbol, side, order_type, status, quantity, price, submitted_at, executed_quantity, executed_price}。仅限美股账户：us_action（Buy/Sell）、us_page、us_limit 通过独立的美股委托接口筛选/分页",
       "properties": {
         "symbol": "按证券筛选，例如 `\"700.HK\"`，省略则返回当日全部委托",
-        "us_status": "仅限美股账户：`\"all\"`（默认，含已拒绝）、`\"pending\"`（未成交）、`\"history\"`（仅已成交）",
         "us_action": "仅限美股账户：按方向筛选，`\"Buy\"` 或 `\"Sell\"`，留空表示全部",
         "us_page": "仅限美股账户：页码（默认 1）",
         "us_limit": "仅限美股账户：每页数量（默认 20）"
