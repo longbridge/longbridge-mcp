@@ -7,6 +7,7 @@ use crate::counter::symbol_to_counter_id;
 use crate::error::Error;
 use crate::serialize::convert_unix_paths;
 use crate::tools::support::http_client::{http_get_tool, http_get_tool_unix};
+use crate::tools::tool_json;
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ProfitAnalysisParam {
@@ -161,4 +162,29 @@ pub async fn profit_analysis_detail(
         &["start", "end"],
     )
     .await
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ProfitAnalysisRealizedParam {
+    /// Currency to report in, e.g. "USD" (default: "USD"). US accounts only.
+    pub currency: Option<String>,
+    /// Filter by category: "STOCK", "OPTION", "CRYPTO", or omit for all.
+    pub category: Option<String>,
+}
+
+/// Get realized profit-and-loss for a US account, broken down by category
+/// (stock/option/crypto) and period. US-region accounts only — calling this
+/// from a non-US account fails with a DcRegionRestricted error, since the
+/// underlying SDK method is US-DC-restricted.
+pub async fn profit_analysis_realized(
+    mctx: &crate::tools::McpContext,
+    p: ProfitAnalysisRealizedParam,
+) -> Result<CallToolResult, McpError> {
+    let (ctx, _) = longbridge::trade::TradeContext::new(mctx.create_config());
+    let opts = longbridge::trade::GetUSRealizedPLOptions {
+        currency: p.currency.unwrap_or_else(|| "USD".to_string()),
+        category: p.category.unwrap_or_default(),
+    };
+    let result = ctx.us_realized_pl(opts).await.map_err(Error::longbridge)?;
+    tool_json(&result)
 }

@@ -621,6 +621,7 @@ const TOOL_ENDPOINTS: &[(&str, u8)] = &[
     ("participants", V2),
     ("profit_analysis", V2),
     ("profit_analysis_detail", V2),
+    ("profit_analysis_realized", V2),
     ("quant_run", V2),
     ("rank_categories", V2),
     ("screener_indicators", V2),
@@ -2561,6 +2562,29 @@ impl Longbridge {
         let mctx = extract_context(&ctx)?;
         measured_tool_call("profit_analysis_detail", || {
             portfolio::profit_analysis_detail(&mctx, p)
+        })
+        .await
+    }
+
+    /// Get realized profit-and-loss for a US account (stock/option/crypto breakdown).
+    #[tool(
+        title = "Profit Analysis (Realized, US)",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = true
+        ),
+        description = "Get realized P&L for a US account, broken down by category (stock/option/crypto) and period. US accounts only; errors with DcRegionRestricted for HK/CN/SG accounts."
+    )]
+    async fn profit_analysis_realized(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<portfolio::ProfitAnalysisRealizedParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("profit_analysis_realized", || {
+            portfolio::profit_analysis_realized(&mctx, p)
         })
         .await
     }

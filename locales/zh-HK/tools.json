@@ -85,6 +85,14 @@
         "end": "結束日期（`yyyy-mm-dd`）。必須與 `start` 成對傳入，只傳其一會返回空結果"
       }
     },
+    "profit_analysis_realized": {
+      "title": "已實現盈虧分析（美股）",
+      "description": "獲取美股賬戶的已實現盈虧，按類別（股票/期權/加密貨幣）和週期拆分。僅限美股賬戶；港股/滬深/新加坡賬戶調用會返回 DcRegionRestricted 錯誤",
+      "properties": {
+        "currency": "報告貨幣，例如 `\"USD\"`（默認 `\"USD\"`）。僅限美股賬戶",
+        "category": "按類別篩選：`\"STOCK\"`、`\"OPTION\"`、`\"CRYPTO\"`，留空表示全部"
+      }
+    },
     "statement_export": {
       "title": "對帳單導出",
       "description": "獲取對帳單文件的預簽名下載 URL（file_key 來自 statement_list），返回 {url}，訪問該 URL 即可獲取對帳單 JSON",
