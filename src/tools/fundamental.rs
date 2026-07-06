@@ -110,6 +110,21 @@ pub async fn dividend(
     mctx: &crate::tools::McpContext,
     p: SymbolParam,
 ) -> Result<CallToolResult, McpError> {
+    if crate::tools::support::us_market::is_us_fundamental(mctx, &p.symbol).await {
+        let ctx = longbridge::fundamental::FundamentalContext::new(mctx.create_config());
+        if crate::counter::is_etf(&p.symbol) {
+            let result = ctx
+                .us_etf_dividend_info(p.symbol)
+                .await
+                .map_err(crate::error::Error::longbridge)?;
+            return crate::tools::tool_json(&result);
+        }
+        let result = ctx
+            .us_company_dividends(p.symbol)
+            .await
+            .map_err(crate::error::Error::longbridge)?;
+        return crate::tools::tool_json(&result);
+    }
     let client = mctx.create_http_client();
     let cid = symbol_to_counter_id(&p.symbol);
     http_get_tool(
