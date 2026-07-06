@@ -15,6 +15,9 @@ pub use crate::tools::quote::SymbolParam;
 pub struct OrderIdParam {
     /// Order ID (returned by submit_order or listed in today_orders / history_orders)
     pub order_id: String,
+    /// US accounts only: when true and the order has an attached (child) order,
+    /// return that attached order instead of the parent.
+    pub attached: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -238,6 +241,25 @@ pub async fn order_detail(
     p: OrderIdParam,
 ) -> Result<CallToolResult, McpError> {
     let (ctx, _) = TradeContext::new(mctx.create_config());
+    if mctx.dc_region().await == longbridge::DcRegion::Us {
+        let result = ctx
+            .us_order_detail(p.order_id)
+            .await
+            .map_err(Error::longbridge)?;
+        let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;
+        if p.attached.unwrap_or(false)
+            && let Some(attached) = value.get("current_attached_order").cloned()
+            && !attached.is_null()
+        {
+            let mut attached = attached;
+            crate::tools::support::us_normalize::normalize_us_order(&mut attached);
+            return tool_json(&attached);
+        }
+        if let Some(order) = value.get_mut("order") {
+            crate::tools::support::us_normalize::normalize_us_order(order);
+        }
+        return tool_json(&value);
+    }
     let result = ctx
         .order_detail(p.order_id)
         .await

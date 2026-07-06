@@ -1724,7 +1724,7 @@ impl Longbridge {
         title = "Order Detail",
         annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = true),
         output_schema = schema_for::<output::OrderDetailResponse>(),
-        description = "Get detailed information about a specific order. Returns {order_id, symbol, status, side, order_type, quantity, price, executed_quantity, executed_price, submitted_at, time_in_force, msg}."
+        description = "Get detailed information about a specific order. Returns {order_id, symbol, status, side, order_type, quantity, price, executed_quantity, executed_price, submitted_at, time_in_force, msg}. US accounts only: pass attached=true to return the order's attached (child) order instead of the parent."
     )]
     async fn order_detail(
         &self,
