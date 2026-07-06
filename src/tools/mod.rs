@@ -582,6 +582,7 @@ const TOOL_ENDPOINTS: &[(&str, u8)] = &[
     ("delete_watchlist_group", V2),
     ("dividend_detail", V2),
     ("estimate_max_purchase_quantity", V2),
+    ("etf_docs", V2),
     ("exchange_rate", V2),
     ("executive", V2),
     ("financial_report", V2),
@@ -3373,6 +3374,26 @@ impl Longbridge {
             fundamental::financial_report_key_metrics(&mctx, p)
         })
         .await
+    }
+
+    /// Get regulatory/prospectus documents for a US ETF.
+    #[tool(
+        title = "ETF Documents (US)",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = true
+        ),
+        description = "Get regulatory/prospectus documents (etf-files) for a US ETF. US accounts only; errors with DcRegionRestricted for HK/CN/SG accounts."
+    )]
+    async fn etf_docs(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<fundamental::EtfDocsParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("etf_docs", || fundamental::etf_docs(&mctx, p)).await
     }
 
     /// Get latest financial report summary for a security.

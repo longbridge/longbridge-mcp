@@ -452,6 +452,14 @@
         "symbol": "證券代碼，例如 `\"700.HK\"`"
       }
     },
+    "etf_docs": {
+      "title": "ETF文件（美股）",
+      "description": "獲取美股ETF的監管/招募說明書文件（etf-files）。僅限美股賬戶；港股/滬深/新加坡賬戶調用會返回 DcRegionRestricted 錯誤",
+      "properties": {
+        "symbol": "ETF代碼，例如 `\"SPY.US\"`",
+        "limit": "最多返回的文件數量，留空返回全部"
+      }
+    },
     "exchange_rate": {
       "title": "匯率",
       "description": "獲取全部支援幣種的匯率，返回 list[]{from_currency, to_currency, rate, timestamp}，覆蓋 USD/HKD/CNY/SGD 等"

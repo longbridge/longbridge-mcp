@@ -457,6 +457,28 @@ pub async fn financial_report_key_metrics(
     crate::tools::tool_json(&result)
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct EtfDocsParam {
+    /// ETF symbol, e.g. "SPY.US"
+    pub symbol: String,
+    /// Maximum number of documents to return. Omit for all.
+    pub limit: Option<u32>,
+}
+
+/// Get regulatory/prospectus documents for a US ETF. US accounts only — no
+/// HK equivalent exists for this interface.
+pub async fn etf_docs(
+    mctx: &crate::tools::McpContext,
+    p: EtfDocsParam,
+) -> Result<CallToolResult, McpError> {
+    let ctx = longbridge::fundamental::FundamentalContext::new(mctx.create_config());
+    let result = ctx
+        .us_etf_files(p.symbol, p.limit)
+        .await
+        .map_err(crate::error::Error::longbridge)?;
+    crate::tools::tool_json(&result)
+}
+
 /// Get latest financial report summary for a security.
 pub async fn financial_report_latest(
     mctx: &crate::tools::McpContext,
