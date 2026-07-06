@@ -39,6 +39,15 @@ Shared annotation semantics for this group:
 - **Open World = true** — Backed by externally-disclosed issuer financials that change with each
   reporting period, outside server control.
 
+### financial_report_key_metrics
+- **Read Only = true** — Calls `FundamentalContext::us_key_financial_metrics(symbol, report)`
+  (`fundamental.rs`), a getter returning key financial metrics for a US symbol. Read-only;
+  US-region accounts only (the underlying SDK method is `dc_restrict`ed to `DcRegion::Us`).
+- **Destructive = false** — Reading key metrics writes nothing.
+- **Idempotent = true** — The same symbol/report returns the same metrics per call.
+- **Open World = true** — Sourced from issuer filings on the external Longbridge US-DC backend and
+  updates as new periods are disclosed; not server-controlled.
+
 ### financial_report_latest
 - **Read Only = true** — Reads the latest report summary (period, revenue, net_income, eps, roe,
   gross_margin, report_date). Query only.
@@ -105,6 +114,15 @@ Shared annotation semantics for this group:
 - **Idempotent = true** — Same symbol returns the same scheme details per call.
 - **Open World = true** — Distribution details are sourced from external issuer disclosures and
   update as schemes are declared; not server-controlled.
+
+### etf_docs
+- **Read Only = true** — Calls `FundamentalContext::us_etf_files(symbol, size)` (`fundamental.rs`),
+  a getter returning regulatory/prospectus document links for a US ETF. Read-only; US-region
+  accounts only (the underlying SDK method is `dc_restrict`ed to `DcRegion::Us`).
+- **Destructive = false** — Reading the document list writes nothing.
+- **Idempotent = true** — The same symbol/limit returns the same document list per call.
+- **Open World = true** — Document listings are external issuer/regulatory filings surfaced on the
+  Longbridge US-DC backend and extend as new documents are filed; not server-controlled.
 
 ### forecast_eps
 - **Read Only = true** — Reads EPS forecast/estimate history (forecast_start_date,
@@ -292,6 +310,15 @@ Shared annotation semantics for this group:
 - **Idempotent = true** — The same symbol/range returns the same detail per call.
 - **Open World = true** — Computed on the external backend from account and market data that change
   over time; outside server control.
+
+### profit_analysis_realized
+- **Read Only = true** — Calls `TradeContext::us_realized_pl(opts)` (`portfolio.rs`), a getter
+  returning realized P&L by category (stock/option/crypto) and period for a US account. Read-only;
+  US-region accounts only (the underlying SDK method is `dc_restrict`ed to `DcRegion::Us`).
+- **Destructive = false** — Reading realized P&L writes nothing to the account.
+- **Idempotent = true** — The same currency/category filter returns the same summary per call.
+- **Open World = true** — Computed on the external Longbridge US-DC backend from account and market
+  data that change over time; outside server control.
 
 ### business_segments
 - **Read Only = true** — Reads the current-period business segment revenue breakdown (name,
