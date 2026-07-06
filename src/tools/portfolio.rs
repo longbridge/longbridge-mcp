@@ -172,6 +172,24 @@ pub struct ProfitAnalysisRealizedParam {
     pub category: Option<String>,
 }
 
+/// Maps a friendly category name to the numeric-string code the backend
+/// actually accepts. The SDK's own doc comment on `GetUSRealizedPLOptions`
+/// claims `"STOCK"`/`"OPTION"`/`"CRYPTO"` are valid, but sending those
+/// literal strings 500s in practice (confirmed against a real staging
+/// account) — only the numeric codes ("1"/"2"/"3", ""/"0" = all) work.
+/// Anything not recognized is passed through unchanged (covers callers who
+/// already send a numeric code, and preserves forward-compatibility with
+/// any new backend-defined value).
+fn map_realized_pl_category(input: &str) -> String {
+    match input.trim().to_ascii_uppercase().as_str() {
+        "STOCK" => "1".to_string(),
+        "OPTION" => "2".to_string(),
+        "CRYPTO" => "3".to_string(),
+        "ALL" => String::new(),
+        _ => input.to_string(),
+    }
+}
+
 /// Get realized profit-and-loss for a US account, broken down by category
 /// (stock/option/crypto) and period. US-region accounts only — calling this
 /// from a non-US account fails with a DcRegionRestricted error, since the
@@ -181,10 +199,40 @@ pub async fn profit_analysis_realized(
     p: ProfitAnalysisRealizedParam,
 ) -> Result<CallToolResult, McpError> {
     let (ctx, _) = longbridge::trade::TradeContext::new(mctx.create_config());
+    let category = p
+        .category
+        .as_deref()
+        .map(map_realized_pl_category)
+        .unwrap_or_default();
     let opts = longbridge::trade::GetUSRealizedPLOptions {
         currency: p.currency.unwrap_or_else(|| "USD".to_string()),
-        category: p.category.unwrap_or_default(),
+        category,
     };
     let result = ctx.us_realized_pl(opts).await.map_err(Error::longbridge)?;
-    tool_json(&result)
+    let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;
+    crate::tools::support::us_normalize::normalize_us_realized_pl(&mut value);
+    tool_json(&value)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn map_realized_pl_category_translates_friendly_names_to_backend_codes() {
+        assert_eq!(map_realized_pl_category("STOCK"), "1");
+        assert_eq!(map_realized_pl_category("stock"), "1");
+        assert_eq!(map_realized_pl_category("OPTION"), "2");
+        assert_eq!(map_realized_pl_category("CRYPTO"), "3");
+        assert_eq!(map_realized_pl_category("ALL"), "");
+        assert_eq!(map_realized_pl_category(""), "");
+    }
+
+    #[test]
+    fn map_realized_pl_category_passes_through_unrecognized_values() {
+        // Callers who already send a numeric code, or any future
+        // backend-defined value, must not be silently altered.
+        assert_eq!(map_realized_pl_category("1"), "1");
+        assert_eq!(map_realized_pl_category("something-else"), "something-else");
+    }
 }

@@ -109,6 +109,48 @@ fn time_in_force_label(code: i64) -> &'static str {
     }
 }
 
+/// realized-P&L category int -> readable label (server-defined: 0=all,
+/// 1=stock, 2=option, 3=crypto). Unknown codes pass through as "Unknown"
+/// rather than panicking, since the upstream may add codes.
+fn realized_pl_category_label(code: i64) -> &'static str {
+    match code {
+        0 => "All",
+        1 => "Stock",
+        2 => "Option",
+        3 => "Crypto",
+        _ => "Unknown",
+    }
+}
+
+/// Normalizes `us_realized_pl` output: decodes each entry's numeric
+/// `category` to a readable label, and adds `rate_unit: "decimal_fraction"`
+/// to every metric so a caller doesn't misread e.g. `-0.9303` as -0.93%
+/// instead of -93.03%.
+pub fn normalize_us_realized_pl(v: &mut Value) {
+    let Some(Value::Array(list)) = v.get_mut("realized_pl_list") else {
+        return;
+    };
+    for entry in list.iter_mut() {
+        let Value::Object(map) = entry else { continue };
+        if let Some(code) = map.get("category").and_then(Value::as_i64) {
+            map.insert(
+                "category".to_string(),
+                Value::String(realized_pl_category_label(code).to_string()),
+            );
+        }
+        if let Some(Value::Array(metrics)) = map.get_mut("metrics") {
+            for metric in metrics.iter_mut() {
+                if let Value::Object(mmap) = metric {
+                    mmap.insert(
+                        "rate_unit".to_string(),
+                        Value::String("decimal_fraction".to_string()),
+                    );
+                }
+            }
+        }
+    }
+}
+
 /// Internal/backend-routing fields with no meaning to a tool caller, plus the
 /// account holder's real name — `order`/`order_histories` on the US order
 /// endpoints are untyped `serde_json::Value` passthrough (unlike the
@@ -422,5 +464,29 @@ mod tests {
         let mut v = json!({"dividend_yield": ""});
         normalize_pct_fields(&mut v, &["dividend_yield"]);
         assert_eq!(v["dividend_yield"], json!(""));
+    }
+
+    #[test]
+    fn normalize_us_realized_pl_decodes_category_and_tags_rate_unit() {
+        // Shape observed from a real staging profit_analysis_realized response.
+        let mut v = json!({
+            "realized_pl_list": [
+                {"category": 0, "currency": "USD", "metrics": [{"amount": "-41857.14", "period": 2, "rate": "-0.9303"}]},
+                {"category": 1, "currency": "USD", "metrics": [{"amount": "22.86", "period": 2, "rate": "0.0172"}]},
+                {"category": 99, "currency": "USD", "metrics": []}
+            ]
+        });
+        normalize_us_realized_pl(&mut v);
+        assert_eq!(v["realized_pl_list"][0]["category"], json!("All"));
+        assert_eq!(v["realized_pl_list"][1]["category"], json!("Stock"));
+        assert_eq!(v["realized_pl_list"][2]["category"], json!("Unknown"));
+        assert_eq!(
+            v["realized_pl_list"][0]["metrics"][0]["rate_unit"],
+            json!("decimal_fraction")
+        );
+        assert_eq!(
+            v["realized_pl_list"][0]["metrics"][0]["rate"],
+            json!("-0.9303")
+        );
     }
 }
