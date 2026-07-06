@@ -111,7 +111,7 @@
     },
     "stock_positions": {
       "title": "股票持仓",
-      "description": "查询所有渠道下的当前股票持仓，返回 list[].stock_info[]{symbol, symbol_name, quantity, available_quantity, currency, cost_price, market}"
+      "description": "查询所有渠道下的当前股票持仓，返回 list[].stock_info[]{symbol, symbol_name, quantity, available_quantity, currency, cost_price, market}。仅限美股账户：额外附带 us_asset_overview 字段 {cash_list, crypto_list, cash_buy_power}"
     },
     "dca_history": {
       "title": "定投执行历史",
@@ -169,9 +169,10 @@
     },
     "order_detail": {
       "title": "委托详情",
-      "description": "查询单个委托详情，返回 {order_id, symbol, status, side, order_type, quantity, price, executed_quantity, executed_price, submitted_at, time_in_force, msg}",
+      "description": "查询单个委托详情，返回 {order_id, symbol, status, side, order_type, quantity, price, executed_quantity, executed_price, submitted_at, time_in_force, msg}。仅限美股账户：传入 attached=true 可返回该委托的附属（子）委托而非主委托",
       "properties": {
-        "order_id": "委托单号"
+        "order_id": "委托单号",
+        "attached": "仅限美股账户：为 true 且该委托存在附属委托时，返回附属委托而非主委托"
       }
     },
     "today_executions": {
@@ -184,9 +185,13 @@
     },
     "today_orders": {
       "title": "当日委托",
-      "description": "查询当日委托，返回 orders[]{order_id, symbol, side, order_type, status, quantity, price, submitted_at, executed_quantity, executed_price}",
+      "description": "查询当日委托，返回 orders[]{order_id, symbol, side, order_type, status, quantity, price, submitted_at, executed_quantity, executed_price}。仅限美股账户：us_status（all/pending/history）、us_action（Buy/Sell）、us_page、us_limit 通过独立的美股委托接口筛选/分页",
       "properties": {
-        "symbol": "按证券筛选，例如 `\"700.HK\"`，省略则返回当日全部委托"
+        "symbol": "按证券筛选，例如 `\"700.HK\"`，省略则返回当日全部委托",
+        "us_status": "仅限美股账户：`\"all\"`（默认，含已拒绝）、`\"pending\"`（未成交）、`\"history\"`（仅已成交）",
+        "us_action": "仅限美股账户：按方向筛选，`\"Buy\"` 或 `\"Sell\"`，留空表示全部",
+        "us_page": "仅限美股账户：页码（默认 1）",
+        "us_limit": "仅限美股账户：每页数量（默认 20）"
       }
     },
     "cancel_order": {
@@ -398,14 +403,14 @@
     },
     "company": {
       "title": "公司概况",
-      "description": "获取公司概况，返回 name、description、employees、CEO、founded_year、website、exchange、industry、market_cap 等信息",
+      "description": "获取公司概况，返回 name、description、employees、CEO、founded_year、website、exchange、industry、market_cap 等信息。美股账户查询 `.US` 标的时会路由到专属美股接口，其余组合走通用接口",
       "properties": {
         "symbol": "证券代码，例如 `\"700.HK\"`"
       }
     },
     "consensus": {
       "title": "一致预期",
-      "description": "获取分析师一致预期，返回 items[]{period, revenue_estimate, eps_estimate, net_income_estimate, analyst_count, last_updated}",
+      "description": "获取分析师一致预期，返回 items[]{period, revenue_estimate, eps_estimate, net_income_estimate, analyst_count, last_updated}。美股账户查询 `.US` 标的时会路由到专属美股一致预期接口并剔除前端专用字段，其余组合走通用接口",
       "properties": {
         "symbol": "证券代码，例如 `\"700.HK\"`"
       }
@@ -440,7 +445,7 @@
     },
     "dividend": {
       "title": "派息历史",
-      "description": "获取证券的派息历史，返回 items[]{ex_date（除权日）, pay_date（派发日）, record_date, dividend_type, amount, currency, status}",
+      "description": "获取证券的派息历史，返回 items[]{ex_date（除权日）, pay_date（派发日）, record_date, dividend_type, amount, currency, status}。美股账户查询 `.US` 标的时会按 ETF/个股路由到对应的专属美股派息接口，其余组合走通用接口",
       "properties": {
         "symbol": "证券代码，例如 `\"700.HK\"`"
       }
@@ -490,7 +495,7 @@
     },
     "financial_report": {
       "title": "财务报表",
-      "description": "获取财务报告（利润表/资产负债表/现金流量表）。kind：IS/BS/CF/ALL；report_type：af（年报）/saf（半年报）/q1/q2/q3/qf（季报全量）",
+      "description": "获取财务报告（利润表/资产负债表/现金流量表）。kind：IS/BS/CF/ALL；report_type：af（年报）/saf（半年报）/q1/q2/q3/qf（季报全量）。美股账户在不传 kind 的情况下查询 `.US` 标的会路由到专属美股概览接口；显式传入 kind 时始终走通用接口",
       "properties": {
         "symbol": "证券代码，例如 `\"AAPL.US\"`",
         "kind": "报表种类：`IS`（利润表）、`BS`（资产负债表）、`CF`（现金流量表）、`ALL`（默认全部）",
@@ -771,7 +776,7 @@
     },
     "static_info": {
       "title": "证券基础信息",
-      "description": "获取证券基础信息，返回各标的：symbol, name_cn, name_en, exchange（如 NASDAQ）, type（如 US_Stock）, lot_size（每手股数）, listed_date, delisted",
+      "description": "获取证券基础信息，返回各标的：symbol, name_cn, name_en, exchange（如 NASDAQ）, type（如 US_Stock）, lot_size（每手股数）, listed_date, delisted。仅限美股账户：`.BKKT` 加密货币代码（如 BTCUSD.BKKT）会路由到独立的美股加密货币概览接口；`.HAS`/`.OSL` 不受影响",
       "properties": {
         "symbols": "证券代码，例如 `[\"700.HK\", \"AAPL.US\"]`"
       }
@@ -848,7 +853,7 @@
     },
     "valuation": {
       "title": "估值",
-      "description": "获取估值概览及同业对比，返回 metrics.pe/pb/ps/dividend_yield{current, industry_avg, 5yr_avg, percentile} 及同业对比列表",
+      "description": "获取估值概览及同业对比，返回 metrics.pe/pb/ps/dividend_yield{current, industry_avg, 5yr_avg, percentile} 及同业对比列表。美股账户查询 `.US` 标的时会路由到专属美股估值接口并剔除前端专用字段，其余组合走通用接口",
       "properties": {
         "symbol": "证券代码，例如 `\"700.HK\"`"
       }
@@ -915,7 +920,7 @@
     },
     "financial_statement": {
       "title": "财务报表",
-      "description": "获取证券财务报表（利润表/资产负债表/现金流量表）。kind：IS/BS/CF/ALL（默认）；report：af（年报）/saf（半年报）/qf（季报）/q1/q2/q3",
+      "description": "获取证券财务报表（利润表/资产负债表/现金流量表）。kind：IS/BS/CF/ALL（默认）；report：af（年报）/saf（半年报）/qf（季报）/q1/q2/q3。美股账户查询 `.US` 标的时会路由到专属美股报表接口（report 默认改为 annual/quarterly，而非 af/saf/qf/q1-q3），其余组合走通用接口",
       "properties": {
         "symbol": "证券代码，例如 `\"AAPL.US\"`",
         "kind": "报表类型：`IS`（利润表）、`BS`（资产负债表）、`CF`（现金流量表）、`ALL`（全部，默认）",
