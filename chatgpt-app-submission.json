@@ -12,7 +12,7 @@
   "app_info": {
     "display_name": "Longbridge",
     "subtitle": "Market insights & portfolio view",
-    "description": "Longbridge brings US, HK, A-share, and SG market research into ChatGPT: live quotes, candlestick charts, order-book depth and trades, fundamentals and financial statements, valuations, analyst ratings and estimates, finance calendars, news, filings, options and warrants, stock screeners, market movers, and ranking lists. With the user's Longbridge OAuth credentials it also provides read-only access to their account and portfolio (balances, positions, profit & loss, margin, cash flow, statements) and order and execution history, and lets them manage watchlists, price alerts, and community share lists. The endpoint never places, modifies, or cancels trades, never sets up recurring (DCA) investments, never submits IPO orders, and never moves money — no deposits, withdrawals, or bank-card access.",
+    "description": "Longbridge brings US, HK, A-share, and SG market research into ChatGPT: live quotes, candlestick charts, order-book depth and trades, fundamentals and financial statements, valuations, analyst ratings and estimates, finance calendars, news, filings, options and warrants, stock screeners, market movers, and ranking lists. With the user's Longbridge OAuth credentials it also provides read-only access to their account and portfolio (balances, positions, profit & loss, margin, cash flow, statements) and order and execution history, and lets them manage watchlists, price alerts, and community share lists.",
     "category": "FINANCE"
   },
   "tools": {
