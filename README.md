@@ -132,6 +132,8 @@ These are **advanced settings** — most users do not need to change them. They 
 |----------|---------|-------------|
 | `LONGBRIDGE_MCP_CONFIG_DIR` | `~/.longbridge/mcp` | Config file directory |
 | `LONGBRIDGE_HTTP_URL` | `https://openapi.longbridge.com` | Longbridge API base URL (also used for OAuth metadata) |
+| `LONGBRIDGE_PUBLIC_HOSTS` | *(none)* | Comma-separated hostnames accepted from the edge-injected `X-Host` header; matching requests echo that host in the 401 challenge / RFC 9728 metadata. Unset = `X-Host` ignored |
+| `LONGBRIDGE_GLOBAL_OAUTH_URL` | *(none)* | Authorization-server URL advertised to requests arriving via an allowlisted `X-Host` (global single-domain entry). Unset = fall back to `LONGBRIDGE_HTTP_URL` |
 | `LONGBRIDGE_QUOTE_WS_URL` | `wss://openapi-quote.longbridge.com/v2` | Quote WebSocket endpoint |
 | `LONGBRIDGE_TRADE_WS_URL` | `wss://openapi-trade.longbridge.com/v2` | Trade WebSocket endpoint |
 | `LONGBRIDGE_MCP_QUOTE_WS_IDLE_TTL_SECS` | `600` | Idle seconds before a cached quote WebSocket context is evicted |
