@@ -1108,7 +1108,7 @@ Google Trends 非官方 Python 接口，用于获取关键词搜索热度时序�
 
 > 以下项目已使用 Longbridge 数据或 API，由团队手动维护，每日自动监控 README 是否保留相关引用。
 
-| 项目 | 语言 | GitHub | 说明 | Longbridge 用途 |
-|------|------|--------|------|-----------------|
-| **trade-skills** | TypeScript | https://github.com/Innei/trade-skills | 个人交易 skill 集合，集成多券商数据源 | 实时报价、K 线、基本面、资金流等 Longbridge CLI / skill |
-| **open-connector** | TypeScript | https://github.com/oomol-lab/open-connector | oomol-lab 出品的开放连接器平台 | 接入 Longbridge 数据源（集成中） |
+| 项目 | 语言 | GitHub | 说明 | Longbridge 用途 | 重点关注 |
+|------|------|--------|------|-----------------|----------|
+| **trade-skills** | TypeScript | https://github.com/Innei/trade-skills | 个人交易 skill 集合，集成多券商数据源 | 实时报价、K 线、基本面、资金流等 Longbridge CLI / skill | ★★★ |
+| **open-connector** | TypeScript | https://github.com/oomol-lab/open-connector | oomol-lab 出品的开放连接器平台 | 接入 Longbridge 数据源（集成中） | ★★★ |
