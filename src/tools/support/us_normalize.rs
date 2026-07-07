@@ -211,7 +211,8 @@ const ORDER_HISTORY_ENTRY_INTERNAL_FIELDS: &[&str] = &[
     "exec_id",
 ];
 
-fn drop_empty(map: &mut serde_json::Map<String, Value>) {
+/// Removes entries whose value is `null`, an empty string, or an empty array.
+pub fn drop_empty(map: &mut serde_json::Map<String, Value>) {
     map.retain(|_, val| {
         !matches!(val, Value::Null)
             && !matches!(val, Value::String(s) if s.is_empty())

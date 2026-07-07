@@ -246,6 +246,9 @@ pub async fn order_detail(
         if let Some(order) = value.get_mut("order") {
             crate::tools::support::us_normalize::normalize_us_order(order);
         }
+        if let Some(obj) = value.as_object_mut() {
+            crate::tools::support::us_normalize::drop_empty(obj);
+        }
         return tool_json(&value);
     }
     let result = ctx
@@ -709,5 +712,46 @@ mod tests {
         let output = to_tool_json(&input).unwrap();
         let v: serde_json::Value = serde_json::from_str(&output).unwrap();
         assert_eq!(v["list"], serde_json::json!([]), "got: {output}");
+    }
+
+    /// `USOrderDetailResponse`'s top-level `order_histories`/
+    /// `current_attached_order` are near-always empty/null in practice (the
+    /// real state-transition log lives nested inside `order.order_histories`,
+    /// which is normalized separately). The empty top-level duplicate must be
+    /// dropped so callers don't mistake it for "no history exists".
+    #[test]
+    fn order_detail_envelope_drops_empty_top_level_fields() {
+        use crate::tools::support::us_normalize::{drop_empty, normalize_us_order};
+
+        let mut value = serde_json::json!({
+            "order": {
+                "symbol": "AAPL.US",
+                "status": "FilledStatus",
+                "order_histories": [{"status": "FilledStatus", "time": "1780925402"}]
+            },
+            "order_histories": [],
+            "current_attached_order": null
+        });
+
+        if let Some(order) = value.get_mut("order") {
+            normalize_us_order(order);
+        }
+        if let Some(obj) = value.as_object_mut() {
+            drop_empty(obj);
+        }
+
+        assert!(
+            value.get("order_histories").is_none(),
+            "empty top-level order_histories should be dropped: {value}"
+        );
+        assert!(
+            value.get("current_attached_order").is_none(),
+            "null current_attached_order should be dropped: {value}"
+        );
+        assert_eq!(
+            value["order"]["order_histories"][0]["occurred_at"],
+            serde_json::json!("1780925402"),
+            "nested order_histories must survive: {value}"
+        );
     }
 }
