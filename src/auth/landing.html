@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Longbridge MCP</title>
+  <style>
+    :root { --accent: #0a66c2; }
+    body { font-family: system-ui, sans-serif; max-width: 760px; margin: 40px auto; padding: 0 20px; color: #111; line-height: 1.6; }
+    h1 { font-size: 1.75rem; }
+    h2 { margin-top: 2rem; font-size: 1.1rem; }
+    code { background: #f5f5f5; padding: 2px 6px; border-radius: 4px; font-size: 0.9em; }
+    pre { background: #f5f5f5; padding: 16px; border-radius: 6px; overflow-x: auto; }
+    a { color: var(--accent); }
+    a:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+  <h1>Longbridge MCP</h1>
+  <p>Official MCP server for <a href="https://longbridge.com">Longbridge</a> — 110 tools covering real-time quotes, order routing, fundamentals, portfolio analytics and more for US and HK markets.</p>
+
+  <h2>Claude Code</h2>
+  <p><code>claude mcp add --transport http longbridge LANDING_PAGE_URL_PLACEHOLDER/mcp</code></p>
+
+  <h2>Codex</h2>
+  <p>Add to <code>~/.codex/config.yaml</code>:</p>
+  <pre>mcpServers:
+  longbridge:
+    type: http
+    url: LANDING_PAGE_URL_PLACEHOLDER/mcp</pre>
+
+  <h2>Claude Desktop &middot; Cursor &middot; Zed</h2>
+  <p>Point your client at <code>LANDING_PAGE_URL_PLACEHOLDER/mcp</code> using transport <code>streamable-http</code>. OAuth is auto-discovered via RFC&nbsp;9728; no manual token required.</p>
+
+  <h2>ChatGPT</h2>
+  <p><a href="https://chatgpt.com/apps/longbridge/asdk_app_6a2baf2fad748191812393c3e00308ef">chatgpt.com/apps/longbridge</a> — add Longbridge to ChatGPT.</p>
+
+  <h2>Documentation</h2>
+  <p><a href="https://open.longbridge.com">open.longbridge.com</a></p>
+</body>
+</html>

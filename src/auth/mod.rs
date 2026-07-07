@@ -4,6 +4,7 @@ pub mod middleware;
 use std::sync::Arc;
 
 use axum::Router;
+use axum::extract::State;
 use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
 use rmcp::transport::streamable_http_server::{StreamableHttpServerConfig, StreamableHttpService};
 
@@ -85,6 +86,12 @@ async fn scopes_json() -> axum::Json<&'static serde_json::Value> {
     axum::Json(&*SCOPES_JSON)
 }
 
+const LANDING_HTML: &str = include_str!("landing.html");
+
+async fn landing_page(State(state): State<Arc<AppState>>) -> axum::response::Html<String> {
+    axum::response::Html(LANDING_HTML.replace("LANDING_PAGE_URL_PLACEHOLDER", &state.base_url))
+}
+
 async fn health() -> axum::http::StatusCode {
     axum::http::StatusCode::OK
 }
@@ -125,6 +132,10 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route("/mcp/tools.json", axum::routing::get(tools_json))
         .route("/mcp/scopes.json", axum::routing::get(scopes_json));
 
+    let landing_route = Router::new()
+        .route("/", axum::routing::get(landing_page))
+        .with_state(state.clone());
+
     let mcp_service = StreamableHttpService::new(
         move || Ok(Longbridge),
         Arc::new(LocalSessionManager::default()),
@@ -148,6 +159,7 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .merge(health_route)
         .merge(metrics_route)
         .merge(tools_route)
+        .merge(landing_route)
         .nest_service("/mcp", mcp_with_auth)
 }
 
