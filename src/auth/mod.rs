@@ -132,13 +132,29 @@ async fn health() -> axum::http::StatusCode {
 /// onboarding text only — see the file for content.
 const LANDING_PAGE_HTML: &str = include_str!("landing.html");
 
+/// Placeholder substituted with the request's resolved public URL (see
+/// [`metadata::public_url_from_headers`]) before the landing page is served.
+/// Must match the literal URL baked into `landing.html`'s onboarding snippets.
+const LANDING_PAGE_URL_PLACEHOLDER: &str = "https://mcp.longbridge.com";
+
 /// Serve [`LANDING_PAGE_HTML`] only for a browser navigation to `/`
 /// (a `GET` whose `Accept` header asks for `text/html`). Every other request —
 /// JSON-RPC `POST`, the SSE `GET` with `Accept: text/event-stream`, `Accept:
 /// */*`, any non-root path — falls through untouched to the wrapped MCP service,
 /// so client connection/installation is never affected. Layered ahead of the
 /// auth middleware so the page renders without credentials.
-async fn landing_or_mcp(req: axum::extract::Request, next: axum::middleware::Next) -> Response {
+///
+/// The page's onboarding snippets hardcode [`LANDING_PAGE_URL_PLACEHOLDER`];
+/// it's replaced here with the same resolved public URL the OAuth metadata
+/// endpoints advertise (see [`metadata::public_url_from_headers`]), so a
+/// visitor arriving via an allowlisted global `X-Host` entry gets copy-paste
+/// snippets pointing at the domain they're actually using instead of the
+/// origin's own hostname.
+async fn landing_or_mcp(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
     use axum::response::IntoResponse;
 
     let is_browser_root = req.method() == axum::http::Method::GET
@@ -150,9 +166,11 @@ async fn landing_or_mcp(req: axum::extract::Request, next: axum::middleware::Nex
             .is_some_and(|accept| accept.contains("text/html"));
 
     if is_browser_root {
+        let public = metadata::public_url_from_headers(req.headers(), &state.base_url);
+        let html = LANDING_PAGE_HTML.replace(LANDING_PAGE_URL_PLACEHOLDER, &public.url);
         return (
             [(axum::http::header::CONTENT_TYPE, "text/html; charset=utf-8")],
-            LANDING_PAGE_HTML,
+            html,
         )
             .into_response();
     }
@@ -257,7 +275,10 @@ pub fn create_router(state: Arc<AppState>) -> Router {
     // Root mount, plus a thin front layer that serves the human landing page for
     // browser GETs to `/`. All programmatic MCP traffic passes straight through.
     let root_service = tower::ServiceBuilder::new()
-        .layer(axum::middleware::from_fn(landing_or_mcp))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            landing_or_mcp,
+        ))
         .service(mcp_with_auth_root);
     // Optional-auth endpoint — same MCP server, but token-less requests are let
     // through so an OAuth-incapable client can call the `authenticate` tool.
@@ -384,5 +405,37 @@ mod tests {
                 "[{code}] scope name drift — missing translation: {missing:?}, orphan locale entry: {extra:?}"
             );
         }
+    }
+
+    /// Catches drift if a future edit to `landing.html` changes or removes
+    /// the hardcoded URL without updating `LANDING_PAGE_URL_PLACEHOLDER` —
+    /// otherwise `landing_or_mcp`'s substitution would silently become a
+    /// no-op and the page would go back to always showing the origin domain.
+    #[test]
+    fn landing_page_contains_the_url_placeholder() {
+        let count = super::LANDING_PAGE_HTML
+            .matches(super::LANDING_PAGE_URL_PLACEHOLDER)
+            .count();
+        assert!(
+            count > 0,
+            "landing.html no longer contains {:?} — update LANDING_PAGE_URL_PLACEHOLDER \
+             (or drop the substitution if the page no longer needs it)",
+            super::LANDING_PAGE_URL_PLACEHOLDER
+        );
+    }
+
+    /// Every occurrence of the placeholder must be replaced — a visitor
+    /// arriving via an allowlisted global `X-Host` should see that domain in
+    /// every onboarding snippet, not a mix of the new and origin domains.
+    #[test]
+    fn landing_page_substitution_replaces_every_occurrence() {
+        let dynamic_url = "https://mcp-global.longbridge.xyz";
+        let html =
+            super::LANDING_PAGE_HTML.replace(super::LANDING_PAGE_URL_PLACEHOLDER, dynamic_url);
+        assert!(!html.contains(super::LANDING_PAGE_URL_PLACEHOLDER));
+        let expected_count = super::LANDING_PAGE_HTML
+            .matches(super::LANDING_PAGE_URL_PLACEHOLDER)
+            .count();
+        assert_eq!(html.matches(dynamic_url).count(), expected_count);
     }
 }
