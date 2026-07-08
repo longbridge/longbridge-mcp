@@ -176,12 +176,13 @@ pub async fn consensus(
 ) -> Result<CallToolResult, McpError> {
     if crate::tools::support::us_market::is_us_fundamental(mctx, &p.symbol).await {
         let ctx = longbridge::fundamental::FundamentalContext::new(mctx.create_config());
-        let mut result = ctx
+        let result = ctx
             .us_analyst_consensus(p.symbol, "annual")
             .await
             .map_err(crate::error::Error::longbridge)?;
-        crate::tools::support::us_normalize::fix_valuation_value(&mut result);
-        return crate::tools::tool_json(&result);
+        let mut value = serde_json::to_value(&result).map_err(crate::error::Error::Serialize)?;
+        crate::tools::support::us_normalize::fix_valuation_value(&mut value);
+        return crate::tools::tool_json(&value);
     }
     let client = mctx.create_http_client();
     let cid = symbol_to_counter_id(&p.symbol);
