@@ -420,7 +420,7 @@ pub async fn financial_statement(
             .unwrap_or_else(|| "annual".to_string())
             .to_lowercase();
         let result = ctx
-            .us_financial_statement_v3(p.symbol, kind, report)
+            .us_financial_statement(p.symbol, kind, report)
             .await
             .map_err(crate::error::Error::longbridge)?;
         return crate::tools::tool_json(&result);
