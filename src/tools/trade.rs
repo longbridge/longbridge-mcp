@@ -204,12 +204,18 @@ pub async fn today_orders(
             Some(s) if s.eq_ignore_ascii_case("sell") => longbridge::trade::OrderSide::Sell,
             _ => longbridge::trade::OrderSide::Unknown,
         };
-        let now = time::OffsetDateTime::now_utc().unix_timestamp();
+        let now = time::OffsetDateTime::now_utc();
+        let start_of_day = now.replace_time(time::Time::MIDNIGHT);
         let opts = longbridge::trade::GetUSHistoryOrders {
             symbol: p.symbol,
             side,
-            start_at: now - 90 * 24 * 3600,
-            end_at: now,
+            // Confirmed via live testing that start_at/end_at do filter
+            // correctly on the backend (unlike query_type, see below) — start
+            // of the current UTC day gives "today" instead of a multi-month
+            // window that would make this indistinguishable from
+            // history_orders.
+            start_at: start_of_day.unix_timestamp(),
+            end_at: now.unix_timestamp(),
             // query_type (0=all/1=pending/2=history) does not actually filter
             // on the backend as of this writing (confirmed via live testing —
             // "pending" returned the identical set as "all", "history"
