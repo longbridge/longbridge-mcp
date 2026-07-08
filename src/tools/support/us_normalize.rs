@@ -253,9 +253,15 @@ const ORDER_INTERNAL_FIELDS: &[&str] = &[
     "settlement_channel",
     "short_sell_type",
     "activate_rth",
-    // PII: the account holder's real name. Never surface this in tool output.
+    // PII: the account holder's (and, for joint accounts, co-holder's) real
+    // name, plus the bank customer account number. Never surface these in
+    // tool output.
     "real_name",
     "en_name",
+    "customer_name",
+    "joint_real_name",
+    "joint_en_name",
+    "bcan",
 ];
 
 /// Internal fields on a single `order_histories[]` entry — a state-transition
@@ -519,6 +525,10 @@ mod tests {
             "symbol": "AAPL.US",
             "real_name": "John Doe",
             "en_name": "Doe John",
+            "customer_name": "John Doe",
+            "joint_real_name": "Jane Doe",
+            "joint_en_name": "Doe Jane",
+            "bcan": "1234567890",
             "settlement_account": "4DH07862",
             "display_account": "4DH07862",
             "op_entrust_way": 0,
@@ -531,6 +541,10 @@ mod tests {
         assert_eq!(v["symbol"], json!("AAPL.US"));
         assert!(v.get("real_name").is_none());
         assert!(v.get("en_name").is_none());
+        assert!(v.get("customer_name").is_none());
+        assert!(v.get("joint_real_name").is_none());
+        assert!(v.get("joint_en_name").is_none());
+        assert!(v.get("bcan").is_none());
         assert!(v.get("settlement_account").is_none());
         assert!(v.get("display_account").is_none());
         assert!(v.get("op_entrust_way").is_none());
