@@ -25,6 +25,44 @@ fn strip_html(s: &str) -> String {
     out
 }
 
+/// `USCryptoOverview.profile` is a JSON-encoded string (not a nested object)
+/// holding one HTML-formatted description per language, e.g.
+/// `"{\"en\": \"<p>...</p>\", \"zh-CN\": \"...\"}"`. Parses it into a proper
+/// object and strips HTML from each language's text, so a caller doesn't have
+/// to double-parse JSON to get plain-text descriptions. No-ops if `profile`
+/// is absent or not valid JSON.
+///
+/// Language keys are lower-cased with `-` replaced by `_` (`"zh-CN"` ->
+/// `"zh_cn"`) before insertion: the response as a whole passes through
+/// `to_tool_json`'s generic snake_case key transform downstream, which would
+/// otherwise mangle a hyphenated-uppercase key like `"zh-CN"` into
+/// `"zh-_c_n"` (it wasn't designed for locale-code keys, only API field
+/// names). Pre-normalizing to a form the transform treats as a no-op avoids
+/// that corruption.
+pub fn normalize_crypto_profile(v: &mut Value) {
+    let Value::Object(map) = v else { return };
+    let Some(Value::String(raw)) = map.get("profile") else {
+        return;
+    };
+    let Ok(parsed) = serde_json::from_str::<Value>(raw) else {
+        return;
+    };
+    let Value::Object(langs) = parsed else {
+        map.insert("profile".to_string(), parsed);
+        return;
+    };
+    let mut cleaned = serde_json::Map::with_capacity(langs.len());
+    for (key, val) in langs {
+        let key = key.to_ascii_lowercase().replace('-', "_");
+        let val = match val {
+            Value::String(s) => Value::String(strip_html(&s)),
+            other => other,
+        };
+        cleaned.insert(key, val);
+    }
+    map.insert("profile".to_string(), Value::Object(cleaned));
+}
+
 /// Strip frontend-only rendering fields, strip HTML markup from prose text
 /// fields, and coerce known numeric-as-string fields (timestamps, valuation
 /// metrics) to actual numbers, recursively. Applied to `us_valuation_overview`
@@ -322,6 +360,32 @@ mod tests {
         assert!(v.get("layouts").is_none());
         assert!(v["nested"].get("h5_data").is_none());
         assert_eq!(v["nested"]["median"], json!(12.5));
+    }
+
+    #[test]
+    fn normalize_crypto_profile_parses_json_string_and_strips_html() {
+        let mut v = json!({
+            "name": "Bitcoin",
+            "profile": "{\"en\": \"<p>Bitcoin is digital.</p>\", \"zh-CN\": \"<p>比特币</p>\"}"
+        });
+        normalize_crypto_profile(&mut v);
+        assert_eq!(v["profile"]["en"], json!("Bitcoin is digital."));
+        // "zh-CN" is normalized to "zh_cn" so the downstream generic
+        // snake_case key transform (designed for API field names, not locale
+        // codes) treats it as a no-op instead of mangling it into "zh-_c_n".
+        assert_eq!(v["profile"]["zh_cn"], json!("比特币"));
+        assert!(v["profile"].get("zh-CN").is_none());
+    }
+
+    #[test]
+    fn normalize_crypto_profile_noop_on_missing_or_invalid_profile() {
+        let mut v = json!({"name": "Bitcoin"});
+        normalize_crypto_profile(&mut v);
+        assert_eq!(v, json!({"name": "Bitcoin"}));
+
+        let mut v = json!({"name": "Bitcoin", "profile": "not json"});
+        normalize_crypto_profile(&mut v);
+        assert_eq!(v["profile"], json!("not json"));
     }
 
     #[test]

@@ -245,7 +245,9 @@ pub async fn static_info(
             mctx.evict_quote_context();
             Error::longbridge(e)
         })?;
-        results.push(serde_json::to_value(&overview).map_err(Error::Serialize)?);
+        let mut value = serde_json::to_value(&overview).map_err(Error::Serialize)?;
+        crate::tools::support::us_normalize::normalize_crypto_profile(&mut value);
+        results.push(value);
     }
     if !other_symbols.is_empty() {
         let rest = ctx.static_info(other_symbols).await.map_err(|e| {
