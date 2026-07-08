@@ -13,11 +13,11 @@
   <a href="https://longbridge.com"><img alt="Longbridge" src="https://img.shields.io/badge/brokerage-Longbridge-ffe000?labelColor=000"></a>
 </p>
 
-Official MCP server for the [Longbridge](https://longbridge.com) brokerage. **145 tools** across real-time quotes, options, order routing, fundamentals, analyst ratings, calendars, IPO, price alerts, DCA plans, portfolio analytics and community sharelists — covering **US and HK markets**. Built with Rust using [rmcp](https://github.com/anthropics/rmcp) and [axum](https://github.com/tokio-rs/axum).
+Official MCP server for the [Longbridge](https://longbridge.com) brokerage. **148 tools** across real-time quotes, options, order routing, fundamentals, analyst ratings, calendars, IPO, price alerts, DCA plans, portfolio analytics and community sharelists — covering **US and HK markets**. Built with Rust using [rmcp](https://github.com/anthropics/rmcp) and [axum](https://github.com/tokio-rs/axum).
 
 ## Features
 
-- **145 MCP tools** across 13 categories: quotes, trading, fundamentals, screener, market data, calendars, IPO, portfolio, alerts, content, account statements, DCA, and community sharelists
+- **148 MCP tools** across 19 categories: quotes, fundamentals, trading, market data, DCA, IPO, sharelists, content, alerts, screener, ATM, portfolio, macrodata, search, statements, authenticate, calendar, quant, and utility
 - **Stateless architecture** -- each request carries a Bearer token forwarded directly to the Longbridge SDK; no server-side sessions or database
 - **OAuth 2.1 resource metadata** compliant with RFC 9728, pointing clients to Longbridge OAuth for authorization
 - **JSON response transformation** -- field names normalized to snake_case, timestamps converted to RFC 3339, internal counter_id values mapped to human-readable symbols
@@ -179,19 +179,23 @@ On the first tool invocation, Claude Code reads the `WWW-Authenticate` challenge
 | Category | Count | Description |
 |----------|-------|-------------|
 | **Quote** | 32 | Real-time and historical quotes, candlesticks, depth, brokers, options, warrants, watchlists, capital flow, market temperature, short positions, option volume |
-| **Trade** | 14 | Order submission/cancellation/replacement, positions, balance, executions, cash flow, margin |
-| **Fundamental** | 19 | Financial statements, business segments, institutional views, industry peers, earnings snapshot, dividends, EPS forecasts, valuations, company info, shareholders, corporate actions |
-| **Market** | 10 | Market status, industry rank, broker holdings, A/H premium, trade statistics, anomalies, index constituents |
-| **IPO** | 8 | IPO subscriptions, calendar, listed stocks, order detail, profit/loss analysis |
-| **Content** | 8 | News, discussion topics, filing details |
+| **Fundamental** | 31 | Financial statements/reports, business segments, institutional views, industry peers/valuation, dividends, EPS forecasts, valuations, company info/executives, shareholders, corporate actions, operating metrics |
+| **Trade** | 15 | Order submission/cancellation/replacement, positions, balance, executions, cash flow, margin |
+| **Market** | 14 | Market status, industry/top-mover rank, broker holdings, A/H premium, trade statistics, anomalies, short trades, index constituents |
 | **DCA** | 9 | Dollar-cost averaging plan create/update/pause/resume/stop, execution history, statistics, and support check |
+| **IPO** | 7 | IPO subscriptions, calendar, listed stocks, order detail, profit/loss analysis |
 | **Sharelist** | 8 | Community sharelist CRUD, member add/remove/sort, popular lists |
+| **Content** | 6 | News, discussion topic CRUD and replies |
 | **Alert** | 5 | Price alert CRUD (add, delete, enable, disable, list) |
+| **Screener** | 5 | Stock screener search, indicators, and strategy recommendation/management |
 | **ATM** | 3 | Bank cards, withdrawal records, deposit records |
 | **Portfolio** | 3 | Exchange rates, profit/loss analysis with optional date range |
+| **Macrodata** | 2 | Macroeconomic indicator list and detail data |
 | **Search** | 2 | News search, community topic search |
 | **Statement** | 2 | Account statement listing and export |
+| **Authenticate** | 1 | OAuth authorization-code exchange for MCP-native clients that can't complete a browser redirect |
 | **Calendar** | 1 | Finance calendar events (earnings, dividends, IPOs, macro data, market closures) |
+| **Quant** | 1 | Run a quant indicator script against historical K-line data server-side |
 | **Utility** | 1 | Current UTC time |
 
 ## Prometheus Metrics
