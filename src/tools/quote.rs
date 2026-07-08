@@ -254,7 +254,9 @@ pub async fn static_info(
             mctx.evict_quote_context();
             Error::longbridge(e)
         })?;
-        results.push(serde_json::to_value(&rest).map_err(Error::Serialize)?);
+        for entry in rest {
+            results.push(serde_json::to_value(&entry).map_err(Error::Serialize)?);
+        }
     }
     tool_json(&results)
 }
