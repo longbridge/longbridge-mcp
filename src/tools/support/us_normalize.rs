@@ -25,6 +25,27 @@ fn strip_html(s: &str) -> String {
     out
 }
 
+/// `USAssetOverview.stock_list[]` carries both `symbol` (the bare ticker,
+/// e.g. `"AAPL"`) and `full_symbol` (converted from `counter_id`, e.g.
+/// `"AAPL.US"`) — unlike every other tool in this server, where `symbol`
+/// always means the fully-qualified form. Overwrites `symbol` with
+/// `full_symbol` and drops `full_symbol` so callers can rely on the same
+/// convention everywhere. No-ops if `stock_list` is absent or not an array.
+pub fn normalize_us_stock_list(v: &mut Value) {
+    let Value::Object(map) = v else { return };
+    let Some(Value::Array(stocks)) = map.get_mut("stock_list") else {
+        return;
+    };
+    for entry in stocks.iter_mut() {
+        let Value::Object(stock) = entry else {
+            continue;
+        };
+        if let Some(full_symbol) = stock.remove("full_symbol") {
+            stock.insert("symbol".to_string(), full_symbol);
+        }
+    }
+}
+
 /// `USCryptoOverview.profile` is a JSON-encoded string (not a nested object)
 /// holding one HTML-formatted description per language, e.g.
 /// `"{\"en\": \"<p>...</p>\", \"zh-CN\": \"...\"}"`. Parses it into a proper
@@ -215,6 +236,7 @@ const ORDER_INTERNAL_FIELDS: &[&str] = &[
     "aaid",
     "org_id",
     "ploy_type",
+    "ploy_id",
     // Exchange tick-size metadata, not order-specific data — observed as a
     // large nested table on every order (e.g. bid_size_list), unrelated to
     // this order's own price/quantity.
@@ -317,7 +339,10 @@ pub fn normalize_us_order(v: &mut Value) {
 }
 
 /// Strips a trailing `%` from the named string fields (recursively) and
-/// parses the remainder as a decimal number, e.g. `"1.85%"` -> `1.85`.
+/// parses the remainder as a decimal number, e.g. `"1.85%"` -> `1.85`. The
+/// result is a percent value (1.85 means 1.85%), not a 0-1 decimal fraction
+/// — unlike `normalize_us_realized_pl`'s `rate_unit: "decimal_fraction"`
+/// fields, so don't divide this by 100 again.
 /// Applied to `dividend_yield`/`dividend_yield_ttm` on the US dividend tools.
 pub fn normalize_pct_fields(v: &mut Value, keys: &[&str]) {
     match v {
@@ -397,6 +422,28 @@ mod tests {
     }
 
     #[test]
+    fn normalize_us_stock_list_promotes_full_symbol_over_bare_ticker() {
+        let mut v = json!({
+            "stock_list": [
+                {"symbol": "AAPL", "full_symbol": "AAPL.US", "quantity": "56"},
+                {"symbol": "B", "full_symbol": "B.US", "quantity": "4"}
+            ],
+            "cash_list": []
+        });
+        normalize_us_stock_list(&mut v);
+        assert_eq!(v["stock_list"][0]["symbol"], json!("AAPL.US"));
+        assert!(v["stock_list"][0].get("full_symbol").is_none());
+        assert_eq!(v["stock_list"][1]["symbol"], json!("B.US"));
+    }
+
+    #[test]
+    fn normalize_us_stock_list_noop_on_missing_stock_list() {
+        let mut v = json!({"cash_list": []});
+        normalize_us_stock_list(&mut v);
+        assert_eq!(v, json!({"cash_list": []}));
+    }
+
+    #[test]
     fn fix_valuation_value_strips_html_from_text_fields() {
         let mut v = json!({
             "ai_summary": "revenue of <strong>$143.8B</strong> vs. <strong>$138.5B</strong> expected",
@@ -450,6 +497,7 @@ mod tests {
             "aaid": null,
             "org_id": "1",
             "ploy_type": "0",
+            "ploy_id": "",
             "ticker_size": "0.01",
             "bid_size_list": [{"str_proceed": "0", "end_proceed": "1", "bid_size": "0.0001"}]
         });
@@ -459,6 +507,7 @@ mod tests {
         assert!(v.get("aaid").is_none());
         assert!(v.get("org_id").is_none());
         assert!(v.get("ploy_type").is_none());
+        assert!(v.get("ploy_id").is_none());
         assert!(v.get("ticker_size").is_none());
         assert!(v.get("bid_size_list").is_none());
     }

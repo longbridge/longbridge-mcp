@@ -111,7 +111,7 @@
     },
     "stock_positions": {
       "title": "股票持倉",
-      "description": "查詢所有渠道下的當前股票持倉，返回 list[].stock_info[]{symbol, symbol_name, quantity, available_quantity, currency, cost_price, market}。僅限美股賬戶：額外附帶 us_asset_overview 字段 {cash_list, crypto_list, cash_buy_power}"
+      "description": "查詢所有渠道下的當前股票持倉，返回 list[].stock_info[]{symbol, symbol_name, quantity, available_quantity, currency, cost_price, market}。僅限美股賬戶：額外附帶 us_asset_overview 字段 {cash_list, stock_list, option_list, crypto_list, cash_buy_power, overnight_buy_power}"
     },
     "dca_history": {
       "title": "定投執行歷史",
@@ -443,7 +443,7 @@
     },
     "dividend": {
       "title": "派息歷史",
-      "description": "獲取證券的派息歷史，返回 items[]{ex_date（除權日）, pay_date（派發日）, record_date, dividend_type, amount, currency, status}。美股賬戶查詢 `.US` 標的時會按 ETF/個股路由到對應的專屬美股派息接口，其餘組合走通用接口",
+      "description": "獲取證券的派息歷史，返回 items[]{ex_date（除權日）, pay_date（派發日）, record_date, dividend_type, amount, currency, status}。美股賬戶查詢 `.US` 標的時會按 ETF/個股路由到對應的專屬美股派息接口（dividend_yield/dividend_yield_ttm 是百分比數值，例如 0.34 代表 0.34%，不是 0-1 的小數），其餘組合走通用接口",
       "properties": {
         "symbol": "證券代碼，例如 `\"700.HK\"`"
       }

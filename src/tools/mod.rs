@@ -1703,7 +1703,7 @@ impl Longbridge {
         title = "Stock Positions",
         annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = true),
         output_schema = schema_for::<output::StockPositionsResponse>(),
-        description = "Get current stock positions across all channels. Returns list[].stock_info[]{symbol, symbol_name, quantity, available_quantity, currency, cost_price, market}. US accounts only: an additional us_asset_overview field {cash_list, crypto_list, cash_buy_power} is included alongside the existing data."
+        description = "Get current stock positions across all channels. Returns list[].stock_info[]{symbol, symbol_name, quantity, available_quantity, currency, cost_price, market}. US accounts only: an additional us_asset_overview field {cash_list, stock_list, option_list, crypto_list, cash_buy_power, overnight_buy_power} is included alongside the existing data."
     )]
     async fn stock_positions(
         &self,
@@ -2021,7 +2021,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::fundamental::DividendResponse>(),
-        description = "Get dividend history. Returns items[]{ex_date, pay_date, record_date, dividend_type, amount, currency, status} for the symbol. US accounts querying a .US symbol are routed to a US-specific dividend endpoint (ETF vs. stock, by symbol); all other symbol/account combinations use the generic path."
+        description = "Get dividend history. Returns items[]{ex_date, pay_date, record_date, dividend_type, amount, currency, status} for the symbol. US accounts querying a .US symbol are routed to a US-specific dividend endpoint (ETF vs. stock, by symbol; dividend_yield/dividend_yield_ttm are percent values, e.g. 0.34 means 0.34%, not a 0-1 fraction); all other symbol/account combinations use the generic path."
     )]
     async fn dividend(
         &self,

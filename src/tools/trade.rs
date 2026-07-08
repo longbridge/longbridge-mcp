@@ -160,11 +160,12 @@ pub async fn stock_positions(mctx: &crate::tools::McpContext) -> Result<CallTool
     let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;
     if mctx.dc_region().await == longbridge::DcRegion::Us
         && let Ok(us_overview) = ctx.us_asset_overview().await
-        && let (Some(obj), Ok(us_value)) = (
+        && let (Some(obj), Ok(mut us_value)) = (
             value.as_object_mut(),
             serde_json::to_value(&us_overview).map_err(Error::Serialize),
         )
     {
+        crate::tools::support::us_normalize::normalize_us_stock_list(&mut us_value);
         obj.insert("us_asset_overview".to_string(), us_value);
     }
     tool_json(&value)
