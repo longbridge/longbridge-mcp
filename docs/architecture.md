@@ -58,11 +58,13 @@ src/
 ├── error.rs                Unified error type (thiserror)
 ├── counter.rs              Symbol ↔ counter_id bidirectional conversion
 ├── metrics.rs              Prometheus metrics and /metrics handler
+├── ws_pool.rs              Cached QuoteContext pool (idle TTL, capacity eviction)
 │
 ├── auth/
 │   ├── mod.rs              Router composition, AppState, MCP service wiring
 │   ├── metadata.rs         /.well-known/oauth-protected-resource (RFC 9728)
-│   └── middleware.rs       Bearer token extraction middleware
+│   ├── middleware.rs       Bearer token extraction middleware
+│   └── landing.html        Landing page served at `/` for browser visitors
 │
 ├── serialize/
 │   ├── mod.rs              Public API: to_tool_json(), transform_json()
@@ -71,18 +73,40 @@ src/
 │   └── counter_id.rs       CounterIdSerializer (counter_id → symbol)
 │
 └── tools/
-    ├── mod.rs              McpContext, #[tool_router], forwarding layer
-    ├── parse.rs            Parameter parsing helpers
-    ├── http_client.rs      Shared HTTP request helpers
-    ├── quote.rs            SDK QuoteContext tools (29)
-    ├── trade.rs            SDK TradeContext tools (14)
-    ├── fundamental.rs      HTTP fundamental data tools (18)
-    ├── market.rs           HTTP market data tools (9)
-    ├── content.rs          SDK ContentContext + HTTP content tools (8)
-    ├── alert.rs            HTTP price alert tools (5)
-    ├── portfolio.rs        HTTP portfolio tools (3)
-    ├── statement.rs        HTTP account statement tools (2)
-    └── calendar.rs         HTTP finance calendar tool (1)
+    ├── mod.rs              McpContext, #[tool_router], forwarding layer, TOOL_ENDPOINTS
+    ├── quote.rs            Quote tools (32)
+    ├── fundamental.rs      Fundamental data tools (31)
+    ├── trade.rs            Trade tools (15)
+    ├── market.rs           Market data tools (14)
+    ├── dca.rs              Dollar-cost averaging tools (9)
+    ├── sharelist.rs        Community sharelist tools (8)
+    ├── ipo.rs              IPO tools (7)
+    ├── content.rs          News/discussion tools (6)
+    ├── alert.rs            Price alert tools (5)
+    ├── screener.rs         Stock screener tools (5)
+    ├── portfolio.rs        Portfolio tools (3)
+    ├── atm.rs              ATM/bank card tools (3)
+    ├── macrodata.rs        Macroeconomic indicator tools (2)
+    ├── search.rs           Search tools (2)
+    ├── statement.rs        Account statement tools (2)
+    ├── authenticate.rs     Self-service OAuth code exchange tool (1)
+    ├── calendar.rs         Finance calendar tool (1)
+    ├── quant.rs            Quant indicator script tool (1)
+    │
+    ├── output/             Typed output schemas for tools with a known post-transform shape
+    │   ├── mod.rs
+    │   ├── account.rs
+    │   ├── discovery.rs
+    │   ├── fundamental.rs
+    │   ├── market.rs
+    │   ├── quote.rs
+    │   └── social.rs
+    │
+    └── support/            Shared plumbing, not MCP tools themselves
+        ├── mod.rs
+        ├── http_client.rs  Shared HTTP request helpers
+        ├── parse.rs        Parameter parsing helpers
+        └── tolerant.rs     Lenient deserializers for loosely-typed client input
 ```
 
 ## Authentication
@@ -170,17 +194,27 @@ for the `depth` tool, including field descriptions.
 
 | Module | Count | Data Source | Description |
 |--------|-------|-------------|-------------|
-| `quote` | 29 | SDK `QuoteContext` | Quotes, candlesticks, depth, options, warrants, watchlists, capital flow |
-| `trade` | 14 | SDK `TradeContext` | Orders, positions, balance, executions, margin |
-| `fundamental` | 18 | HTTP `/v1/quote/*` | Financial reports, ratings, valuations, company info |
-| `market` | 9 | HTTP `/v1/quote/*` | Broker holdings, A/H premium, anomalies, index constituents |
-| `content` | 8 | SDK + HTTP | News, topics, filings, community posts |
+| `quote` | 32 | SDK `QuoteContext` + HTTP `/v1/quote/*` | Quotes, candlesticks, depth, brokers, options, warrants, watchlists, capital flow |
+| `fundamental` | 31 | HTTP `/v1/quote/*` | Financial reports/statements, ratings, valuations, company info, shareholders, corporate actions |
+| `trade` | 15 | SDK `TradeContext` | Orders, positions, balance, executions, margin |
+| `market` | 14 | HTTP `/v1/quote/*` | Broker holdings, A/H premium, anomalies, top movers, short trades, index constituents |
+| `dca` | 9 | HTTP `/v1/dailycoins/*` | Dollar-cost averaging plan CRUD, execution history, statistics |
+| `sharelist` | 8 | HTTP `/v1/sharelists/*` | Community sharelist CRUD, member management, popular lists |
+| `ipo` | 7 | HTTP `/v1/ipo/*` | IPO subscriptions, calendar, listed stocks, profit/loss analysis |
+| `content` | 6 | SDK `ContentContext` | News, discussion topic CRUD and replies |
 | `alert` | 5 | HTTP `/v1/notify/*` | Price alert CRUD |
-| `portfolio` | 3 | HTTP `/v1/portfolio/*` | Exchange rates, P&L analysis |
-| `statement` | 2 | HTTP `/v1/asset/*` | Account statement listing and export |
+| `screener` | 5 | HTTP `/v1/quote/*` | Stock screener search, indicators, strategy recommendation/management |
+| `portfolio` | 3 | HTTP `/v1/portfolio/*` + `/v1/asset/*` | Exchange rates, P&L analysis |
+| `atm` | 3 | HTTP `/v1/account/*` | Bank cards, withdrawal/deposit records |
+| `macrodata` | 2 | SDK `FundamentalContext` | Macroeconomic indicator list and detail data |
+| `search` | 2 | HTTP `/v1/search/*` | News search, community topic search |
+| `statement` | 2 | SDK `AssetContext` | Account statement listing and export |
+| `authenticate` | 1 | OAuth authorization-code exchange | Self-service auth for MCP-native clients that can't complete a browser redirect |
 | `calendar` | 1 | HTTP `/v1/quote/*` | Finance calendar events |
+| `quant` | 1 | HTTP `/v1/quant/*` | Run a quant indicator script against historical K-line data server-side |
+| `utility` | 1 | none | Current UTC time |
 
-SDK tools create `QuoteContext`/`TradeContext`/`ContentContext` per request (WebSocket-based). HTTP tools use the authenticated `HttpClient` for REST calls. Both paths produce JSON that flows through the same `TransformSerializer`.
+SDK tools create `QuoteContext`/`TradeContext`/`ContentContext`/`AssetContext`/`FundamentalContext` per request (`QuoteContext` is WebSocket-based and cached; the rest are per-request). HTTP tools use the authenticated `HttpClient` for REST calls. Both paths produce JSON that flows through the same `TransformSerializer`.
 
 ## Symbol Mapping
 
