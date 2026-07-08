@@ -1829,7 +1829,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get historical orders between dates (excludes today). Returns orders[]{order_id, symbol, side, status, quantity, price, submitted_at}. start_at/end_at in RFC3339."
+        description = "Get historical orders between dates (excludes today). Returns orders[]{order_id, symbol, side, status, quantity, price, submitted_at}. start_at/end_at in RFC3339. US accounts only: us_page, us_limit paginate via a separate US order endpoint (default page size 20 — pass us_page to see more than the first page)."
     )]
     async fn history_orders(
         &self,

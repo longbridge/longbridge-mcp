@@ -160,11 +160,13 @@
     },
     "history_orders": {
       "title": "歷史委託",
-      "description": "查詢指定日期區間內的歷史委託（不含當日），返回 orders[]{order_id, symbol, side, status, quantity, price, submitted_at}",
+      "description": "查詢指定日期區間內的歷史委託（不含當日），返回 orders[]{order_id, symbol, side, status, quantity, price, submitted_at}。僅限美股賬戶：us_page、us_limit 通過獨立的美股委託接口分頁（預設每頁 20 條，傳 us_page 可翻頁）",
       "properties": {
         "symbol": "按證券篩選（可選）",
         "start_at": "起始時間（RFC3339 時間格式）",
-        "end_at": "結束時間（RFC3339 時間格式）"
+        "end_at": "結束時間（RFC3339 時間格式）",
+        "us_page": "僅限美股賬戶：頁碼（預設 1）",
+        "us_limit": "僅限美股賬戶：每頁數量（預設 20）"
       }
     },
     "order_detail": {

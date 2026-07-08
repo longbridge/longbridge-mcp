@@ -110,6 +110,10 @@ pub struct HistoryOrdersParam {
     pub start_at: String,
     /// End time (RFC3339)
     pub end_at: String,
+    /// US accounts only, history_orders tool only: page number (default 1).
+    pub us_page: Option<i32>,
+    /// US accounts only, history_orders tool only: page size (default 20).
+    pub us_limit: Option<i32>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -331,8 +335,8 @@ pub async fn history_orders(
             // orders exist in range. 0 (all) is the only value confirmed to
             // return data.
             query_type: 0,
-            page: 1,
-            limit: 20,
+            page: p.us_page.unwrap_or(1),
+            limit: p.us_limit.unwrap_or(20),
         };
         let result = ctx.us_query_orders(opts).await.map_err(Error::longbridge)?;
         let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;

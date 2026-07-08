@@ -160,11 +160,13 @@
     },
     "history_orders": {
       "title": "历史委托",
-      "description": "查询指定日期区间内的历史委托（不含当日），返回 orders[]{order_id, symbol, side, status, quantity, price, submitted_at}",
+      "description": "查询指定日期区间内的历史委托（不含当日），返回 orders[]{order_id, symbol, side, status, quantity, price, submitted_at}。仅限美股账户：us_page、us_limit 通过独立的美股委托接口分页（默认每页 20 条，传 us_page 可翻页）",
       "properties": {
         "symbol": "按证券筛选（可选）",
         "start_at": "起始时间（RFC3339 格式）",
-        "end_at": "结束时间（RFC3339 格式）"
+        "end_at": "结束时间（RFC3339 格式）",
+        "us_page": "仅限美股账户：页码（默认 1）",
+        "us_limit": "仅限美股账户：每页数量（默认 20）"
       }
     },
     "order_detail": {
