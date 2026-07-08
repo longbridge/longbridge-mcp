@@ -918,7 +918,7 @@
     },
     "financial_statement": {
       "title": "財務報表",
-      "description": "獲取證券財務報表（損益表/資產負債表/現金流量表）。kind：IS/BS/CF/ALL（預設）；report：af（年報）/saf（半年報）/qf（季報）/q1/q2/q3。美股賬戶查詢 `.US` 標的時會路由到專屬美股報表接口（report 默認改為 annual/quarterly，而非 af/saf/qf/q1-q3；kind=ALL/預設會拆成 IS+BS+CF 三次請求合併返回 {income_statement, balance_sheet, cash_flow}，因為後端不支持合併請求），其餘組合走通用接口",
+      "description": "獲取證券財務報表（損益表/資產負債表/現金流量表）。kind：IS/BS/CF/ALL（預設）；report：af（年報，預設）/saf（半年報）/qf（季報）/q1/q2/q3。美股賬戶查詢 `.US` 標的時會路由到專屬美股報表接口（report 詞彙表與通用接口相同；kind=ALL/預設會拆成 IS+BS+CF 三次請求合併返回 {income_statement, balance_sheet, cash_flow}，因為後端不支持合併請求），其餘組合走通用接口",
       "properties": {
         "symbol": "證券代碼，例如 `\"AAPL.US\"`",
         "kind": "報表類型：`IS`（損益表）、`BS`（資產負債表）、`CF`（現金流量表）、`ALL`（全部，預設）",

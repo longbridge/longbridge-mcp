@@ -415,10 +415,11 @@ pub async fn financial_statement(
     if crate::tools::support::us_market::is_us_fundamental(mctx, &p.symbol).await {
         let ctx = longbridge::fundamental::FundamentalContext::new(mctx.create_config());
         let kind = p.kind.unwrap_or_else(|| "ALL".to_string()).to_uppercase();
-        let report = p
-            .report
-            .unwrap_or_else(|| "annual".to_string())
-            .to_lowercase();
+        // Despite the SDK's own doc comment claiming "annual"/"quarterly",
+        // live staging testing confirmed the US endpoint actually uses the
+        // same af/saf/qf/q1-q3 vocabulary as the generic path — "annual"
+        // silently returns an empty list.
+        let report = p.report.unwrap_or_else(|| "af".to_string()).to_lowercase();
         // The backend does not support kind=ALL directly (confirmed via live
         // staging testing: it returns an empty list, while IS/BS/CF each
         // return full data individually) — fan out and merge so ALL still
