@@ -403,14 +403,14 @@
     },
     "company": {
       "title": "公司概況",
-      "description": "獲取公司概況，返回 name、description、employees、CEO、founded_year、website、exchange、industry、market_cap 等信息。美股賬戶查詢 `.US` 標的時會路由到專屬美股接口，其餘組合走通用接口",
+      "description": "獲取公司概況，返回 name、description、employees、CEO、founded_year、website、exchange、industry、market_cap 等信息。美股賬戶查詢 `.US` 標的時會路由到專屬美股接口，返回結構不同（intro、market_cap、top_rank_tags、sharelist、detail_url），與 output_schema 不符；其餘組合走通用接口，符合 output_schema",
       "properties": {
         "symbol": "證券代碼，例如 `\"700.HK\"`"
       }
     },
     "consensus": {
       "title": "一致預期",
-      "description": "獲取分析師一致預期，返回 items[]{period, revenue_estimate, eps_estimate, net_income_estimate, analyst_count, last_updated}。美股賬戶查詢 `.US` 標的時會路由到專屬美股一致預期接口並剔除前端專用字段，其餘組合走通用接口",
+      "description": "獲取分析師一致預期，返回 items[]{period, revenue_estimate, eps_estimate, net_income_estimate, analyst_count, last_updated}。美股賬戶查詢 `.US` 標的時會路由到專屬美股一致預期接口，返回結構不同（ai_summary + 按期間的 details[] 列表），與 output_schema 不符；其餘組合走通用接口，符合 output_schema",
       "properties": {
         "symbol": "證券代碼，例如 `\"700.HK\"`"
       }
@@ -445,7 +445,7 @@
     },
     "dividend": {
       "title": "派息歷史",
-      "description": "獲取證券的派息歷史，返回 items[]{ex_date（除權日）, pay_date（派發日）, record_date, dividend_type, amount, currency, status}。美股賬戶查詢 `.US` 標的時會按 ETF/個股路由到對應的專屬美股派息接口（dividend_yield/dividend_yield_ttm 是百分比數值，例如 0.34 代表 0.34%，不是 0-1 的小數），其餘組合走通用接口",
+      "description": "獲取證券的派息歷史，返回 items[]{ex_date（除權日）, pay_date（派發日）, record_date, dividend_type, amount, currency, status}。美股賬戶查詢 `.US` 標的時會按 ETF/個股路由到對應的專屬美股派息接口，返回結構不同，與 output_schema 不符（dividend_yield/dividend_yield_ttm 是百分比數值，例如 0.34 代表 0.34%，不是 0-1 的小數）；其餘組合走通用接口，符合 output_schema",
       "properties": {
         "symbol": "證券代碼，例如 `\"700.HK\"`"
       }
@@ -853,7 +853,7 @@
     },
     "valuation": {
       "title": "估值",
-      "description": "獲取估值概覽及同業對比，返回 metrics.pe/pb/ps/dividend_yield{current, industry_avg, 5yr_avg, percentile} 及同業對比列表。美股賬戶查詢 `.US` 標的時會路由到專屬美股估值接口並剔除前端專用字段，其餘組合走通用接口",
+      "description": "獲取估值概覽及同業對比，返回 metrics.pe/pb/ps/dividend_yield{current, industry_avg, 5yr_avg, percentile} 及同業對比列表。美股賬戶查詢 `.US` 標的時會路由到專屬美股估值接口，返回結構不同（ai_summary + 字段不同的 metrics.pe），與 output_schema 不符；其餘組合走通用接口，符合 output_schema",
       "properties": {
         "symbol": "證券代碼，例如 `\"700.HK\"`"
       }

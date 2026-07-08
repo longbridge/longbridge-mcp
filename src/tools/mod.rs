@@ -2021,7 +2021,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::fundamental::DividendResponse>(),
-        description = "Get dividend history. Returns items[]{ex_date, pay_date, record_date, dividend_type, amount, currency, status} for the symbol. US accounts querying a .US symbol are routed to a US-specific dividend endpoint (ETF vs. stock, by symbol; dividend_yield/dividend_yield_ttm are percent values, e.g. 0.34 means 0.34%, not a 0-1 fraction); all other symbol/account combinations use the generic path."
+        description = "Get dividend history for the symbol. US accounts querying a .US symbol get a differently-shaped response not matching output_schema (dividend_yield_ttm etc. are percent values, e.g. 0.34 means 0.34%); other combinations match output_schema."
     )]
     async fn dividend(
         &self,
@@ -2084,7 +2084,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::fundamental::ConsensusResponse>(),
-        description = "Get financial consensus estimates. Returns items[]{period, revenue_estimate, eps_estimate, net_income_estimate, analyst_count, last_updated} for upcoming periods. US accounts querying a .US symbol are routed to a US-specific consensus endpoint with frontend-only fields stripped; all other symbol/account combinations use the generic path."
+        description = "Get financial consensus estimates for upcoming periods. US accounts querying a .US symbol get a differently-shaped response not matching output_schema (ai_summary plus a details[] list per period); other combinations match output_schema."
     )]
     async fn consensus(
         &self,
@@ -2105,7 +2105,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::fundamental::ValuationResponse>(),
-        description = "Get valuation overview with peer comparison. Returns metrics.pe/pb/ps/dividend_yield{current, industry_avg, 5yr_avg, percentile} and peer comparison list. US accounts querying a .US symbol are routed to a US-specific valuation endpoint with frontend-only fields stripped; all other symbol/account combinations use the generic path."
+        description = "Get valuation overview with peer comparison. US accounts querying a .US symbol get a differently-shaped response not matching output_schema (ai_summary plus a metrics.pe object with different sub-fields); other combos match output_schema."
     )]
     async fn valuation(
         &self,
@@ -2198,7 +2198,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::fundamental::CompanyResponse>(),
-        description = "Get company overview. Returns name, description, employees, CEO, founded_year, website, exchange, industry, market_cap, and business profile summary. US accounts querying a .US symbol are routed to a US-specific company overview endpoint; all other symbol/account combinations use the generic path."
+        description = "Get company overview. US accounts querying a .US symbol get a differently-shaped response not matching output_schema (intro, market_cap, top_rank_tags, sharelist, detail_url); other combinations match output_schema."
     )]
     async fn company(
         &self,
