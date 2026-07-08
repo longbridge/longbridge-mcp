@@ -1,8 +1,8 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "com.longbridge/mcp",
-  "description": "US/HK markets — 145 tools: quotes, options, orders, fundamentals, screener, IPO, alerts & DCA",
-  "version": "0.7.1",
+  "description": "US/HK markets — 148 tools: quotes, options, orders, fundamentals, screener, IPO, alerts & DCA",
+  "version": "0.7.2",
   "repository": {
     "url": "https://github.com/longbridge/longbridge-mcp",
     "source": "github"
