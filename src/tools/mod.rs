@@ -3382,7 +3382,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get financial statements (income statement, balance sheet, or cash flow) for a security. kind: IS/BS/CF/ALL. report: af (annual), saf (semi-annual), qf (quarterly full), q1/q2/q3. US accounts querying a .US symbol are routed to a US-specific statement endpoint (report defaults to annual/quarterly instead of af/saf/qf/q1-q3); all other symbol/account combinations use the generic path."
+        description = "Get financial statements (income statement, balance sheet, or cash flow) for a security. kind: IS/BS/CF/ALL. report: af (annual), saf (semi-annual), qf (quarterly full), q1/q2/q3. US accounts querying a .US symbol are routed to a US-specific statement endpoint (report defaults to annual/quarterly instead of af/saf/qf/q1-q3); kind=ALL/default fans out to IS+BS+CF and returns {income_statement, balance_sheet, cash_flow} since the backend doesn't support a combined request; all other symbol/account combinations use the generic path."
     )]
     async fn financial_statement(
         &self,

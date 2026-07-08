@@ -419,6 +419,24 @@ pub async fn financial_statement(
             .report
             .unwrap_or_else(|| "annual".to_string())
             .to_lowercase();
+        // The backend does not support kind=ALL directly (confirmed via live
+        // staging testing: it returns an empty list, while IS/BS/CF each
+        // return full data individually) — fan out and merge so ALL still
+        // behaves as advertised instead of silently returning nothing.
+        if kind == "ALL" {
+            let (is, bs, cf) = tokio::try_join!(
+                ctx.us_financial_statement(p.symbol.clone(), "IS".to_string(), report.clone()),
+                ctx.us_financial_statement(p.symbol.clone(), "BS".to_string(), report.clone()),
+                ctx.us_financial_statement(p.symbol.clone(), "CF".to_string(), report),
+            )
+            .map_err(crate::error::Error::longbridge)?;
+            let combined = serde_json::json!({
+                "income_statement": is,
+                "balance_sheet": bs,
+                "cash_flow": cf,
+            });
+            return crate::tools::tool_json(&combined);
+        }
         let result = ctx
             .us_financial_statement(p.symbol, kind, report)
             .await

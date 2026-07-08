@@ -918,7 +918,7 @@
     },
     "financial_statement": {
       "title": "财务报表",
-      "description": "获取证券财务报表（利润表/资产负债表/现金流量表）。kind：IS/BS/CF/ALL（默认）；report：af（年报）/saf（半年报）/qf（季报）/q1/q2/q3。美股账户查询 `.US` 标的时会路由到专属美股报表接口（report 默认改为 annual/quarterly，而非 af/saf/qf/q1-q3），其余组合走通用接口",
+      "description": "获取证券财务报表（利润表/资产负债表/现金流量表）。kind：IS/BS/CF/ALL（默认）；report：af（年报）/saf（半年报）/qf（季报）/q1/q2/q3。美股账户查询 `.US` 标的时会路由到专属美股报表接口（report 默认改为 annual/quarterly，而非 af/saf/qf/q1-q3；kind=ALL/默认会拆成 IS+BS+CF 三次请求合并返回 {income_statement, balance_sheet, cash_flow}，因为后端不支持合并请求），其余组合走通用接口",
       "properties": {
         "symbol": "证券代码，例如 `\"AAPL.US\"`",
         "kind": "报表类型：`IS`（利润表）、`BS`（资产负债表）、`CF`（现金流量表）、`ALL`（全部，默认）",
