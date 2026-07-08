@@ -30,7 +30,9 @@ fn strip_html(s: &str) -> String {
 /// `"{\"en\": \"<p>...</p>\", \"zh-CN\": \"...\"}"`. Parses it into a proper
 /// object and strips HTML from each language's text, so a caller doesn't have
 /// to double-parse JSON to get plain-text descriptions. No-ops if `profile`
-/// is absent or not valid JSON.
+/// is absent or not valid JSON; if it parses to something other than an
+/// object (unexpected per the documented shape), the parsed value is
+/// inserted as-is rather than HTML-cleaned.
 ///
 /// Language keys are lower-cased with `-` replaced by `_` (`"zh-CN"` ->
 /// `"zh_cn"`) before insertion: the response as a whole passes through
@@ -386,6 +388,12 @@ mod tests {
         let mut v = json!({"name": "Bitcoin", "profile": "not json"});
         normalize_crypto_profile(&mut v);
         assert_eq!(v["profile"], json!("not json"));
+
+        // Valid JSON but not an object (unexpected per the documented
+        // shape): inserted as-is rather than HTML-cleaned.
+        let mut v = json!({"name": "Bitcoin", "profile": "42"});
+        normalize_crypto_profile(&mut v);
+        assert_eq!(v["profile"], json!(42));
     }
 
     #[test]
