@@ -12,6 +12,7 @@
 pub mod account;
 pub mod discovery;
 pub mod fundamental;
+pub mod macrodata;
 pub mod market;
 pub mod quote;
 pub mod social;
