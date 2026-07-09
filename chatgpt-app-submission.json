@@ -748,6 +748,30 @@
         "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
       }
     },
+    "macrodata": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Get historical observations for a macro-economic indicator. It only reads data and does not place orders or modify any account, watchlist, or stored state.",
+        "open_world_justification": "Queries Longbridge's external macro-economic data services over the network for live and historical data.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
+    "macrodata_indicators": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "List supported macro-economic indicators and their codes. It only reads data and does not place orders or modify any account, watchlist, or stored state.",
+        "open_world_justification": "Queries Longbridge's external macro-economic data services over the network for available indicators.",
+        "destructive_justification": "Does not delete, overwrite, trade, publish, or change any stored state."
+      }
+    },
     "margin_ratio": {
       "annotations": {
         "readOnlyHint": true,
