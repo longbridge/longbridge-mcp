@@ -130,7 +130,18 @@ pub(crate) struct ProtectedResourceMetadata {
     scopes_supported: Vec<String>,
 }
 
+/// OAuth scope ids advertised by the Longbridge authorization server.
+///
+/// - 4: Watchlist management, including creating, updating, and deleting user
+///   watchlists.
+/// - 6: Account assets and cash details, including fund/stock positions, cash
+///   balances, and cash-flow history for portfolio overview and reconciliation.
+/// - 10: Trade order lookup, covering read-only order lifecycle and execution
+///   reports, plus pre-order buying-power estimates.
+/// - 11: Trade execution, including submit/replace/cancel orders and recurring
+///   investment operations.
 const SCOPES_SUPPORTED: &[&str] = &["4", "6", "10", "11"];
+const V2_SCOPES_SUPPORTED: &[&str] = &["4", "6", "10"];
 
 /// Picks the authorization server to advertise: requests that came through the
 /// global single-domain entry get [`global_oauth_url`] (when configured) so the
@@ -147,7 +158,11 @@ fn select_authorization_server(
     }
 }
 
-fn build_resource_metadata(via_global_entry: bool, resource: String) -> ProtectedResourceMetadata {
+fn build_resource_metadata(
+    via_global_entry: bool,
+    resource: String,
+    scopes_supported: &[&str],
+) -> ProtectedResourceMetadata {
     ProtectedResourceMetadata {
         resource,
         authorization_servers: vec![select_authorization_server(
@@ -155,7 +170,7 @@ fn build_resource_metadata(via_global_entry: bool, resource: String) -> Protecte
             global_oauth_url(),
             longbridge_oauth_url(),
         )],
-        scopes_supported: SCOPES_SUPPORTED
+        scopes_supported: scopes_supported
             .iter()
             .map(|scope| scope.to_string())
             .collect(),
@@ -167,7 +182,11 @@ pub async fn protected_resource_metadata(
     headers: HeaderMap,
 ) -> Json<ProtectedResourceMetadata> {
     let public = public_url_from_headers(&headers, &state.base_url);
-    Json(build_resource_metadata(public.via_global_entry, public.url))
+    Json(build_resource_metadata(
+        public.via_global_entry,
+        public.url,
+        SCOPES_SUPPORTED,
+    ))
 }
 
 /// Protected-resource metadata for the restricted `/v2` endpoint (RFC 9728
@@ -175,13 +194,19 @@ pub async fn protected_resource_metadata(
 ///
 /// The `resource` identifier is the `/v2` URL. Scopes stay aligned with the
 /// authorization server metadata instead of advertising an endpoint marker.
+/// Scope 11 is intentionally excluded because `/v2` must not request trade
+/// execution permissions.
 pub async fn protected_resource_metadata_v2(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> Json<ProtectedResourceMetadata> {
     let public = public_url_from_headers(&headers, &state.base_url);
     let resource = format!("{}/v2", public.url);
-    Json(build_resource_metadata(public.via_global_entry, resource))
+    Json(build_resource_metadata(
+        public.via_global_entry,
+        resource,
+        V2_SCOPES_SUPPORTED,
+    ))
 }
 
 #[derive(Serialize)]
