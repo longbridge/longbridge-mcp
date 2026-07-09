@@ -130,15 +130,7 @@ pub(crate) struct ProtectedResourceMetadata {
     scopes_supported: Vec<String>,
 }
 
-/// Scope value advertised for the restricted public `/v2` endpoint.
-///
-/// A client discovering auth from a `/v2` 401 copies this `mcp-endpoint=v2`
-/// marker into the authorization request's `scope` parameter, so the Longbridge
-/// authorization server can present the broader read-only consent set for `/v2`
-/// (account/portfolio + order history, but no trade execution, DCA, IPO orders,
-/// or money movement). It is a marker, not a granular OAuth scope list —
-/// narrowing the granted permissions is done server-side off this marker.
-const V2_SCOPES_SUPPORTED: &[&str] = &["mcp-endpoint=v2"];
+const SCOPES_SUPPORTED: &[&str] = &["4", "6", "10", "11"];
 
 /// Picks the authorization server to advertise: requests that came through the
 /// global single-domain entry get [`global_oauth_url`] (when configured) so the
@@ -155,11 +147,7 @@ fn select_authorization_server(
     }
 }
 
-fn build_resource_metadata(
-    via_global_entry: bool,
-    resource: String,
-    scopes: Vec<String>,
-) -> ProtectedResourceMetadata {
+fn build_resource_metadata(via_global_entry: bool, resource: String) -> ProtectedResourceMetadata {
     ProtectedResourceMetadata {
         resource,
         authorization_servers: vec![select_authorization_server(
@@ -167,7 +155,10 @@ fn build_resource_metadata(
             global_oauth_url(),
             longbridge_oauth_url(),
         )],
-        scopes_supported: scopes,
+        scopes_supported: SCOPES_SUPPORTED
+            .iter()
+            .map(|scope| scope.to_string())
+            .collect(),
     }
 }
 
@@ -176,31 +167,21 @@ pub async fn protected_resource_metadata(
     headers: HeaderMap,
 ) -> Json<ProtectedResourceMetadata> {
     let public = public_url_from_headers(&headers, &state.base_url);
-    Json(build_resource_metadata(
-        public.via_global_entry,
-        public.url,
-        vec!["openapi".to_string()],
-    ))
+    Json(build_resource_metadata(public.via_global_entry, public.url))
 }
 
 /// Protected-resource metadata for the restricted `/v2` endpoint (RFC 9728
 /// resource-specific document at `/.well-known/oauth-protected-resource/v2`).
 ///
-/// The `resource` identifier is the `/v2` URL and `scopes_supported` is the
-/// `/v2` read-only marker, so a client that discovers auth from a `/v2` 401
-/// requests the v2 consent set — keeping trade execution off the consent screen.
+/// The `resource` identifier is the `/v2` URL. Scopes stay aligned with the
+/// authorization server metadata instead of advertising an endpoint marker.
 pub async fn protected_resource_metadata_v2(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> Json<ProtectedResourceMetadata> {
     let public = public_url_from_headers(&headers, &state.base_url);
     let resource = format!("{}/v2", public.url);
-    let scopes = V2_SCOPES_SUPPORTED.iter().map(|s| s.to_string()).collect();
-    Json(build_resource_metadata(
-        public.via_global_entry,
-        resource,
-        scopes,
-    ))
+    Json(build_resource_metadata(public.via_global_entry, resource))
 }
 
 #[derive(Serialize)]

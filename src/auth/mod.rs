@@ -197,8 +197,9 @@ pub fn create_router(state: Arc<AppState>) -> Router {
             "/.well-known/oauth-protected-resource",
             axum::routing::get(metadata::protected_resource_metadata),
         )
-        // RFC 9728 resource-specific metadata for the restricted `/v2` endpoint:
-        // advertises read-only scopes so the OAuth consent screen hides trading.
+        // RFC 9728 resource-specific metadata for the restricted `/v2` endpoint.
+        // The `/v2` resource URL identifies the endpoint; scopes mirror the
+        // authorization server metadata instead of advertising a marker.
         .route(
             "/.well-known/oauth-protected-resource/v2",
             axum::routing::get(metadata::protected_resource_metadata_v2),
