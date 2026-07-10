@@ -166,6 +166,12 @@ claude mcp logout longbridge
 
 On the first tool invocation, Claude Code reads the `WWW-Authenticate` challenge from the server, fetches `/.well-known/oauth-protected-resource` (RFC 9728), and opens your browser for the Longbridge OAuth flow. Access tokens are cached per-session and refreshed automatically.
 
+## Composing with FXMacroData
+
+For workflows that need broader FX-focused macro calendars, official indicator
+history, FX sessions, COT, commodities, or seasonality alongside Longbridge
+account and market tools, see [Composing Longbridge MCP with FXMacroData](docs/fxmacrodata-composition.md).
+
 ## API Endpoints
 
 | Method | Path | Description |
