@@ -31,7 +31,18 @@ pub async fn financial_report(
         && crate::tools::support::us_market::is_us_fundamental(mctx, &p.symbol).await
     {
         let ctx = longbridge::fundamental::FundamentalContext::new(mctx.create_config());
-        let report = p.report_type.unwrap_or_else(|| "annual".to_string());
+        // Same report-vocabulary bug as financial_statement and
+        // financial_report_key_metrics: raw verification data shows
+        // report="annual" returns a handful of periods that mix FY/Q1/H1
+        // labels rather than annual-only, and "quarterly" returns an empty
+        // list — both symptoms match the other two US fundamental endpoints
+        // silently ignoring an invalid report value. Defaulting to "af" for
+        // consistency; not independently re-confirmed against this specific
+        // endpoint in this pass (the raw dump only tried annual/quarterly).
+        let report = p
+            .report_type
+            .unwrap_or_else(|| "af".to_string())
+            .to_lowercase();
         let result = ctx
             .us_financial_overview(p.symbol, report)
             .await
@@ -176,8 +187,14 @@ pub async fn consensus(
 ) -> Result<CallToolResult, McpError> {
     if crate::tools::support::us_market::is_us_fundamental(mctx, &p.symbol).await {
         let ctx = longbridge::fundamental::FundamentalContext::new(mctx.create_config());
+        // Same report-vocabulary bug as the other US fundamental endpoints:
+        // report="annual" silently returns an empty result (confirmed live —
+        // ai_summary populated but currency/report/list/opt_reports all
+        // empty). The raw verification dump's real call used report="af"
+        // and got a full 5-period list, whose own opt_reports field
+        // ["qf","af"] confirms af/qf are the only valid values.
         let result = ctx
-            .us_analyst_consensus(p.symbol, "annual")
+            .us_analyst_consensus(p.symbol, "af")
             .await
             .map_err(crate::error::Error::longbridge)?;
         let mut value = serde_json::to_value(&result).map_err(crate::error::Error::Serialize)?;
@@ -464,7 +481,8 @@ pub async fn financial_statement(
 pub struct SymbolReportParam {
     /// Security symbol, e.g. "AAPL.US"
     pub symbol: String,
-    /// Report period: "annual" (default) or "quarterly"
+    /// Report period: "af" (annual, default), "saf" (semi-annual), "qf"
+    /// (quarterly full), "q1"/"q2"/"q3".
     pub report: Option<String>,
 }
 
@@ -475,7 +493,15 @@ pub async fn financial_report_key_metrics(
     p: SymbolReportParam,
 ) -> Result<CallToolResult, McpError> {
     let ctx = longbridge::fundamental::FundamentalContext::new(mctx.create_config());
-    let report = p.report.unwrap_or_else(|| "annual".to_string());
+    // Same sibling-endpoint doc-comment bug as financial_statement: raw
+    // verification data confirms report="af" returns a clean 11-period
+    // annual-only list, while "annual" (this endpoint's own former default,
+    // matching its incorrect doc comment) returns 140+ unfiltered periods
+    // mixing FY/Q1/Q2/Q3/H0/H1 — i.e. the report filter is silently ignored.
+    // Lowercased for consistency with financial_statement's handling of the
+    // same report vocabulary — the backend appears to match report values
+    // exactly rather than case-insensitively (see the "annual" note above).
+    let report = p.report.unwrap_or_else(|| "af".to_string()).to_lowercase();
     let result = ctx
         .us_key_financial_metrics(p.symbol, report)
         .await

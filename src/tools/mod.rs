@@ -1951,6 +1951,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
+        output_schema = schema_for::<output::us_market::FinancialReportResponse>(),
         description = "Get financial reports (income statement, balance sheet, cash flow). kind: IS/BS/CF/ALL. report_type: af (annual), saf (semi-annual), q1/q2/q3, qf (quarterly full). US accounts querying a .US symbol without kind are routed to a US-specific overview endpoint; passing kind explicitly always uses the generic path."
     )]
     async fn financial_report(
@@ -2622,6 +2623,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
+        output_schema = schema_for::<output::us_market::PortfolioRealizedPlResponse>(),
         description = "Get realized P&L for a US account, broken down by category (stock/option/crypto) and period. US accounts only; errors with DcRegionRestricted for HK/CN/SG accounts."
     )]
     async fn profit_analysis_realized(
@@ -3384,6 +3386,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
+        output_schema = schema_for::<output::us_market::FinancialStatementResponse>(),
         description = "Get financial statements (income statement, balance sheet, or cash flow) for a security. kind: IS/BS/CF/ALL. report: af (annual, default), saf (semi-annual), qf (quarterly full), q1/q2/q3. US accounts querying a .US symbol are routed to a US-specific statement endpoint (same report vocabulary as the generic path); kind=ALL/default fans out to IS+BS+CF and returns {income_statement, balance_sheet, cash_flow} since the backend doesn't support a combined request; all other symbol/account combinations use the generic path."
     )]
     async fn financial_statement(
@@ -3407,7 +3410,8 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get key financial metrics (fin-keyfactor) for a US symbol. US accounts only; errors with DcRegionRestricted for HK/CN/SG accounts."
+        output_schema = schema_for::<output::us_market::FinancialReportKeyMetricsResponse>(),
+        description = "Get key financial metrics (fin-keyfactor) for a US symbol. report: af (annual, default), saf, qf, q1/q2/q3. US accounts only; errors with DcRegionRestricted for HK/CN/SG accounts."
     )]
     async fn financial_report_key_metrics(
         &self,
@@ -3430,6 +3434,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
+        output_schema = schema_for::<output::us_market::EtfDocsResponse>(),
         description = "Get regulatory/prospectus documents (etf-files) for a US ETF. US accounts only; errors with DcRegionRestricted for HK/CN/SG accounts."
     )]
     async fn etf_docs(
@@ -4865,6 +4870,40 @@ mod quote_cmd_tests {
     #[test]
     fn macrodata_tools_expose_chatgpt_required_metadata() {
         for name in ["macrodata", "macrodata_indicators"] {
+            let tool = super::list_tools()
+                .into_iter()
+                .find(|tool| tool.name == name)
+                .unwrap_or_else(|| panic!("{name} tool must be registered"));
+            let annotations = tool
+                .annotations
+                .as_ref()
+                .unwrap_or_else(|| panic!("{name} must declare annotations"));
+
+            assert_eq!(annotations.read_only_hint, Some(true));
+            assert_eq!(annotations.destructive_hint, Some(false));
+            assert_eq!(annotations.open_world_hint, Some(true));
+            assert!(
+                tool.output_schema.is_some(),
+                "{name} must declare an outputSchema"
+            );
+        }
+    }
+
+    #[test]
+    fn us_market_tools_expose_required_metadata() {
+        for name in [
+            "financial_statement",
+            "financial_report",
+            "financial_report_key_metrics",
+            "profit_analysis_realized",
+            "etf_docs",
+            "stock_positions",
+            "order_detail",
+            "dividend",
+            "consensus",
+            "valuation",
+            "company",
+        ] {
             let tool = super::list_tools()
                 .into_iter()
                 .find(|tool| tool.name == name)

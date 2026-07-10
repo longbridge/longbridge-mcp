@@ -504,7 +504,7 @@
     },
     "financial_report_key_metrics": {
       "title": "关键财务指标（美股）",
-      "description": "获取美股标的的关键财务指标（fin-keyfactor）。仅限美股账户；港股/沪深/新加坡账户调用会返回 DcRegionRestricted 错误",
+      "description": "获取美股标的的关键财务指标（fin-keyfactor）。report: af（年度，默认）、saf、qf、q1/q2/q3。仅限美股账户；港股/沪深/新加坡账户调用会返回 DcRegionRestricted 错误",
       "properties": {
         "symbol": "证券代码，例如 `\"AAPL.US\"`",
         "report": "报告期：`\"annual\"`（默认）或 `\"quarterly\"`"

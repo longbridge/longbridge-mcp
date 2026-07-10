@@ -504,7 +504,7 @@
     },
     "financial_report_key_metrics": {
       "title": "關鍵財務指標（美股）",
-      "description": "獲取美股標的的關鍵財務指標（fin-keyfactor）。僅限美股賬戶；港股/滬深/新加坡賬戶調用會返回 DcRegionRestricted 錯誤",
+      "description": "獲取美股標的的關鍵財務指標（fin-keyfactor）。report: af（年度，默認）、saf、qf、q1/q2/q3。僅限美股賬戶；港股/滬深/新加坡賬戶調用會返回 DcRegionRestricted 錯誤",
       "properties": {
         "symbol": "證券代碼，例如 `\"AAPL.US\"`",
         "report": "報告期：`\"annual\"`（默認）或 `\"quarterly\"`"
