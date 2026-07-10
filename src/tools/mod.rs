@@ -73,6 +73,7 @@ mod sharelist;
 mod statement;
 mod support;
 mod trade;
+mod prompts;
 
 /// Helper to build a JSON Schema `Arc<JsonObject>` from a `JsonSchema`-derived
 /// type, suitable for passing to `#[tool(output_schema = ...)]`.
@@ -4060,6 +4061,7 @@ impl ServerHandler for Longbridge {
             rmcp::model::ServerCapabilities::builder()
                 .enable_tools()
                 .enable_resources()
+                .enable_prompts()
                 .build(),
         )
         .with_server_info(rmcp::model::Implementation::new(
@@ -4179,6 +4181,22 @@ impl ServerHandler for Longbridge {
             tools,
             ..Default::default()
         })
+    }
+
+    async fn list_prompts(
+        &self,
+        _request: Option<rmcp::model::PaginatedRequestParams>,
+        _context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> Result<rmcp::model::ListPromptsResult, rmcp::ErrorData> {
+        Ok(prompts::list_prompts_result())
+    }
+
+    async fn get_prompt(
+        &self,
+        request: rmcp::model::GetPromptRequestParams,
+        _context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> Result<rmcp::model::GetPromptResult, rmcp::ErrorData> {
+        prompts::get_prompt_result(&request.name)
     }
 
     async fn list_resources(
