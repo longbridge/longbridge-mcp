@@ -4828,6 +4828,17 @@ mod quote_cmd_tests {
         );
     }
 
+    // AC-06: initialize 响应的 capabilities 包含 prompts 字段
+    #[test]
+    fn server_info_declares_prompts_capability() {
+        let info = <super::Longbridge as rmcp::ServerHandler>::get_info(&super::Longbridge);
+
+        assert!(
+            info.capabilities.prompts.is_some(),
+            "prompts capability must be advertised after enable_prompts()"
+        );
+    }
+
     /// Measures the speedup of the cached tool list vs. the old rebuild-on-every-call path.
     /// Also benchmarks the actual production hot path (`tools_main_endpoint().to_vec()`).
     ///
