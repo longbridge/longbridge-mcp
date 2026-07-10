@@ -81,9 +81,7 @@ pub async fn macrodata_indicators(
         }
     }
     let json = serde_json::to_string(&value).map_err(Error::Serialize)?;
-    Ok(CallToolResult::success(vec![rmcp::model::Content::text(
-        json,
-    )]))
+    Ok(crate::tools::tool_result(json))
 }
 
 pub async fn macrodata(
@@ -115,9 +113,7 @@ pub async fn macrodata(
         }
     }
     let json = serde_json::to_string(&value).map_err(Error::Serialize)?;
-    Ok(CallToolResult::success(vec![rmcp::model::Content::text(
-        json,
-    )]))
+    Ok(crate::tools::tool_result(json))
 }
 
 #[cfg(test)]

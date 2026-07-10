@@ -102,8 +102,7 @@ pub async fn mcp_auth_layer(
 ) -> Response {
     let resource = crate::auth::metadata::public_url_from_headers(req.headers(), base_url).url;
     // A restricted endpoint points at its own RFC 9728 resource-specific
-    // metadata, which advertises read-only scopes only — so the authorize URL the
-    // client builds never requests trading scopes.
+    // metadata so clients bind the OAuth flow to the endpoint resource URL.
     let metadata_path = match restricted {
         Some(version) => version.metadata_path(),
         None => "/.well-known/oauth-protected-resource",

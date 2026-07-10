@@ -1460,8 +1460,9 @@ impl Longbridge {
     /// List all supported macro-economic indicators.
     #[tool(
         title = "Macro Indicator List",
-        annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "List macro-economic indicators. keyword: search by name (e.g. \"CPI\", \"非农\", \"GDP\"). country: US/CN/HK/EU/JP/SG (omit for all). Returns {count, list[]{indicator_code, country, name, describe, periodicity, importance(1=low/2=mid/3=high)}}. Supports offset/limit pagination."
+        annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = true),
+        output_schema = schema_for::<output::macrodata::MacroeconomicIndicatorsResponse>(),
+        description = "List macro-economic indicators. Filter by keyword and country (US/CN/HK/EU/JP/SG). Use the returned indicator_code with macrodata. Supports offset/limit pagination."
     )]
     async fn macrodata_indicators(
         &self,
@@ -1478,8 +1479,9 @@ impl Longbridge {
     /// Get historical data for a macro-economic indicator.
     #[tool(
         title = "Macro Indicator Data",
-        annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = true),
-        description = "Get historical data for a macro-economic indicator by its code (from macrodata_indicators). start_date/end_date accept YYYY-MM-DD. Returns {count, info{indicator_code, country, name, describe, periodicity, importance(1=low/2=mid/3=high)}, data[]{period, release_at, actual_value, previous_value, forecast_value, unit}}. period format varies by periodicity: monthly=\"YYYY-MM-DD\", quarterly=\"YYYY-Qn\" (e.g. \"2024-Q1\"), annual=\"YYYY-01-01\". Note: empty actual_value = not yet released (only forecast_value available); empty data[] = no records in range. Supports offset/limit pagination (max 100 per page). Returns error if indicator_code does not exist."
+        annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = true),
+        output_schema = schema_for::<output::macrodata::MacroeconomicResponse>(),
+        description = "Get historical observations for one macro-economic indicator. Use indicator_code from macrodata_indicators; start_date/end_date accept YYYY-MM-DD. Supports offset/limit pagination."
     )]
     async fn macrodata(
         &self,
@@ -4858,6 +4860,28 @@ mod quote_cmd_tests {
                 .contains("Returns "),
             "typed-output tools should not duplicate output field lists in top-level descriptions"
         );
+    }
+
+    #[test]
+    fn macrodata_tools_expose_chatgpt_required_metadata() {
+        for name in ["macrodata", "macrodata_indicators"] {
+            let tool = super::list_tools()
+                .into_iter()
+                .find(|tool| tool.name == name)
+                .unwrap_or_else(|| panic!("{name} tool must be registered"));
+            let annotations = tool
+                .annotations
+                .as_ref()
+                .unwrap_or_else(|| panic!("{name} must declare annotations"));
+
+            assert_eq!(annotations.read_only_hint, Some(true));
+            assert_eq!(annotations.destructive_hint, Some(false));
+            assert_eq!(annotations.open_world_hint, Some(true));
+            assert!(
+                tool.output_schema.is_some(),
+                "{name} must declare an outputSchema"
+            );
+        }
     }
 
     #[test]
