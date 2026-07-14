@@ -34,6 +34,8 @@ Run `cargo clippy --all-features --all-targets` and fix all warnings before comm
 
 - Public items should have doc comments.
 - Use `//!` for module-level documentation, `///` for item documentation.
+- Store connector submissions, review materials, test credentials, and other non-public submission documents under `docs/internal/`.
+- Never commit or publish files under `docs/internal/`; the directory is intentionally excluded by `.gitignore`.
 
 ## Commit messages
 
