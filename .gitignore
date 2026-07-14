@@ -12,3 +12,4 @@ docs/.gitkeep
 scripts/check_registries.py
 scripts/check_sponsors.py
 scripts/generate_homepage.py
+docs/internal/
