@@ -5,7 +5,7 @@
 //!   `2026-06-02 20:00:00.0 +00:00:00`) -> RFC3339, regardless of field name
 //! - Field `counter_id` (string) -> renamed to `symbol`, value converted
 //! - Field `counter_ids` (array of strings) -> renamed to `symbols`, each converted
-//! - Fields `aaid` and `account_channel` -> value set to null
+//! - Fields `aaid` and `account_channel` -> excluded from output entirely
 //!
 //! Zero intermediate allocation for SDK types (`to_tool_json`).
 
@@ -193,7 +193,7 @@ pub(crate) enum FieldKind {
     Timestamp,
     CounterId,
     CounterIds,
-    Nullified,
+    Excluded,
 }
 
 pub(crate) fn classify_field(snake_name: &str) -> FieldKind {
@@ -204,7 +204,7 @@ pub(crate) fn classify_field(snake_name: &str) -> FieldKind {
     } else if snake_name.ends_with("_at") {
         FieldKind::Timestamp
     } else if matches!(snake_name, "aaid" | "account_channel") {
-        FieldKind::Nullified
+        FieldKind::Excluded
     } else {
         FieldKind::Normal
     }
@@ -534,7 +534,7 @@ mod tests {
     }
 
     #[test]
-    fn nullified_fields_to_tool_json() {
+    fn excluded_fields_to_tool_json() {
         #[derive(Serialize)]
         struct Data {
             aaid: String,
@@ -547,18 +547,18 @@ mod tests {
             name: "keep".to_string(),
         })
         .unwrap();
-        assert!(json.contains("\"aaid\":null"), "got: {json}");
-        assert!(json.contains("\"account_channel\":null"), "got: {json}");
+        assert!(!json.contains("\"aaid\""), "got: {json}");
+        assert!(!json.contains("\"account_channel\""), "got: {json}");
         assert!(json.contains("\"name\":\"keep\""), "got: {json}");
     }
 
     #[test]
-    fn nullified_fields_transform_json() {
+    fn excluded_fields_transform_json() {
         let raw = r#"{"planId":"1","aaid":"999","accountChannel":"lb","market":"US"}"#;
         let output = transform_json(raw.as_bytes()).unwrap();
         let v: serde_json::Value = serde_json::from_str(&output).unwrap();
-        assert_eq!(v["aaid"], serde_json::Value::Null);
-        assert_eq!(v["account_channel"], serde_json::Value::Null);
+        assert!(v.get("aaid").is_none());
+        assert!(v.get("account_channel").is_none());
         assert_eq!(v["plan_id"], "1");
     }
 

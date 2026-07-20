@@ -230,16 +230,16 @@ impl<M: SerializeMap> SerializeMap for TransformMap<M> {
         let snake = to_snake_case(&raw);
         let kind = classify_field(&snake);
         self.current_kind = kind;
+        if kind == FieldKind::Excluded {
+            return Ok(());
+        }
         let out = output_key(&snake, kind);
         self.inner.serialize_key(out.as_ref())
     }
 
     fn serialize_value<T: Serialize + ?Sized>(&mut self, value: &T) -> Result<(), Self::Error> {
         match self.current_kind {
-            FieldKind::Nullified => {
-                let _ = serde_json::to_value(value);
-                self.inner.serialize_value(&None::<()>)
-            }
+            FieldKind::Excluded => Ok(()),
             FieldKind::Timestamp => self.inner.serialize_value(&TimestampValue { value }),
             FieldKind::CounterId => self.inner.serialize_value(&CounterIdValue { value }),
             FieldKind::CounterIds => self.inner.serialize_value(&CounterIdsValue { value }),
@@ -267,10 +267,13 @@ impl<M: SerializeMap> SerializeStruct for TransformStructAsMap<M> {
     ) -> Result<(), Self::Error> {
         let snake = to_snake_case(key);
         let kind = classify_field(&snake);
+        if kind == FieldKind::Excluded {
+            return Ok(());
+        }
         let out_key = output_key(&snake, kind);
         self.inner.serialize_key(out_key.as_ref())?;
         match kind {
-            FieldKind::Nullified => self.inner.serialize_value(&None::<()>),
+            FieldKind::Excluded => unreachable!("excluded fields skipped above"),
             FieldKind::Timestamp => self.inner.serialize_value(&TimestampValue { value }),
             FieldKind::CounterId => self.inner.serialize_value(&CounterIdValue { value }),
             FieldKind::CounterIds => self.inner.serialize_value(&CounterIdsValue { value }),
