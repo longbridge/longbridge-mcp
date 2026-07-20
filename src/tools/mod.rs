@@ -119,6 +119,38 @@ pub struct McpContext {
     pub extra_headers: Vec<(String, String)>,
 }
 
+/// Global-gateway endpoints, pinned for US-data-center tokens.
+///
+/// # Which access point can serve which data center
+///
+/// Every Longbridge credential carries its data center as a prefix: `us_…` for
+/// the US data center, `ap_…` (or unprefixed) for Asia-Pacific. That prefix
+/// decides which access point can serve it:
+///
+/// | Data center | `.com` | `.cn` |
+/// |-------------|--------|-------|
+/// | `us`        | yes — the only usable access point | no |
+/// | `ap`        | yes    | yes   |
+///
+/// `.cn` has no path to the US data center. This is a hard constraint, not a
+/// latency or preference question.
+///
+/// # Why this is pinned
+///
+/// Left unset, the SDK picks an access point by geolocation at request time,
+/// which resolves to `.cn` on a China Mainland network. A US token sent to `.cn`
+/// still authenticates — the WebSocket connects and basic calls such as
+/// `static_info` succeed — but every market-data request comes back
+/// `301604 no quote access`, because `.cn` cannot source US-account quotes. The
+/// failure reads like a missing permission and is not one, so pin the endpoints
+/// rather than letting geolocation decide.
+///
+/// AP tokens are deliberately left to geolocation: both access points serve
+/// them, so the nearer one is the right choice.
+const US_HTTP_URL: &str = "https://openapi.longbridge.com";
+const US_QUOTE_WS_URL: &str = "wss://openapi-quote.longbridge.com/v2";
+const US_TRADE_WS_URL: &str = "wss://openapi-trade.longbridge.com/v2";
+
 /// Server-side beacon endpoint. Quote operations flow over the WebSocket quote
 /// channel and never reach the HTTP access log; a request to this fake path lets
 /// the server record (and count) that a WS-backed quote tool ran. The path only
@@ -165,6 +197,16 @@ impl McpContext {
         }
     }
 
+    /// Whether this request's token belongs to the US data center and so needs
+    /// the global gateway pinned instead of geotest-selected endpoints.
+    ///
+    /// `LONGBRIDGE_HTTP_URL` takes precedence when set, so tests and local mock
+    /// servers can still redirect the SDK.
+    fn pin_us_endpoints(&self) -> bool {
+        std::env::var("LONGBRIDGE_HTTP_URL").is_err()
+            && longbridge::DcRegion::from_credential(&self.token) == longbridge::DcRegion::Us
+    }
+
     pub fn create_config(&self) -> Arc<longbridge::Config> {
         let mut config =
             longbridge::Config::from_oauth(longbridge::oauth::OAuth::from_token(&self.token))
@@ -173,6 +215,12 @@ impl McpContext {
                 // Identify MCP-originated requests on the Context path (REST and
                 // WebSocket upgrades), mirroring how longbridge-cli tags itself.
                 .header("user-agent", self.user_agent());
+        if self.pin_us_endpoints() {
+            config = config
+                .http_url(US_HTTP_URL)
+                .quote_ws_url(US_QUOTE_WS_URL)
+                .trade_ws_url(US_TRADE_WS_URL);
+        }
         if let Some(ref lang) = self.language {
             let lb_lang = if lang.contains("zh-CN") || lang.contains("zh-Hans") {
                 longbridge::Language::ZH_CN
@@ -192,11 +240,15 @@ impl McpContext {
     }
 
     pub fn create_http_client(&self) -> longbridge::httpclient::HttpClient {
-        let mut client = longbridge::httpclient::HttpClient::new(
-            longbridge::httpclient::HttpClientConfig::from_oauth(
-                longbridge::oauth::OAuth::from_token(&self.token),
-            ),
+        let mut http_config = longbridge::httpclient::HttpClientConfig::from_oauth(
+            longbridge::oauth::OAuth::from_token(&self.token),
         );
+        // Same US pinning as `create_config`, so REST calls do not drift to the
+        // CN node while the WebSocket is pinned to the global one.
+        if self.pin_us_endpoints() {
+            http_config = http_config.http_url(US_HTTP_URL);
+        }
+        let mut client = longbridge::httpclient::HttpClient::new(http_config);
         // NOTE: This is very important for passing headers to upstream Longbridge services.
         // Do not remove this unless you have a good reason and know exactly which headers to forward instead.
         for (key, value) in &self.extra_headers {
