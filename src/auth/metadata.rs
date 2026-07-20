@@ -147,7 +147,7 @@ const V2_SCOPES_SUPPORTED: &[&str] = &["4", "6", "10"];
 /// global single-domain entry get [`global_oauth_url`] (when configured) so the
 /// whole OAuth bootstrap stays on the global domains; everything else keeps the
 /// per-DC [`longbridge_oauth_url`].
-fn select_authorization_server(
+pub(crate) fn select_authorization_server(
     via_global_entry: bool,
     global: Option<String>,
     fallback: String,
@@ -159,17 +159,13 @@ fn select_authorization_server(
 }
 
 fn build_resource_metadata(
-    via_global_entry: bool,
+    authorization_server: String,
     resource: String,
     scopes_supported: &[&str],
 ) -> ProtectedResourceMetadata {
     ProtectedResourceMetadata {
         resource,
-        authorization_servers: vec![select_authorization_server(
-            via_global_entry,
-            global_oauth_url(),
-            longbridge_oauth_url(),
-        )],
+        authorization_servers: vec![authorization_server],
         scopes_supported: scopes_supported
             .iter()
             .map(|scope| scope.to_string())
@@ -183,7 +179,7 @@ pub async fn protected_resource_metadata(
 ) -> Json<ProtectedResourceMetadata> {
     let public = public_url_from_headers(&headers, &state.base_url);
     Json(build_resource_metadata(
-        public.via_global_entry,
+        public.url.clone(),
         public.url,
         SCOPES_SUPPORTED,
     ))
@@ -203,10 +199,65 @@ pub async fn protected_resource_metadata_v2(
     let public = public_url_from_headers(&headers, &state.base_url);
     let resource = format!("{}/v2", public.url);
     Json(build_resource_metadata(
-        public.via_global_entry,
+        public.url,
         resource,
         V2_SCOPES_SUPPORTED,
     ))
+}
+
+/// Longbridge OAuth upstream selected for this public entry point.
+pub(crate) fn oauth_upstream_url(via_global_entry: bool) -> String {
+    select_authorization_server(via_global_entry, global_oauth_url(), longbridge_oauth_url())
+}
+
+/// RFC 8414 metadata for the minimal OAuth facade hosted by this MCP server.
+/// Authorization and registration remain direct Longbridge endpoints; only
+/// token exchange and revocation return through this server so it can attach
+/// Longbridge's private DC routing header.
+#[derive(Serialize)]
+pub(crate) struct AuthorizationServerMetadata {
+    issuer: String,
+    authorization_endpoint: String,
+    token_endpoint: String,
+    revocation_endpoint: String,
+    registration_endpoint: String,
+    jwks_uri: String,
+    scopes_supported: Vec<String>,
+    response_types_supported: Vec<&'static str>,
+    grant_types_supported: Vec<&'static str>,
+    token_endpoint_auth_methods_supported: Vec<&'static str>,
+    code_challenge_methods_supported: Vec<&'static str>,
+}
+
+fn build_authorization_server_metadata(
+    issuer: String,
+    upstream: String,
+) -> AuthorizationServerMetadata {
+    let issuer = issuer.trim_end_matches('/');
+    let upstream = upstream.trim_end_matches('/');
+    AuthorizationServerMetadata {
+        issuer: issuer.to_string(),
+        authorization_endpoint: format!("{upstream}/oauth2/authorize"),
+        token_endpoint: format!("{issuer}/oauth2/token"),
+        revocation_endpoint: format!("{issuer}/oauth2/revoke"),
+        registration_endpoint: format!("{upstream}/oauth2/register"),
+        jwks_uri: format!("{upstream}/.well-known/jwks.json"),
+        scopes_supported: SCOPES_SUPPORTED.iter().map(|s| s.to_string()).collect(),
+        response_types_supported: vec!["code"],
+        grant_types_supported: vec!["authorization_code", "refresh_token"],
+        token_endpoint_auth_methods_supported: vec!["none"],
+        code_challenge_methods_supported: vec!["S256", "plain"],
+    }
+}
+
+/// Serve the MCP OAuth facade's RFC 8414 authorization-server metadata.
+pub async fn authorization_server_metadata(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Json<AuthorizationServerMetadata> {
+    let public = public_url_from_headers(&headers, &state.base_url);
+    let upstream = oauth_upstream_url(public.via_global_entry);
+    Json(build_authorization_server_metadata(public.url, upstream))
 }
 
 #[derive(Serialize)]
@@ -390,6 +441,32 @@ mod tests {
         assert_eq!(
             select_authorization_server(false, global(), fallback()),
             fallback()
+        );
+    }
+
+    #[test]
+    fn oauth_facade_only_proxies_credential_bearing_endpoints() {
+        let metadata = build_authorization_server_metadata(
+            "https://mcp.longbridge.com/".to_string(),
+            "https://openapi.longbridge.com/".to_string(),
+        );
+
+        assert_eq!(metadata.issuer, "https://mcp.longbridge.com");
+        assert_eq!(
+            metadata.authorization_endpoint,
+            "https://openapi.longbridge.com/oauth2/authorize"
+        );
+        assert_eq!(
+            metadata.registration_endpoint,
+            "https://openapi.longbridge.com/oauth2/register"
+        );
+        assert_eq!(
+            metadata.token_endpoint,
+            "https://mcp.longbridge.com/oauth2/token"
+        );
+        assert_eq!(
+            metadata.revocation_endpoint,
+            "https://mcp.longbridge.com/oauth2/revoke"
         );
     }
 }

@@ -1,5 +1,6 @@
 pub mod metadata;
 pub mod middleware;
+mod oauth_proxy;
 
 use std::sync::Arc;
 
@@ -204,6 +205,10 @@ pub fn create_router(state: Arc<AppState>) -> Router {
             "/.well-known/oauth-protected-resource/v2",
             axum::routing::get(metadata::protected_resource_metadata_v2),
         )
+        .route(
+            "/.well-known/oauth-authorization-server",
+            axum::routing::get(metadata::authorization_server_metadata),
+        )
         .with_state(state.clone());
 
     // Serve the static server card at both the host-root path Smithery's docs
@@ -236,6 +241,11 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route("/mcp/scopes.json", axum::routing::get(scopes_json))
         // Restricted public manifest for the `/v2` endpoint (allowlist only).
         .route("/v2/tools.json", axum::routing::get(v2_tools_json));
+
+    let oauth_proxy_routes: Router = Router::new()
+        .route("/oauth2/token", axum::routing::post(oauth_proxy::token))
+        .route("/oauth2/revoke", axum::routing::post(oauth_proxy::revoke))
+        .with_state(state.clone());
 
     // Build an auth-wrapped MCP service for one mounting point. The same
     // `Longbridge` MCP server is mounted several times; the only thing that
@@ -303,6 +313,7 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .merge(openai_apps_challenge_route)
         .merge(metrics_route)
         .merge(tools_route)
+        .merge(oauth_proxy_routes)
         .nest_service("/agent", mcp_agent)
         .nest_service("/v2", mcp_v2)
         .nest_service("/mcp", mcp_with_auth)
