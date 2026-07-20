@@ -129,6 +129,61 @@ fn init_logging(log_dir: Option<&PathBuf>) {
     }
 }
 
+/// Human-facing startup summary printed to stderr.
+///
+/// Structured `tracing` events go to the log file and are meant for machines;
+/// this block is what an operator reads when starting the server by hand, so it
+/// also carries the client install commands (kept in sync with
+/// `src/auth/landing.html`).
+fn print_startup_banner(config: &AppConfig, tools: usize, v2_tools: usize) {
+    use std::io::IsTerminal;
+
+    let color = std::io::stderr().is_terminal();
+    let (b, d, c, r) = if color {
+        ("\x1b[1m", "\x1b[2m", "\x1b[36m", "\x1b[0m")
+    } else {
+        ("", "", "", "")
+    };
+
+    let base = &config.base_url;
+    let scheme = if config.tls_cert.is_some() && config.tls_key.is_some() {
+        "https"
+    } else {
+        "http"
+    };
+    let logs = config
+        .log_dir
+        .as_ref()
+        .map_or_else(|| "stderr".to_string(), |d| d.display().to_string());
+
+    eprintln!();
+    eprintln!(
+        "  {b}Longbridge MCP Server{r} {d}v{}{r}",
+        env!("CARGO_PKG_VERSION")
+    );
+    eprintln!();
+    eprintln!("  {d}Listening{r}  {scheme}://{}", config.bind);
+    eprintln!("  {d}Base URL{r}   {base}");
+    eprintln!("  {d}Logs{r}       {logs}");
+    eprintln!();
+    eprintln!("  {b}Endpoints{r}");
+    eprintln!(
+        "    {c}{base}/mcp{r}  {d}{tools} tools — direct users (all tools, incl. trading & DCA){r}"
+    );
+    eprintln!(
+        "    {c}{base}/v2{r}   {d}{v2_tools} tools — app directories (read-only; no trade execution / DCA / IPO orders / money movement){r}"
+    );
+    eprintln!("    {c}{base}/mcp/tools.json{r}  {d}tool schema{r}");
+    eprintln!();
+    eprintln!("  {b}Add to your client{r}");
+    eprintln!("    {d}Claude Code{r}  claude mcp add --transport http longbridge-dev {base}");
+    eprintln!("    {d}Codex{r}        codex mcp add longbridge-dev --url {base}");
+    eprintln!(
+        "    {d}Others{r}       {{\"mcpServers\": {{\"longbridge-dev\": {{\"url\": \"{base}\"}}}}}}  {d}(Claude Desktop · Cursor · Zed){r}"
+    );
+    eprintln!();
+}
+
 async fn shutdown_signal() {
     tokio::signal::ctrl_c().await.ok();
     tracing::info!("shutting down");
@@ -181,27 +236,12 @@ async fn main() -> anyhow::Result<()> {
     let app =
         auth::create_router(app_state.clone()).layer(tower_http::cors::CorsLayer::permissive());
 
+    // Counts include all registered tools; authenticated clients on /mcp see one
+    // fewer (the `authenticate` tool is only surfaced on the unauthenticated
+    // /agent endpoint).
     let tools = crate::tools::list_tools();
-    // count includes all registered tools; authenticated clients on /mcp see one fewer
-    // (the `authenticate` tool is only surfaced on the unauthenticated /agent endpoint).
-    tracing::info!(
-        count = tools.len(),
-        url = format!("{}/mcp/tools.json", config.base_url),
-        "tools registered"
-    );
-
-    // The client-facing endpoints differ only in which tools they expose.
     let v2_tools = crate::tools::v2_list_tools();
-    tracing::info!(
-        url = %format!("{}/mcp", config.base_url),
-        tools = tools.len(),
-        "full endpoint — direct users (all tools, incl. trading & DCA)"
-    );
-    tracing::info!(
-        url = %format!("{}/v2", config.base_url),
-        tools = v2_tools.len(),
-        "restricted public endpoint — app directories (read-only; no trade execution / DCA / IPO orders / money movement)"
-    );
+    print_startup_banner(&config, tools.len(), v2_tools.len());
 
     if let (Some(cert), Some(key)) = (&config.tls_cert, &config.tls_key) {
         let tls_config = axum_server::tls_rustls::RustlsConfig::from_pem_file(cert, key).await?;

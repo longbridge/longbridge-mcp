@@ -117,12 +117,82 @@ pub struct InstitutionRatingDetailItem {
 
 /// Returned by `dividend`. Wraps an `items` array of dividend events.
 ///
-/// Subset of documented fields; upstream may return more.
+/// Subset of documented fields; upstream may return more. US-region shape
+/// (confirmed via a live US staging call) uses a completely different set
+/// of fields, listed below `items`.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct DividendResponse {
-    /// Dividend events for the symbol.
+    /// Dividend events for the symbol. Generic (non-US) shape only.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub items: Option<Vec<DividendItem>>,
+    /// US-region shape only: trailing-twelve-month summary.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recent_dividends: Option<UsRecentDividends>,
+    /// US-region shape only: per-fiscal-year dividend history.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dividend_history: Option<Vec<UsDividendHistoryYear>>,
+    /// US-region shape only: per-fiscal-year payout ratios.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub payout_ratios: Option<Vec<UsDividendHistoryYear>>,
+    /// US-region shape only: individual dividend payment events.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dividend_payout_history: Option<Vec<UsDividendPayout>>,
+}
+
+/// `recent_dividends` block of `dividend`'s US-region shape.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct UsRecentDividends {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dividend_ttm: Option<String>,
+    /// Percent value, e.g. 0.34 means 0.34% (not a 0-1 fraction).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dividend_yield_ttm: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub payouts: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub currency: Option<String>,
+}
+
+/// One fiscal year's entry in `dividend`'s US-region `dividend_history` /
+/// `payout_ratios`. Both arrays share this shape; only the populated fields
+/// differ per array.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct UsDividendHistoryYear {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fiscal_year: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fiscal_year_range: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dividend: Option<String>,
+    /// Percent value (e.g. 0.58 means 0.58%), present in `dividend_history`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dividend_yield: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dividend_growth_rate: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dividend_payout_ratio: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dividend_to_cashflow_ratio: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub currency: Option<String>,
+}
+
+/// One dividend payment event in `dividend`'s US-region
+/// `dividend_payout_history`.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct UsDividendPayout {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dividend: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dividend_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub currency: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ex_date: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub payment_date: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub record_date: Option<String>,
 }
 
 /// One dividend event in `dividend`'s `items`.
@@ -229,12 +299,58 @@ pub struct ForecastEpsItem {
 
 /// Returned by `consensus`. Wraps an `items` array of consensus estimates.
 ///
-/// Subset of documented fields; upstream may return more.
+/// Subset of documented fields; upstream may return more. US-region shape
+/// (confirmed via a live US staging call) uses `ai_summary` plus a
+/// differently-shaped `list` instead of `items`.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct ConsensusResponse {
-    /// Consensus estimate records for upcoming periods.
+    /// Consensus estimate records for upcoming periods. Generic (non-US)
+    /// shape only.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub items: Option<Vec<ConsensusItem>>,
+    /// US-region shape only: AI-generated summary of the latest consensus
+    /// vs. actual results.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ai_summary: Option<String>,
+    /// US-region shape only: valid `report` values for this symbol, e.g.
+    /// `["qf", "af"]`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub opt_reports: Option<Vec<String>>,
+    /// US-region shape only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub currency: Option<String>,
+    /// US-region shape only: the report period actually used, e.g. "af".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub report: Option<String>,
+    /// US-region shape only: consensus vs. actual per fiscal year.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub list: Option<Vec<UsConsensusPeriod>>,
+}
+
+/// One fiscal year's estimate-vs-actual in `consensus`'s US-region `list`.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct UsConsensusPeriod {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fiscal_year: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub report_txt: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub revenue: Option<UsConsensusEstimate>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub eps: Option<UsConsensusEstimate>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ebit: Option<UsConsensusEstimate>,
+}
+
+/// One estimate-vs-actual pair (e.g. `revenue`, `eps`, `ebit`) in
+/// `UsConsensusPeriod`.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct UsConsensusEstimate {
+    /// Actual reported value. Empty string when not yet reported.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub actual: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub estimate: Option<String>,
 }
 
 /// One record in `consensus`'s `items`.
@@ -265,12 +381,33 @@ pub struct ConsensusItem {
 /// Returned by `valuation`. The valuation overview groups per-metric blocks
 /// under `metrics`.
 ///
-/// Subset of documented fields; upstream may return more.
+/// Subset of documented fields; upstream may return more. US-region shape
+/// (confirmed via a live US staging call) populates only `metrics.pe`, using
+/// different sub-fields (see `ValuationMetric`), plus the top-level fields
+/// below.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct ValuationResponse {
     /// Valuation metric blocks keyed by indicator.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metrics: Option<ValuationMetrics>,
+    /// US-region shape only: which indicator `metrics.pe` describes, e.g.
+    /// "pe".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub indicator: Option<String>,
+    /// US-region shape only: lookback window in years for the percentile
+    /// calculation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub range: Option<i32>,
+    /// US-region shape only: as-of date, e.g. "Jul 7, 2026".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub date: Option<String>,
+    /// US-region shape only: currency symbol, e.g. "$".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ccy_symbol: Option<String>,
+    /// US-region shape only: AI-generated summary (duplicates
+    /// `metrics.pe.desc`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ai_summary: Option<String>,
 }
 
 /// `metrics` block of `valuation`. Each indicator carries the same shape.
@@ -309,6 +446,17 @@ pub struct ValuationMetric {
     /// Historical percentile.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub percentile: Option<String>,
+    /// US-region shape only: industry median value (numeric, not a
+    /// percentile).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub industry_median: Option<f64>,
+    /// US-region shape only: AI-generated description of this metric.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub desc: Option<String>,
+    /// US-region shape only: current metric value (equivalent to
+    /// `current` in the generic shape).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metric: Option<f64>,
 }
 
 /// Returned by `valuation_history`. Time-series valuation metrics grouped
@@ -498,9 +646,27 @@ pub struct CompanyResponse {
     /// Industry classification.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub industry: Option<String>,
-    /// Market capitalization.
+    /// Market capitalization. Populated by both the generic and US-region
+    /// shapes.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub market_cap: Option<String>,
+    /// US-region shape only: short company tagline (equivalent to
+    /// `description` in the generic shape).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub intro: Option<String>,
+    /// US-region shape only: currency symbol, e.g. "$".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ccy_symbol: Option<String>,
+    /// US-region shape only: badges such as watchlist-popularity rank.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub top_rank_tags: Option<Vec<serde_json::Value>>,
+    /// US-region shape only: link to the full company profile page.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail_url: Option<String>,
+    /// US-region shape only: watchlist groups containing this symbol. Shape
+    /// not yet observed populated; passed through as raw JSON.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub share_list: Option<Vec<serde_json::Value>>,
 }
 
 /// Returned by `executive`. Wraps a `members` array of executives / board

@@ -27,6 +27,28 @@ pub async fn financial_report(
     mctx: &crate::tools::McpContext,
     p: FinancialReportParam,
 ) -> Result<CallToolResult, McpError> {
+    if p.kind.is_none()
+        && crate::tools::support::us_market::is_us_fundamental(mctx, &p.symbol).await
+    {
+        let ctx = longbridge::fundamental::FundamentalContext::new(mctx.create_config());
+        // Same report-vocabulary bug as financial_statement and
+        // financial_report_key_metrics: raw verification data shows
+        // report="annual" returns a handful of periods that mix FY/Q1/H1
+        // labels rather than annual-only, and "quarterly" returns an empty
+        // list — both symptoms match the other two US fundamental endpoints
+        // silently ignoring an invalid report value. Defaulting to "af" for
+        // consistency; not independently re-confirmed against this specific
+        // endpoint in this pass (the raw dump only tried annual/quarterly).
+        let report = p
+            .report_type
+            .unwrap_or_else(|| "af".to_string())
+            .to_lowercase();
+        let result = ctx
+            .us_financial_overview(p.symbol, report)
+            .await
+            .map_err(crate::error::Error::longbridge)?;
+        return crate::tools::tool_json(&result);
+    }
     let client = mctx.create_http_client();
     let cid = symbol_to_counter_id(&p.symbol);
     let kind = p.kind.unwrap_or_else(|| "ALL".to_string());
@@ -99,6 +121,27 @@ pub async fn dividend(
     mctx: &crate::tools::McpContext,
     p: SymbolParam,
 ) -> Result<CallToolResult, McpError> {
+    if crate::tools::support::us_market::is_us_fundamental(mctx, &p.symbol).await {
+        let ctx = longbridge::fundamental::FundamentalContext::new(mctx.create_config());
+        const PCT_KEYS: &[&str] = &["dividend_yield", "dividend_yield_ttm"];
+        if crate::counter::is_etf(&p.symbol) {
+            let result = ctx
+                .us_etf_dividend_info(p.symbol)
+                .await
+                .map_err(crate::error::Error::longbridge)?;
+            let mut value =
+                serde_json::to_value(&result).map_err(crate::error::Error::Serialize)?;
+            crate::tools::support::us_normalize::normalize_pct_fields(&mut value, PCT_KEYS);
+            return crate::tools::tool_json(&value);
+        }
+        let result = ctx
+            .us_company_dividends(p.symbol)
+            .await
+            .map_err(crate::error::Error::longbridge)?;
+        let mut value = serde_json::to_value(&result).map_err(crate::error::Error::Serialize)?;
+        crate::tools::support::us_normalize::normalize_pct_fields(&mut value, PCT_KEYS);
+        return crate::tools::tool_json(&value);
+    }
     let client = mctx.create_http_client();
     let cid = symbol_to_counter_id(&p.symbol);
     http_get_tool(
@@ -142,6 +185,22 @@ pub async fn consensus(
     mctx: &crate::tools::McpContext,
     p: SymbolParam,
 ) -> Result<CallToolResult, McpError> {
+    if crate::tools::support::us_market::is_us_fundamental(mctx, &p.symbol).await {
+        let ctx = longbridge::fundamental::FundamentalContext::new(mctx.create_config());
+        // Same report-vocabulary bug as the other US fundamental endpoints:
+        // report="annual" silently returns an empty result (confirmed live —
+        // ai_summary populated but currency/report/list/opt_reports all
+        // empty). The raw verification dump's real call used report="af"
+        // and got a full 5-period list, whose own opt_reports field
+        // ["qf","af"] confirms af/qf are the only valid values.
+        let result = ctx
+            .us_analyst_consensus(p.symbol, "af")
+            .await
+            .map_err(crate::error::Error::longbridge)?;
+        let mut value = serde_json::to_value(&result).map_err(crate::error::Error::Serialize)?;
+        crate::tools::support::us_normalize::fix_valuation_value(&mut value);
+        return crate::tools::tool_json(&value);
+    }
     let client = mctx.create_http_client();
     let cid = symbol_to_counter_id(&p.symbol);
     http_get_tool(
@@ -156,6 +215,16 @@ pub async fn valuation(
     mctx: &crate::tools::McpContext,
     p: SymbolParam,
 ) -> Result<CallToolResult, McpError> {
+    if crate::tools::support::us_market::is_us_fundamental(mctx, &p.symbol).await {
+        let ctx = longbridge::fundamental::FundamentalContext::new(mctx.create_config());
+        let result = ctx
+            .us_valuation_overview(p.symbol)
+            .await
+            .map_err(crate::error::Error::longbridge)?;
+        let mut value = serde_json::to_value(&result).map_err(crate::error::Error::Serialize)?;
+        crate::tools::support::us_normalize::fix_valuation_value(&mut value);
+        return crate::tools::tool_json(&value);
+    }
     let client = mctx.create_http_client();
     let cid = symbol_to_counter_id(&p.symbol);
     http_get_tool_unix(
@@ -219,6 +288,14 @@ pub async fn company(
     mctx: &crate::tools::McpContext,
     p: SymbolParam,
 ) -> Result<CallToolResult, McpError> {
+    if crate::tools::support::us_market::is_us_fundamental(mctx, &p.symbol).await {
+        let ctx = longbridge::fundamental::FundamentalContext::new(mctx.create_config());
+        let result = ctx
+            .us_company_overview(p.symbol)
+            .await
+            .map_err(crate::error::Error::longbridge)?;
+        return crate::tools::tool_json(&result);
+    }
     let client = mctx.create_http_client();
     let cid = symbol_to_counter_id(&p.symbol);
     http_get_tool(
@@ -352,6 +429,38 @@ pub async fn financial_statement(
     mctx: &crate::tools::McpContext,
     p: FinancialStatementParam,
 ) -> Result<CallToolResult, McpError> {
+    if crate::tools::support::us_market::is_us_fundamental(mctx, &p.symbol).await {
+        let ctx = longbridge::fundamental::FundamentalContext::new(mctx.create_config());
+        let kind = p.kind.unwrap_or_else(|| "ALL".to_string()).to_uppercase();
+        // Despite the SDK's own doc comment claiming "annual"/"quarterly",
+        // live staging testing confirmed the US endpoint actually uses the
+        // same af/saf/qf/q1-q3 vocabulary as the generic path — "annual"
+        // silently returns an empty list.
+        let report = p.report.unwrap_or_else(|| "af".to_string()).to_lowercase();
+        // The backend does not support kind=ALL directly (confirmed via live
+        // staging testing: it returns an empty list, while IS/BS/CF each
+        // return full data individually) — fan out and merge so ALL still
+        // behaves as advertised instead of silently returning nothing.
+        if kind == "ALL" {
+            let (is, bs, cf) = tokio::try_join!(
+                ctx.us_financial_statement(p.symbol.clone(), "IS".to_string(), report.clone()),
+                ctx.us_financial_statement(p.symbol.clone(), "BS".to_string(), report.clone()),
+                ctx.us_financial_statement(p.symbol.clone(), "CF".to_string(), report),
+            )
+            .map_err(crate::error::Error::longbridge)?;
+            let combined = serde_json::json!({
+                "income_statement": is,
+                "balance_sheet": bs,
+                "cash_flow": cf,
+            });
+            return crate::tools::tool_json(&combined);
+        }
+        let result = ctx
+            .us_financial_statement(p.symbol, kind, report)
+            .await
+            .map_err(crate::error::Error::longbridge)?;
+        return crate::tools::tool_json(&result);
+    }
     let client = mctx.create_http_client();
     let cid = symbol_to_counter_id(&p.symbol);
     let kind = p.kind.unwrap_or_else(|| "ALL".to_string()).to_uppercase();
@@ -366,6 +475,60 @@ pub async fn financial_statement(
         ],
     )
     .await
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct SymbolReportParam {
+    /// Security symbol, e.g. "AAPL.US"
+    pub symbol: String,
+    /// Report period: "af" (annual, default), "saf" (semi-annual), "qf"
+    /// (quarterly full), "q1"/"q2"/"q3".
+    pub report: Option<String>,
+}
+
+/// Get key financial metrics for a US symbol. US accounts only — no HK
+/// equivalent exists for this interface.
+pub async fn financial_report_key_metrics(
+    mctx: &crate::tools::McpContext,
+    p: SymbolReportParam,
+) -> Result<CallToolResult, McpError> {
+    let ctx = longbridge::fundamental::FundamentalContext::new(mctx.create_config());
+    // Same sibling-endpoint doc-comment bug as financial_statement: raw
+    // verification data confirms report="af" returns a clean 11-period
+    // annual-only list, while "annual" (this endpoint's own former default,
+    // matching its incorrect doc comment) returns 140+ unfiltered periods
+    // mixing FY/Q1/Q2/Q3/H0/H1 — i.e. the report filter is silently ignored.
+    // Lowercased for consistency with financial_statement's handling of the
+    // same report vocabulary — the backend appears to match report values
+    // exactly rather than case-insensitively (see the "annual" note above).
+    let report = p.report.unwrap_or_else(|| "af".to_string()).to_lowercase();
+    let result = ctx
+        .us_key_financial_metrics(p.symbol, report)
+        .await
+        .map_err(crate::error::Error::longbridge)?;
+    crate::tools::tool_json(&result)
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct EtfDocsParam {
+    /// ETF symbol, e.g. "SPY.US"
+    pub symbol: String,
+    /// Maximum number of documents to return. Omit for all.
+    pub limit: Option<u32>,
+}
+
+/// Get regulatory/prospectus documents for a US ETF. US accounts only — no
+/// HK equivalent exists for this interface.
+pub async fn etf_docs(
+    mctx: &crate::tools::McpContext,
+    p: EtfDocsParam,
+) -> Result<CallToolResult, McpError> {
+    let ctx = longbridge::fundamental::FundamentalContext::new(mctx.create_config());
+    let result = ctx
+        .us_etf_files(p.symbol, p.limit)
+        .await
+        .map_err(crate::error::Error::longbridge)?;
+    crate::tools::tool_json(&result)
 }
 
 /// Get latest financial report summary for a security.

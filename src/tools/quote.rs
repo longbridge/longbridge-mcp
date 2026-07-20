@@ -228,12 +228,37 @@ pub async fn static_info(
     mctx: &crate::tools::McpContext,
     p: SymbolsParam,
 ) -> Result<CallToolResult, McpError> {
+    use crate::tools::support::us_market::is_us_crypto_symbol;
+
     let ctx = mctx.get_quote_context().await;
-    let result = ctx.static_info(p.symbols).await.map_err(|e| {
-        mctx.evict_quote_context();
-        Error::longbridge(e)
-    })?;
-    tool_json(&result)
+
+    let (crypto_symbols, other_symbols): (Vec<String>, Vec<String>) =
+        if mctx.dc_region().await == longbridge::DcRegion::Us {
+            p.symbols.into_iter().partition(|s| is_us_crypto_symbol(s))
+        } else {
+            (Vec::new(), p.symbols)
+        };
+
+    let mut results: Vec<serde_json::Value> = Vec::new();
+    for symbol in crypto_symbols {
+        let overview = ctx.us_crypto_overview(symbol).await.map_err(|e| {
+            mctx.evict_quote_context();
+            Error::longbridge(e)
+        })?;
+        let mut value = serde_json::to_value(&overview).map_err(Error::Serialize)?;
+        crate::tools::support::us_normalize::normalize_crypto_profile(&mut value);
+        results.push(value);
+    }
+    if !other_symbols.is_empty() {
+        let rest = ctx.static_info(other_symbols).await.map_err(|e| {
+            mctx.evict_quote_context();
+            Error::longbridge(e)
+        })?;
+        for entry in rest {
+            results.push(serde_json::to_value(&entry).map_err(Error::Serialize)?);
+        }
+    }
+    tool_json(&results)
 }
 
 /// True when an extended-hours session has actually traded. The upstream fills

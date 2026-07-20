@@ -85,6 +85,14 @@
         "end": "結束日期（`yyyy-mm-dd`）。必須與 `start` 成對傳入，只傳其一會返回空結果"
       }
     },
+    "profit_analysis_realized": {
+      "title": "已實現盈虧分析（美股）",
+      "description": "獲取美股賬戶的已實現盈虧，按類別（股票/期權/加密貨幣）和週期拆分。僅限美股賬戶；港股/滬深/新加坡賬戶調用會返回 DcRegionRestricted 錯誤",
+      "properties": {
+        "currency": "報告貨幣，例如 `\"USD\"`（默認 `\"USD\"`）。僅限美股賬戶",
+        "category": "按類別篩選：`\"STOCK\"`、`\"OPTION\"`、`\"CRYPTO\"`，留空表示全部"
+      }
+    },
     "statement_export": {
       "title": "對帳單導出",
       "description": "獲取對帳單文件的預簽名下載 URL（file_key 來自 statement_list），返回 {url}，訪問該 URL 即可獲取對帳單 JSON",
@@ -103,7 +111,7 @@
     },
     "stock_positions": {
       "title": "股票持倉",
-      "description": "查詢所有渠道下的當前股票持倉，返回 list[].stock_info[]{symbol, symbol_name, quantity, available_quantity, currency, cost_price, market}"
+      "description": "查詢所有渠道下的當前股票持倉，返回 list[].stock_info[]{symbol, symbol_name, quantity, available_quantity, currency, cost_price, market}。僅限美股賬戶：額外附帶 us_asset_overview 字段 {cash_list, stock_list, option_list, crypto_list, cash_buy_power, overnight_buy_power}"
     },
     "dca_history": {
       "title": "定投執行歷史",
@@ -152,11 +160,13 @@
     },
     "history_orders": {
       "title": "歷史委託",
-      "description": "查詢指定日期區間內的歷史委託（不含當日），返回 orders[]{order_id, symbol, side, status, quantity, price, submitted_at}",
+      "description": "查詢指定日期區間內的歷史委託（不含當日），返回 orders[]{order_id, symbol, side, status, quantity, price, submitted_at}。僅限美股賬戶：us_page、us_limit 通過獨立的美股委託接口分頁（預設每頁 20 條，傳 us_page 可翻頁）",
       "properties": {
         "symbol": "按證券篩選（可選）",
         "start_at": "起始時間（RFC3339 時間格式）",
-        "end_at": "結束時間（RFC3339 時間格式）"
+        "end_at": "結束時間（RFC3339 時間格式）",
+        "us_page": "僅限美股賬戶：頁碼（預設 1）",
+        "us_limit": "僅限美股賬戶：每頁數量（預設 20）"
       }
     },
     "order_detail": {
@@ -176,9 +186,12 @@
     },
     "today_orders": {
       "title": "當日委託",
-      "description": "查詢當日委託，返回 orders[]{order_id, symbol, side, order_type, status, quantity, price, submitted_at, executed_quantity, executed_price}",
+      "description": "查詢當日委託，返回 orders[]{order_id, symbol, side, order_type, status, quantity, price, submitted_at, executed_quantity, executed_price}。僅限美股賬戶：us_action（Buy/Sell）、us_page、us_limit 通過獨立的美股委託接口篩選/分頁",
       "properties": {
-        "symbol": "按證券篩選，例如 `\"700.HK\"`，省略則返回當日全部委託"
+        "symbol": "按證券篩選，例如 `\"700.HK\"`，省略則返回當日全部委託",
+        "us_action": "僅限美股賬戶：按方向篩選，`\"Buy\"` 或 `\"Sell\"`，留空表示全部",
+        "us_page": "僅限美股賬戶：頁碼（默認 1）",
+        "us_limit": "僅限美股賬戶：每頁數量（默認 20）"
       }
     },
     "cancel_order": {
@@ -390,14 +403,14 @@
     },
     "company": {
       "title": "公司概況",
-      "description": "獲取公司概況，返回 name、description、employees、CEO、founded_year、website、exchange、industry、market_cap 等信息",
+      "description": "獲取公司概況，返回 name、description、employees、CEO、founded_year、website、exchange、industry、market_cap 等信息。美股賬戶查詢 `.US` 標的時會路由到專屬美股接口，返回結構不同（intro、market_cap、top_rank_tags、sharelist、detail_url），與 output_schema 不符；其餘組合走通用接口，符合 output_schema",
       "properties": {
         "symbol": "證券代碼，例如 `\"700.HK\"`"
       }
     },
     "consensus": {
       "title": "一致預期",
-      "description": "獲取分析師一致預期，返回 items[]{period, revenue_estimate, eps_estimate, net_income_estimate, analyst_count, last_updated}",
+      "description": "獲取分析師一致預期，返回 items[]{period, revenue_estimate, eps_estimate, net_income_estimate, analyst_count, last_updated}。美股賬戶查詢 `.US` 標的時會路由到專屬美股一致預期接口，返回結構不同（ai_summary + 按期間的 details[] 列表），與 output_schema 不符；其餘組合走通用接口，符合 output_schema",
       "properties": {
         "symbol": "證券代碼，例如 `\"700.HK\"`"
       }
@@ -432,7 +445,7 @@
     },
     "dividend": {
       "title": "派息歷史",
-      "description": "獲取證券的派息歷史，返回 items[]{ex_date（除權日）, pay_date（派發日）, record_date, dividend_type, amount, currency, status}",
+      "description": "獲取證券的派息歷史，返回 items[]{ex_date（除權日）, pay_date（派發日）, record_date, dividend_type, amount, currency, status}。美股賬戶查詢 `.US` 標的時會按 ETF/個股路由到對應的專屬美股派息接口，返回結構不同，與 output_schema 不符（dividend_yield/dividend_yield_ttm 是百分比數值，例如 0.34 代表 0.34%，不是 0-1 的小數）；其餘組合走通用接口，符合 output_schema",
       "properties": {
         "symbol": "證券代碼，例如 `\"700.HK\"`"
       }
@@ -442,6 +455,14 @@
       "description": "獲取詳細派息分紅方案，返回 details[]{period, cash_dividend, stock_dividend, record_date, ex_date, pay_date, currency}",
       "properties": {
         "symbol": "證券代碼，例如 `\"700.HK\"`"
+      }
+    },
+    "etf_docs": {
+      "title": "ETF文件（美股）",
+      "description": "獲取美股ETF的監管/招募說明書文件（etf-files）。僅限美股賬戶；港股/滬深/新加坡賬戶調用會返回 DcRegionRestricted 錯誤",
+      "properties": {
+        "symbol": "ETF代碼，例如 `\"SPY.US\"`",
+        "limit": "最多返回的文件數量，留空返回全部"
       }
     },
     "exchange_rate": {
@@ -474,11 +495,19 @@
     },
     "financial_report": {
       "title": "財務報表",
-      "description": "獲取財務報告（損益表/資產負債表/現金流量表）。kind：IS/BS/CF/ALL；report_type：af（年報）/saf（半年報）/q1/q2/q3/qf（季報全量）",
+      "description": "獲取財務報告（損益表/資產負債表/現金流量表）。kind：IS/BS/CF/ALL；report_type：af（年報）/saf（半年報）/q1/q2/q3/qf（季報全量）。美股賬戶在不傳 kind 的情況下查詢 `.US` 標的會路由到專屬美股概覽接口；顯式傳入 kind 時始終走通用接口",
       "properties": {
         "symbol": "證券代碼，例如 `\"AAPL.US\"`",
         "kind": "報表種類：`IS`（損益表）、`BS`（資產負債表）、`CF`（現金流量表）、`ALL`（預設全部）",
         "report_type": "報告期：`af`（年度）、`saf`（半年度）、`q1` / `q2` / `q3`（季度）、`qf`（季度全量）"
+      }
+    },
+    "financial_report_key_metrics": {
+      "title": "關鍵財務指標（美股）",
+      "description": "獲取美股標的的關鍵財務指標（fin-keyfactor）。report: af（年度，默認）、saf、qf、q1/q2/q3。僅限美股賬戶；港股/滬深/新加坡賬戶調用會返回 DcRegionRestricted 錯誤",
+      "properties": {
+        "symbol": "證券代碼，例如 `\"AAPL.US\"`",
+        "report": "報告期：`\"annual\"`（默認）或 `\"quarterly\"`"
       }
     },
     "forecast_eps": {
@@ -747,7 +776,7 @@
     },
     "static_info": {
       "title": "證券基礎信息",
-      "description": "獲取證券基礎信息，返回各標的：symbol, name_cn, name_en, exchange（如 NASDAQ）, type（如 US_Stock）, lot_size（每手股數）, listed_date, delisted",
+      "description": "獲取證券基礎信息，返回各標的：symbol, name_cn, name_en, exchange（如 NASDAQ）, type（如 US_Stock）, lot_size（每手股數）, listed_date, delisted。僅限美股賬戶：`.BKKT` 加密貨幣代碼（如 BTCUSD.BKKT）會路由到獨立的美股加密貨幣概覽接口；`.HAS`/`.OSL` 不受影響",
       "properties": {
         "symbols": "證券代碼，例如 `[\"700.HK\", \"AAPL.US\"]`"
       }
@@ -824,7 +853,7 @@
     },
     "valuation": {
       "title": "估值",
-      "description": "獲取估值概覽及同業對比，返回 metrics.pe/pb/ps/dividend_yield{current, industry_avg, 5yr_avg, percentile} 及同業對比列表",
+      "description": "獲取估值概覽及同業對比，返回 metrics.pe/pb/ps/dividend_yield{current, industry_avg, 5yr_avg, percentile} 及同業對比列表。美股賬戶查詢 `.US` 標的時會路由到專屬美股估值接口，返回結構不同（ai_summary + 字段不同的 metrics.pe），與 output_schema 不符；其餘組合走通用接口，符合 output_schema",
       "properties": {
         "symbol": "證券代碼，例如 `\"700.HK\"`"
       }
@@ -891,7 +920,7 @@
     },
     "financial_statement": {
       "title": "財務報表",
-      "description": "獲取證券財務報表（損益表/資產負債表/現金流量表）。kind：IS/BS/CF/ALL（預設）；report：af（年報）/saf（半年報）/qf（季報）/q1/q2/q3",
+      "description": "獲取證券財務報表（損益表/資產負債表/現金流量表）。kind：IS/BS/CF/ALL（預設）；report：af（年報，預設）/saf（半年報）/qf（季報）/q1/q2/q3。美股賬戶查詢 `.US` 標的時會路由到專屬美股報表接口（report 詞彙表與通用接口相同；kind=ALL/預設會拆成 IS+BS+CF 三次請求合併返回 {income_statement, balance_sheet, cash_flow}，因為後端不支持合併請求），其餘組合走通用接口",
       "properties": {
         "symbol": "證券代碼，例如 `\"AAPL.US\"`",
         "kind": "報表類型：`IS`（損益表）、`BS`（資產負債表）、`CF`（現金流量表）、`ALL`（全部，預設）",

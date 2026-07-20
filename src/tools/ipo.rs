@@ -73,7 +73,7 @@ pub async fn ipo_subscriptions(
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
     let hk = http_get_tool(&client, "/v1/ipo/subscriptions", &[]).await?;
-    let us = http_get_tool(&client, "/v1/ipo/us/subscriptions", &[]).await?;
+    let us = http_get_tool(&client, "/v1/us/ipo/subscriptions", &[]).await?;
     let combined = format!(r#"{{"hk":{},"us":{}}}"#, get_json(&hk), get_json(&us));
     Ok(make_result(combined))
 }
@@ -94,7 +94,7 @@ pub async fn ipo_listed(
     let size_str = p.size.unwrap_or(20).to_string();
     let params = [("page", page_str.as_str()), ("size", size_str.as_str())];
     let hk = http_get_tool(&client, "/v1/ipo/listed", &params).await?;
-    let us = http_get_tool(&client, "/v1/ipo/us/listed", &params).await?;
+    let us = http_get_tool(&client, "/v1/us/ipo/listed", &params).await?;
     let combined = format!(r#"{{"hk":{},"us":{}}}"#, get_json(&hk), get_json(&us));
     Ok(make_result(combined))
 }

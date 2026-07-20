@@ -119,6 +119,38 @@ pub struct McpContext {
     pub extra_headers: Vec<(String, String)>,
 }
 
+/// Global-gateway endpoints, pinned for US-data-center tokens.
+///
+/// # Which access point can serve which data center
+///
+/// Every Longbridge credential carries its data center as a prefix: `us_…` for
+/// the US data center, `ap_…` (or unprefixed) for Asia-Pacific. That prefix
+/// decides which access point can serve it:
+///
+/// | Data center | `.com` | `.cn` |
+/// |-------------|--------|-------|
+/// | `us`        | yes — the only usable access point | no |
+/// | `ap`        | yes    | yes   |
+///
+/// `.cn` has no path to the US data center. This is a hard constraint, not a
+/// latency or preference question.
+///
+/// # Why this is pinned
+///
+/// Left unset, the SDK picks an access point by geolocation at request time,
+/// which resolves to `.cn` on a China Mainland network. A US token sent to `.cn`
+/// still authenticates — the WebSocket connects and basic calls such as
+/// `static_info` succeed — but every market-data request comes back
+/// `301604 no quote access`, because `.cn` cannot source US-account quotes. The
+/// failure reads like a missing permission and is not one, so pin the endpoints
+/// rather than letting geolocation decide.
+///
+/// AP tokens are deliberately left to geolocation: both access points serve
+/// them, so the nearer one is the right choice.
+const US_HTTP_URL: &str = "https://openapi.longbridge.com";
+const US_QUOTE_WS_URL: &str = "wss://openapi-quote.longbridge.com/v2";
+const US_TRADE_WS_URL: &str = "wss://openapi-trade.longbridge.com/v2";
+
 /// Server-side beacon endpoint. Quote operations flow over the WebSocket quote
 /// channel and never reach the HTTP access log; a request to this fake path lets
 /// the server record (and count) that a WS-backed quote tool ran. The path only
@@ -165,6 +197,16 @@ impl McpContext {
         }
     }
 
+    /// Whether this request's token belongs to the US data center and so needs
+    /// the global gateway pinned instead of geotest-selected endpoints.
+    ///
+    /// `LONGBRIDGE_HTTP_URL` takes precedence when set, so tests and local mock
+    /// servers can still redirect the SDK.
+    fn pin_us_endpoints(&self) -> bool {
+        std::env::var("LONGBRIDGE_HTTP_URL").is_err()
+            && longbridge::DcRegion::from_credential(&self.token) == longbridge::DcRegion::Us
+    }
+
     pub fn create_config(&self) -> Arc<longbridge::Config> {
         let mut config =
             longbridge::Config::from_oauth(longbridge::oauth::OAuth::from_token(&self.token))
@@ -173,6 +215,12 @@ impl McpContext {
                 // Identify MCP-originated requests on the Context path (REST and
                 // WebSocket upgrades), mirroring how longbridge-cli tags itself.
                 .header("user-agent", self.user_agent());
+        if self.pin_us_endpoints() {
+            config = config
+                .http_url(US_HTTP_URL)
+                .quote_ws_url(US_QUOTE_WS_URL)
+                .trade_ws_url(US_TRADE_WS_URL);
+        }
         if let Some(ref lang) = self.language {
             let lb_lang = if lang.contains("zh-CN") || lang.contains("zh-Hans") {
                 longbridge::Language::ZH_CN
@@ -192,11 +240,15 @@ impl McpContext {
     }
 
     pub fn create_http_client(&self) -> longbridge::httpclient::HttpClient {
-        let mut client = longbridge::httpclient::HttpClient::new(
-            longbridge::httpclient::HttpClientConfig::from_oauth(
-                longbridge::oauth::OAuth::from_token(&self.token),
-            ),
+        let mut http_config = longbridge::httpclient::HttpClientConfig::from_oauth(
+            longbridge::oauth::OAuth::from_token(&self.token),
         );
+        // Same US pinning as `create_config`, so REST calls do not drift to the
+        // CN node while the WebSocket is pinned to the global one.
+        if self.pin_us_endpoints() {
+            http_config = http_config.http_url(US_HTTP_URL);
+        }
+        let mut client = longbridge::httpclient::HttpClient::new(http_config);
         // NOTE: This is very important for passing headers to upstream Longbridge services.
         // Do not remove this unless you have a good reason and know exactly which headers to forward instead.
         for (key, value) in &self.extra_headers {
@@ -249,6 +301,13 @@ impl McpContext {
     /// Falls back to `"lb"` when the token cannot be decoded.
     pub fn account_channel(&self) -> String {
         decode_jwt_account_channel(&self.token).unwrap_or_else(|| "lb".to_string())
+    }
+
+    /// The DC region (`Us` or `Ap`) this session's credentials resolve to,
+    /// derived from the bearer token — no network round-trip for token-based
+    /// sessions (see `longbridge_httpcli::DcRegion::from_credential`).
+    pub async fn dc_region(&self) -> longbridge::DcRegion {
+        self.create_http_client().dc_region().await
     }
 }
 
@@ -383,6 +442,49 @@ fn restricted_version(ctx: &RequestContext<RoleServer>) -> Option<RestrictedVers
 fn is_restricted_tool_allowed(version: RestrictedVersion, name: &str) -> bool {
     match version {
         RestrictedVersion::V2 => is_v2_public_tool(name),
+    }
+}
+
+/// Tools whose underlying SDK method is US-DC-only (calls
+/// `.dc_restrict(DcRegion::Us)` internally, confirmed against the SDK
+/// source) — hidden from accounts in the AP region. This is a completely
+/// separate mechanism from the `/v1`/`/v2` restricted-endpoint allowlists
+/// above; it applies only on the main (`/mcp`) and authenticated `/agent`
+/// endpoints and never touches `TOOL_ENDPOINTS`/`is_v2_public_tool`.
+const US_ONLY_TOOLS: &[&str] = &[
+    "profit_analysis_realized",
+    "financial_report_key_metrics",
+    "etf_docs",
+];
+
+/// Tools whose underlying SDK method is AP-DC-only (calls
+/// `.dc_restrict(DcRegion::Ap)` / checks `DcRegion::Ap` internally, confirmed
+/// against the SDK source: broker queue/holding data and the entire
+/// recurring-investment (DCA) API) — hidden from accounts in the US region.
+const AP_ONLY_TOOLS: &[&str] = &[
+    "brokers",
+    "broker_holding",
+    "broker_holding_detail",
+    "broker_holding_daily",
+    "operating",
+    "dca_list",
+    "dca_create",
+    "dca_update",
+    "dca_pause",
+    "dca_resume",
+    "dca_stop",
+    "dca_history",
+    "dca_stats",
+    "dca_check",
+];
+
+/// True when `name` is restricted to the DC region opposite `region` — i.e.
+/// it should be hidden from `tools/list` and rejected by `call_tool` for an
+/// account in `region`.
+fn is_hidden_for_dc_region(name: &str, region: longbridge::DcRegion) -> bool {
+    match region {
+        longbridge::DcRegion::Us => AP_ONLY_TOOLS.contains(&name),
+        longbridge::DcRegion::Ap => US_ONLY_TOOLS.contains(&name),
     }
 }
 
@@ -575,9 +677,11 @@ const TOOL_ENDPOINTS: &[(&str, u8)] = &[
     ("delete_watchlist_group", V2),
     ("dividend_detail", V2),
     ("estimate_max_purchase_quantity", V2),
+    ("etf_docs", V2),
     ("exchange_rate", V2),
     ("executive", V2),
     ("financial_report", V2),
+    ("financial_report_key_metrics", V2),
     ("financial_report_snapshot", V2),
     ("fund_holder", V2),
     ("fund_positions", V2),
@@ -614,6 +718,7 @@ const TOOL_ENDPOINTS: &[(&str, u8)] = &[
     ("participants", V2),
     ("profit_analysis", V2),
     ("profit_analysis_detail", V2),
+    ("profit_analysis_realized", V2),
     ("quant_run", V2),
     ("rank_categories", V2),
     ("screener_indicators", V2),
@@ -1021,7 +1126,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get static info for securities. Returns per symbol: symbol, name_cn, name_en, exchange (e.g. NASDAQ), type (e.g. US_Stock), lot_size, listed_date, delisted (bool)."
+        description = "Get static info for securities. Returns per symbol: symbol, name_cn, name_en, exchange (e.g. NASDAQ), type (e.g. US_Stock), lot_size, listed_date, delisted (bool). US accounts only: .BKKT crypto symbols (e.g. BTCUSD.BKKT) are routed to a separate US crypto overview endpoint; .HAS/.OSL crypto symbols are unaffected."
     )]
     async fn static_info(
         &self,
@@ -1652,7 +1757,7 @@ impl Longbridge {
         title = "Stock Positions",
         annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = true),
         output_schema = schema_for::<output::StockPositionsResponse>(),
-        description = "Get current stock positions across all channels. Returns list[].stock_info[]{symbol, symbol_name, quantity, available_quantity, currency, cost_price, market}."
+        description = "Get current stock positions across all channels. Returns list[].stock_info[]{symbol, symbol_name, quantity, available_quantity, currency, cost_price, market}. US accounts only: an additional us_asset_overview field {cash_list, stock_list, option_list, crypto_list, cash_buy_power, overnight_buy_power} is included alongside the existing data."
     )]
     async fn stock_positions(
         &self,
@@ -1702,7 +1807,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get orders placed today. Returns orders[]{order_id, symbol, side, order_type, status, quantity, price, submitted_at, executed_quantity, executed_price}. Pass symbol to filter."
+        description = "Get orders placed today. Returns orders[]{order_id, symbol, side, order_type, status, quantity, price, submitted_at, executed_quantity, executed_price}. Pass symbol to filter. US accounts only: us_action (Buy/Sell), us_page, us_limit filter/paginate via a separate US order endpoint."
     )]
     async fn today_orders(
         &self,
@@ -1778,7 +1883,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get historical orders between dates (excludes today). Returns orders[]{order_id, symbol, side, status, quantity, price, submitted_at}. start_at/end_at in RFC3339."
+        description = "Get historical orders between dates (excludes today). Returns orders[]{order_id, symbol, side, status, quantity, price, submitted_at}. start_at/end_at in RFC3339. US accounts only: us_page, us_limit paginate via a separate US order endpoint (default page size 20 — pass us_page to see more than the first page)."
     )]
     async fn history_orders(
         &self,
@@ -1898,7 +2003,8 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get financial reports (income statement, balance sheet, cash flow). kind: IS/BS/CF/ALL. report_type: af (annual), saf (semi-annual), q1/q2/q3, qf (quarterly full)."
+        output_schema = schema_for::<output::us_market::FinancialReportResponse>(),
+        description = "Get financial reports (income statement, balance sheet, cash flow). kind: IS/BS/CF/ALL. report_type: af (annual), saf (semi-annual), q1/q2/q3, qf (quarterly full). US accounts querying a .US symbol without kind are routed to a US-specific overview endpoint; passing kind explicitly always uses the generic path."
     )]
     async fn financial_report(
         &self,
@@ -1970,7 +2076,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::fundamental::DividendResponse>(),
-        description = "Get dividend history. Returns items[]{ex_date, pay_date, record_date, dividend_type, amount, currency, status} for the symbol."
+        description = "Get dividend history for the symbol. US accounts querying a .US symbol get a differently-shaped response not matching output_schema (dividend_yield_ttm etc. are percent values, e.g. 0.34 means 0.34%); other combinations match output_schema."
     )]
     async fn dividend(
         &self,
@@ -2033,7 +2139,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::fundamental::ConsensusResponse>(),
-        description = "Get financial consensus estimates. Returns items[]{period, revenue_estimate, eps_estimate, net_income_estimate, analyst_count, last_updated} for upcoming periods."
+        description = "Get financial consensus estimates for upcoming periods. US accounts querying a .US symbol get a differently-shaped response not matching output_schema (ai_summary plus a details[] list per period); other combinations match output_schema."
     )]
     async fn consensus(
         &self,
@@ -2054,7 +2160,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::fundamental::ValuationResponse>(),
-        description = "Get valuation overview with peer comparison. Returns metrics.pe/pb/ps/dividend_yield{current, industry_avg, 5yr_avg, percentile} and peer comparison list."
+        description = "Get valuation overview with peer comparison. US accounts querying a .US symbol get a differently-shaped response not matching output_schema (ai_summary plus a metrics.pe object with different sub-fields); other combos match output_schema."
     )]
     async fn valuation(
         &self,
@@ -2147,7 +2253,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::fundamental::CompanyResponse>(),
-        description = "Get company overview. Returns name, description, employees, CEO, founded_year, website, exchange, industry, market_cap, and business profile summary."
+        description = "Get company overview. US accounts querying a .US symbol get a differently-shaped response not matching output_schema (intro, market_cap, top_rank_tags, sharelist, detail_url); other combinations match output_schema."
     )]
     async fn company(
         &self,
@@ -2556,6 +2662,30 @@ impl Longbridge {
         let mctx = extract_context(&ctx)?;
         measured_tool_call("profit_analysis_detail", || {
             portfolio::profit_analysis_detail(&mctx, p)
+        })
+        .await
+    }
+
+    /// Get realized profit-and-loss for a US account (stock/option/crypto breakdown).
+    #[tool(
+        title = "Profit Analysis (Realized, US)",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = true
+        ),
+        output_schema = schema_for::<output::us_market::PortfolioRealizedPlResponse>(),
+        description = "Get realized P&L for a US account, broken down by category (stock/option/crypto) and period. US accounts only; errors with DcRegionRestricted for HK/CN/SG accounts."
+    )]
+    async fn profit_analysis_realized(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<portfolio::ProfitAnalysisRealizedParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("profit_analysis_realized", || {
+            portfolio::profit_analysis_realized(&mctx, p)
         })
         .await
     }
@@ -3308,7 +3438,8 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get financial statements (income statement, balance sheet, or cash flow) for a security. kind: IS/BS/CF/ALL. report: af (annual), saf (semi-annual), qf (quarterly full), q1/q2/q3."
+        output_schema = schema_for::<output::us_market::FinancialStatementResponse>(),
+        description = "Get financial statements (income statement, balance sheet, or cash flow) for a security. kind: IS/BS/CF/ALL. report: af (annual, default), saf (semi-annual), qf (quarterly full), q1/q2/q3. US accounts querying a .US symbol are routed to a US-specific statement endpoint (same report vocabulary as the generic path); kind=ALL/default fans out to IS+BS+CF and returns {income_statement, balance_sheet, cash_flow} since the backend doesn't support a combined request; all other symbol/account combinations use the generic path."
     )]
     async fn financial_statement(
         &self,
@@ -3320,6 +3451,51 @@ impl Longbridge {
             fundamental::financial_statement(&mctx, p)
         })
         .await
+    }
+
+    /// Get key financial metrics for a US symbol.
+    #[tool(
+        title = "Financial Report Key Metrics (US)",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = true
+        ),
+        output_schema = schema_for::<output::us_market::FinancialReportKeyMetricsResponse>(),
+        description = "Get key financial metrics (fin-keyfactor) for a US symbol. report: af (annual, default), saf, qf, q1/q2/q3. US accounts only; errors with DcRegionRestricted for HK/CN/SG accounts."
+    )]
+    async fn financial_report_key_metrics(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<fundamental::SymbolReportParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("financial_report_key_metrics", || {
+            fundamental::financial_report_key_metrics(&mctx, p)
+        })
+        .await
+    }
+
+    /// Get regulatory/prospectus documents for a US ETF.
+    #[tool(
+        title = "ETF Documents (US)",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = true
+        ),
+        output_schema = schema_for::<output::us_market::EtfDocsResponse>(),
+        description = "Get regulatory/prospectus documents (etf-files) for a US ETF. US accounts only; errors with DcRegionRestricted for HK/CN/SG accounts."
+    )]
+    async fn etf_docs(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<fundamental::EtfDocsParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("etf_docs", || fundamental::etf_docs(&mctx, p)).await
     }
 
     /// Get latest financial report summary for a security.
@@ -4155,6 +4331,24 @@ impl ServerHandler for Longbridge {
                 None,
             ));
         }
+        // DC-region execution gate, independent of the /v1/v2 restricted-endpoint
+        // check above: on the main (`/mcp`) and authenticated `/agent` endpoints,
+        // a tool hidden from `tools/list` for this account's region must also be
+        // un-callable by name, or the listing filter is merely cosmetic.
+        if restricted_version(&context).is_none()
+            && let Ok(mctx) = extract_context(&context)
+        {
+            let region = mctx.dc_region().await;
+            if is_hidden_for_dc_region(request.name.as_ref(), region) {
+                return Err(McpError::invalid_request(
+                    format!(
+                        "Tool `{}` is not available for accounts in the {region} data center.",
+                        request.name
+                    ),
+                    None,
+                ));
+            }
+        }
         let tcc = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
         cached_router().call(tcc).await
     }
@@ -4173,7 +4367,12 @@ impl ServerHandler for Longbridge {
                 RestrictedVersion::V2 => tools_v2_endpoint().to_vec(),
             }
         } else {
-            tools_main_endpoint().to_vec()
+            let mut tools = tools_main_endpoint().to_vec();
+            if let Ok(mctx) = extract_context(&context) {
+                let region = mctx.dc_region().await;
+                tools.retain(|t| !is_hidden_for_dc_region(t.name.as_ref(), region));
+            }
+            tools
         };
         Ok(rmcp::model::ListToolsResult {
             tools,
@@ -4464,6 +4663,55 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn dc_region_tool_lists_reference_live_tools() {
+        use std::collections::HashSet;
+
+        let live: HashSet<String> = crate::tools::list_tools()
+            .iter()
+            .map(|t| t.name.to_string())
+            .collect();
+
+        for name in super::US_ONLY_TOOLS.iter().chain(super::AP_ONLY_TOOLS) {
+            assert!(
+                live.contains(*name),
+                "US_ONLY_TOOLS/AP_ONLY_TOOLS references unknown tool `{name}` (renamed or removed?)"
+            );
+        }
+    }
+
+    #[test]
+    fn dc_region_hiding_is_symmetric_and_disjoint() {
+        use longbridge::DcRegion;
+
+        for name in super::US_ONLY_TOOLS {
+            assert!(
+                super::is_hidden_for_dc_region(name, DcRegion::Ap),
+                "US-only tool `{name}` must be hidden for AP accounts"
+            );
+            assert!(
+                !super::is_hidden_for_dc_region(name, DcRegion::Us),
+                "US-only tool `{name}` must not be hidden for US accounts"
+            );
+        }
+        for name in super::AP_ONLY_TOOLS {
+            assert!(
+                super::is_hidden_for_dc_region(name, DcRegion::Us),
+                "AP-only tool `{name}` must be hidden for US accounts"
+            );
+            assert!(
+                !super::is_hidden_for_dc_region(name, DcRegion::Ap),
+                "AP-only tool `{name}` must not be hidden for AP accounts"
+            );
+        }
+        assert!(
+            super::US_ONLY_TOOLS
+                .iter()
+                .all(|n| !super::AP_ONLY_TOOLS.contains(n)),
+            "US_ONLY_TOOLS and AP_ONLY_TOOLS must be disjoint"
+        );
+    }
 }
 
 #[cfg(test)]
@@ -4674,6 +4922,40 @@ mod quote_cmd_tests {
     #[test]
     fn macrodata_tools_expose_chatgpt_required_metadata() {
         for name in ["macrodata", "macrodata_indicators"] {
+            let tool = super::list_tools()
+                .into_iter()
+                .find(|tool| tool.name == name)
+                .unwrap_or_else(|| panic!("{name} tool must be registered"));
+            let annotations = tool
+                .annotations
+                .as_ref()
+                .unwrap_or_else(|| panic!("{name} must declare annotations"));
+
+            assert_eq!(annotations.read_only_hint, Some(true));
+            assert_eq!(annotations.destructive_hint, Some(false));
+            assert_eq!(annotations.open_world_hint, Some(true));
+            assert!(
+                tool.output_schema.is_some(),
+                "{name} must declare an outputSchema"
+            );
+        }
+    }
+
+    #[test]
+    fn us_market_tools_expose_required_metadata() {
+        for name in [
+            "financial_statement",
+            "financial_report",
+            "financial_report_key_metrics",
+            "profit_analysis_realized",
+            "etf_docs",
+            "stock_positions",
+            "order_detail",
+            "dividend",
+            "consensus",
+            "valuation",
+            "company",
+        ] {
             let tool = super::list_tools()
                 .into_iter()
                 .find(|tool| tool.name == name)

@@ -16,6 +16,7 @@ pub mod macrodata;
 pub mod market;
 pub mod quote;
 pub mod social;
+pub mod us_market;
 
 use rmcp::schemars::JsonSchema;
 use rmcp::serde::Serialize;
@@ -67,6 +68,10 @@ pub struct MarginRatioResponse {
 pub struct StockPositionsResponse {
     /// Position channels — one entry per broker channel.
     pub list: Vec<StockPositionChannel>,
+    /// US accounts only: cash/stock/option/crypto overview from a separate
+    /// US-specific endpoint.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub us_asset_overview: Option<us_market::UsAssetOverview>,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -231,42 +236,54 @@ pub struct BrokerLevel {
 /// Returned by `order_detail`. Single order with full lifecycle metadata.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct OrderDetailResponse {
-    /// Order ID.
-    pub order_id: String,
-    /// Status enum (e.g. `Filled`, `WaitToNew`, `Canceled`).
-    pub status: String,
-    /// Security symbol, e.g. "700.HK".
-    pub symbol: String,
-    /// Display name of the security.
-    pub stock_name: String,
-    /// Submitted quantity.
-    pub quantity: String,
-    /// Quantity already executed.
-    pub executed_quantity: String,
+    /// Order ID. Not present in the US-region shape (see `order` below).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub order_id: Option<String>,
+    /// Status enum (e.g. `Filled`, `WaitToNew`, `Canceled`). Not present in the US-region shape (see `order` below).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    /// Security symbol, e.g. "700.HK". Not present in the US-region shape (see `order` below).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub symbol: Option<String>,
+    /// Display name of the security. Not present in the US-region shape (see `order` below).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stock_name: Option<String>,
+    /// Submitted quantity. Not present in the US-region shape (see `order` below).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quantity: Option<String>,
+    /// Quantity already executed. Not present in the US-region shape (see `order` below).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub executed_quantity: Option<String>,
     /// Submitted limit price (null for market orders).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub price: Option<String>,
     /// Volume-weighted average executed price (null when unfilled).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub executed_price: Option<String>,
-    /// Order submission time (RFC3339).
-    pub submitted_at: String,
-    /// Buy or Sell.
-    pub side: String,
-    /// Order type enum, e.g. `LO`, `MO`, `LIT`.
-    pub order_type: String,
+    /// Order submission time (RFC3339). Not present in the US-region shape (see `order` below).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub submitted_at: Option<String>,
+    /// Buy or Sell. Not present in the US-region shape (see `order` below).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub side: Option<String>,
+    /// Order type enum, e.g. `LO`, `MO`, `LIT`. Not present in the US-region shape (see `order` below).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub order_type: Option<String>,
     /// Latest price snapshot at order time (null if missing).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_done: Option<String>,
     /// Trigger price for LIT/MIT/trailing orders.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub trigger_price: Option<String>,
-    /// Reject message or remark.
-    pub msg: String,
-    /// Order tag (e.g. `Normal`, `LongTerm`).
-    pub tag: String,
-    /// Time-in-force: `Day` / `GTC` / `GTD`.
-    pub time_in_force: String,
+    /// Reject message or remark. Not present in the US-region shape (see `order` below).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub msg: Option<String>,
+    /// Order tag (e.g. `Normal`, `LongTerm`). Not present in the US-region shape (see `order` below).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tag: Option<String>,
+    /// Time-in-force: `Day` / `GTC` / `GTD`. Not present in the US-region shape (see `order` below).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub time_in_force: Option<String>,
     /// GTD expiry date (yyyy-mm-dd).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub expire_date: Option<String>,
@@ -288,9 +305,17 @@ pub struct OrderDetailResponse {
     /// Trigger status, e.g. `Deactive` / `Active` / `Released`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub trigger_status: Option<String>,
-    /// Settlement currency.
-    pub currency: String,
+    /// Settlement currency. Not present in the US-region shape (see `order` below).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub currency: Option<String>,
     /// Outside-RTH setting: `RTH_ONLY` / `ANY_TIME` / `OVERNIGHT`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub outside_rth: Option<String>,
+    /// US-region shape only: the order, nested instead of at the response
+    /// root (confirmed via a live US staging `order_detail` call).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub order: Option<us_market::UsOrderDetail>,
+    /// US-region shape only: server timestamp accompanying `order`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub current_millisecond: Option<String>,
 }

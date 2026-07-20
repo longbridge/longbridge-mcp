@@ -27,6 +27,12 @@ pub struct AccountBalanceParam {
 pub struct TodayOrdersParam {
     /// Filter by symbol, e.g. "700.HK". Omit to return all today's orders.
     pub symbol: Option<String>,
+    /// US accounts only: filter by side, "Buy" or "Sell". Omit for all.
+    pub us_action: Option<String>,
+    /// US accounts only: page number (default 1).
+    pub us_page: Option<i32>,
+    /// US accounts only: page size (default 20).
+    pub us_limit: Option<i32>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -104,6 +110,10 @@ pub struct HistoryOrdersParam {
     pub start_at: String,
     /// End time (RFC3339)
     pub end_at: String,
+    /// US accounts only, history_orders tool only: page number (default 1).
+    pub us_page: Option<i32>,
+    /// US accounts only, history_orders tool only: page size (default 20).
+    pub us_limit: Option<i32>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -151,7 +161,18 @@ pub async fn account_balance(
 pub async fn stock_positions(mctx: &crate::tools::McpContext) -> Result<CallToolResult, McpError> {
     let (ctx, _) = TradeContext::new(mctx.create_config());
     let result = ctx.stock_positions(None).await.map_err(Error::longbridge)?;
-    tool_json(&result)
+    let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;
+    if mctx.dc_region().await == longbridge::DcRegion::Us
+        && let Ok(us_overview) = ctx.us_asset_overview().await
+        && let (Some(obj), Ok(mut us_value)) = (
+            value.as_object_mut(),
+            serde_json::to_value(&us_overview).map_err(Error::Serialize),
+        )
+    {
+        crate::tools::support::us_normalize::normalize_us_stock_list(&mut us_value);
+        obj.insert("us_asset_overview".to_string(), us_value);
+    }
+    tool_json(&value)
 }
 
 pub async fn fund_positions(mctx: &crate::tools::McpContext) -> Result<CallToolResult, McpError> {
@@ -176,11 +197,48 @@ pub async fn today_orders(
     mctx: &crate::tools::McpContext,
     p: TodayOrdersParam,
 ) -> Result<CallToolResult, McpError> {
+    let (ctx, _) = TradeContext::new(mctx.create_config());
+    if mctx.dc_region().await == longbridge::DcRegion::Us {
+        let side = match p.us_action.as_deref() {
+            Some(s) if s.eq_ignore_ascii_case("buy") => longbridge::trade::OrderSide::Buy,
+            Some(s) if s.eq_ignore_ascii_case("sell") => longbridge::trade::OrderSide::Sell,
+            _ => longbridge::trade::OrderSide::Unknown,
+        };
+        let now = time::OffsetDateTime::now_utc();
+        let start_of_day = now.replace_time(time::Time::MIDNIGHT);
+        let opts = longbridge::trade::GetUSHistoryOrders {
+            symbol: p.symbol,
+            side,
+            // Confirmed via live testing that start_at/end_at do filter
+            // correctly on the backend (unlike query_type, see below) — start
+            // of the current UTC day gives "today" instead of a multi-month
+            // window that would make this indistinguishable from
+            // history_orders.
+            start_at: start_of_day.unix_timestamp(),
+            end_at: now.unix_timestamp(),
+            // query_type (0=all/1=pending/2=history) does not actually filter
+            // on the backend as of this writing (confirmed via live testing —
+            // "pending" returned the identical set as "all", "history"
+            // returned nothing despite matching orders existing) — always
+            // request 0 (all) rather than expose a filter that silently does
+            // nothing or hides real data.
+            query_type: 0,
+            page: p.us_page.unwrap_or(1),
+            limit: p.us_limit.unwrap_or(20),
+        };
+        let result = ctx.us_query_orders(opts).await.map_err(Error::longbridge)?;
+        let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;
+        if let Some(orders) = value.get_mut("orders").and_then(|v| v.as_array_mut()) {
+            for order in orders {
+                crate::tools::support::us_normalize::normalize_us_order(order);
+            }
+        }
+        return tool_json(&value);
+    }
     let mut opts = GetTodayOrdersOptions::new();
     if let Some(symbol) = p.symbol {
         opts = opts.symbol(symbol);
     }
-    let (ctx, _) = TradeContext::new(mctx.create_config());
     let result = ctx.today_orders(opts).await.map_err(Error::longbridge)?;
     tool_json(&result)
 }
@@ -190,6 +248,20 @@ pub async fn order_detail(
     p: OrderIdParam,
 ) -> Result<CallToolResult, McpError> {
     let (ctx, _) = TradeContext::new(mctx.create_config());
+    if mctx.dc_region().await == longbridge::DcRegion::Us {
+        let result = ctx
+            .us_order_detail(p.order_id)
+            .await
+            .map_err(Error::longbridge)?;
+        let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;
+        if let Some(order) = value.get_mut("order") {
+            crate::tools::support::us_normalize::normalize_us_order(order);
+        }
+        if let Some(obj) = value.as_object_mut() {
+            crate::tools::support::us_normalize::drop_empty(obj);
+        }
+        return tool_json(&value);
+    }
     let result = ctx
         .order_detail(p.order_id)
         .await
@@ -256,13 +328,37 @@ pub async fn history_orders(
 ) -> Result<CallToolResult, McpError> {
     let start = parse::parse_rfc3339(&p.start_at)?;
     let end = parse::parse_rfc3339(&p.end_at)?;
+    let (ctx, _) = TradeContext::new(mctx.create_config());
+    if mctx.dc_region().await == longbridge::DcRegion::Us {
+        let opts = longbridge::trade::GetUSHistoryOrders {
+            symbol: p.symbol,
+            side: longbridge::trade::OrderSide::Unknown,
+            start_at: start.unix_timestamp(),
+            end_at: end.unix_timestamp(),
+            // See the identical note in today_orders: query_type does not
+            // filter on the backend as of this writing, so 2 ("history") was
+            // confirmed to always return zero results even when matching
+            // orders exist in range. 0 (all) is the only value confirmed to
+            // return data.
+            query_type: 0,
+            page: p.us_page.unwrap_or(1),
+            limit: p.us_limit.unwrap_or(20),
+        };
+        let result = ctx.us_query_orders(opts).await.map_err(Error::longbridge)?;
+        let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;
+        if let Some(orders) = value.get_mut("orders").and_then(|v| v.as_array_mut()) {
+            for order in orders {
+                crate::tools::support::us_normalize::normalize_us_order(order);
+            }
+        }
+        return tool_json(&value);
+    }
     let mut opts = longbridge::trade::GetHistoryOrdersOptions::new()
         .start_at(start)
         .end_at(end);
     if let Some(symbol) = p.symbol {
         opts = opts.symbol(symbol);
     }
-    let (ctx, _) = TradeContext::new(mctx.create_config());
     let result = ctx.history_orders(opts).await.map_err(Error::longbridge)?;
     tool_json(&result)
 }
@@ -627,5 +723,46 @@ mod tests {
         let output = to_tool_json(&input).unwrap();
         let v: serde_json::Value = serde_json::from_str(&output).unwrap();
         assert_eq!(v["list"], serde_json::json!([]), "got: {output}");
+    }
+
+    /// `USOrderDetailResponse`'s top-level `order_histories`/
+    /// `current_attached_order` are near-always empty/null in practice (the
+    /// real state-transition log lives nested inside `order.order_histories`,
+    /// which is normalized separately). The empty top-level duplicate must be
+    /// dropped so callers don't mistake it for "no history exists".
+    #[test]
+    fn order_detail_envelope_drops_empty_top_level_fields() {
+        use crate::tools::support::us_normalize::{drop_empty, normalize_us_order};
+
+        let mut value = serde_json::json!({
+            "order": {
+                "symbol": "AAPL.US",
+                "status": "FilledStatus",
+                "order_histories": [{"status": "FilledStatus", "time": "1780925402"}]
+            },
+            "order_histories": [],
+            "current_attached_order": null
+        });
+
+        if let Some(order) = value.get_mut("order") {
+            normalize_us_order(order);
+        }
+        if let Some(obj) = value.as_object_mut() {
+            drop_empty(obj);
+        }
+
+        assert!(
+            value.get("order_histories").is_none(),
+            "empty top-level order_histories should be dropped: {value}"
+        );
+        assert!(
+            value.get("current_attached_order").is_none(),
+            "null current_attached_order should be dropped: {value}"
+        );
+        assert_eq!(
+            value["order"]["order_histories"][0]["occurred_at"],
+            serde_json::json!("1780925402"),
+            "nested order_histories must survive: {value}"
+        );
     }
 }
