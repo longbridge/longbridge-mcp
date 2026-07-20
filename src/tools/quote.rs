@@ -2,7 +2,7 @@ use longbridge::quote::{
     RequestCreateWatchlistGroup, RequestUpdateWatchlistGroup, SecuritiesUpdateMode,
 };
 use rmcp::ErrorData as McpError;
-use rmcp::model::CallToolResult;
+use rmcp::model::{CallToolResult, Content};
 use rmcp::schemars::JsonSchema;
 use rmcp::serde::Deserialize;
 
@@ -307,18 +307,73 @@ fn clean_session(removed: Option<serde_json::Value>) -> serde_json::Value {
     }
 }
 
+/// Requested symbols that are absent from a batch response, preserving the
+/// order they were asked for.
+///
+/// Longbridge's batch quote APIs are partial-success: a symbol the caller
+/// cannot be served — a market the account holds no quote entitlement for, a
+/// delisted security, a typo — is dropped from the result instead of reported.
+/// Asking for four symbols and receiving two looks identical to asking for two,
+/// so callers cannot distinguish "no data" from "not permitted" from "no such
+/// symbol" unless the omission is stated.
+fn missing_symbols<'a>(
+    requested: &[String],
+    returned: impl IntoIterator<Item = &'a str>,
+) -> Vec<String> {
+    let returned: std::collections::HashSet<String> =
+        returned.into_iter().map(str::to_uppercase).collect();
+    requested
+        .iter()
+        .filter(|s| !returned.contains(&s.to_uppercase()))
+        .cloned()
+        .collect()
+}
+
+/// Fails when a batch response is entirely empty, and otherwise notes which
+/// symbols were dropped.
+///
+/// Returning nothing at all is a failure rather than a result, so it surfaces
+/// as an error. A partial response still carries useful data, so it is left
+/// intact and the omission is appended as a separate text block — the payload
+/// and its `output_schema` are untouched.
+fn report_missing_symbols(
+    mut result: CallToolResult,
+    requested: &[String],
+    missing: &[String],
+) -> Result<CallToolResult, McpError> {
+    if missing.is_empty() {
+        return Ok(result);
+    }
+    if missing.len() == requested.len() {
+        return Err(Error::Other(format!(
+            "no quote data for any requested symbol ({}). The account may hold no \
+             quote entitlement for these markets, or the symbols may not exist.",
+            requested.join(", ")
+        ))
+        .into());
+    }
+    result.content.push(Content::text(format!(
+        "Note: no quote data returned for {}. The account may hold no quote \
+         entitlement for these markets, or the symbols may not exist.",
+        missing.join(", ")
+    )));
+    Ok(result)
+}
+
 pub async fn quote(
     mctx: &crate::tools::McpContext,
     p: SymbolsParam,
 ) -> Result<CallToolResult, McpError> {
+    let requested = p.symbols.clone();
     let ctx = mctx.get_quote_context().await;
     let result = ctx.quote(p.symbols).await.map_err(|e| {
         mctx.evict_quote_context();
         Error::longbridge(e)
     })?;
+    let missing = missing_symbols(&requested, result.iter().map(|q| q.symbol.as_str()));
     let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;
     normalize_extended_sessions(&mut value);
-    tool_json(&value)
+    report_missing_symbols(tool_json(&value)?, &requested, &missing)
 }
 
 pub async fn option_quote(
@@ -734,11 +789,13 @@ pub async fn calc_indexes(
         .iter()
         .map(|s| parse::parse_calc_index(s))
         .collect::<Result<_, _>>()?;
+    let requested = p.symbols.clone();
     let ctx = mctx.get_quote_context().await;
     let mut result = ctx.calc_indexes(p.symbols, indexes).await.map_err(|e| {
         mctx.evict_quote_context();
         Error::longbridge(e)
     })?;
+    let missing = missing_symbols(&requested, result.iter().map(|r| r.symbol.as_str()));
 
     // Normalize Greeks to match Longbridge app display values:
     // - theta: API returns annualized value (×252), divide by 252 for per-trading-day
@@ -756,7 +813,7 @@ pub async fn calc_indexes(
         }
     }
 
-    tool_json(&result)
+    report_missing_symbols(tool_json(&result)?, &requested, &missing)
 }
 
 pub async fn create_watchlist_group(
@@ -1002,7 +1059,74 @@ pub async fn option_volume_daily(
 mod tests {
     use serde_json::json;
 
-    use super::normalize_extended_sessions;
+    use super::{missing_symbols, normalize_extended_sessions, report_missing_symbols};
+
+    fn strs(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| (*s).to_string()).collect()
+    }
+
+    #[test]
+    fn missing_symbols_reports_dropped_ones_in_request_order() {
+        let requested = strs(&["AAPL.US", "700.HK", "NVDA.US", "600519.SH"]);
+        let missing = missing_symbols(&requested, ["NVDA.US", "AAPL.US"]);
+        assert_eq!(missing, strs(&["700.HK", "600519.SH"]));
+    }
+
+    #[test]
+    fn missing_symbols_ignores_case_differences() {
+        let requested = strs(&["aapl.us"]);
+        assert!(missing_symbols(&requested, ["AAPL.US"]).is_empty());
+    }
+
+    #[test]
+    fn partial_response_keeps_payload_and_appends_a_note() {
+        let requested = strs(&["AAPL.US", "700.HK"]);
+        let missing = strs(&["700.HK"]);
+        let result = report_missing_symbols(
+            crate::tools::tool_result("[{\"symbol\":\"AAPL.US\"}]".to_string()),
+            &requested,
+            &missing,
+        )
+        .expect("a partial response must not fail");
+
+        // Original payload survives untouched; the note is a separate block so
+        // `output_schema` consumers still see only the array.
+        assert_eq!(result.content.len(), 2);
+        let note = result.content[1].as_text().unwrap().text.as_str();
+        assert!(
+            note.contains("700.HK"),
+            "note should name the dropped symbol"
+        );
+        assert!(
+            !note.contains("AAPL.US"),
+            "note should not name served ones"
+        );
+    }
+
+    #[test]
+    fn empty_response_fails_instead_of_looking_like_no_data() {
+        let requested = strs(&["700.HK", "600519.SH"]);
+        let err = report_missing_symbols(
+            crate::tools::tool_result("[]".to_string()),
+            &requested,
+            &requested.clone(),
+        )
+        .expect_err("an entirely empty response must surface as an error");
+        let msg = format!("{err:?}");
+        assert!(msg.contains("700.HK") && msg.contains("600519.SH"));
+    }
+
+    #[test]
+    fn full_response_is_passed_through_unchanged() {
+        let requested = strs(&["AAPL.US"]);
+        let result = report_missing_symbols(
+            crate::tools::tool_result("[{\"symbol\":\"AAPL.US\"}]".to_string()),
+            &requested,
+            &[],
+        )
+        .expect("a complete response must not fail");
+        assert_eq!(result.content.len(), 1);
+    }
 
     #[test]
     fn normalizes_sessions_string_last_done() {
