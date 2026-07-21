@@ -258,3 +258,55 @@ The server is designed for containerized deployment:
 - No persistent state; the process-local quote WebSocket cache is bounded and disposable
 - Horizontal scaling: any number of instances behind a load balancer
 - Health check: `GET /metrics` returns 200
+
+### CN public-domain network path
+
+The CN public domains share the Shenzhen public ingress path. At the time this
+topology was verified, both `mcp.longbridge.cn` and `openapi.longbridge.cn`
+resolved through `traefik-sz-public.lbkrs.com`. The MCP IngressRoute sends
+`mcp.longbridge.cn` traffic through Traefik to the MCP ClusterIP service on
+port 80, which targets MCP containers on port 8000.
+
+```text
+MCP client
+    |
+    | HTTPS mcp.longbridge.cn
+    v
+CN public edge / Shenzhen ALB
+    |
+    v
+Traefik IngressRoute (longbridge-mcp-sg)
+    |
+    v
+MCP ClusterIP service:80 -> MCP container:8000
+    |
+    | HTTPS openapi.longbridge.cn
+    v
+The same CN public edge / Shenzhen ALB
+    |
+    v
+OpenAPI ingress and application
+```
+
+This second traversal is intentional, but ALB routing metadata from the first
+traversal must not be replayed. In particular, Alibaba Cloud ALB adds
+`ALICLOUD-ALB-TRACE` for loop detection. Forwarding that header from the client
+request into the MCP server's upstream OpenAPI request can repeat the same rule
+trace or exceed the trace-chain limit. ALB then returns HTTP 463 before the
+request reaches the OpenAPI application. `collect_headers` therefore treats
+`ALICLOUD-ALB-TRACE` as hop-specific and removes it at the MCP-to-OpenAPI
+boundary.
+
+The failure mode was verified against
+`openapi.longbridge.cn/v1/quote/market-status`: changing only an
+`ALICLOUD-ALB-TRACE` comma-separated chain from 16 values to 17 changed the
+response from the OpenAPI application's HTTP 401 JSON response to an empty HTTP
+463 response. Equally long control and `X-Forwarded-For` headers still reached
+OpenAPI and returned 401. OpenAPI application logs also contained no entry for
+the affected 463 requests, locating the rejection at the public edge rather
+than in the application.
+
+If the CN DNS, CDN, ALB, or ingress layout changes, re-check this path before
+removing the filter. The invariant is that load-balancer-generated tracing and
+loop-detection headers belong to one proxy hop and must not be forwarded as
+end-user headers.

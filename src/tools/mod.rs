@@ -381,6 +381,15 @@ const SKIP_FORWARD_HEADERS: &[&str] = &[
     "accept-encoding",
     "mcp-session-id",
     "authorization",
+    // Alibaba Cloud ALB appends this header to detect routing loops. In the CN
+    // deployment, both mcp.longbridge.cn and openapi.longbridge.cn enter through
+    // the same public ALB. Forwarding the trace received by MCP back to OpenAPI
+    // therefore sends an ALB-generated rule trace through that ALB a second
+    // time. A repeated rule ID, or a trace chain over ALB's limit, is rejected
+    // at the load balancer with HTTP 463 before the request reaches OpenAPI.
+    // This is hop-specific routing metadata and must never cross the MCP-to-
+    // OpenAPI boundary.
+    "alicloud-alb-trace",
     // Captured separately in `extract_context` and folded into the synthesized
     // upstream User-Agent; never forwarded raw.
     "user-agent",
@@ -4455,6 +4464,21 @@ mod tests {
         );
         // The client UA is folded into the synthesized upstream UA, not forwarded raw.
         assert!(!collect_headers(&map).iter().any(|(k, _)| k == "user-agent"));
+    }
+
+    #[test]
+    fn does_not_forward_alicloud_alb_trace() {
+        let mut map = HeaderMap::new();
+        map.insert(
+            HeaderName::from_static("alicloud-alb-trace"),
+            HeaderValue::from_static("0123456789abcdef"),
+        );
+
+        assert!(
+            !collect_headers(&map)
+                .iter()
+                .any(|(key, _)| key == "alicloud-alb-trace")
+        );
     }
 
     #[test]
