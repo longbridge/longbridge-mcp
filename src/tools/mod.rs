@@ -381,9 +381,14 @@ const SKIP_FORWARD_HEADERS: &[&str] = &[
     "accept-encoding",
     "mcp-session-id",
     "authorization",
-    // Added by Alibaba Cloud ALB for loop detection. Replaying it when this
-    // server calls another hostname on the same ALB makes that legitimate
-    // upstream request look like a routing loop and the ALB returns HTTP 463.
+    // Alibaba Cloud ALB appends this header to detect routing loops. In the CN
+    // deployment, both mcp.longbridge.cn and openapi.longbridge.cn enter through
+    // the same public ALB. Forwarding the trace received by MCP back to OpenAPI
+    // therefore sends an ALB-generated rule trace through that ALB a second
+    // time. A repeated rule ID, or a trace chain over ALB's limit, is rejected
+    // at the load balancer with HTTP 463 before the request reaches OpenAPI.
+    // This is hop-specific routing metadata and must never cross the MCP-to-
+    // OpenAPI boundary.
     "alicloud-alb-trace",
     // Captured separately in `extract_context` and folded into the synthesized
     // upstream User-Agent; never forwarded raw.
