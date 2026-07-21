@@ -381,26 +381,43 @@ const SKIP_FORWARD_HEADERS: &[&str] = &[
     "accept-encoding",
     "mcp-session-id",
     "authorization",
-    // Describes the client -> MCP server hop and must not be replayed upstream.
-    // AWS ALB rejects an X-Forwarded-For header containing too many addresses
-    // with HTTP 463; the upstream infrastructure will build its own chain.
-    "x-forwarded-for",
     // Captured separately in `extract_context` and folded into the synthesized
     // upstream User-Agent; never forwarded raw.
     "user-agent",
 ];
 
+const MAX_FORWARDED_FOR_ADDRESSES: usize = 10;
+
 fn collect_headers(headers: &axum::http::HeaderMap) -> Vec<(String, String)> {
-    headers
-        .iter()
-        .filter_map(|(name, value)| {
-            let key = name.as_str().to_lowercase();
-            if SKIP_FORWARD_HEADERS.contains(&key.as_str()) {
-                return None;
-            }
-            Some((key, value.to_str().ok()?.to_string()))
-        })
-        .collect()
+    let mut forwarded = Vec::new();
+    let mut forwarded_for = Vec::new();
+
+    for (name, value) in headers {
+        let key = name.as_str().to_lowercase();
+        if SKIP_FORWARD_HEADERS.contains(&key.as_str()) {
+            continue;
+        }
+        let Ok(value) = value.to_str() else {
+            continue;
+        };
+        if key == "x-forwarded-for" {
+            forwarded_for.extend(
+                value
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|address| !address.is_empty())
+                    .take(MAX_FORWARDED_FOR_ADDRESSES - forwarded_for.len())
+                    .map(str::to_owned),
+            );
+        } else {
+            forwarded.push((key, value.to_string()));
+        }
+    }
+
+    if !forwarded_for.is_empty() {
+        forwarded.push(("x-forwarded-for".to_string(), forwarded_for.join(", ")));
+    }
+    forwarded
 }
 
 /// Whether the current request carries Longbridge credentials.
@@ -4441,7 +4458,7 @@ mod tests {
     }
 
     #[test]
-    fn does_not_forward_x_forwarded_for() {
+    fn forwards_short_x_forwarded_for_chain() {
         let mut map = HeaderMap::new();
         map.insert(
             HeaderName::from_static("x-forwarded-for"),
@@ -4450,9 +4467,42 @@ mod tests {
 
         let headers = collect_headers(&map);
         assert!(
-            headers.is_empty(),
-            "x-forwarded-for leaked upstream: {headers:?}"
+            headers.iter().any(|(key, value)| {
+                key == "x-forwarded-for" && value == "192.0.2.1, 192.0.2.2"
+            })
         );
+    }
+
+    #[test]
+    fn parses_x_forwarded_for_chain_without_spaces() {
+        let mut map = HeaderMap::new();
+        map.insert(
+            HeaderName::from_static("x-forwarded-for"),
+            HeaderValue::from_static("192.0.2.1,192.0.2.2,192.0.2.3"),
+        );
+
+        let headers = collect_headers(&map);
+        assert!(headers.iter().any(|(key, value)| {
+            key == "x-forwarded-for" && value == "192.0.2.1, 192.0.2.2, 192.0.2.3"
+        }));
+    }
+
+    #[test]
+    fn caps_x_forwarded_for_chain_at_ten_addresses() {
+        let mut map = HeaderMap::new();
+        map.insert(
+            HeaderName::from_static("x-forwarded-for"),
+            HeaderValue::from_static(
+                "192.0.2.1, 192.0.2.2, 192.0.2.3, 192.0.2.4, 192.0.2.5, 192.0.2.6, 192.0.2.7, 192.0.2.8, 192.0.2.9, 192.0.2.10, 192.0.2.11, 192.0.2.12",
+            ),
+        );
+
+        let headers = collect_headers(&map);
+        assert!(headers.iter().any(|(key, value)| {
+            key == "x-forwarded-for"
+                && value
+                    == "192.0.2.1, 192.0.2.2, 192.0.2.3, 192.0.2.4, 192.0.2.5, 192.0.2.6, 192.0.2.7, 192.0.2.8, 192.0.2.9, 192.0.2.10"
+        }));
     }
 
     fn ctx_with_ua(ua: Option<&str>) -> super::McpContext {
