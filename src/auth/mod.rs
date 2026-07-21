@@ -137,6 +137,9 @@ const LANDING_PAGE_HTML: &str = include_str!("landing.html");
 /// Must match the literal URL baked into `landing.html`'s onboarding snippets.
 const LANDING_PAGE_URL_PLACEHOLDER: &str = "https://mcp.longbridge.com";
 
+/// Replaced with the crate version embedded by Cargo at compile time.
+const LANDING_PAGE_VERSION_PLACEHOLDER: &str = "{{VERSION}}";
+
 /// Serve [`LANDING_PAGE_HTML`] only for a browser navigation to `/`
 /// (a `GET` whose `Accept` header asks for `text/html`). Every other request —
 /// JSON-RPC `POST`, the SSE `GET` with `Accept: text/event-stream`, `Accept:
@@ -167,7 +170,9 @@ async fn landing_or_mcp(
 
     if is_browser_root {
         let public = metadata::public_url_from_headers(req.headers(), &state.base_url);
-        let html = LANDING_PAGE_HTML.replace(LANDING_PAGE_URL_PLACEHOLDER, &public.url);
+        let html = LANDING_PAGE_HTML
+            .replace(LANDING_PAGE_URL_PLACEHOLDER, &public.url)
+            .replace(LANDING_PAGE_VERSION_PLACEHOLDER, env!("CARGO_PKG_VERSION"));
         return (
             [(axum::http::header::CONTENT_TYPE, "text/html; charset=utf-8")],
             html,
@@ -438,5 +443,19 @@ mod tests {
             .matches(super::LANDING_PAGE_URL_PLACEHOLDER)
             .count();
         assert_eq!(html.matches(dynamic_url).count(), expected_count);
+    }
+
+    #[test]
+    fn landing_page_version_matches_the_crate_version() {
+        assert!(
+            super::LANDING_PAGE_HTML.contains(super::LANDING_PAGE_VERSION_PLACEHOLDER),
+            "landing.html must contain the version placeholder"
+        );
+        let html = super::LANDING_PAGE_HTML.replace(
+            super::LANDING_PAGE_VERSION_PLACEHOLDER,
+            env!("CARGO_PKG_VERSION"),
+        );
+        assert!(!html.contains(super::LANDING_PAGE_VERSION_PLACEHOLDER));
+        assert!(html.contains(&format!("v{}", env!("CARGO_PKG_VERSION"))));
     }
 }

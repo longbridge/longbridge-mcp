@@ -138,6 +138,10 @@
             }
 
             footer {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                gap: 16px;
                 margin-top: 28px;
                 color: var(--muted);
                 font-size: 0.82rem;
@@ -194,7 +198,10 @@
                 — full setup, tool reference &amp; examples.
             </p>
 
-            <footer>© <a href="https://longbridge.com">Longbridge</a></footer>
+            <footer>
+                <span>© <a href="https://longbridge.com">Longbridge</a></span>
+                <span class="mono">v{{VERSION}}</span>
+            </footer>
         </div>
     </body>
 </html>
