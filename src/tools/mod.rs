@@ -381,6 +381,10 @@ const SKIP_FORWARD_HEADERS: &[&str] = &[
     "accept-encoding",
     "mcp-session-id",
     "authorization",
+    // Describes the client -> MCP server hop and must not be replayed upstream.
+    // AWS ALB rejects an X-Forwarded-For header containing too many addresses
+    // with HTTP 463; the upstream infrastructure will build its own chain.
+    "x-forwarded-for",
     // Captured separately in `extract_context` and folded into the synthesized
     // upstream User-Agent; never forwarded raw.
     "user-agent",
@@ -4434,6 +4438,21 @@ mod tests {
         );
         // The client UA is folded into the synthesized upstream UA, not forwarded raw.
         assert!(!collect_headers(&map).iter().any(|(k, _)| k == "user-agent"));
+    }
+
+    #[test]
+    fn does_not_forward_x_forwarded_for() {
+        let mut map = HeaderMap::new();
+        map.insert(
+            HeaderName::from_static("x-forwarded-for"),
+            HeaderValue::from_static("192.0.2.1, 192.0.2.2"),
+        );
+
+        let headers = collect_headers(&map);
+        assert!(
+            headers.is_empty(),
+            "x-forwarded-for leaked upstream: {headers:?}"
+        );
     }
 
     fn ctx_with_ua(ua: Option<&str>) -> super::McpContext {
