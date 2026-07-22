@@ -19,7 +19,7 @@ Official MCP server for the [Longbridge](https://longbridge.com) brokerage. **14
 
 - **148 MCP tools** across 19 categories: quotes, fundamentals, trading, market data, DCA, IPO, sharelists, content, alerts, screener, ATM, portfolio, macrodata, search, statements, authenticate, calendar, quant, and utility
 - **Stateless architecture** -- each request carries a Bearer token forwarded directly to the Longbridge SDK; no server-side sessions or database
-- **OAuth 2.1 resource metadata** compliant with RFC 9728, pointing clients to Longbridge OAuth for authorization
+- **OAuth 2.1 metadata** — RFC 9728 protected-resource + RFC 8414 authorization-server facade; browser authorization stays direct while `token`/`revoke` pass through this server to attach Longbridge's DC routing header
 - **JSON response transformation** -- field names normalized to snake_case, timestamps converted to RFC 3339, internal counter_id values mapped to human-readable symbols
 - **Compact tool metadata** -- typed `outputSchema` descriptors stay in `tools/list` for compatible clients, redundant return-field prose is trimmed, and full verbose schemas are available as MCP resources under `lb://tools/{tool}/output-schema`
 - **Prometheus metrics** for monitoring tool calls, latency, and errors
@@ -171,6 +171,9 @@ On the first tool invocation, Claude Code reads the `WWW-Authenticate` challenge
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/.well-known/oauth-protected-resource` | Protected Resource Metadata (RFC 9728) |
+| GET | `/.well-known/oauth-authorization-server` | Authorization Server Metadata (RFC 8414); advertises direct Longbridge authorize/register and proxied token/revoke endpoints |
+| POST | `/oauth2/token` | OAuth token proxy; derives `x-dc-region` from the code/refresh token, defaulting to AP |
+| POST | `/oauth2/revoke` | OAuth revocation proxy; derives `x-dc-region` from the token, defaulting to AP |
 | GET | `/metrics` | Prometheus metrics |
 | POST/GET/DELETE | `/mcp` | MCP Streamable HTTP endpoint (requires Bearer token) |
 
