@@ -138,7 +138,24 @@ These are **advanced settings** — most users do not need to change them. They 
 | `LONGBRIDGE_TRADE_WS_URL` | `wss://openapi-trade.longbridge.com/v2` | Trade WebSocket endpoint |
 | `LONGBRIDGE_MCP_QUOTE_WS_IDLE_TTL_SECS` | `600` | Idle seconds before a cached quote WebSocket context is evicted |
 | `LONGBRIDGE_MCP_QUOTE_WS_MAX_CONTEXTS` | `1024` | Maximum cached quote WebSocket contexts per server process |
-| `LONGBRIDGE_LOG_PATH` | *(none)* | SDK internal log path |
+| `LONGBRIDGE_MCP_LOG_PAYLOADS` | *(unset)* | `1` lifts the payload log caps (see [Logging and customer data](#logging-and-customer-data)). Never set this in production |
+| `LONGBRIDGE_LOG_PATH` | *(none)* | SDK internal log path. **Leave unset in production** — the SDK writes unfiltered request/response bodies there (see [Logging and customer data](#logging-and-customer-data)) |
+
+## Logging and customer data
+
+MCP requests and responses carry customer data — cash balances, positions, order history — and the upstream SDK frames carry access tokens. None of it belongs in a log file, so the server enforces a cap on the log targets that would print it, independent of `RUST_LOG`:
+
+| Target | Cap | What it would otherwise print |
+|--------|-----|-------------------------------|
+| `longbridge_httpcli` | `warn` | OpenAPI request and full response bodies (INFO) |
+| `longbridge_wscli` | `warn` | Every WebSocket frame, auth token included (INFO) |
+| `longbridge::trade` | `warn` | Order push events (INFO) |
+| `rmcp` | `info` | Decoded MCP requests and full tool results (DEBUG), raw JSON-RPC frames (TRACE) |
+
+Raising verbosity is therefore safe: `RUST_LOG=debug` (or even `trace`) gives you this server's own logs without turning customer data into log lines. Two things do defeat it, both off by default:
+
+- `LONGBRIDGE_MCP_LOG_PAYLOADS=1` removes the caps. Use it only against a test account on a local machine.
+- `LONGBRIDGE_LOG_PATH` makes the SDK install a private subscriber that writes `longbridge*` INFO events — request and response bodies included — into that directory, where this server's filter does not apply. The server logs a warning at startup when it is set.
 
 ## Authentication
 

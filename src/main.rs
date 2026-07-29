@@ -1,6 +1,7 @@
 mod auth;
 mod counter;
 mod error;
+mod logging;
 mod metrics;
 mod serialize;
 mod tools;
@@ -13,7 +14,6 @@ use std::sync::Arc;
 use clap::Parser;
 use serde::Deserialize;
 use tokio::net::TcpListener;
-use tracing_subscriber::EnvFilter;
 
 fn default_bind() -> SocketAddr {
     "127.0.0.1:8000".parse().unwrap()
@@ -112,23 +112,6 @@ fn load_config() -> AppConfig {
     }
 }
 
-fn init_logging(log_dir: Option<&PathBuf>) {
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-        EnvFilter::new("info,longbridge_mcp=debug,longbridge_httpcli=warn,rmcp=warn")
-    });
-
-    if let Some(dir) = log_dir {
-        let file_appender = tracing_appender::rolling::daily(dir, "longbridge-mcp.log");
-        tracing_subscriber::fmt()
-            .with_env_filter(filter)
-            .with_writer(file_appender)
-            .with_ansi(false)
-            .init();
-    } else {
-        tracing_subscriber::fmt().with_env_filter(filter).init();
-    }
-}
-
 /// Human-facing startup summary printed to stderr.
 ///
 /// Structured `tracing` events go to the log file and are meant for machines;
@@ -205,12 +188,7 @@ async fn main() -> anyhow::Result<()> {
     // tools/list works without credentials; tools/call returns auth errors.
     if std::env::args().any(|a| a == "--stdio") {
         // In stdio mode stdout is the MCP transport; send all logs to stderr.
-        let filter = tracing_subscriber::EnvFilter::try_from_default_env()
-            .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
-        tracing_subscriber::fmt()
-            .with_env_filter(filter)
-            .with_writer(std::io::stderr)
-            .init();
+        crate::logging::init_stdio();
         let tools = crate::tools::list_tools();
         // count includes all registered tools; authenticated clients on /mcp see one fewer
         // (the `authenticate` tool is only surfaced on the unauthenticated /agent endpoint).
@@ -227,7 +205,7 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let config = load_config();
-    init_logging(config.log_dir.as_ref());
+    crate::logging::init(config.log_dir.as_deref());
 
     let app_state = Arc::new(crate::auth::AppState {
         base_url: config.base_url.clone(),
