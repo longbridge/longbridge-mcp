@@ -13,7 +13,7 @@ pub use crate::tools::quote::SymbolParam;
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct OrderIdParam {
-    /// Order ID (returned by submit_order or listed in today_orders / history_orders)
+    /// Order ID (from today's orders or order history)
     pub order_id: String,
 }
 
