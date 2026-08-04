@@ -53,6 +53,7 @@ where
         .await
 }
 
+mod ai;
 mod alert;
 mod atm;
 mod authenticate;
@@ -790,6 +791,11 @@ const TOOL_ENDPOINTS: &[(&str, u8)] = &[
     ("warrant_issuers", V2),
     ("warrant_list", V2),
     ("warrant_quote", V2),
+    // Excluded from every restricted endpoint — AI Agent conversation (high cost).
+    ("ai_agents", 0),
+    ("ai_continue_conversation", 0),
+    ("ai_conversation", 0),
+    ("ai_workspaces", 0),
     // Excluded from every restricted endpoint — DCA automation, order-write,
     // IPO order management, money movement / PCI.
     ("bank_cards", 0),
@@ -4244,6 +4250,88 @@ impl Longbridge {
         let mctx = extract_context(&ctx)?;
         measured_tool_call("screener_indicators", || {
             screener::screener_indicators(&mctx, p)
+        })
+        .await
+    }
+
+    /// List all AI agent workspaces for the authenticated account.
+    #[tool(
+        title = "AI Agent Workspaces",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        ),
+        description = "List all AI agent workspaces available to the authenticated user. Returns workspace id, name, and timestamps. Use to discover workspaces before listing agents."
+    )]
+    async fn ai_workspaces(
+        &self,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("ai_workspaces", || ai::ai_workspaces(&mctx)).await
+    }
+
+    /// List AI agents in a workspace.
+    #[tool(
+        title = "AI Agents",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        ),
+        description = "List AI agents in a workspace. Supports pagination (page, limit) and filtering by name. Returns agent list with total count. Only published agents can start conversations."
+    )]
+    async fn ai_agents(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<ai::AiAgentsParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("ai_agents", || ai::ai_agents(&mctx, p)).await
+    }
+
+    /// Start or continue a conversation with an AI agent.
+    #[tool(
+        title = "AI Agent Conversation",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = true
+        ),
+        description = "Start or continue a conversation with an AI agent. Pass agent_id and query; optionally pass chat_uid to continue an existing session. Returns chat_uid, message_id, status, answer, and interrupt details when the agent needs user input."
+    )]
+    async fn ai_conversation(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<ai::AiConversationParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("ai_conversation", || ai::ai_conversation(&mctx, p)).await
+    }
+
+    /// Resume an interrupted AI agent conversation.
+    #[tool(
+        title = "AI Agent Continue Conversation",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = true
+        ),
+        description = "Resume an interrupted AI agent conversation. Provide agent_id, chat_uid, message_id, and answers to pending tool-call questions. Returns updated status, answer, and any new interrupt if the agent needs more input."
+    )]
+    async fn ai_continue_conversation(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<ai::AiContinueConversationParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("ai_continue_conversation", || {
+            ai::ai_continue_conversation(&mctx, p)
         })
         .await
     }

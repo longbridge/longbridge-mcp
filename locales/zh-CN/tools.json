@@ -1178,6 +1178,39 @@
       "properties": {
         "auth_code": "用户在 https://open.longbridge.com/connect 生成的一次性 OAuth 授权码，5 分钟内有效且仅可使用一次。"
       }
+    },
+    "ai_workspaces": {
+      "title": "AI Agent 工作区列表",
+      "description": "获取当前账户下所有 AI Agent 工作区，返回 workspaces[]{id, name, created_at, updated_at}。用于发现工作区，再通过 ai_agents 列出该工作区内的 Agent"
+    },
+    "ai_agents": {
+      "title": "AI Agent 列表",
+      "description": "列出指定工作区内的 AI Agent，支持分页（page/limit）和按名称模糊筛选，返回 agents[]{uid, name, description, mode, is_published} 及总数。仅已发布的 Agent 可发起对话",
+      "properties": {
+        "workspace_id": "工作区 ID，从 ai_workspaces 获取",
+        "page": "页码，从 1 开始（默认 1）",
+        "limit": "每页条数（默认 20，最大 100）",
+        "name": "按 Agent 名称模糊筛选"
+      }
+    },
+    "ai_conversation": {
+      "title": "AI Agent 对话",
+      "description": "向 AI Agent 发起或继续对话。传入 agent_id 和 query；传入 chat_uid 可继续已有会话，省略则开启新会话。返回 chat_uid、message_id、status、answer，当 Agent 需要补充信息时返回 interrupt",
+      "properties": {
+        "agent_id": "Agent UID，从 ai_agents 响应的 uid 字段获取",
+        "query": "用户提问或指令",
+        "chat_uid": "会话 ID；省略则开启新会话，传入则继续已有会话"
+      }
+    },
+    "ai_continue_conversation": {
+      "title": "AI Agent 继续对话",
+      "description": "在 AI Agent 因需用户输入而中断后，提供答案并恢复对话。需传入 agent_id、chat_uid、message_id 及对应工具调用的答案映射。返回更新后的 status、answer，以及 Agent 是否仍需更多输入",
+      "properties": {
+        "agent_id": "Agent UID",
+        "chat_uid": "上一次 ai_conversation 响应中的会话 ID",
+        "message_id": "上一次 ai_conversation 响应中的消息 ID",
+        "answers": "以 tool_call_id 为键的答案映射，每个值为问题文本到答案字符串的映射"
+      }
     }
   }
 }
