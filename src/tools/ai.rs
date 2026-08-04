@@ -41,13 +41,14 @@ pub struct AiConversationParam {
 /// Parameters for [`ai_continue_conversation`].
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct AiContinueConversationParam {
-    /// Agent UID.
+    /// Agent UID (uid field from ai_agents response).
     pub agent_id: String,
     /// Session ID from the previous ai_conversation response.
     pub chat_uid: String,
     /// Message ID from the previous ai_conversation response.
     pub message_id: String,
-    /// Answers keyed by tool_call_id; each value maps question_text to answer string.
+    /// Answers to pending questions. Outer key: tool_call_id from interrupt.tool_call_id.
+    /// Inner key: question text from interrupt.questions[i].question; inner value: answer string.
     pub answers: HashMap<String, HashMap<String, String>>,
 }
 
