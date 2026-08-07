@@ -5,6 +5,8 @@
 <h1 align="center">Longbridge MCP Server</h1>
 
 <p align="center">
+  <a href="https://chatgpt.com"><img alt="ChatGPT App" src="https://img.shields.io/badge/ChatGPT-App-10a37f?logo=openai&logoColor=white"></a>
+  <a href="https://claude.ai/settings/connectors"><img alt="Claude Connector" src="https://img.shields.io/badge/Claude-Connector-d97757?logo=claude&logoColor=white"></a>
   <a href="https://registry.modelcontextprotocol.io/v0/servers/com.longbridge%2Fmcp/versions"><img alt="Official MCP Registry" src="https://img.shields.io/badge/MCP%20Registry-com.longbridge%2Fmcp-0a66c2"></a>
   <a href="https://smithery.ai/servers/longbridge-official/longbridge-mcp"><img alt="Smithery" src="https://smithery.ai/badge/longbridge-official/longbridge-mcp"></a>
   <a href="https://lobehub.com/mcp/longbridge-longbridge-mcp"><img alt="LobeHub" src="https://lobehub.com/badge/mcp/longbridge-longbridge-mcp"></a>
@@ -13,11 +15,30 @@
   <a href="https://longbridge.com"><img alt="Longbridge" src="https://img.shields.io/badge/brokerage-Longbridge-ffe000?labelColor=000"></a>
 </p>
 
-Official MCP server for the [Longbridge](https://longbridge.com) brokerage. **148 tools** across real-time quotes, options, order routing, fundamentals, analyst ratings, calendars, IPO, price alerts, DCA plans, portfolio analytics and community sharelists — covering **US and HK markets**. Built with Rust using [rmcp](https://github.com/anthropics/rmcp) and [axum](https://github.com/tokio-rs/axum).
+Official MCP server for the [Longbridge](https://longbridge.com) brokerage. **151 tools** across real-time quotes, options, order routing, fundamentals, analyst ratings, calendars, IPO, price alerts, DCA plans, portfolio analytics and community sharelists — covering **US and HK markets**. Built with Rust using [rmcp](https://github.com/anthropics/rmcp) and [axum](https://github.com/tokio-rs/axum).
+
+---
+
+<h2 align="center">Now live in ChatGPT and Claude</h2>
+
+<p align="center">
+  <b>Longbridge is officially listed in the ChatGPT Apps directory and the Claude Connectors directory.</b><br>
+  Talk to the markets in plain language — quotes, options, fundamentals, and your own portfolio —<br>
+  with no config files to edit and no tokens to paste.
+</p>
+
+| | Add it in one place | Then just ask |
+|---|---|---|
+| **ChatGPT** | Settings → **Apps & Connectors** → add **Longbridge** | *"How's NVDA trading today?"* · *"Show my HK positions"* |
+| **Claude** | Settings → **Connectors** → add **Longbridge** (web · desktop · mobile) | *"Compare AAPL and MSFT valuations"* · *"Any IPOs this week?"* |
+
+Sign in once with your Longbridge account. Every request runs over the same hosted, OAuth 2.1–secured endpoint documented below — read-only market data plus full account, portfolio, and trading tools, all gated by your own credentials.
+
+---
 
 ## Features
 
-- **148 MCP tools** across 19 categories: quotes, fundamentals, trading, market data, DCA, IPO, sharelists, content, alerts, screener, ATM, portfolio, macrodata, search, statements, authenticate, calendar, quant, and utility
+- **151 MCP tools** across 19 categories: quotes, fundamentals, trading, market data, DCA, IPO, sharelists, content, alerts, screener, ATM, portfolio, macrodata, search, statements, authenticate, calendar, quant, and utility
 - **Stateless architecture** -- each request carries a Bearer token forwarded directly to the Longbridge SDK; no server-side sessions or database
 - **OAuth 2.1 metadata** — RFC 9728 protected-resource + RFC 8414 authorization-server facade; browser authorization stays direct while `token`/`revoke` pass through this server to attach Longbridge's DC routing header
 - **JSON response transformation** -- field names normalized to snake_case, timestamps converted to RFC 3339, internal counter_id values mapped to human-readable symbols
@@ -199,9 +220,9 @@ On the first tool invocation, Claude Code reads the `WWW-Authenticate` challenge
 | Category | Count | Description |
 |----------|-------|-------------|
 | **Quote** | 32 | Real-time and historical quotes, candlesticks, depth, brokers, options, warrants, watchlists, capital flow, market temperature, short positions, option volume |
-| **Fundamental** | 31 | Financial statements/reports, business segments, institutional views, industry peers/valuation, dividends, EPS forecasts, valuations, company info/executives, shareholders, corporate actions, operating metrics |
-| **Trade** | 15 | Order submission/cancellation/replacement, positions, balance, executions, cash flow, margin |
-| **Market** | 14 | Market status, industry/top-mover rank, broker holdings, A/H premium, trade statistics, anomalies, short trades, index constituents |
+| **Fundamental** | 33 | Financial statements/reports, business segments, institutional views, industry peers/valuation, dividends, EPS forecasts, valuations & valuation comparison, company info/executives, shareholders, corporate actions, operating metrics |
+| **Trade** | 14 | Order submission/cancellation/replacement, positions, balance, executions, cash flow, margin |
+| **Market** | 15 | Market status, industry/top-mover rank, broker holdings, A/H premium, trade statistics, anomalies, short trades/margin, index constituents |
 | **DCA** | 9 | Dollar-cost averaging plan create/update/pause/resume/stop, execution history, statistics, and support check |
 | **IPO** | 7 | IPO subscriptions, calendar, listed stocks, order detail, profit/loss analysis |
 | **Sharelist** | 8 | Community sharelist CRUD, member add/remove/sort, popular lists |
@@ -209,7 +230,7 @@ On the first tool invocation, Claude Code reads the `WWW-Authenticate` challenge
 | **Alert** | 5 | Price alert CRUD (add, delete, enable, disable, list) |
 | **Screener** | 5 | Stock screener search, indicators, and strategy recommendation/management |
 | **ATM** | 3 | Bank cards, withdrawal records, deposit records |
-| **Portfolio** | 3 | Exchange rates, profit/loss analysis with optional date range |
+| **Portfolio** | 4 | Exchange rates, profit/loss analysis (summary, detail, and realized) with optional date range |
 | **Macrodata** | 2 | Macroeconomic indicator list and detail data |
 | **Search** | 2 | News search, community topic search |
 | **Statement** | 2 | Account statement listing and export |
