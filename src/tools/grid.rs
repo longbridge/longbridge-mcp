@@ -1,9 +1,14 @@
 //! Grid trading tools. Wrap the SDK `longbridge::grid::GridContext`
 //! (parallel to `TradeContext`) — one `*Param` struct + one async fn per tool.
 
+use std::str::FromStr;
+
+use longbridge::Decimal;
 use longbridge::grid::{
     GetGridOrderDetailOptions, GetGridOrdersByIdsOptions, GetGridOrdersOptions,
-    GetGridTriggerHistoryOptions, GridContext,
+    GetGridTriggerHistoryOptions, GridContext, GridLimitEvent, GridTimeInForce, GridTradeRule,
+    ReplaceGridOrderOptions, SubmitGridOrderOptions, SubmitStrategyQuestionnaireOptions,
+    TriggerPriceType,
 };
 use rmcp::ErrorData as McpError;
 use rmcp::model::CallToolResult;
@@ -11,7 +16,7 @@ use rmcp::schemars::JsonSchema;
 use rmcp::serde::Deserialize;
 
 use crate::error::Error;
-use crate::tools::tool_json;
+use crate::tools::{tool_json, tool_result};
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct GridSymbolParam {
@@ -150,6 +155,181 @@ pub async fn grid_trigger_history(
         "trigger_orders": result.trigger_orders,
         "has_more": result.has_more,
     }))
+}
+
+/// Full grid trading rule — passed through to submit / replace verbatim.
+/// Prices and quantities are decimal strings; enum-like fields are raw ints.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct GridRuleParam {
+    /// Base price the grid is anchored to (decimal string).
+    pub submitted_base_price: Option<String>,
+    /// Upper price bound (decimal string).
+    pub upper_limit_price: Option<String>,
+    /// Lower price bound (decimal string).
+    pub lower_limit_price: Option<String>,
+    /// Trigger price type: 1 = spread (absolute), 2 = percent.
+    pub trigger_price_type: Option<i32>,
+    /// Upward trigger spread, absolute (decimal string; use with type 1).
+    pub trigger_spread_up: Option<String>,
+    /// Downward trigger spread, absolute (decimal string; use with type 1).
+    pub trigger_spread_down: Option<String>,
+    /// Upward trigger percent (decimal string; use with type 2).
+    pub trigger_percent_up: Option<String>,
+    /// Downward trigger percent (decimal string; use with type 2).
+    pub trigger_percent_down: Option<String>,
+    /// Whether one grid level may trigger multiple times.
+    pub multiple_trigger: Option<bool>,
+    /// Time in force: 0 = Day, 1 = GTC, 6 = GTD.
+    pub time_in_force: Option<i32>,
+    /// Quantity handled when the upper bound is reached (decimal string).
+    pub upper_limit_quantity: Option<String>,
+    /// Quantity handled when the lower bound is reached (decimal string).
+    pub lower_limit_quantity: Option<String>,
+    /// Expiry time in unix seconds (use with GTD).
+    pub expire_time: Option<i64>,
+    /// Action at upper bound: 1 = ignore (keep running), 2 = close at last price.
+    pub upper_limit_event: Option<i32>,
+    /// Action at lower bound: 1 = ignore (keep running), 2 = close at last price.
+    pub lower_limit_event: Option<i32>,
+    /// Sell-side order-book depth (-5..5; 0 = use grid_order_type_up).
+    pub trigger_sell_depth: Option<i32>,
+    /// Buy-side order-book depth (-5..5; 0 = use grid_order_type_down).
+    pub trigger_buy_depth: Option<i32>,
+    /// Quantity per trigger (decimal string).
+    pub trigger_quantity: Option<String>,
+    /// Whether short selling is allowed.
+    pub support_shortsell: Option<bool>,
+    /// Regular-trading-hours flag: 0 / 1 / 2.
+    pub rth: Option<i32>,
+    /// Sell-side order type when depth is 0: GMO / GLO / GTG.
+    pub grid_order_type_up: Option<String>,
+    /// Buy-side order type when depth is 0: GMO / GLO / GTG.
+    pub grid_order_type_down: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct GridSubmitParam {
+    /// Security symbol, e.g. "700.HK".
+    pub symbol: String,
+    /// Settlement currency, e.g. "HKD".
+    pub settlement_currency: String,
+    #[serde(flatten)]
+    pub rule: GridRuleParam,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct GridReplaceParam {
+    /// Grid order ID to replace.
+    pub order_id: String,
+    #[serde(flatten)]
+    pub rule: GridRuleParam,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct GridOrderIdParam {
+    /// Grid order ID.
+    pub order_id: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct GridQuestionnaireParam {}
+
+fn parse_decimal(field: &str, value: &Option<String>) -> Result<Option<Decimal>, McpError> {
+    match value {
+        Some(s) => Decimal::from_str(s)
+            .map(Some)
+            .map_err(|e| McpError::invalid_params(format!("invalid {field}: {e}"), None)),
+        None => Ok(None),
+    }
+}
+
+fn build_rule(p: GridRuleParam) -> Result<GridTradeRule, McpError> {
+    Ok(GridTradeRule {
+        submitted_base_price: parse_decimal("submitted_base_price", &p.submitted_base_price)?,
+        upper_limit_price: parse_decimal("upper_limit_price", &p.upper_limit_price)?,
+        lower_limit_price: parse_decimal("lower_limit_price", &p.lower_limit_price)?,
+        trigger_price_type: p.trigger_price_type.map(TriggerPriceType::from),
+        trigger_spread_up: parse_decimal("trigger_spread_up", &p.trigger_spread_up)?,
+        trigger_spread_down: parse_decimal("trigger_spread_down", &p.trigger_spread_down)?,
+        trigger_percent_up: parse_decimal("trigger_percent_up", &p.trigger_percent_up)?,
+        trigger_percent_down: parse_decimal("trigger_percent_down", &p.trigger_percent_down)?,
+        multiple_trigger: p.multiple_trigger,
+        time_in_force: p.time_in_force.map(GridTimeInForce::from),
+        upper_limit_quantity: parse_decimal("upper_limit_quantity", &p.upper_limit_quantity)?,
+        lower_limit_quantity: parse_decimal("lower_limit_quantity", &p.lower_limit_quantity)?,
+        expire_time: p.expire_time,
+        upper_limit_event: p.upper_limit_event.map(GridLimitEvent::from),
+        lower_limit_event: p.lower_limit_event.map(GridLimitEvent::from),
+        trigger_sell_depth: p.trigger_sell_depth,
+        trigger_buy_depth: p.trigger_buy_depth,
+        trigger_quantity: parse_decimal("trigger_quantity", &p.trigger_quantity)?,
+        support_shortsell: p.support_shortsell,
+        rth: p.rth,
+        grid_order_type_up: p.grid_order_type_up,
+        grid_order_type_down: p.grid_order_type_down,
+    })
+}
+
+pub async fn grid_submit(
+    mctx: &crate::tools::McpContext,
+    p: GridSubmitParam,
+) -> Result<CallToolResult, McpError> {
+    let rule = build_rule(p.rule)?;
+    let opts = SubmitGridOrderOptions::new(p.symbol, p.settlement_currency, rule);
+    let ctx = GridContext::new(mctx.create_config());
+    let result = ctx.submit(opts).await.map_err(Error::longbridge)?;
+    tool_json(&result)
+}
+
+pub async fn grid_replace(
+    mctx: &crate::tools::McpContext,
+    p: GridReplaceParam,
+) -> Result<CallToolResult, McpError> {
+    let rule = build_rule(p.rule)?;
+    let opts = ReplaceGridOrderOptions::new(p.order_id, rule);
+    let ctx = GridContext::new(mctx.create_config());
+    ctx.replace(opts).await.map_err(Error::longbridge)?;
+    Ok(tool_result("grid order replaced".to_string()))
+}
+
+pub async fn grid_cancel(
+    mctx: &crate::tools::McpContext,
+    p: GridOrderIdParam,
+) -> Result<CallToolResult, McpError> {
+    let ctx = GridContext::new(mctx.create_config());
+    ctx.cancel(p.order_id).await.map_err(Error::longbridge)?;
+    Ok(tool_result("grid order cancelled".to_string()))
+}
+
+pub async fn grid_suspend(
+    mctx: &crate::tools::McpContext,
+    p: GridOrderIdParam,
+) -> Result<CallToolResult, McpError> {
+    let ctx = GridContext::new(mctx.create_config());
+    ctx.suspend(p.order_id).await.map_err(Error::longbridge)?;
+    Ok(tool_result("grid order suspended".to_string()))
+}
+
+pub async fn grid_restart(
+    mctx: &crate::tools::McpContext,
+    p: GridOrderIdParam,
+) -> Result<CallToolResult, McpError> {
+    let ctx = GridContext::new(mctx.create_config());
+    ctx.restart(p.order_id).await.map_err(Error::longbridge)?;
+    Ok(tool_result("grid order restarted".to_string()))
+}
+
+pub async fn grid_questionnaire(
+    mctx: &crate::tools::McpContext,
+    _p: GridQuestionnaireParam,
+) -> Result<CallToolResult, McpError> {
+    let ctx = GridContext::new(mctx.create_config());
+    ctx.submit_strategy_questionnaire(SubmitStrategyQuestionnaireOptions::new())
+        .await
+        .map_err(Error::longbridge)?;
+    Ok(tool_result(
+        "strategy risk-disclosure questionnaire submitted".to_string(),
+    ))
 }
 
 #[cfg(test)]

@@ -181,7 +181,7 @@
       "id": "11",
       "name": "Trade Execution",
       "key": "trade.write",
-      "description": "Place, replace and cancel orders, plus DCA plan create/update/pause/resume/stop.",
+      "description": "Place, replace and cancel orders, DCA plan create/update/pause/resume/stop, and grid order submit/replace/cancel/suspend/restart plus the one-time grid strategy consent.",
       "tools": [
         "cancel_order",
         "dca_create",
@@ -189,6 +189,12 @@
         "dca_resume",
         "dca_stop",
         "dca_update",
+        "grid_cancel",
+        "grid_questionnaire",
+        "grid_replace",
+        "grid_restart",
+        "grid_submit",
+        "grid_suspend",
         "replace_order",
         "submit_order"
       ]

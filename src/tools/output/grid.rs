@@ -5,6 +5,14 @@
 use rmcp::schemars::JsonSchema;
 use rmcp::serde::Serialize;
 
+/// Returned by `grid_submit`.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct GridSubmitResponse {
+    /// The newly-created grid order ID. Pass to grid_detail / grid_cancel /
+    /// grid_suspend / grid_restart / grid_replace.
+    pub order_id: String,
+}
+
 /// A grid order summary (list rows). Documented subset of the SDK `GridOrder`.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct GridOrderSummary {

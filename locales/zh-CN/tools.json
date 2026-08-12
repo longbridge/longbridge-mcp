@@ -529,6 +529,12 @@
     "grid_list_by_ids": { "title": "按 ID 查询网格订单", "description": "按订单 ID 批量获取网格订单,返回 grid_orders[] 摘要。" },
     "grid_detail": { "title": "网格订单详情", "description": "单个网格订单的完整详情:规则参数、状态、子订单(grid_sub_orders)与生命周期历史(grid_order_history)。支持 history_id 游标与 limit 分页。" },
     "grid_trigger_history": { "title": "网格触发历史", "description": "单个网格订单的触发历史:每笔被触发的子订单及其价格、数量、成交均价/数量与触发时间。支持 page/limit。" },
+    "grid_submit": { "title": "提交网格订单", "description": "提交网格交易订单。需提供 symbol、settlement_currency 及网格规则:基准价/上限价/下限价、trigger_price_type(1=价差,2=百分比)及对应的价差/百分比上下沿、trigger_quantity、上下限数量、time_in_force(0=当日,1=GTC,6=GTD)、grid_order_type_up/down(GMO/GLO/GTG)、边界事件(1=忽略,2=按最新价平仓)。价格/数量为字符串。需先通过 grid_questionnaire 授权。" },
+    "grid_replace": { "title": "修改网格订单", "description": "按 order_id 修改网格订单规则,规则字段同 grid_submit。" },
+    "grid_cancel": { "title": "取消网格订单", "description": "按 order_id 取消(终止)网格订单。" },
+    "grid_suspend": { "title": "暂停网格订单", "description": "按 order_id 暂停运行中的网格订单,可用 grid_restart 恢复。" },
+    "grid_restart": { "title": "恢复网格订单", "description": "按 order_id 恢复已暂停的网格订单。" },
+    "grid_questionnaire": { "title": "网格策略授权", "description": "记录提交网格订单前所需的一次性策略风险披露同意,无需参数。" },
     "history_candlesticks_by_date": {
       "title": "历史 K 线（按日期）",
       "description": "按日期区间获取历史 K 线（OHLCV）数据。period：1m/5m/15m/30m/60m/day/week/month/year",
