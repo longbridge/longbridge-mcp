@@ -13,11 +13,11 @@
   <a href="https://longbridge.com"><img alt="Longbridge" src="https://img.shields.io/badge/brokerage-Longbridge-ffe000?labelColor=000"></a>
 </p>
 
-Official MCP server for the [Longbridge](https://longbridge.com) brokerage. **148 tools** across real-time quotes, options, order routing, fundamentals, analyst ratings, calendars, IPO, price alerts, DCA plans, portfolio analytics and community sharelists — covering **US and HK markets**. Built with Rust using [rmcp](https://github.com/anthropics/rmcp) and [axum](https://github.com/tokio-rs/axum).
+Official MCP server for the [Longbridge](https://longbridge.com) brokerage. **162 tools** across real-time quotes, options, order routing, fundamentals, analyst ratings, calendars, IPO, price alerts, DCA plans, grid trading, portfolio analytics and community sharelists — covering **US and HK markets**. Built with Rust using [rmcp](https://github.com/anthropics/rmcp) and [axum](https://github.com/tokio-rs/axum).
 
 ## Features
 
-- **148 MCP tools** across 19 categories: quotes, fundamentals, trading, market data, DCA, IPO, sharelists, content, alerts, screener, ATM, portfolio, macrodata, search, statements, authenticate, calendar, quant, and utility
+- **162 MCP tools** across 20 categories: quotes, fundamentals, trading, market data, DCA, grid trading, IPO, sharelists, content, alerts, screener, ATM, portfolio, macrodata, search, statements, authenticate, calendar, quant, and utility
 - **Stateless architecture** -- each request carries a Bearer token forwarded directly to the Longbridge SDK; no server-side sessions or database
 - **OAuth 2.1 metadata** — RFC 9728 protected-resource + RFC 8414 authorization-server facade; browser authorization stays direct while `token`/`revoke` pass through this server to attach Longbridge's DC routing header
 - **JSON response transformation** -- field names normalized to snake_case, timestamps converted to RFC 3339, internal counter_id values mapped to human-readable symbols
@@ -203,6 +203,7 @@ On the first tool invocation, Claude Code reads the `WWW-Authenticate` challenge
 | **Trade** | 15 | Order submission/cancellation/replacement, positions, balance, executions, cash flow, margin |
 | **Market** | 14 | Market status, industry/top-mover rank, broker holdings, A/H premium, trade statistics, anomalies, short trades, index constituents |
 | **DCA** | 9 | Dollar-cost averaging plan create/update/pause/resume/stop, execution history, statistics, and support check |
+| **Grid** | 11 | Grid trading order submit/replace/cancel/suspend/restart, list/detail/trigger-history reads, per-symbol setup info, and one-time strategy consent |
 | **IPO** | 7 | IPO subscriptions, calendar, listed stocks, order detail, profit/loss analysis |
 | **Sharelist** | 8 | Community sharelist CRUD, member add/remove/sort, popular lists |
 | **Content** | 6 | News, discussion topic CRUD and replies |
