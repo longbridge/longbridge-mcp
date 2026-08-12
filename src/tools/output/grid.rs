@@ -172,5 +172,5 @@ pub struct GridSymbolInfoResponse {
     pub lot_size: Option<String>,
     /// Channel / authorization info: strategy grant flag, RTH support, currencies.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub channel_infos: Option<serde_json::Value>,
+    pub channel_info: Option<serde_json::Value>,
 }

@@ -71,7 +71,7 @@ pub async fn grid_symbol_info(
     p: GridSymbolParam,
 ) -> Result<CallToolResult, McpError> {
     let ctx = GridContext::new(mctx.create_config());
-    let result = ctx.order_info(p.symbol).await.map_err(Error::longbridge)?;
+    let result = ctx.symbol_info(p.symbol).await.map_err(Error::longbridge)?;
     tool_json(&result)
 }
 
