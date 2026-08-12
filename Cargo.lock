@@ -1489,7 +1489,7 @@ checksum = "0ceec5bc11778974d1bcb055b18002eba7f4b3518b6a0081b3af5f21666da9ad"
 [[package]]
 name = "longbridge"
 version = "4.4.3"
-source = "git+https://github.com/longbridge/openapi.git?branch=feat%2Fgrid-trading-rust-core#77669dfbb6831d598a2eafe25a5a2ae906b0acec"
+source = "git+https://github.com/longbridge/openapi.git?branch=feat%2Fgrid-trading-rust-core#1d2226ffe1d07c53ad71fd03532090f26db9c271"
 dependencies = [
  "anyhow",
  "bitflags 2.13.0",
@@ -1525,7 +1525,7 @@ dependencies = [
 [[package]]
 name = "longbridge-candlesticks"
 version = "4.4.3"
-source = "git+https://github.com/longbridge/openapi.git?branch=feat%2Fgrid-trading-rust-core#77669dfbb6831d598a2eafe25a5a2ae906b0acec"
+source = "git+https://github.com/longbridge/openapi.git?branch=feat%2Fgrid-trading-rust-core#1d2226ffe1d07c53ad71fd03532090f26db9c271"
 dependencies = [
  "bitflags 2.13.0",
  "num-traits",
@@ -1537,7 +1537,7 @@ dependencies = [
 [[package]]
 name = "longbridge-geo"
 version = "4.4.3"
-source = "git+https://github.com/longbridge/openapi.git?branch=feat%2Fgrid-trading-rust-core#77669dfbb6831d598a2eafe25a5a2ae906b0acec"
+source = "git+https://github.com/longbridge/openapi.git?branch=feat%2Fgrid-trading-rust-core#1d2226ffe1d07c53ad71fd03532090f26db9c271"
 dependencies = [
  "reqwest 0.12.28",
 ]
@@ -1545,7 +1545,7 @@ dependencies = [
 [[package]]
 name = "longbridge-httpcli"
 version = "4.4.3"
-source = "git+https://github.com/longbridge/openapi.git?branch=feat%2Fgrid-trading-rust-core#77669dfbb6831d598a2eafe25a5a2ae906b0acec"
+source = "git+https://github.com/longbridge/openapi.git?branch=feat%2Fgrid-trading-rust-core#1d2226ffe1d07c53ad71fd03532090f26db9c271"
 dependencies = [
  "dotenv",
  "eventsource-stream",
@@ -1600,7 +1600,7 @@ dependencies = [
 [[package]]
 name = "longbridge-oauth"
 version = "4.4.3"
-source = "git+https://github.com/longbridge/openapi.git?branch=feat%2Fgrid-trading-rust-core#77669dfbb6831d598a2eafe25a5a2ae906b0acec"
+source = "git+https://github.com/longbridge/openapi.git?branch=feat%2Fgrid-trading-rust-core#1d2226ffe1d07c53ad71fd03532090f26db9c271"
 dependencies = [
  "dirs",
  "futures-util",
@@ -1617,7 +1617,7 @@ dependencies = [
 [[package]]
 name = "longbridge-proto"
 version = "4.4.3"
-source = "git+https://github.com/longbridge/openapi.git?branch=feat%2Fgrid-trading-rust-core#77669dfbb6831d598a2eafe25a5a2ae906b0acec"
+source = "git+https://github.com/longbridge/openapi.git?branch=feat%2Fgrid-trading-rust-core#1d2226ffe1d07c53ad71fd03532090f26db9c271"
 dependencies = [
  "prost",
  "serde",
@@ -1626,7 +1626,7 @@ dependencies = [
 [[package]]
 name = "longbridge-wscli"
 version = "4.4.3"
-source = "git+https://github.com/longbridge/openapi.git?branch=feat%2Fgrid-trading-rust-core#77669dfbb6831d598a2eafe25a5a2ae906b0acec"
+source = "git+https://github.com/longbridge/openapi.git?branch=feat%2Fgrid-trading-rust-core#1d2226ffe1d07c53ad71fd03532090f26db9c271"
 dependencies = [
  "byteorder",
  "flate2",
