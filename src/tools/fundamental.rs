@@ -5,6 +5,7 @@ use rmcp::serde::Deserialize;
 
 use crate::counter::{counter_id_to_symbol, symbol_to_counter_id};
 use crate::serialize::convert_unix_paths;
+use crate::tools::output::fundamental::ShareholderObjectId;
 use crate::tools::support::http_client::{http_get_tool, http_get_tool_unix};
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -809,7 +810,7 @@ pub struct ShareholderDetailParam {
     /// Security symbol, e.g. "AAPL.US"
     pub symbol: String,
     /// Shareholder object_id from shareholder_top tool
-    pub object_id: i64,
+    pub object_id: ShareholderObjectId,
 }
 
 pub async fn shareholder_detail(
@@ -866,4 +867,22 @@ pub async fn valuation_comparison(
         &["list.*.history.*.date"],
     )
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shareholder_detail_accepts_string_and_integer_object_ids() {
+        let string_param: ShareholderDetailParam =
+            serde_json::from_str(r#"{"symbol":"300750.SZ","object_id":"148059"}"#)
+                .expect("string shareholder object_id should deserialize");
+        let integer_param: ShareholderDetailParam =
+            serde_json::from_str(r#"{"symbol":"300750.SZ","object_id":148059}"#)
+                .expect("integer shareholder object_id should deserialize");
+
+        assert_eq!(string_param.object_id.to_string(), "148059");
+        assert_eq!(integer_param.object_id.to_string(), "148059");
+    }
 }

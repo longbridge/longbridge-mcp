@@ -26,7 +26,8 @@
 //! `outputSchema` root to be `type: "object"`).
 
 use rmcp::schemars::JsonSchema;
-use rmcp::serde::Serialize;
+use rmcp::serde::{Deserialize, Serialize};
+use std::fmt;
 
 /// Returned by `institution_rating`.
 ///
@@ -1190,6 +1191,29 @@ pub struct ShareholderTopPeriod {
     pub share_holders: Option<Vec<ShareholderTopHolder>>,
 }
 
+/// Shareholder identifier returned by `shareholder_top` and accepted by
+/// `shareholder_detail`.
+///
+/// The upstream API currently emits string IDs, while older responses and
+/// clients may still use integers.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum ShareholderObjectId {
+    /// String form returned by current shareholder endpoints.
+    String(String),
+    /// Integer form retained for backward compatibility.
+    Integer(i64),
+}
+
+impl fmt::Display for ShareholderObjectId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::String(value) => f.write_str(value),
+            Self::Integer(value) => write!(f, "{value}"),
+        }
+    }
+}
+
 /// One holder in `shareholder_top`'s `share_holders`.
 ///
 /// Subset of documented fields; upstream may return more.
@@ -1197,7 +1221,7 @@ pub struct ShareholderTopPeriod {
 pub struct ShareholderTopHolder {
     /// Holder object id. Pass to `shareholder_detail`.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub object_id: Option<i64>,
+    pub object_id: Option<ShareholderObjectId>,
     /// Holder name.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
@@ -1350,4 +1374,72 @@ pub struct ValuationComparisonHistoryPoint {
     /// Price-to-sales at this date.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ps: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeSet;
+
+    fn collect_schema_types(value: &serde_json::Value, types: &mut BTreeSet<String>) {
+        match value {
+            serde_json::Value::Object(object) => {
+                if let Some(schema_type) = object.get("type") {
+                    match schema_type {
+                        serde_json::Value::String(value) => {
+                            types.insert(value.clone());
+                        }
+                        serde_json::Value::Array(values) => {
+                            for value in values {
+                                if let Some(value) = value.as_str() {
+                                    types.insert(value.to_string());
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                for child in object.values() {
+                    collect_schema_types(child, types);
+                }
+            }
+            serde_json::Value::Array(values) => {
+                for child in values {
+                    collect_schema_types(child, types);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    #[test]
+    fn shareholder_object_id_accepts_string_and_integer() {
+        let string_id: ShareholderObjectId =
+            serde_json::from_str(r#""148059""#).expect("string object_id should deserialize");
+        let integer_id: ShareholderObjectId =
+            serde_json::from_str("148059").expect("integer object_id should deserialize");
+
+        assert_eq!(string_id, ShareholderObjectId::String("148059".to_string()));
+        assert_eq!(integer_id, ShareholderObjectId::Integer(148059));
+        assert_eq!(string_id.to_string(), "148059");
+        assert_eq!(integer_id.to_string(), "148059");
+    }
+
+    #[test]
+    fn shareholder_object_id_schema_accepts_string_integer_and_null() {
+        let schema = rmcp::schemars::schema_for!(Option<ShareholderObjectId>);
+        let value = serde_json::to_value(schema).expect("shareholder schema should serialize");
+        let mut types = BTreeSet::new();
+        collect_schema_types(&value, &mut types);
+
+        assert_eq!(
+            types,
+            BTreeSet::from([
+                "integer".to_string(),
+                "null".to_string(),
+                "string".to_string(),
+            ]),
+            "shareholder object_id schema types changed: {value}"
+        );
+    }
 }
