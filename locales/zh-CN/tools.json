@@ -524,6 +524,11 @@
         "symbol": "证券代码，例如 `\"700.HK\"`"
       }
     },
+    "grid_symbol_info": { "title": "网格标的信息", "description": "按 symbol 获取某标的网格下单的盘前设置信息(入参是标的代码,不是订单号):证券名称、最新价、买/卖每手股数、价格档位表(bid_size),以及渠道/授权信息(策略授权标志、是否支持盘前盘后、可用结算货币)。下单前可先查该标的的网格约束。" },
+    "grid_list": { "title": "网格订单列表", "description": "列出网格交易订单。可按标的或逗号分隔的状态(如 \"Performing,Suspended\")筛选,支持分页与排序。返回 grid_order[] 摘要与 has_more。" },
+    "grid_list_by_ids": { "title": "按 ID 查询网格订单", "description": "按订单 ID 批量获取网格订单,返回 grid_orders[] 摘要。" },
+    "grid_detail": { "title": "网格订单详情", "description": "单个网格订单的完整详情:规则参数、状态、子订单(grid_sub_orders)与生命周期历史(grid_order_history)。支持 history_id 游标与 limit 分页。" },
+    "grid_trigger_history": { "title": "网格触发历史", "description": "单个网格订单的触发历史:每笔被触发的子订单及其价格、数量、成交均价/数量与触发时间。支持 page/limit。" },
     "history_candlesticks_by_date": {
       "title": "历史 K 线（按日期）",
       "description": "按日期区间获取历史 K 线（OHLCV）数据。period：1m/5m/15m/30m/60m/day/week/month/year",

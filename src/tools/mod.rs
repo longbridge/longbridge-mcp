@@ -60,6 +60,7 @@ mod calendar;
 mod content;
 mod dca;
 mod fundamental;
+mod grid;
 mod ipo;
 mod macrodata;
 mod market;
@@ -804,6 +805,11 @@ const TOOL_ENDPOINTS: &[(&str, u8)] = &[
     ("dca_stop", 0),
     ("dca_update", 0),
     ("deposits", 0),
+    ("grid_detail", 0),
+    ("grid_list", 0),
+    ("grid_list_by_ids", 0),
+    ("grid_symbol_info", 0),
+    ("grid_trigger_history", 0),
     ("ipo_order_detail", 0),
     ("ipo_orders", 0),
     ("ipo_profit_loss", 0),
@@ -3230,6 +3236,89 @@ impl Longbridge {
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
         measured_tool_call("dca_check", || dca::dca_check(&mctx, p)).await
+    }
+
+    /// Pre-trade grid setup info for a symbol (lot sizes, price steps, authorization).
+    #[tool(
+        title = "Grid Symbol Info",
+        annotations(read_only_hint = true, open_world_hint = true),
+        output_schema = schema_for::<output::grid::GridSymbolInfoResponse>(),
+        description = "Pre-trade grid setup info for a security (takes a symbol, not an order_id): security name, last price, board lot sizes (buy/sell), price-step (bid_size) table, and channel/authorization info (strategy grant flag, RTH support, supported settlement currencies). Use before grid_submit to learn the symbol's grid constraints."
+    )]
+    async fn grid_symbol_info(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<grid::GridSymbolParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("grid_symbol_info", || grid::grid_symbol_info(&mctx, p)).await
+    }
+
+    /// List grid trading orders.
+    #[tool(
+        title = "List Grid Orders",
+        annotations(read_only_hint = true, open_world_hint = true),
+        output_schema = schema_for::<output::grid::GridListResponse>(),
+        description = "List grid trading orders. Filter by symbol or comma-joined status (e.g. \"Performing,Suspended\"); supports page/limit and sort_by/sort_order. Returns grid_order[] summaries + has_more."
+    )]
+    async fn grid_list(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<grid::GridListParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("grid_list", || grid::grid_list(&mctx, p)).await
+    }
+
+    /// Fetch grid orders by IDs.
+    #[tool(
+        title = "Get Grid Orders By IDs",
+        annotations(read_only_hint = true, open_world_hint = true),
+        output_schema = schema_for::<output::grid::GridOrdersResponse>(),
+        description = "Fetch specific grid orders by their IDs. Returns grid_orders[] summaries."
+    )]
+    async fn grid_list_by_ids(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<grid::GridIdsParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("grid_list_by_ids", || grid::grid_list_by_ids(&mctx, p)).await
+    }
+
+    /// Grid order detail.
+    #[tool(
+        title = "Grid Order Detail",
+        annotations(read_only_hint = true, open_world_hint = true),
+        output_schema = schema_for::<output::grid::GridOrderDetailResponse>(),
+        description = "Full detail for one grid order: rule parameters, status, embedded child orders (grid_sub_orders) and lifecycle history (grid_order_history). Supports history_id cursor + limit paging."
+    )]
+    async fn grid_detail(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<grid::GridDetailParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("grid_detail", || grid::grid_detail(&mctx, p)).await
+    }
+
+    /// Grid order trigger history.
+    #[tool(
+        title = "Grid Trigger History",
+        annotations(read_only_hint = true, open_world_hint = true),
+        output_schema = schema_for::<output::grid::GridTriggerHistoryResponse>(),
+        description = "Trigger history for one grid order: each triggered child order with price, quantity, executed price/qty, and trigger time. Supports page/limit."
+    )]
+    async fn grid_trigger_history(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<grid::GridTriggerHistoryParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("grid_trigger_history", || {
+            grid::grid_trigger_history(&mctx, p)
+        })
+        .await
     }
 
     /// List community sharelists.

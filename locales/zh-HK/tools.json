@@ -524,6 +524,11 @@
         "symbol": "證券代碼，例如 `\"700.HK\"`"
       }
     },
+    "grid_symbol_info": { "title": "網格標的資訊", "description": "按 symbol 取得某標的網格下單的盤前設定資訊(入參是標的代碼,不是訂單號):證券名稱、最新價、買/賣每手股數、價格檔位表(bid_size),以及渠道/授權資訊(策略授權標誌、是否支援盤前盤後、可用結算貨幣)。下單前可先查該標的的網格約束。" },
+    "grid_list": { "title": "網格訂單列表", "description": "列出網格交易訂單。可按標的或逗號分隔的狀態(如 \"Performing,Suspended\")篩選,支援分頁與排序。返回 grid_order[] 摘要與 has_more。" },
+    "grid_list_by_ids": { "title": "按 ID 查詢網格訂單", "description": "按訂單 ID 批量取得網格訂單,返回 grid_orders[] 摘要。" },
+    "grid_detail": { "title": "網格訂單詳情", "description": "單個網格訂單的完整詳情:規則參數、狀態、子訂單(grid_sub_orders)與生命週期歷史(grid_order_history)。支援 history_id 游標與 limit 分頁。" },
+    "grid_trigger_history": { "title": "網格觸發歷史", "description": "單個網格訂單的觸發歷史:每筆被觸發的子訂單及其價格、數量、成交均價/數量與觸發時間。支援 page/limit。" },
     "history_candlesticks_by_date": {
       "title": "歷史 K 線（按日期）",
       "description": "按日期區間獲取歷史 K 線（OHLCV）數據。period：1m/5m/15m/30m/60m/day/week/month/year",
