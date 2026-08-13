@@ -244,9 +244,9 @@ fn parse_decimal(field: &str, value: &Option<String>) -> Result<Option<Decimal>,
 }
 
 /// Validate an enum-like integer code against its allowed set before it is
-/// mapped into an SDK enum. The SDK's `num_enum` fallbacks silently coerce
-/// out-of-range codes to `Unknown`/`0`, which would ship a wrong ("unset")
-/// value to the trading gateway instead of erroring — so reject them here.
+/// mapped into an SDK enum. Under the SDK's `num_enum` `catch_all`, an
+/// out-of-range code maps to `Unknown(i32)` and serializes verbatim to the
+/// trading gateway — so reject it here rather than ship an unvalidated code.
 fn checked_code(field: &str, value: Option<i32>, allowed: &[i32]) -> Result<Option<i32>, McpError> {
     match value {
         Some(v) if !allowed.contains(&v) => Err(McpError::invalid_params(
