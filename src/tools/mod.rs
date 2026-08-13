@@ -3353,11 +3353,11 @@ impl Longbridge {
         title = "Replace Grid Order",
         annotations(
             read_only_hint = false,
-            destructive_hint = false,
-            idempotent_hint = false,
+            destructive_hint = true,
+            idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Replace an existing grid order's rule by order_id. Accepts the same grid rule fields as grid_submit."
+        description = "Replace an existing grid order's rule by order_id. Accepts the same grid rule fields as grid_submit. Overwrites the order's entire rule."
     )]
     async fn grid_replace(
         &self,

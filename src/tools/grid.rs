@@ -243,23 +243,41 @@ fn parse_decimal(field: &str, value: &Option<String>) -> Result<Option<Decimal>,
     }
 }
 
+/// Validate an enum-like integer code against its allowed set before it is
+/// mapped into an SDK enum. The SDK's `num_enum` fallbacks silently coerce
+/// out-of-range codes to `Unknown`/`0`, which would ship a wrong ("unset")
+/// value to the trading gateway instead of erroring — so reject them here.
+fn checked_code(field: &str, value: Option<i32>, allowed: &[i32]) -> Result<Option<i32>, McpError> {
+    match value {
+        Some(v) if !allowed.contains(&v) => Err(McpError::invalid_params(
+            format!("invalid {field}: {v} (allowed: {allowed:?})"),
+            None,
+        )),
+        other => Ok(other),
+    }
+}
+
 fn build_rule(p: GridRuleParam) -> Result<GridTradeRule, McpError> {
     Ok(GridTradeRule {
         submitted_base_price: parse_decimal("submitted_base_price", &p.submitted_base_price)?,
         upper_limit_price: parse_decimal("upper_limit_price", &p.upper_limit_price)?,
         lower_limit_price: parse_decimal("lower_limit_price", &p.lower_limit_price)?,
-        trigger_price_type: p.trigger_price_type.map(TriggerPriceType::from),
+        trigger_price_type: checked_code("trigger_price_type", p.trigger_price_type, &[1, 2])?
+            .map(TriggerPriceType::from),
         trigger_spread_up: parse_decimal("trigger_spread_up", &p.trigger_spread_up)?,
         trigger_spread_down: parse_decimal("trigger_spread_down", &p.trigger_spread_down)?,
         trigger_percent_up: parse_decimal("trigger_percent_up", &p.trigger_percent_up)?,
         trigger_percent_down: parse_decimal("trigger_percent_down", &p.trigger_percent_down)?,
         multiple_trigger: p.multiple_trigger,
-        time_in_force: p.time_in_force.map(GridTimeInForce::from),
+        time_in_force: checked_code("time_in_force", p.time_in_force, &[0, 1, 6])?
+            .map(GridTimeInForce::from),
         upper_limit_quantity: parse_decimal("upper_limit_quantity", &p.upper_limit_quantity)?,
         lower_limit_quantity: parse_decimal("lower_limit_quantity", &p.lower_limit_quantity)?,
         expire_time: p.expire_time,
-        upper_limit_event: p.upper_limit_event.map(GridLimitEvent::from),
-        lower_limit_event: p.lower_limit_event.map(GridLimitEvent::from),
+        upper_limit_event: checked_code("upper_limit_event", p.upper_limit_event, &[1, 2])?
+            .map(GridLimitEvent::from),
+        lower_limit_event: checked_code("lower_limit_event", p.lower_limit_event, &[1, 2])?
+            .map(GridLimitEvent::from),
         trigger_sell_depth: p.trigger_sell_depth,
         trigger_buy_depth: p.trigger_buy_depth,
         trigger_quantity: parse_decimal("trigger_quantity", &p.trigger_quantity)?,

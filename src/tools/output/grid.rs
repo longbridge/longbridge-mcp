@@ -1,6 +1,8 @@
 //! Typed output schemas for the grid trading tools. Mirror the subset of the
 //! SDK grid response shape that `tool_json` emits (snake_case, decimals as
-//! strings, timestamps as RFC3339). All fields optional — documented subset.
+//! strings, timestamps as RFC3339). Most fields are optional documented
+//! subsets; the response wrappers (submit / list / trigger-history) keep their
+//! always-present fields required.
 
 use rmcp::schemars::JsonSchema;
 use rmcp::serde::Serialize;
@@ -158,7 +160,7 @@ pub struct GridOrderDetailResponse {
     pub grid_order_history: Option<Vec<serde_json::Value>>,
 }
 
-/// Returned by `grid_symbol_info`. Documented subset of the SDK `GridOrderInfo`.
+/// Returned by `grid_symbol_info`. Documented subset of the SDK `GridSymbolInfo`.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct GridSymbolInfoResponse {
     /// Security name.
@@ -170,7 +172,31 @@ pub struct GridSymbolInfoResponse {
     /// Board lot size (decimal string).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lot_size: Option<String>,
+    /// Buy-side board lot size (decimal string).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub buy_lot_size: Option<String>,
+    /// Sell-side board lot size (decimal string).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sell_lot_size: Option<String>,
+    /// Price-step (bid_size) rule table: each entry has str_proceed / end_proceed
+    /// (price range, decimal strings) and bid_size (tick step within the range).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bid_sizes: Option<Vec<GridBidSizeRule>>,
     /// Channel / authorization info: strategy grant flag, RTH support, currencies.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub channel_info: Option<serde_json::Value>,
+}
+
+/// One price-step rule row from `grid_symbol_info.bid_sizes`.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct GridBidSizeRule {
+    /// Range start price, inclusive (decimal string).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub str_proceed: Option<String>,
+    /// Range end price (decimal string).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub end_proceed: Option<String>,
+    /// Tick step within the range (decimal string).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bid_size: Option<String>,
 }

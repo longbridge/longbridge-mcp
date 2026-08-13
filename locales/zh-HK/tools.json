@@ -524,17 +524,134 @@
         "symbol": "證券代碼，例如 `\"700.HK\"`"
       }
     },
-    "grid_symbol_info": { "title": "網格標的資訊", "description": "按 symbol 取得某標的網格下單的盤前設定資訊(入參是標的代碼,不是訂單號):證券名稱、最新價、買/賣每手股數、價格檔位表(bid_size),以及渠道/授權資訊(策略授權標誌、是否支援盤前盤後、可用結算貨幣)。下單前可先查該標的的網格約束。" },
-    "grid_list": { "title": "網格訂單列表", "description": "列出網格交易訂單。可按標的或逗號分隔的狀態(如 \"Performing,Suspended\")篩選,支援分頁與排序。返回 grid_order[] 摘要與 has_more。" },
-    "grid_list_by_ids": { "title": "按 ID 查詢網格訂單", "description": "按訂單 ID 批量取得網格訂單,返回 grid_orders[] 摘要。" },
-    "grid_detail": { "title": "網格訂單詳情", "description": "單個網格訂單的完整詳情:規則參數、狀態、子訂單(grid_sub_orders)與生命週期歷史(grid_order_history)。支援 history_id 游標與 limit 分頁。" },
-    "grid_trigger_history": { "title": "網格觸發歷史", "description": "單個網格訂單的觸發歷史:每筆被觸發的子訂單及其價格、數量、成交均價/數量與觸發時間。支援 page/limit。" },
-    "grid_submit": { "title": "提交網格訂單", "description": "提交網格交易訂單。需提供 symbol、settlement_currency 及網格規則:基準價/上限價/下限價、trigger_price_type(1=價差,2=百分比)及對應的價差/百分比上下沿、trigger_quantity、上下限數量、time_in_force(0=當日,1=GTC,6=GTD)、grid_order_type_up/down(GMO/GLO/GTG)、邊界事件(1=忽略,2=按最新價平倉)。價格/數量為字串。需先通過 grid_questionnaire 授權。" },
-    "grid_replace": { "title": "修改網格訂單", "description": "按 order_id 修改網格訂單規則,規則欄位同 grid_submit。" },
-    "grid_cancel": { "title": "取消網格訂單", "description": "按 order_id 取消(終止)網格訂單。" },
-    "grid_suspend": { "title": "暫停網格訂單", "description": "按 order_id 暫停運行中的網格訂單,可用 grid_restart 恢復。" },
-    "grid_restart": { "title": "恢復網格訂單", "description": "按 order_id 恢復已暫停的網格訂單。" },
-    "grid_questionnaire": { "title": "網格策略授權", "description": "記錄提交網格訂單前所需的一次性策略風險披露同意,無需參數。" },
+    "grid_symbol_info": {
+      "title": "網格標的資訊",
+      "description": "按 symbol 取得某標的網格下單的盤前設定資訊(入參是標的代碼,不是訂單號):證券名稱、最新價、買/賣每手股數、價格檔位表(bid_size),以及渠道/授權資訊(策略授權標誌、是否支援盤前盤後、可用結算貨幣)。下單前可先查該標的的網格約束。",
+      "properties": {
+        "symbol": "證券代碼,例如 \"700.HK\""
+      }
+    },
+    "grid_list": {
+      "title": "網格訂單列表",
+      "description": "列出網格交易訂單。可按標的或逗號分隔的狀態(如 \"Performing,Suspended\")篩選,支援分頁與排序。返回 grid_order[] 摘要與 has_more。",
+      "properties": {
+        "symbol": "證券代碼,例如 \"700.HK\"",
+        "status": "逗號分隔的狀態篩選,如 \"Performing,Suspended\"",
+        "page": "頁碼(預設 1)",
+        "limit": "每頁數量(預設 20)",
+        "sort_by": "排序欄位(如 \"created_at\")",
+        "sort_order": "排序方向(\"asc\"/\"desc\")"
+      }
+    },
+    "grid_list_by_ids": {
+      "title": "按 ID 查詢網格訂單",
+      "description": "按訂單 ID 批量取得網格訂單,返回 grid_orders[] 摘要。",
+      "properties": {
+        "order_ids": "網格訂單號陣列,例如 [\"123\",\"456\"]"
+      }
+    },
+    "grid_detail": {
+      "title": "網格訂單詳情",
+      "description": "單個網格訂單的完整詳情:規則參數、狀態、子訂單(grid_sub_orders)與生命週期歷史(grid_order_history)。支援 history_id 游標與 limit 分頁。",
+      "properties": {
+        "order_id": "網格訂單號",
+        "history_id": "分頁游標(翻頁內嵌觸發歷史/子訂單)",
+        "limit": "每頁數量(預設 20)"
+      }
+    },
+    "grid_trigger_history": {
+      "title": "網格觸發歷史",
+      "description": "單個網格訂單的觸發歷史:每筆被觸發的子訂單及其價格、數量、成交均價/數量與觸發時間。支援 page/limit。",
+      "properties": {
+        "order_id": "網格訂單號",
+        "page": "頁碼(預設 1)",
+        "limit": "每頁數量(預設 20)"
+      }
+    },
+    "grid_submit": {
+      "title": "提交網格訂單",
+      "description": "提交網格交易訂單。需提供 symbol、settlement_currency 及網格規則:基準價/上限價/下限價、trigger_price_type(1=價差,2=百分比)及對應的價差/百分比上下沿、trigger_quantity、上下限數量、time_in_force(0=當日,1=GTC,6=GTD)、grid_order_type_up/down(GMO/GLO/GTG)、邊界事件(1=忽略,2=按最新價平倉)。價格/數量為字串。需先通過 grid_questionnaire 授權。",
+      "properties": {
+        "symbol": "證券代碼,例如 \"700.HK\"",
+        "settlement_currency": "結算貨幣,例如 \"HKD\"",
+        "submitted_base_price": "基準價(網格錨定價,小數字串)",
+        "upper_limit_price": "上限價(小數字串)",
+        "lower_limit_price": "下限價(小數字串)",
+        "trigger_price_type": "觸發方式:1=價差,2=百分比",
+        "trigger_spread_up": "向上觸發價差(絕對值,配 type=1,小數字串)",
+        "trigger_spread_down": "向下觸發價差(絕對值,配 type=1,小數字串)",
+        "trigger_percent_up": "向上觸發百分比(配 type=2,小數字串)",
+        "trigger_percent_down": "向下觸發百分比(配 type=2,小數字串)",
+        "multiple_trigger": "同一網格是否允許多次觸發",
+        "time_in_force": "有效期:0=當日,1=GTC,6=GTD",
+        "upper_limit_quantity": "觸及上限時處理的數量(小數字串)",
+        "lower_limit_quantity": "觸及下限時處理的數量(小數字串)",
+        "expire_time": "到期時間(unix 秒,配 GTD)",
+        "upper_limit_event": "觸及上限時的動作:1=忽略(繼續運行),2=按最新價平倉",
+        "lower_limit_event": "觸及下限時的動作:1=忽略(繼續運行),2=按最新價平倉",
+        "trigger_sell_depth": "賣方盤口深度(-5..5,0=用 grid_order_type_up)",
+        "trigger_buy_depth": "買方盤口深度(-5..5,0=用 grid_order_type_down)",
+        "trigger_quantity": "每次觸發數量(小數字串)",
+        "support_shortsell": "是否允許融券賣出",
+        "rth": "盤中交易時段標誌:0/1/2",
+        "grid_order_type_up": "深度為 0 時的賣方訂單類型:GMO/GLO/GTG",
+        "grid_order_type_down": "深度為 0 時的買方訂單類型:GMO/GLO/GTG"
+      }
+    },
+    "grid_replace": {
+      "title": "修改網格訂單",
+      "description": "按 order_id 修改網格訂單規則,規則欄位同 grid_submit。",
+      "properties": {
+        "order_id": "網格訂單號",
+        "submitted_base_price": "基準價(網格錨定價,小數字串)",
+        "upper_limit_price": "上限價(小數字串)",
+        "lower_limit_price": "下限價(小數字串)",
+        "trigger_price_type": "觸發方式:1=價差,2=百分比",
+        "trigger_spread_up": "向上觸發價差(絕對值,配 type=1,小數字串)",
+        "trigger_spread_down": "向下觸發價差(絕對值,配 type=1,小數字串)",
+        "trigger_percent_up": "向上觸發百分比(配 type=2,小數字串)",
+        "trigger_percent_down": "向下觸發百分比(配 type=2,小數字串)",
+        "multiple_trigger": "同一網格是否允許多次觸發",
+        "time_in_force": "有效期:0=當日,1=GTC,6=GTD",
+        "upper_limit_quantity": "觸及上限時處理的數量(小數字串)",
+        "lower_limit_quantity": "觸及下限時處理的數量(小數字串)",
+        "expire_time": "到期時間(unix 秒,配 GTD)",
+        "upper_limit_event": "觸及上限時的動作:1=忽略(繼續運行),2=按最新價平倉",
+        "lower_limit_event": "觸及下限時的動作:1=忽略(繼續運行),2=按最新價平倉",
+        "trigger_sell_depth": "賣方盤口深度(-5..5,0=用 grid_order_type_up)",
+        "trigger_buy_depth": "買方盤口深度(-5..5,0=用 grid_order_type_down)",
+        "trigger_quantity": "每次觸發數量(小數字串)",
+        "support_shortsell": "是否允許融券賣出",
+        "rth": "盤中交易時段標誌:0/1/2",
+        "grid_order_type_up": "深度為 0 時的賣方訂單類型:GMO/GLO/GTG",
+        "grid_order_type_down": "深度為 0 時的買方訂單類型:GMO/GLO/GTG"
+      }
+    },
+    "grid_cancel": {
+      "title": "取消網格訂單",
+      "description": "按 order_id 取消(終止)網格訂單。",
+      "properties": {
+        "order_id": "網格訂單號"
+      }
+    },
+    "grid_suspend": {
+      "title": "暫停網格訂單",
+      "description": "按 order_id 暫停運行中的網格訂單,可用 grid_restart 恢復。",
+      "properties": {
+        "order_id": "網格訂單號"
+      }
+    },
+    "grid_restart": {
+      "title": "恢復網格訂單",
+      "description": "按 order_id 恢復已暫停的網格訂單。",
+      "properties": {
+        "order_id": "網格訂單號"
+      }
+    },
+    "grid_questionnaire": {
+      "title": "網格策略授權",
+      "description": "記錄提交網格訂單前所需的一次性策略風險披露同意,無需參數。"
+    },
     "history_candlesticks_by_date": {
       "title": "歷史 K 線（按日期）",
       "description": "按日期區間獲取歷史 K 線（OHLCV）數據。period：1m/5m/15m/30m/60m/day/week/month/year",
