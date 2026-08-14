@@ -125,6 +125,25 @@ pub async fn screener_strategy(
     Ok(strip_strategy_keys(result))
 }
 
+/// A single Mode-B filter condition. `key` selects the indicator; the other
+/// fields describe the filter and are forwarded to the screener API verbatim.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ScreenerCondition {
+    /// Indicator key, e.g. "pettm" / "roe" / "macd_day". The "filter_" prefix
+    /// is added automatically if missing.
+    pub key: String,
+    /// Minimum value (inclusive), as a numeric string, e.g. "10". Use for
+    /// fundamental range filters.
+    pub min: Option<String>,
+    /// Maximum value (inclusive), as a numeric string, e.g. "50".
+    pub max: Option<String>,
+    /// Technical-indicator parameters (required for technical keys such as
+    /// macd/rsi/kdj/boll). Shape varies per indicator — call
+    /// `screener_indicators` for the exact schema. Example for macd:
+    /// {"category":"goldenfork","period":"day"}.
+    pub tech_values: Option<serde_json::Value>,
+}
+
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ScreenerSearchParam {
     /// Market: "US" | "HK" | "CN" | "SG".
@@ -136,9 +155,7 @@ pub struct ScreenerSearchParam {
     /// The tool auto-fetches the strategy and builds filters. Omit for Mode B.
     pub strategy_id: Option<String>,
 
-    /// Mode B — Filter conditions as objects, passed directly to the API.
-    /// Each item: {"key": "KEY", "min": "10", "max": "50", "tech_values": {}}
-    /// The "filter_" prefix is added automatically to the key if missing.
+    /// Mode B — Filter conditions, passed directly to the API. Omit for Mode A.
     ///
     /// Fundamental keys (pass with or without filter_ prefix):
     ///   pettm  pbmrq  roe  roa  netmargin
@@ -151,7 +168,7 @@ pub struct ScreenerSearchParam {
     ///   rsi_day/week   → {"value_type":"overbought"|"oversold"}
     ///   kdj_day/week   → {"category":"goldenfork"|"deadcross"}
     ///   boll_day/week  → {"category":"breakthrough_up"|"breakthrough_down"}
-    pub conditions: Option<Vec<serde_json::Value>>,
+    pub conditions: Option<Vec<ScreenerCondition>>,
 
     /// Extra indicator keys to include in each result row (display-only, not used as filters).
     /// Same key naming as conditions (filter_ prefix added automatically).
@@ -257,24 +274,30 @@ pub async fn screener_search(
         let mut filters: Vec<serde_json::Value> = Vec::new();
         let mut returns: Vec<String> = Vec::new();
 
-        for item in p.conditions.as_deref().unwrap_or(&[]) {
-            if let Some(raw_key) = item.get("key").and_then(|v| v.as_str()) {
-                if raw_key.is_empty() {
-                    continue;
-                }
-                let key = if raw_key.starts_with("filter_") {
-                    raw_key.to_string()
-                } else {
-                    format!("filter_{raw_key}")
-                };
-                returns.push(key.clone());
-                // Rebuild the filter object with the normalised key
-                let mut f = item.clone();
-                if let Some(obj) = f.as_object_mut() {
-                    obj.insert("key".to_string(), serde_json::Value::String(key));
-                }
-                filters.push(f);
+        for cond in p.conditions.as_deref().unwrap_or(&[]) {
+            if cond.key.is_empty() {
+                continue;
             }
+            let key = if cond.key.starts_with("filter_") {
+                cond.key.clone()
+            } else {
+                format!("filter_{}", cond.key)
+            };
+            returns.push(key.clone());
+            // Build the filter object with the normalised key, forwarding only
+            // the documented fields the screener API accepts.
+            let mut f = serde_json::Map::new();
+            f.insert("key".to_string(), serde_json::Value::String(key));
+            if let Some(ref min) = cond.min {
+                f.insert("min".to_string(), serde_json::Value::String(min.clone()));
+            }
+            if let Some(ref max) = cond.max {
+                f.insert("max".to_string(), serde_json::Value::String(max.clone()));
+            }
+            if let Some(ref tech_values) = cond.tech_values {
+                f.insert("tech_values".to_string(), tech_values.clone());
+            }
+            filters.push(serde_json::Value::Object(f));
         }
 
         (
