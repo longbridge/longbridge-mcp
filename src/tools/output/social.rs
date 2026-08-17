@@ -88,6 +88,62 @@ pub struct TopicImage {
     pub lg: String,
 }
 
+/// Returned by `news_detail`. One news article's full detail.
+///
+/// HTTP passthrough of `GET /v1/content/news/{id}`'s `item`. proto3 JSON
+/// encodes `int64` as a string, so `id` / `author.id` arrive as strings;
+/// `published_at` (unix seconds) is converted to RFC3339 by the transform
+/// pipeline.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct NewsDetailResponse {
+    /// News article ID (numeric string).
+    pub id: String,
+    /// Title.
+    pub title: String,
+    /// Plain-text excerpt, no HTML tags.
+    pub description: String,
+    /// Markdown content.
+    pub body: String,
+    /// URL to the full article page.
+    pub url: String,
+    /// Article author.
+    pub author: NewsAuthor,
+    /// Attached images.
+    pub images: Vec<NewsImage>,
+    /// Comments count.
+    pub comments_count: i32,
+    /// Likes count.
+    pub likes_count: i32,
+    /// Shares count.
+    pub shares_count: i32,
+    /// Published time (RFC3339).
+    pub published_at: String,
+    /// Related stock tickers, format `<CODE>.<MARKET>` (e.g. "AAPL.US").
+    pub tickers: Vec<String>,
+}
+
+/// Author of a news article.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct NewsAuthor {
+    /// Author ID (numeric string).
+    pub id: String,
+    /// Display name.
+    pub name: String,
+    /// Avatar URL.
+    pub avatar: String,
+}
+
+/// An image attached to a news article.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct NewsImage {
+    /// Image URL.
+    pub url: String,
+    /// Width in pixels.
+    pub width: i32,
+    /// Height in pixels.
+    pub height: i32,
+}
+
 /// Returned by `topic_create`. The handler wraps the new topic ID in a single
 /// `{ "id": ... }` object.
 #[derive(Debug, Serialize, JsonSchema)]

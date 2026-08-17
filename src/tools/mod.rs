@@ -2852,6 +2852,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
+        output_schema = schema_for::<output::social::NewsDetailResponse>(),
         description = "Get one news article's full detail by id (from news/news_search). Returns {id, title, description, body (Markdown), url, author{name}, images[], comments_count, likes_count, shares_count, published_at, tickers[]}."
     )]
     async fn news_detail(
