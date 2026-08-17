@@ -67,7 +67,24 @@ pub async fn news(
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct NewsIdParam {
     /// News article ID (numeric), e.g. "7123456789012345678". Get IDs from `news` or `news_search`.
+    #[serde(deserialize_with = "tolerant_id_string")]
+    #[schemars(with = "String")]
     pub id: String,
+}
+
+/// Accept the article id as either a JSON string or a bare number — models
+/// often echo the numeric id from `news_search` results as a number.
+fn tolerant_id_string<'de, D: rmcp::serde::Deserializer<'de>>(d: D) -> Result<String, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Value {
+        String(String),
+        Number(i64),
+    }
+    Ok(match Value::deserialize(d)? {
+        Value::String(s) => s,
+        Value::Number(n) => n.to_string(),
+    })
 }
 
 /// `GET /v1/content/news/{id}` — one article's full detail. This endpoint is
@@ -92,7 +109,16 @@ pub async fn news_detail(
         .send()
         .await
         .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-    tool_json(&resp.0["item"])
+    // The tool declares an outputSchema, so it must return a structured
+    // object — never a bare `null` if the payload is missing `item`.
+    let item = &resp.0["item"];
+    if !item.is_object() {
+        return Err(McpError::internal_error(
+            format!("news article {id} not found or response missing `item`"),
+            None,
+        ));
+    }
+    tool_json(item)
 }
 
 pub async fn topic(
