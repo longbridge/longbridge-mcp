@@ -672,6 +672,7 @@ const TOOL_ENDPOINTS: &[(&str, u8)] = &[
     ("intraday", V2),
     ("market_status", V2),
     ("news", V2),
+    ("news_detail", V2),
     ("news_search", V2),
     ("quote", V2),
     ("rank_list", V2),
@@ -2840,6 +2841,26 @@ impl Longbridge {
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
         measured_tool_call("news", || content::news(&mctx, p)).await
+    }
+
+    /// Get one news article's full detail.
+    #[tool(
+        title = "News Detail",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = true
+        ),
+        description = "Get one news article's full detail by id (from news/news_search). Returns {id, title, description, body (Markdown), url, author{name}, images[], comments_count, likes_count, shares_count, published_at, tickers[]}."
+    )]
+    async fn news_detail(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<content::NewsIdParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("news_detail", || content::news_detail(&mctx, p)).await
     }
 
     /// Get discussion topics for a symbol.

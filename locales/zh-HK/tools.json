@@ -640,6 +640,13 @@
         "symbol": "證券代碼，例如 `\"700.HK\"`"
       }
     },
+    "news_detail": {
+      "title": "資訊詳情",
+      "description": "按 id 獲取單篇資訊的完整內容（id 來自 news / news_search）。返回 {id, title, description, body (Markdown), url, author{name}, images[], comments_count, likes_count, shares_count, published_at, tickers[]}",
+      "properties": {
+        "id": "資訊文章 ID（數字），例如 \"7123456789012345678\"。可從 news 或 news_search 獲取"
+      }
+    },
     "now": {
       "title": "當前時間",
       "description": "獲取當前 UTC 時間（RFC3339 時間格式），用於在發起日期相關查詢前確認當前日期"

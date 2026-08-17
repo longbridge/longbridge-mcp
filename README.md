@@ -15,7 +15,7 @@
   <a href="https://longbridge.com"><img alt="Longbridge" src="https://img.shields.io/badge/brokerage-Longbridge-ffe000?labelColor=000"></a>
 </p>
 
-Official MCP server for the [Longbridge](https://longbridge.com) brokerage. **151 tools** across real-time quotes, options, order routing, fundamentals, analyst ratings, calendars, IPO, price alerts, DCA plans, portfolio analytics and community sharelists — covering **US and HK markets**. Built with Rust using [rmcp](https://github.com/anthropics/rmcp) and [axum](https://github.com/tokio-rs/axum).
+Official MCP server for the [Longbridge](https://longbridge.com) brokerage. **152 tools** across real-time quotes, options, order routing, fundamentals, analyst ratings, calendars, IPO, price alerts, DCA plans, portfolio analytics and community sharelists — covering **US and HK markets**. Built with Rust using [rmcp](https://github.com/anthropics/rmcp) and [axum](https://github.com/tokio-rs/axum).
 
 ---
 
@@ -38,7 +38,7 @@ Sign in once with your Longbridge account. Every request runs over the same host
 
 ## Highlights
 
-- **151 tools, one endpoint** — quotes, options, order routing, fundamentals, analyst research, screeners, IPO, alerts, DCA and portfolio analytics across **US and HK markets**.
+- **152 tools, one endpoint** — quotes, options, order routing, fundamentals, analyst research, screeners, IPO, alerts, DCA and portfolio analytics across **US and HK markets**.
 - **Stateless by design** — every request forwards its Bearer token straight to the Longbridge SDK. No sessions, no database, nothing stored server-side.
 - **OAuth 2.1, auto-discovered** — RFC 9728 protected-resource and RFC 8414 authorization-server metadata; clients complete the flow with no token to paste.
 - **Clean, typed responses** — snake_case fields, RFC 3339 timestamps, human-readable symbols, and typed `outputSchema` descriptors for compatible clients.
@@ -80,7 +80,7 @@ On first use, the client reads the `WWW-Authenticate` challenge, fetches `/.well
 
 </details>
 
-## The 151 tools
+## The 152 tools
 
 Nineteen categories spanning market data, trading, research and account management.
 
@@ -93,7 +93,7 @@ Nineteen categories spanning market data, trading, research and account manageme
 | **DCA** | 9 | Dollar-cost averaging plan create/update/pause/resume/stop, execution history, statistics, support check |
 | **Sharelist** | 8 | Community sharelist CRUD, member add/remove/sort, popular lists |
 | **IPO** | 7 | IPO subscriptions, calendar, listed stocks, order detail, profit/loss analysis |
-| **Content** | 6 | News, discussion topic CRUD and replies |
+| **Content** | 7 | News list/detail, discussion topic CRUD and replies |
 | **Alert** | 5 | Price alert CRUD (add, delete, enable, disable, list) |
 | **Screener** | 5 | Stock screener search, indicators, strategy recommendation/management |
 | **Portfolio** | 4 | Exchange rates, profit/loss analysis (summary, detail, realized) |

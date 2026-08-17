@@ -64,6 +64,37 @@ pub async fn news(
     tool_json(&result)
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct NewsIdParam {
+    /// News article ID (numeric), e.g. "7123456789012345678". Get IDs from `news` or `news_search`.
+    pub id: String,
+}
+
+/// `GET /v1/content/news/{id}` — one article's full detail. This endpoint is
+/// not part of the language SDKs, so it is called through the signed raw HTTP
+/// client.
+pub async fn news_detail(
+    mctx: &crate::tools::McpContext,
+    p: NewsIdParam,
+) -> Result<CallToolResult, McpError> {
+    use longbridge::httpclient::{Json, Method};
+
+    let id: i64 = p.id.trim().parse().map_err(|_| {
+        McpError::invalid_params(
+            "id must be a numeric news article ID (from news/news_search)",
+            None,
+        )
+    })?;
+    let resp = mctx
+        .create_http_client()
+        .request(Method::GET, format!("/v1/content/news/{id}"))
+        .response::<Json<serde_json::Value>>()
+        .send()
+        .await
+        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+    tool_json(&resp.0["item"])
+}
+
 pub async fn topic(
     mctx: &crate::tools::McpContext,
     p: SymbolParam,
