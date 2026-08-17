@@ -909,7 +909,23 @@ fn strip_schema_documentation_keys(value: &mut serde_json::Value) {
             map.remove("$schema");
             map.remove("title");
             map.remove("description");
-            for v in map.values_mut() {
+            for (key, v) in map.iter_mut() {
+                // The values of these keywords are maps keyed by *names*
+                // (property / definition names), not schema objects — a
+                // property legitimately named "title" or "description" must
+                // not be stripped. Recurse into each named child schema
+                // directly instead.
+                if matches!(
+                    key.as_str(),
+                    "properties" | "patternProperties" | "$defs" | "definitions"
+                ) {
+                    if let serde_json::Value::Object(children) = v {
+                        for child in children.values_mut() {
+                            strip_schema_documentation_keys(child);
+                        }
+                        continue;
+                    }
+                }
                 strip_schema_documentation_keys(v);
             }
         }
@@ -4453,6 +4469,37 @@ impl ServerHandler for Longbridge {
 
 #[cfg(test)]
 mod tests {
+    use super::strip_schema_documentation_keys;
+
+    #[test]
+    fn schema_compactor_keeps_properties_named_title_or_description() {
+        // "title"/"description" are documentation keywords on a *schema*
+        // object, but inside a `properties` map they are property *names* —
+        // stripping them there deletes real fields (news_detail's headline
+        // fields) from the advertised outputSchema.
+        let mut schema = serde_json::json!({
+            "title": "NewsDetailResponse",
+            "description": "doc",
+            "type": "object",
+            "properties": {
+                "title": { "type": "string", "description": "Title." },
+                "description": { "type": "string", "description": "Excerpt." },
+                "body": { "type": "string", "description": "Markdown." }
+            }
+        });
+        strip_schema_documentation_keys(&mut schema);
+        let props = schema["properties"].as_object().unwrap();
+        assert!(props.contains_key("title"), "property name must survive");
+        assert!(
+            props.contains_key("description"),
+            "property name must survive"
+        );
+        // Schema-level annotations are stripped, including on child schemas.
+        assert!(schema.get("title").is_none());
+        assert!(schema.get("description").is_none());
+        assert!(props["body"].get("description").is_none());
+    }
+
     use axum::http::{HeaderMap, HeaderName, HeaderValue};
 
     use super::collect_headers;

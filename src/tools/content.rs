@@ -109,7 +109,17 @@ pub async fn news_detail(
         .response::<Json<serde_json::Value>>()
         .send()
         .await
-        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        .map_err(|e| match &e {
+            // 1901107: content does not exist or has been deleted — the
+            // caller's id was wrong, not a server fault.
+            longbridge::httpclient::HttpClientError::OpenApi { code: 1901107, .. } => {
+                McpError::invalid_params(
+                    format!("news article {id} not found; get a valid id from news/news_search"),
+                    None,
+                )
+            }
+            _ => McpError::internal_error(e.to_string(), None),
+        })?;
     // The tool declares an outputSchema, so it must return a structured
     // object — never a bare `null` if the payload is missing `item`.
     let item = &resp.0["item"];
