@@ -918,13 +918,12 @@ fn strip_schema_documentation_keys(value: &mut serde_json::Value) {
                 if matches!(
                     key.as_str(),
                     "properties" | "patternProperties" | "$defs" | "definitions"
-                ) {
-                    if let serde_json::Value::Object(children) = v {
-                        for child in children.values_mut() {
-                            strip_schema_documentation_keys(child);
-                        }
-                        continue;
+                ) && let serde_json::Value::Object(children) = v
+                {
+                    for child in children.values_mut() {
+                        strip_schema_documentation_keys(child);
                     }
+                    continue;
                 }
                 strip_schema_documentation_keys(v);
             }
