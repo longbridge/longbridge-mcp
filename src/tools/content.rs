@@ -75,16 +75,17 @@ pub struct NewsIdParam {
 /// Accept the article id as either a JSON string or a bare number — models
 /// often echo the numeric id from `news_search` results as a number.
 fn tolerant_id_string<'de, D: rmcp::serde::Deserializer<'de>>(d: D) -> Result<String, D::Error> {
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum Value {
-        String(String),
-        Number(i64),
+    let value = serde_json::Value::deserialize(d)?;
+    match value {
+        serde_json::Value::String(s) => Ok(s),
+        serde_json::Value::Number(n) => n
+            .as_i64()
+            .map(|n| n.to_string())
+            .ok_or_else(|| rmcp::serde::de::Error::custom("id must be an integer article ID")),
+        other => Err(rmcp::serde::de::Error::custom(format!(
+            "id must be a string or integer article ID, got {other}"
+        ))),
     }
-    Ok(match Value::deserialize(d)? {
-        Value::String(s) => s,
-        Value::Number(n) => n.to_string(),
-    })
 }
 
 /// `GET /v1/content/news/{id}` — one article's full detail. This endpoint is
@@ -113,8 +114,10 @@ pub async fn news_detail(
     // object — never a bare `null` if the payload is missing `item`.
     let item = &resp.0["item"];
     if !item.is_object() {
-        return Err(McpError::internal_error(
-            format!("news article {id} not found or response missing `item`"),
+        // The id didn't resolve to an article — that's the caller's input,
+        // not a server fault, so signal it as such.
+        return Err(McpError::invalid_params(
+            format!("news article {id} not found; get a valid id from news/news_search"),
             None,
         ));
     }

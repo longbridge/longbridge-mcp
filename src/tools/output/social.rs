@@ -93,55 +93,56 @@ pub struct TopicImage {
 /// HTTP passthrough of `GET /v1/content/news/{id}`'s `item`. proto3 JSON
 /// encodes `int64` as a string, so `id` / `author.id` arrive as strings;
 /// `published_at` (unix seconds) is converted to RFC3339 by the transform
-/// pipeline.
+/// pipeline. Per the passthrough convention above, every field is `Option` —
+/// the upstream may omit unpopulated proto3 fields.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct NewsDetailResponse {
     /// News article ID (numeric string).
-    pub id: String,
+    pub id: Option<String>,
     /// Title.
-    pub title: String,
+    pub title: Option<String>,
     /// Plain-text excerpt, no HTML tags.
-    pub description: String,
+    pub description: Option<String>,
     /// Markdown content.
-    pub body: String,
+    pub body: Option<String>,
     /// URL to the full article page.
-    pub url: String,
+    pub url: Option<String>,
     /// Article author.
-    pub author: NewsAuthor,
+    pub author: Option<NewsAuthor>,
     /// Attached images.
-    pub images: Vec<NewsImage>,
+    pub images: Option<Vec<NewsImage>>,
     /// Comments count.
-    pub comments_count: i32,
+    pub comments_count: Option<i32>,
     /// Likes count.
-    pub likes_count: i32,
+    pub likes_count: Option<i32>,
     /// Shares count.
-    pub shares_count: i32,
+    pub shares_count: Option<i32>,
     /// Published time (RFC3339).
-    pub published_at: String,
+    pub published_at: Option<String>,
     /// Related stock tickers, format `<CODE>.<MARKET>` (e.g. "AAPL.US").
-    pub tickers: Vec<String>,
+    pub tickers: Option<Vec<String>>,
 }
 
 /// Author of a news article.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct NewsAuthor {
     /// Author ID (numeric string).
-    pub id: String,
+    pub id: Option<String>,
     /// Display name.
-    pub name: String,
+    pub name: Option<String>,
     /// Avatar URL.
-    pub avatar: String,
+    pub avatar: Option<String>,
 }
 
 /// An image attached to a news article.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct NewsImage {
     /// Image URL.
-    pub url: String,
+    pub url: Option<String>,
     /// Width in pixels.
-    pub width: i32,
+    pub width: Option<i32>,
     /// Height in pixels.
-    pub height: i32,
+    pub height: Option<i32>,
 }
 
 /// Returned by `topic_create`. The handler wraps the new topic ID in a single

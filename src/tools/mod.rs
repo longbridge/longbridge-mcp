@@ -580,7 +580,7 @@ fn all_tools_full_cached() -> &'static [rmcp::model::Tool] {
 ///
 /// Returns all tools, processed once and cached for the lifetime of the process.
 ///
-/// Building the router (151 entries) and recursively traversing every JSON Schema
+/// Building the router (152 entries) and recursively traversing every JSON Schema
 /// is expensive; doing it on each `tools/list` request was the primary CPU hotspot.
 /// The result is immutable after startup, so a `OnceLock` is safe.
 fn all_tools_cached() -> &'static [rmcp::model::Tool] {
@@ -2853,7 +2853,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::social::NewsDetailResponse>(),
-        description = "Get one news article's full detail by id (from news/news_search). Returns {id, title, description, body (Markdown), url, author{name}, images[], comments_count, likes_count, shares_count, published_at, tickers[]}."
+        description = "Get one news article's full detail by id (from news/news_search). Returns {id, title, description, body (Markdown), url, author{id,name,avatar}, images[], comments_count, likes_count, shares_count, published_at, tickers[]}."
     )]
     async fn news_detail(
         &self,
@@ -5234,7 +5234,7 @@ mod quote_cmd_tests {
         }
         let hot_elapsed = start.elapsed();
 
-        // ── list_tools() path: all_tools_cached().to_vec() (all 151 tools) ──
+        // ── list_tools() path: all_tools_cached().to_vec() (all 152 tools) ──
         let start = Instant::now();
         for _ in 0..n {
             let _ = black_box(list_tools());
@@ -5270,7 +5270,7 @@ mod quote_cmd_tests {
             hot_us, hot_elapsed
         );
         eprintln!(
-            "list_tools (all 151 tools):     {:>8.1} µs/call  ({n} calls, {:?} total)",
+            "list_tools (all 152 tools):     {:>8.1} µs/call  ({n} calls, {:?} total)",
             cached_us, cached_elapsed
         );
         eprintln!(

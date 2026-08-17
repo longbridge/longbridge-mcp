@@ -642,7 +642,7 @@
     },
     "news_detail": {
       "title": "资讯详情",
-      "description": "按 id 获取单篇资讯的完整内容（id 来自 news / news_search）。返回 {id, title, description, body (Markdown), url, author{name}, images[], comments_count, likes_count, shares_count, published_at, tickers[]}",
+      "description": "按 id 获取单篇资讯的完整内容（id 来自 news / news_search）。返回 {id, title, description, body (Markdown), url, author{id,name,avatar}, images[], comments_count, likes_count, shares_count, published_at, tickers[]}",
       "properties": {
         "id": "资讯文章 ID（数字），例如 \"7123456789012345678\"。可从 news 或 news_search 获取"
       }
