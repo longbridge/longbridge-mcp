@@ -580,7 +580,7 @@ fn all_tools_full_cached() -> &'static [rmcp::model::Tool] {
 ///
 /// Returns all tools, processed once and cached for the lifetime of the process.
 ///
-/// Building the router (151 entries) and recursively traversing every JSON Schema
+/// Building the router (152 entries) and recursively traversing every JSON Schema
 /// is expensive; doing it on each `tools/list` request was the primary CPU hotspot.
 /// The result is immutable after startup, so a `OnceLock` is safe.
 fn all_tools_cached() -> &'static [rmcp::model::Tool] {
@@ -672,6 +672,7 @@ const TOOL_ENDPOINTS: &[(&str, u8)] = &[
     ("intraday", V2),
     ("market_status", V2),
     ("news", V2),
+    ("news_detail", V2),
     ("news_search", V2),
     ("quote", V2),
     ("rank_list", V2),
@@ -908,7 +909,22 @@ fn strip_schema_documentation_keys(value: &mut serde_json::Value) {
             map.remove("$schema");
             map.remove("title");
             map.remove("description");
-            for v in map.values_mut() {
+            for (key, v) in map.iter_mut() {
+                // The values of these keywords are maps keyed by *names*
+                // (property / definition names), not schema objects — a
+                // property legitimately named "title" or "description" must
+                // not be stripped. Recurse into each named child schema
+                // directly instead.
+                if matches!(
+                    key.as_str(),
+                    "properties" | "patternProperties" | "$defs" | "definitions"
+                ) && let serde_json::Value::Object(children) = v
+                {
+                    for child in children.values_mut() {
+                        strip_schema_documentation_keys(child);
+                    }
+                    continue;
+                }
                 strip_schema_documentation_keys(v);
             }
         }
@@ -2842,6 +2858,27 @@ impl Longbridge {
         measured_tool_call("news", || content::news(&mctx, p)).await
     }
 
+    /// Get one news article's full detail.
+    #[tool(
+        title = "News Detail",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = true
+        ),
+        output_schema = schema_for::<output::social::NewsDetailResponse>(),
+        description = "Get one news article's full detail by id (from news/news_search). Returns {id, title, description, body (Markdown), url, author{id,name,avatar}, images[], comments_count, likes_count, shares_count, published_at, tickers[]}."
+    )]
+    async fn news_detail(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<content::NewsIdParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("news_detail", || content::news_detail(&mctx, p)).await
+    }
+
     /// Get discussion topics for a symbol.
     #[tool(
         title = "Topic List",
@@ -4431,6 +4468,37 @@ impl ServerHandler for Longbridge {
 
 #[cfg(test)]
 mod tests {
+    use super::strip_schema_documentation_keys;
+
+    #[test]
+    fn schema_compactor_keeps_properties_named_title_or_description() {
+        // "title"/"description" are documentation keywords on a *schema*
+        // object, but inside a `properties` map they are property *names* —
+        // stripping them there deletes real fields (news_detail's headline
+        // fields) from the advertised outputSchema.
+        let mut schema = serde_json::json!({
+            "title": "NewsDetailResponse",
+            "description": "doc",
+            "type": "object",
+            "properties": {
+                "title": { "type": "string", "description": "Title." },
+                "description": { "type": "string", "description": "Excerpt." },
+                "body": { "type": "string", "description": "Markdown." }
+            }
+        });
+        strip_schema_documentation_keys(&mut schema);
+        let props = schema["properties"].as_object().unwrap();
+        assert!(props.contains_key("title"), "property name must survive");
+        assert!(
+            props.contains_key("description"),
+            "property name must survive"
+        );
+        // Schema-level annotations are stripped, including on child schemas.
+        assert!(schema.get("title").is_none());
+        assert!(schema.get("description").is_none());
+        assert!(props["body"].get("description").is_none());
+    }
+
     use axum::http::{HeaderMap, HeaderName, HeaderValue};
 
     use super::collect_headers;
@@ -5212,7 +5280,7 @@ mod quote_cmd_tests {
         }
         let hot_elapsed = start.elapsed();
 
-        // ── list_tools() path: all_tools_cached().to_vec() (all 151 tools) ──
+        // ── list_tools() path: all_tools_cached().to_vec() (all 152 tools) ──
         let start = Instant::now();
         for _ in 0..n {
             let _ = black_box(list_tools());
@@ -5248,7 +5316,7 @@ mod quote_cmd_tests {
             hot_us, hot_elapsed
         );
         eprintln!(
-            "list_tools (all 151 tools):     {:>8.1} µs/call  ({n} calls, {:?} total)",
+            "list_tools (all 152 tools):     {:>8.1} µs/call  ({n} calls, {:?} total)",
             cached_us, cached_elapsed
         );
         eprintln!(

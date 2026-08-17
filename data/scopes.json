@@ -65,6 +65,7 @@
         "market_status",
         "market_temperature",
         "news",
+        "news_detail",
         "news_search",
         "now",
         "operating",
