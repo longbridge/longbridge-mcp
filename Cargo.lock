@@ -1555,7 +1555,7 @@ dependencies = [
 
 [[package]]
 name = "longbridge-mcp"
-version = "0.8.6"
+version = "0.8.7"
 dependencies = [
  "anyhow",
  "axum",
