@@ -1,12 +1,11 @@
 [package]
 name = "longbridge-mcp"
-version = "0.8.6"
+version = "0.8.7"
 edition = "2024"
 
 [dependencies]
 # TODO: switch back to crates.io after the next openapi release
-# TODO(grid): revert to branch = "main" once openapi PR #563 merges.
-longbridge = { git = "https://github.com/longbridge/openapi.git", branch = "feat/grid-trading-rust-core" }
+longbridge = { git = "https://github.com/longbridge/openapi.git", branch = "main" }
 rust_decimal = "1"
 rmcp = { version = "1.4", features = [
     "server",

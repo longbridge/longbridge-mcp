@@ -64,6 +64,76 @@ pub async fn news(
     tool_json(&result)
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct NewsIdParam {
+    /// News article ID (numeric), e.g. "7123456789012345678". Get IDs from `news` or `news_search`.
+    #[serde(deserialize_with = "tolerant_id_string")]
+    #[schemars(with = "String")]
+    pub id: String,
+}
+
+/// Accept the article id as either a JSON string or a bare number — models
+/// often echo the numeric id from `news_search` results as a number.
+fn tolerant_id_string<'de, D: rmcp::serde::Deserializer<'de>>(d: D) -> Result<String, D::Error> {
+    let value = serde_json::Value::deserialize(d)?;
+    match value {
+        serde_json::Value::String(s) => Ok(s),
+        serde_json::Value::Number(n) => n
+            .as_i64()
+            .map(|n| n.to_string())
+            .ok_or_else(|| rmcp::serde::de::Error::custom("id must be an integer article ID")),
+        other => Err(rmcp::serde::de::Error::custom(format!(
+            "id must be a string or integer article ID, got {other}"
+        ))),
+    }
+}
+
+/// `GET /v1/content/news/{id}` — one article's full detail. This endpoint is
+/// not part of the language SDKs, so it is called through the signed raw HTTP
+/// client.
+pub async fn news_detail(
+    mctx: &crate::tools::McpContext,
+    p: NewsIdParam,
+) -> Result<CallToolResult, McpError> {
+    use longbridge::httpclient::{Json, Method};
+
+    let id: i64 = p.id.trim().parse().map_err(|_| {
+        McpError::invalid_params(
+            "id must be a numeric news article ID (from news/news_search)",
+            None,
+        )
+    })?;
+    let resp = mctx
+        .create_http_client()
+        .request(Method::GET, format!("/v1/content/news/{id}"))
+        .response::<Json<serde_json::Value>>()
+        .send()
+        .await
+        .map_err(|e| match &e {
+            // 1901107: content does not exist or has been deleted — the
+            // caller's id was wrong, not a server fault.
+            longbridge::httpclient::HttpClientError::OpenApi { code: 1901107, .. } => {
+                McpError::invalid_params(
+                    format!("news article {id} not found; get a valid id from news/news_search"),
+                    None,
+                )
+            }
+            _ => McpError::internal_error(e.to_string(), None),
+        })?;
+    // The tool declares an outputSchema, so it must return a structured
+    // object — never a bare `null` if the payload is missing `item`.
+    let item = &resp.0["item"];
+    if !item.is_object() {
+        // The id didn't resolve to an article — that's the caller's input,
+        // not a server fault, so signal it as such.
+        return Err(McpError::invalid_params(
+            format!("news article {id} not found; get a valid id from news/news_search"),
+            None,
+        ));
+    }
+    tool_json(item)
+}
+
 pub async fn topic(
     mctx: &crate::tools::McpContext,
     p: SymbolParam,
