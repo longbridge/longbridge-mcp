@@ -422,17 +422,9 @@ fn normalize_short_trades(
 /// Pagination cursor returned by `top_movers`; pass it back verbatim to fetch the next page.
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct TopMoversNextParams {
-    /// Event IDs already seen in previous pages.
+    /// Event IDs already seen in previous pages. Pass back verbatim from the
+    /// previous response — do not fabricate.
     pub visited: Vec<String>,
-}
-
-fn next_params_schema(_: &mut rmcp::schemars::SchemaGenerator) -> rmcp::schemars::Schema {
-    rmcp::schemars::json_schema!({
-        "description": "Pagination cursor from the previous response. Pass the entire next_params object back verbatim to fetch the next page.",
-        "type": "object",
-        "properties": {},
-        "additionalProperties": true
-    })
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -454,7 +446,6 @@ pub struct StockEventsParam {
     /// Pass the entire next_params object returned by the previous call to get the next page.
     /// Omit for the first page.
     #[serde(default)]
-    #[schemars(schema_with = "next_params_schema")]
     pub next_params: Option<TopMoversNextParams>,
 }
 
