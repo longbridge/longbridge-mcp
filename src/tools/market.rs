@@ -420,11 +420,31 @@ fn normalize_short_trades(
 }
 
 /// Pagination cursor returned by `top_movers`; pass it back verbatim to fetch the next page.
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct TopMoversNextParams {
-    /// Event IDs already seen in previous pages. Pass back verbatim from the
-    /// previous response — do not fabricate.
+    /// Event IDs already seen in previous pages.
     pub visited: Vec<String>,
+}
+
+/// Inlined JSON Schema for `next_params`.
+///
+/// Emitted by hand (not derived from [`TopMoversNextParams`]) so the manifest
+/// stays OpenAI-function-calling compatible: a concrete object with enumerated
+/// fields — no `$ref`/`$defs`, and no `anyOf`/nullable union that OpenAI's
+/// strict mode collapses.
+fn next_params_schema(_: &mut rmcp::schemars::SchemaGenerator) -> rmcp::schemars::Schema {
+    rmcp::schemars::json_schema!({
+        "type": "object",
+        "description": "Pagination cursor from the previous response. Pass its next_params back verbatim to fetch the next page; omit for the first page.",
+        "properties": {
+            "visited": {
+                "type": "array",
+                "items": { "type": "string" },
+                "description": "Event IDs already seen in previous pages. Pass back verbatim from the previous response — do not fabricate."
+            }
+        },
+        "required": ["visited"]
+    })
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -446,6 +466,7 @@ pub struct StockEventsParam {
     /// Pass the entire next_params object returned by the previous call to get the next page.
     /// Omit for the first page.
     #[serde(default)]
+    #[schemars(schema_with = "next_params_schema")]
     pub next_params: Option<TopMoversNextParams>,
 }
 

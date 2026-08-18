@@ -126,22 +126,67 @@ pub async fn screener_strategy(
 }
 
 /// A single Mode-B filter condition. `key` selects the indicator; the other
-/// fields describe the filter and are forwarded to the screener API verbatim.
-#[derive(Debug, Deserialize, JsonSchema)]
+/// fields describe the filter. `tech_values` is accepted either as a JSON
+/// string (the schema-advertised form, required for OpenAI compatibility) or
+/// as an object (tolerated for Anthropic/Gemini clients).
+#[derive(Debug, Deserialize)]
 pub struct ScreenerCondition {
-    /// Indicator key, e.g. "pettm" / "roe" / "macd_day". The "filter_" prefix
-    /// is added automatically if missing.
     pub key: String,
-    /// Minimum value (inclusive), as a numeric string, e.g. "10". Use for
-    /// fundamental range filters.
     pub min: Option<String>,
-    /// Maximum value (inclusive), as a numeric string, e.g. "50".
     pub max: Option<String>,
-    /// Technical-indicator parameters (required for technical keys such as
-    /// macd/rsi/kdj/boll). Shape varies per indicator — call
-    /// `screener_indicators` for the exact schema. Example for macd:
-    /// {"category":"goldenfork","period":"day"}.
     pub tech_values: Option<serde_json::Value>,
+}
+
+/// Inlined JSON Schema for the `conditions` array.
+///
+/// Emitted by hand rather than derived from [`ScreenerCondition`] so the tool
+/// manifest is OpenAI-function-calling compatible: the array `items` is a
+/// concrete object (no `$ref`/`$defs`), and `tech_values` is a JSON *string*
+/// (OpenAI strict mode cannot express the free-form technical-params object).
+/// OpenAI also forces every property `required` and sends unused fields as
+/// empty strings, so the consumer treats `""` as "not provided".
+fn conditions_schema(_: &mut rmcp::schemars::SchemaGenerator) -> rmcp::schemars::Schema {
+    rmcp::schemars::json_schema!({
+        "type": "array",
+        "description": "Mode B — filter conditions. Omit when using strategy_id (Mode A).",
+        "items": {
+            "type": "object",
+            "properties": {
+                "key": {
+                    "type": "string",
+                    "description": "Indicator key; the \"filter_\" prefix is added automatically if missing.\nFundamental: pettm, pbmrq, roe, roa, netmargin, salesgrowthyoy, netincomegrowthyoy, marketcap, circulating_marketcap, prevclose, prevchg, divyld, la, epsttm, netincome, sales, turnover_rate, balance.\nTechnical: macd_day, macd_week, rsi_day, rsi_week, kdj_day, kdj_week, boll_day, boll_week."
+                },
+                "min": {
+                    "type": "string",
+                    "description": "Lower bound as a numeric string, e.g. \"10\". Pass an empty string when unbounded or for technical keys."
+                },
+                "max": {
+                    "type": "string",
+                    "description": "Upper bound as a numeric string, e.g. \"50\". Pass an empty string when unbounded or for technical keys."
+                },
+                "tech_values": {
+                    "type": "string",
+                    "description": "Technical-indicator params as a JSON string (empty string for fundamental keys):\nmacd_day/week: {\"category\":\"goldenfork\"|\"deadcross\",\"period\":\"day\"|\"week\"}\nrsi_day/week: {\"value_type\":\"overbought\"|\"oversold\"}\nkdj_day/week: {\"category\":\"goldenfork\"|\"deadcross\"}\nboll_day/week: {\"category\":\"breakthrough_up\"|\"breakthrough_down\"}"
+                }
+            },
+            "required": ["key"]
+        }
+    })
+}
+
+/// Normalise a `tech_values` input into the object the screener API expects.
+/// Accepts an object (used verbatim), a JSON string (parsed), and treats empty
+/// string / empty object / null as "not provided".
+fn normalize_tech_values(v: &serde_json::Value) -> Option<serde_json::Value> {
+    match v {
+        serde_json::Value::Null => None,
+        serde_json::Value::String(s) if s.trim().is_empty() => None,
+        serde_json::Value::String(s) => serde_json::from_str(s)
+            .ok()
+            .filter(|parsed| !matches!(parsed, serde_json::Value::Object(o) if o.is_empty())),
+        serde_json::Value::Object(o) if o.is_empty() => None,
+        other => Some(other.clone()),
+    }
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -168,6 +213,11 @@ pub struct ScreenerSearchParam {
     ///   rsi_day/week   → {"value_type":"overbought"|"oversold"}
     ///   kdj_day/week   → {"category":"goldenfork"|"deadcross"}
     ///   boll_day/week  → {"category":"breakthrough_up"|"breakthrough_down"}
+    // Schema is emitted inline (not via ScreenerCondition's `$ref`) and keeps
+    // `tech_values` as a JSON string so the manifest stays OpenAI-function-calling
+    // compatible (no `$defs`/`$ref`, no free-form object).
+    #[serde(default)]
+    #[schemars(schema_with = "conditions_schema")]
     pub conditions: Option<Vec<ScreenerCondition>>,
 
     /// Extra indicator keys to include in each result row (display-only, not used as filters).
@@ -275,27 +325,35 @@ pub async fn screener_search(
         let mut returns: Vec<String> = Vec::new();
 
         for cond in p.conditions.as_deref().unwrap_or(&[]) {
-            if cond.key.is_empty() {
+            let raw_key = cond.key.trim();
+            if raw_key.is_empty() {
                 continue;
             }
-            let key = if cond.key.starts_with("filter_") {
-                cond.key.clone()
+            let key = if raw_key.starts_with("filter_") {
+                raw_key.to_string()
             } else {
-                format!("filter_{}", cond.key)
+                format!("filter_{raw_key}")
             };
             returns.push(key.clone());
             // Build the filter object with the normalised key, forwarding only
-            // the documented fields the screener API accepts.
+            // the documented fields. OpenAI strict mode sends every property,
+            // filling unused ones with empty strings, so treat "" as absent.
             let mut f = serde_json::Map::new();
             f.insert("key".to_string(), serde_json::Value::String(key));
-            if let Some(ref min) = cond.min {
-                f.insert("min".to_string(), serde_json::Value::String(min.clone()));
+            if let Some(min) = cond.min.as_deref().filter(|s| !s.trim().is_empty()) {
+                f.insert(
+                    "min".to_string(),
+                    serde_json::Value::String(min.to_string()),
+                );
             }
-            if let Some(ref max) = cond.max {
-                f.insert("max".to_string(), serde_json::Value::String(max.clone()));
+            if let Some(max) = cond.max.as_deref().filter(|s| !s.trim().is_empty()) {
+                f.insert(
+                    "max".to_string(),
+                    serde_json::Value::String(max.to_string()),
+                );
             }
-            if let Some(ref tech_values) = cond.tech_values {
-                f.insert("tech_values".to_string(), tech_values.clone());
+            if let Some(tech_values) = cond.tech_values.as_ref().and_then(normalize_tech_values) {
+                f.insert("tech_values".to_string(), tech_values);
             }
             filters.push(serde_json::Value::Object(f));
         }
