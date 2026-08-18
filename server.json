@@ -1,7 +1,7 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "com.longbridge/mcp",
-  "description": "US/HK markets — 152 tools: quotes, options, orders, fundamentals, screener, IPO, alerts & DCA",
+  "description": "US/HK markets — 163 tools: quotes, options, orders, fundamentals, screener, IPO, alerts, DCA & grid",
   "version": "0.8.7",
   "repository": {
     "url": "https://github.com/longbridge/longbridge-mcp",
@@ -92,9 +92,9 @@
         }
       },
       "localizedDescriptions": {
-        "en": "Longbridge — official MCP server for the Longbridge brokerage. 152 tools across real-time quotes, options, order routing, fundamentals, stock screener, shareholders, short selling, IPO, calendars, alerts, DCA and portfolio analytics for US / HK markets.",
-        "zh-CN": "长桥证券官方 MCP 服务：152 个工具覆盖美股 / 港股的实时行情、期权、下单路由、基本面、选股器、股东持仓、卖空数据、IPO 打新、财报日历、价格预警、定投计划与组合分析。",
-        "zh-HK": "長橋證券官方 MCP 伺服器：152 個工具覆蓋美股 / 港股的即時行情、期權、下單路由、基本面、選股器、股東持倉、賣空數據、IPO 打新、財報日曆、價格警示、定投計劃與組合分析。"
+        "en": "Longbridge — official MCP server for the Longbridge brokerage. 163 tools across real-time quotes, options, order routing, fundamentals, stock screener, shareholders, short selling, IPO, calendars, alerts, DCA, grid trading and portfolio analytics for US / HK markets.",
+        "zh-CN": "长桥证券官方 MCP 服务：163 个工具覆盖美股 / 港股的实时行情、期权、下单路由、基本面、选股器、股东持仓、卖空数据、IPO 打新、财报日历、价格预警、定投计划、网格交易与组合分析。",
+        "zh-HK": "長橋證券官方 MCP 伺服器：163 個工具覆蓋美股 / 港股的即時行情、期權、下單路由、基本面、選股器、股東持倉、賣空數據、IPO 打新、財報日曆、價格警示、定投計劃、網格交易與組合分析。"
       },
       "icons": [
         {
@@ -138,23 +138,27 @@
           "name": "Hong Kong"
         }
       ],
-      "toolCount": 152,
+      "toolCount": 163,
       "toolCategories": {
         "quote": 32,
-        "fundamental": 24,
-        "trade": 14,
+        "fundamental": 33,
+        "trade": 15,
         "market": 14,
+        "grid": 11,
         "screener": 5,
         "dca": 9,
-        "ipo": 8,
-        "content": 9,
+        "ipo": 7,
+        "content": 7,
         "sharelist": 8,
         "alert": 5,
         "atm": 3,
         "portfolio": 4,
+        "macrodata": 2,
         "search": 2,
         "statement": 2,
         "calendar": 1,
+        "quant": 1,
+        "authenticate": 1,
         "utility": 1
       },
       "authentication": {

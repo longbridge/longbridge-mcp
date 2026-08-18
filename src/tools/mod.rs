@@ -60,6 +60,7 @@ mod calendar;
 mod content;
 mod dca;
 mod fundamental;
+mod grid;
 mod ipo;
 mod macrodata;
 mod market;
@@ -805,6 +806,17 @@ const TOOL_ENDPOINTS: &[(&str, u8)] = &[
     ("dca_stop", 0),
     ("dca_update", 0),
     ("deposits", 0),
+    ("grid_cancel", 0),
+    ("grid_detail", 0),
+    ("grid_list", 0),
+    ("grid_list_by_ids", 0),
+    ("grid_questionnaire", 0),
+    ("grid_replace", 0),
+    ("grid_restart", 0),
+    ("grid_submit", 0),
+    ("grid_suspend", 0),
+    ("grid_symbol_info", 0),
+    ("grid_trigger_history", 0),
     ("ipo_order_detail", 0),
     ("ipo_orders", 0),
     ("ipo_profit_loss", 0),
@@ -3267,6 +3279,210 @@ impl Longbridge {
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
         measured_tool_call("dca_check", || dca::dca_check(&mctx, p)).await
+    }
+
+    /// Pre-trade grid setup info for a symbol (lot sizes, price steps, authorization).
+    #[tool(
+        title = "Grid Symbol Info",
+        annotations(read_only_hint = true, open_world_hint = true),
+        output_schema = schema_for::<output::grid::GridSymbolInfoResponse>(),
+        description = "Pre-trade grid setup info for a security (takes a symbol, not an order_id): security name, last price, board lot sizes (buy/sell), price-step (bid_size) table, and channel/authorization info (strategy grant flag, RTH support, supported settlement currencies). Use before grid_submit to learn the symbol's grid constraints."
+    )]
+    async fn grid_symbol_info(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<grid::GridSymbolParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("grid_symbol_info", || grid::grid_symbol_info(&mctx, p)).await
+    }
+
+    /// List grid trading orders.
+    #[tool(
+        title = "List Grid Orders",
+        annotations(read_only_hint = true, open_world_hint = true),
+        output_schema = schema_for::<output::grid::GridListResponse>(),
+        description = "List grid trading orders. Filter by symbol or comma-joined status (e.g. \"Performing,Suspended\"); supports page/limit and sort_by/sort_order. Returns grid_order[] summaries + has_more."
+    )]
+    async fn grid_list(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<grid::GridListParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("grid_list", || grid::grid_list(&mctx, p)).await
+    }
+
+    /// Fetch grid orders by IDs.
+    #[tool(
+        title = "Get Grid Orders By IDs",
+        annotations(read_only_hint = true, open_world_hint = true),
+        output_schema = schema_for::<output::grid::GridOrdersResponse>(),
+        description = "Fetch specific grid orders by their IDs. Returns grid_orders[] summaries."
+    )]
+    async fn grid_list_by_ids(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<grid::GridIdsParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("grid_list_by_ids", || grid::grid_list_by_ids(&mctx, p)).await
+    }
+
+    /// Grid order detail.
+    #[tool(
+        title = "Grid Order Detail",
+        annotations(read_only_hint = true, open_world_hint = true),
+        output_schema = schema_for::<output::grid::GridOrderDetailResponse>(),
+        description = "Full detail for one grid order: rule parameters, status, embedded child orders (grid_sub_orders) and lifecycle history (grid_order_history). Supports history_id cursor + limit paging."
+    )]
+    async fn grid_detail(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<grid::GridDetailParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("grid_detail", || grid::grid_detail(&mctx, p)).await
+    }
+
+    /// Grid order trigger history.
+    #[tool(
+        title = "Grid Trigger History",
+        annotations(read_only_hint = true, open_world_hint = true),
+        output_schema = schema_for::<output::grid::GridTriggerHistoryResponse>(),
+        description = "Trigger history for one grid order: each triggered child order with price, quantity, executed price/qty, and trigger time. Supports page/limit."
+    )]
+    async fn grid_trigger_history(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<grid::GridTriggerHistoryParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("grid_trigger_history", || {
+            grid::grid_trigger_history(&mctx, p)
+        })
+        .await
+    }
+
+    /// Submit a grid trading order.
+    #[tool(
+        title = "Submit Grid Order",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = true
+        ),
+        output_schema = schema_for::<output::grid::GridSubmitResponse>(),
+        description = "Submit a grid trading order. Requires symbol, settlement_currency, and the grid rule: base/upper/lower price, trigger_price_type (1=spread, 2=percent) with the matching spread/percent up/down, trigger_quantity, upper/lower_limit_quantity, time_in_force (0=Day, 1=GTC, 6=GTD), grid_order_type_up/down (GMO/GLO/GTG), and boundary events (1=ignore, 2=close-at-last). Prices/quantities are decimal strings. Requires the one-time grid_questionnaire consent."
+    )]
+    async fn grid_submit(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<grid::GridSubmitParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("grid_submit", || grid::grid_submit(&mctx, p)).await
+    }
+
+    /// Replace (modify) a grid trading order.
+    #[tool(
+        title = "Replace Grid Order",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = true,
+            open_world_hint = true
+        ),
+        description = "Replace an existing grid order's rule by order_id. Accepts the same grid rule fields as grid_submit. Overwrites the order's entire rule."
+    )]
+    async fn grid_replace(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<grid::GridReplaceParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("grid_replace", || grid::grid_replace(&mctx, p)).await
+    }
+
+    /// Cancel a grid trading order.
+    #[tool(
+        title = "Cancel Grid Order",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = true,
+            open_world_hint = true
+        ),
+        description = "Cancel (terminate) a grid order by order_id."
+    )]
+    async fn grid_cancel(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<grid::GridOrderIdParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("grid_cancel", || grid::grid_cancel(&mctx, p)).await
+    }
+
+    /// Suspend a grid trading order.
+    #[tool(
+        title = "Suspend Grid Order",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = true
+        ),
+        description = "Suspend (pause) a running grid order by order_id. Resume with grid_restart."
+    )]
+    async fn grid_suspend(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<grid::GridOrderIdParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("grid_suspend", || grid::grid_suspend(&mctx, p)).await
+    }
+
+    /// Restart a suspended grid trading order.
+    #[tool(
+        title = "Restart Grid Order",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = true
+        ),
+        description = "Restart (resume) a suspended grid order by order_id."
+    )]
+    async fn grid_restart(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<grid::GridOrderIdParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("grid_restart", || grid::grid_restart(&mctx, p)).await
+    }
+
+    /// Submit the grid strategy risk-disclosure questionnaire.
+    #[tool(
+        title = "Grid Strategy Consent",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = true
+        ),
+        description = "Record the one-time grid strategy risk-disclosure consent required before submitting grid orders. Takes no parameters."
+    )]
+    async fn grid_questionnaire(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<grid::GridQuestionnaireParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("grid_questionnaire", || grid::grid_questionnaire(&mctx, p)).await
     }
 
     /// List community sharelists.

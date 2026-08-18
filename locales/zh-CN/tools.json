@@ -524,6 +524,134 @@
         "symbol": "证券代码，例如 `\"700.HK\"`"
       }
     },
+    "grid_symbol_info": {
+      "title": "网格标的信息",
+      "description": "按 symbol 获取某标的网格下单的盘前设置信息(入参是标的代码,不是订单号):证券名称、最新价、买/卖每手股数、价格档位表(bid_size),以及渠道/授权信息(策略授权标志、是否支持盘前盘后、可用结算货币)。下单前可先查该标的的网格约束。",
+      "properties": {
+        "symbol": "证券代码,例如 \"700.HK\""
+      }
+    },
+    "grid_list": {
+      "title": "网格订单列表",
+      "description": "列出网格交易订单。可按标的或逗号分隔的状态(如 \"Performing,Suspended\")筛选,支持分页与排序。返回 grid_order[] 摘要与 has_more。",
+      "properties": {
+        "symbol": "证券代码,例如 \"700.HK\"",
+        "status": "逗号分隔的状态筛选,如 \"Performing,Suspended\"",
+        "page": "页码(默认 1)",
+        "limit": "每页数量(默认 20)",
+        "sort_by": "排序字段(如 \"created_at\")",
+        "sort_order": "排序方向(\"asc\"/\"desc\")"
+      }
+    },
+    "grid_list_by_ids": {
+      "title": "按 ID 查询网格订单",
+      "description": "按订单 ID 批量获取网格订单,返回 grid_orders[] 摘要。",
+      "properties": {
+        "order_ids": "网格订单号数组,例如 [\"123\",\"456\"]"
+      }
+    },
+    "grid_detail": {
+      "title": "网格订单详情",
+      "description": "单个网格订单的完整详情:规则参数、状态、子订单(grid_sub_orders)与生命周期历史(grid_order_history)。支持 history_id 游标与 limit 分页。",
+      "properties": {
+        "order_id": "网格订单号",
+        "history_id": "分页游标(翻页内嵌触发历史/子订单)",
+        "limit": "每页数量(默认 20)"
+      }
+    },
+    "grid_trigger_history": {
+      "title": "网格触发历史",
+      "description": "单个网格订单的触发历史:每笔被触发的子订单及其价格、数量、成交均价/数量与触发时间。支持 page/limit。",
+      "properties": {
+        "order_id": "网格订单号",
+        "page": "页码(默认 1)",
+        "limit": "每页数量(默认 20)"
+      }
+    },
+    "grid_submit": {
+      "title": "提交网格订单",
+      "description": "提交网格交易订单。需提供 symbol、settlement_currency 及网格规则:基准价/上限价/下限价、trigger_price_type(1=价差,2=百分比)及对应的价差/百分比上下沿、trigger_quantity、上下限数量、time_in_force(0=当日,1=GTC,6=GTD)、grid_order_type_up/down(GMO/GLO/GTG)、边界事件(1=忽略,2=按最新价平仓)。价格/数量为字符串。需先通过 grid_questionnaire 授权。",
+      "properties": {
+        "symbol": "证券代码,例如 \"700.HK\"",
+        "settlement_currency": "结算货币,例如 \"HKD\"",
+        "submitted_base_price": "基准价(网格锚定价,小数字符串)",
+        "upper_limit_price": "上限价(小数字符串)",
+        "lower_limit_price": "下限价(小数字符串)",
+        "trigger_price_type": "触发方式:1=价差,2=百分比",
+        "trigger_spread_up": "向上触发价差(绝对值,配 type=1,小数字符串)",
+        "trigger_spread_down": "向下触发价差(绝对值,配 type=1,小数字符串)",
+        "trigger_percent_up": "向上触发百分比(配 type=2,小数字符串)",
+        "trigger_percent_down": "向下触发百分比(配 type=2,小数字符串)",
+        "multiple_trigger": "同一网格是否允许多次触发",
+        "time_in_force": "有效期:0=当日,1=GTC,6=GTD",
+        "upper_limit_quantity": "触及上限时处理的数量(小数字符串)",
+        "lower_limit_quantity": "触及下限时处理的数量(小数字符串)",
+        "expire_time": "到期时间(unix 秒,配 GTD)",
+        "upper_limit_event": "触及上限时的动作:1=忽略(继续运行),2=按最新价平仓",
+        "lower_limit_event": "触及下限时的动作:1=忽略(继续运行),2=按最新价平仓",
+        "trigger_sell_depth": "卖方盘口深度(-5..5,0=用 grid_order_type_up)",
+        "trigger_buy_depth": "买方盘口深度(-5..5,0=用 grid_order_type_down)",
+        "trigger_quantity": "每次触发数量(小数字符串)",
+        "support_shortsell": "是否允许融券卖出",
+        "rth": "盘中交易时段标志:0/1/2",
+        "grid_order_type_up": "深度为 0 时的卖方订单类型:GMO/GLO/GTG",
+        "grid_order_type_down": "深度为 0 时的买方订单类型:GMO/GLO/GTG"
+      }
+    },
+    "grid_replace": {
+      "title": "修改网格订单",
+      "description": "按 order_id 修改网格订单规则,规则字段同 grid_submit。",
+      "properties": {
+        "order_id": "网格订单号",
+        "submitted_base_price": "基准价(网格锚定价,小数字符串)",
+        "upper_limit_price": "上限价(小数字符串)",
+        "lower_limit_price": "下限价(小数字符串)",
+        "trigger_price_type": "触发方式:1=价差,2=百分比",
+        "trigger_spread_up": "向上触发价差(绝对值,配 type=1,小数字符串)",
+        "trigger_spread_down": "向下触发价差(绝对值,配 type=1,小数字符串)",
+        "trigger_percent_up": "向上触发百分比(配 type=2,小数字符串)",
+        "trigger_percent_down": "向下触发百分比(配 type=2,小数字符串)",
+        "multiple_trigger": "同一网格是否允许多次触发",
+        "time_in_force": "有效期:0=当日,1=GTC,6=GTD",
+        "upper_limit_quantity": "触及上限时处理的数量(小数字符串)",
+        "lower_limit_quantity": "触及下限时处理的数量(小数字符串)",
+        "expire_time": "到期时间(unix 秒,配 GTD)",
+        "upper_limit_event": "触及上限时的动作:1=忽略(继续运行),2=按最新价平仓",
+        "lower_limit_event": "触及下限时的动作:1=忽略(继续运行),2=按最新价平仓",
+        "trigger_sell_depth": "卖方盘口深度(-5..5,0=用 grid_order_type_up)",
+        "trigger_buy_depth": "买方盘口深度(-5..5,0=用 grid_order_type_down)",
+        "trigger_quantity": "每次触发数量(小数字符串)",
+        "support_shortsell": "是否允许融券卖出",
+        "rth": "盘中交易时段标志:0/1/2",
+        "grid_order_type_up": "深度为 0 时的卖方订单类型:GMO/GLO/GTG",
+        "grid_order_type_down": "深度为 0 时的买方订单类型:GMO/GLO/GTG"
+      }
+    },
+    "grid_cancel": {
+      "title": "取消网格订单",
+      "description": "按 order_id 取消(终止)网格订单。",
+      "properties": {
+        "order_id": "网格订单号"
+      }
+    },
+    "grid_suspend": {
+      "title": "暂停网格订单",
+      "description": "按 order_id 暂停运行中的网格订单,可用 grid_restart 恢复。",
+      "properties": {
+        "order_id": "网格订单号"
+      }
+    },
+    "grid_restart": {
+      "title": "恢复网格订单",
+      "description": "按 order_id 恢复已暂停的网格订单。",
+      "properties": {
+        "order_id": "网格订单号"
+      }
+    },
+    "grid_questionnaire": {
+      "title": "网格策略授权",
+      "description": "记录提交网格订单前所需的一次性策略风险披露同意,无需参数。"
+    },
     "history_candlesticks_by_date": {
       "title": "历史 K 线（按日期）",
       "description": "按日期区间获取历史 K 线（OHLCV）数据。period：1m/5m/15m/30m/60m/day/week/month/year",
