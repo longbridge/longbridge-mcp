@@ -21,7 +21,7 @@ pub struct SignalsParam {
     pub strategy_id: Option<String>,
     /// Filter by strategy name. If omitted, returns signals from all strategies.
     pub strategy_name: Option<String>,
-    /// Filter by the catalyst name that triggered the signal. If omitted, signals with any catalyst name are returned.
+    /// Filter by the name of the factor that triggered the signal, e.g. "EARNINGS_RELEASED" or "macd_12_26_9" — not the display label returned in key_catalyst. If omitted, signals with any catalyst name are returned.
     pub catalyst_name: Option<String>,
     /// Filter by the catalyst type that triggered the signal, e.g. "News", "Fundamental", "Technical". If omitted, signals with any catalyst type are returned.
     pub catalyst_type: Option<String>,

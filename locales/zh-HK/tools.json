@@ -1321,7 +1321,7 @@
         "symbol_name": "按證券代碼篩選，例如 `AAPL.US` 或 `700.HK`；省略則返回全部股票",
         "strategy_id": "按策略 id 篩選，例如 buffett-value。優先於已廢棄的 strategy_name，兩者同時傳入時以此為準",
         "strategy_name": "按策略名稱篩選；省略則返回全部策略的命中結果",
-        "catalyst_name": "按觸發訊號的催化劑名稱篩選；省略則不限催化劑名稱",
+        "catalyst_name": "按觸發訊號的因子名稱篩選，例如 `EARNINGS_RELEASED`、`macd_12_26_9`——不是回傳結果裡 `key_catalyst` 的展示文案；省略則不限",
         "catalyst_type": "按觸發訊號的催化劑類型篩選，例如 News、Fundamental、Technical；省略則不限催化劑類型",
         "start_time": "篩選此時間之後創建的命中記錄，ISO 8601 帶時區格式，例如 2024-01-15T10:30:00Z；省略則不限下限",
         "end_time": "篩選此時間之前創建的命中記錄，ISO 8601 帶時區格式；省略則不限上限",

@@ -36,7 +36,9 @@ pub struct SignalItem {
     /// ID of the fact that triggered the signal — look it up with
     /// `security_facts`.
     pub key_fact_id: String,
-    /// Display name of the catalyst that triggered the signal.
+    /// Display label of the catalyst that triggered the signal, e.g.
+    /// "Q1 Revenue Surge". This is prose for display — the `catalyst_name`
+    /// filter on `signals` matches the underlying factor name instead.
     pub key_catalyst: String,
     /// Price the analysis was based on.
     pub analysis_price: f64,
@@ -51,10 +53,9 @@ pub struct SignalItem {
     pub outlook: String,
     /// Localized outlook label.
     pub outlook_desc: String,
-    /// Risk level, e.g. "R4".
-    pub risk_level: String,
-    /// Signal status.
-    pub status: i32,
+    /// Where the signal is in its lifecycle: "Pending", "Active", "Deleted",
+    /// "AiFailed", "FilteredByManual" or "AiSubmitFailed".
+    pub status: String,
     /// Creation time (RFC3339).
     pub created_at: String,
     /// Last update time (RFC3339).
@@ -86,8 +87,7 @@ impl From<longbridge::signal::Signal> for SignalItem {
             optimistic_price: s.optimistic_price,
             outlook: s.outlook.to_string(),
             outlook_desc: s.outlook_desc,
-            risk_level: s.risk_level,
-            status: s.status,
+            status: format!("{:?}", s.status),
             created_at: s.created_at.format(&Rfc3339).unwrap_or_default(),
             updated_at: s.updated_at.format(&Rfc3339).unwrap_or_default(),
             analysis: None,
@@ -102,5 +102,5 @@ pub struct SignalsResponse {
     pub signals: Vec<SignalItem>,
     /// Total number of signals matching the filters — page through the rest
     /// with `offset`.
-    pub total: i64,
+    pub total: i32,
 }
