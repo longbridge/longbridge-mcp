@@ -92,13 +92,13 @@ fn unwrap_embedded_json(raw: &str) -> serde_json::Value {
     serde_json::from_str(raw).unwrap_or_else(|_| serde_json::Value::String(raw.to_owned()))
 }
 
-/// Unwrap the `{tag, value}` documents `nl_info.summary` / `nl_info.invest_anal`
-/// carry as strings, in place.
+/// Unwrap the `{tag, value}` documents `nl_info.summary`, `invest_anal` and
+/// `eli_explain` carry as strings, in place.
 fn unwrap_fact_nl_info(fact: &mut serde_json::Value) {
     let Some(nl_info) = fact.get_mut("nl_info") else {
         return;
     };
-    for field in ["summary", "invest_anal"] {
+    for field in ["summary", "invest_anal", "eli_explain"] {
         if let Some(raw) = nl_info.get(field).and_then(|v| v.as_str()) {
             let unwrapped = unwrap_embedded_json(raw);
             nl_info[field] = unwrapped;
