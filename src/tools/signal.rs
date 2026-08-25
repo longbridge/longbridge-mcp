@@ -15,7 +15,7 @@ use crate::tools::tool_json;
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct SignalsParam {
-    /// Filter by stock symbol in ticker.region format, e.g. AAPL.US or 700.HK. If omitted, returns signals for all symbols.
+    /// Filter by security symbol, e.g. "AAPL.US" or "700.HK". If omitted, returns signals for all symbols.
     pub symbol_name: Option<String>,
     /// Filter by strategy id (e.g., "buffett-value"). Preferred over the deprecated strategy_name; takes precedence when both are provided.
     pub strategy_id: Option<String>,
@@ -45,7 +45,7 @@ pub struct SignalIdParam {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct SecurityFactsParam {
-    /// The security symbol to query, formatted as ticker.region (e.g., AAPL.US or 700.HK).
+    /// Security symbol to query, e.g. "AAPL.US" or "700.HK".
     pub symbol: String,
     /// The optional start time of the fact query, formatted as 2006-01-02T15:04:05Z in UTC Timezone. If left empty, the query will include the earliest available data.
     pub begin_time: Option<String>,
@@ -84,13 +84,26 @@ pub async fn signals(
     })
 }
 
-/// The strategy analysis arrives as a JSON document embedded in a string. Hand
-/// it to the caller as real JSON so it can be read without a second parse; a
-/// payload that does not parse is passed through as the original string rather
-/// than dropped.
-fn parse_analysis(json_data: &str) -> serde_json::Value {
-    serde_json::from_str(json_data)
-        .unwrap_or_else(|_| serde_json::Value::String(json_data.to_owned()))
+/// Several signal fields arrive as a JSON document embedded in a string. Hand
+/// them to the caller as real JSON so they can be read without a second parse;
+/// a payload that does not parse is passed through as the original string
+/// rather than dropped.
+fn unwrap_embedded_json(raw: &str) -> serde_json::Value {
+    serde_json::from_str(raw).unwrap_or_else(|_| serde_json::Value::String(raw.to_owned()))
+}
+
+/// Unwrap the `{tag, value}` documents `nl_info.summary` / `nl_info.invest_anal`
+/// carry as strings, in place.
+fn unwrap_fact_nl_info(fact: &mut serde_json::Value) {
+    let Some(nl_info) = fact.get_mut("nl_info") else {
+        return;
+    };
+    for field in ["summary", "invest_anal"] {
+        if let Some(raw) = nl_info.get(field).and_then(|v| v.as_str()) {
+            let unwrapped = unwrap_embedded_json(raw);
+            nl_info[field] = unwrapped;
+        }
+    }
 }
 
 /// `GET /v1/signals/{signal_id}` — one signal with its full analysis.
@@ -101,7 +114,7 @@ pub async fn signal_detail(
     let ctx = SignalContext::new(mctx.create_config());
     let signal = ctx.signal(p.signal_id).await.map_err(Error::longbridge)?;
 
-    let analysis = parse_analysis(&signal.json_data);
+    let analysis = unwrap_embedded_json(&signal.json_data);
     let mut item = SignalItem::from(signal);
     item.analysis = Some(analysis);
     tool_json(&item)
@@ -123,6 +136,12 @@ pub async fn security_facts(
         .await
         .map_err(Error::longbridge)?;
 
+    let mut facts = serde_json::to_value(facts).map_err(Error::Serialize)?;
+    if let Some(list) = facts.as_array_mut() {
+        for fact in list {
+            unwrap_fact_nl_info(fact);
+        }
+    }
     tool_json(&serde_json::json!({ "facts": facts }))
 }
 
@@ -132,17 +151,38 @@ mod tests {
 
     #[test]
     fn analysis_is_unwrapped_into_json() {
-        let v = parse_analysis(r#"{"total_score":81,"outlook":"Bearish"}"#);
+        let v = unwrap_embedded_json(r#"{"total_score":81,"outlook":"Bearish"}"#);
         assert_eq!(v["total_score"], 81, "embedded document must be parsed");
     }
 
     #[test]
     fn unparsable_analysis_is_kept_as_a_string() {
-        let v = parse_analysis("not json");
+        let v = unwrap_embedded_json("not json");
         assert_eq!(
             v,
             serde_json::Value::String("not json".into()),
             "an unparsable payload must survive rather than be dropped"
+        );
+    }
+
+    #[test]
+    fn fact_nl_info_documents_are_unwrapped() {
+        let mut fact = serde_json::json!({
+            "fact_id": "technical_rsi_14_short_1",
+            "nl_info": {
+                "title": "RSI_14",
+                "summary": r#"[{"tag":"RSI","value":"balanced"}]"#,
+                "invest_anal": "not json",
+            }
+        });
+        unwrap_fact_nl_info(&mut fact);
+        assert_eq!(
+            fact["nl_info"]["summary"][0]["tag"], "RSI",
+            "summary must become a real array"
+        );
+        assert_eq!(
+            fact["nl_info"]["invest_anal"], "not json",
+            "an unparsable field must survive as its original string"
         );
     }
 }
