@@ -71,6 +71,7 @@ mod quote;
 mod screener;
 mod search;
 mod sharelist;
+mod signal;
 mod statement;
 mod support;
 mod trade;
@@ -757,6 +758,7 @@ const TOOL_ENDPOINTS: &[(&str, u8)] = &[
     ("screener_recommend_strategies", V2),
     ("screener_strategy", V2),
     ("screener_user_strategies", V2),
+    ("security_facts", V2),
     ("security_list", V2),
     ("shareholder", V2),
     ("shareholder_detail", V2),
@@ -770,6 +772,8 @@ const TOOL_ENDPOINTS: &[(&str, u8)] = &[
     ("sharelist_sort", V2),
     ("short_margin", V2),
     ("short_trades", V2),
+    ("signal_detail", V2),
+    ("signals", V2),
     ("statement_export", V2),
     ("statement_list", V2),
     ("static_info", V2),
@@ -2848,6 +2852,68 @@ impl Longbridge {
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
         measured_tool_call("alert_disable", || alert::alert_disable(&mctx, p)).await
+    }
+
+    /// Query strategy signals.
+    #[tool(
+        title = "Signals",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = true
+        ),
+        output_schema = schema_for::<output::signal::SignalsResponse>(),
+        description = "Query strategy signals — a strategy's take on a security, triggered by a catalyst. Filter by symbol, strategy, catalyst and time range; page with limit/offset. Returns each signal's title, summary, outlook, risk level and conservative/benchmark/optimistic target prices, plus the total for paging. The full strategy analysis is omitted here — fetch it with signal_detail."
+    )]
+    async fn signals(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<signal::SignalsParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("signals", || signal::signals(&mctx, p)).await
+    }
+
+    /// Get one signal by ID.
+    #[tool(
+        title = "Signal Detail",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = true
+        ),
+        output_schema = schema_for::<output::signal::SignalItem>(),
+        description = "Get one signal by ID (from `signals`). Same fields as the list, plus `analysis` — the full strategy analysis: fit scores, valuation scenarios, evidence sources and related fact IDs."
+    )]
+    async fn signal_detail(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<signal::SignalIdParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("signal_detail", || signal::signal_detail(&mctx, p)).await
+    }
+
+    /// Get the fact (catalyst) events for a symbol.
+    #[tool(
+        title = "Security Facts",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = true
+        ),
+        description = "List a security's fact (catalyst) events — anomaly detections, factor readings, data sources and natural-language summaries — filtered by time range and count. Facts are what strategies react to: a signal names its trigger in key_fact_id."
+    )]
+    async fn security_facts(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<signal::SecurityFactsParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("security_facts", || signal::security_facts(&mctx, p)).await
     }
 
     /// Get news for a symbol.

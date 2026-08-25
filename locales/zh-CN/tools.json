@@ -1313,6 +1313,38 @@
       "properties": {
         "auth_code": "用户在 https://open.longbridge.com/connect 生成的一次性 OAuth 授权码，5 分钟内有效且仅可使用一次。"
       }
+    },
+    "signals": {
+      "title": "策略信号",
+      "description": "查询策略信号 —— 策略基于催化剂对某只证券给出的判断。支持按股票代码、策略、催化剂和时间范围筛选，用 limit/offset 分页。返回标题、摘要、看法、风险等级与保守/基准/乐观目标价，以及用于翻页的 total。完整策略分析请用 signal_detail 获取",
+      "properties": {
+        "symbol_name": "按股票代码筛选，格式为 ticker.region，例如 AAPL.US 或 700.HK；省略则返回全部股票",
+        "strategy_id": "按策略 id 筛选，例如 buffett-value。优先于已废弃的 strategy_name，两者同时传入时以此为准",
+        "strategy_name": "按策略名称筛选；省略则返回全部策略的命中结果",
+        "catalyst_name": "按触发信号的催化剂名称筛选；省略则不限催化剂名称",
+        "catalyst_type": "按触发信号的催化剂类型筛选，例如 News、Fundamental、Technical；省略则不限催化剂类型",
+        "start_time": "筛选此时间之后创建的命中记录，ISO 8601 带时区格式，例如 2024-01-15T10:30:00Z；省略则不限下限",
+        "end_time": "筛选此时间之前创建的命中记录，ISO 8601 带时区格式；省略则不限上限",
+        "limit": "返回结果数量上限，默认 20",
+        "offset": "分页跳过的条数，默认 0"
+      }
+    },
+    "signal_detail": {
+      "title": "信号详情",
+      "description": "按 ID 获取单条信号（ID 来自 signals）。字段与列表一致，另含 analysis —— 完整策略分析：契合度评分、估值情景、证据来源与相关事实 ID",
+      "properties": {
+        "signal_id": "信号 ID，例如 sign_992_1a00c9425c3_48ab，可从 signals 获取"
+      }
+    },
+    "security_facts": {
+      "title": "证券事实（催化剂）",
+      "description": "查询指定证券的事实事件列表 —— 异动检测、因子信息、数据来源及自然语言摘要，支持按时间范围和数量上限筛选。事实是策略的触发源：信号的 key_fact_id 即指向触发它的事实",
+      "properties": {
+        "symbol": "要查询的证券代码，格式为 ticker.region，例如 AAPL.US 或 700.HK",
+        "begin_time": "查询起始时间，UTC 时区，格式为 2006-01-02T15:04:05Z；留空则从最早可用数据开始",
+        "end_time": "查询结束时间，UTC 时区，格式为 2006-01-02T15:04:05Z；留空则返回最新数据",
+        "limit": "返回事实数量上限。时间范围内的事实超出该上限时，仅返回最新的 limit 条。默认 100"
+      }
     }
   }
 }

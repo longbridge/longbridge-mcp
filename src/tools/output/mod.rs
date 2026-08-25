@@ -16,6 +16,7 @@ pub mod grid;
 pub mod macrodata;
 pub mod market;
 pub mod quote;
+pub mod signal;
 pub mod social;
 pub mod us_market;
 
