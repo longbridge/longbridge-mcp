@@ -278,6 +278,19 @@
         "remark": "委托备注（最多 255 字符）"
       }
     },
+    "submit_multileg_order": {
+      "title": "提交组合期权委托",
+      "description": "提交多腿期权组合委托，各腿作为一个策略单一起成交或挂单。strategy：CoveredCall（备兑看涨）/ CoveredPut（备兑看跌）/ VerticalCallSpread（垂直看涨价差）/ VerticalPutSpread（垂直看跌价差）/ Collar（领口）/ Straddle（跨式）/ Strangle（宽跨式）；side：Buy/Sell（整个策略的方向）；order_type：LO（需 submitted_price，为组合净价）或 MO；legs[]：{symbol, ratio_quantity}，按策略顺序排列，仅接受期权代码；ratio_quantity 恒为正数——每条腿的买卖方向由 strategy 与 side 共同决定",
+      "properties": {
+        "strategy": "组合策略，决定所需腿数与每条腿的方向：`CoveredCall`（备兑看涨）/ `CoveredPut`（备兑看跌）/ `VerticalCallSpread`（垂直看涨价差）/ `VerticalPutSpread`（垂直看跌价差）/ `Collar`（领口）/ `Straddle`（跨式）/ `Strangle`（宽跨式）",
+        "side": "买卖方向：`Buy`（买入）或 `Sell`（卖出），指整个策略的方向",
+        "order_type": "委托类型：`LO`（限价，需 `submitted_price`）或 `MO`（市价）",
+        "submitted_quantity": "委托组数（每组为一套按 `legs` 比例构成的腿）",
+        "legs": "组合的各条腿，按策略顺序排列，仅接受期权代码",
+        "submitted_price": "整个组合的净限价，`LO` 必填",
+        "remark": "委托备注（最多 255 字符）"
+      }
+    },
     "ah_premium": {
       "title": "A/H 溢价",
       "description": "获取 A/H 股溢价历史 K 线数据，返回 items[]{timestamp, open, high, low, close}，表示溢价百分比",
@@ -327,7 +340,7 @@
     },
     "alert_list": {
       "title": "价格预警列表",
-      "description": "获取所有已配置的价格预警，返回 lists[]{counter_id, indicators[]{id, condition, price, frequency, enabled, triggered_at}}"
+      "description": "获取所有已配置的价格预警，返回 lists[]{symbol, indicators[]{id, condition, price, frequency, enabled, triggered_at}}"
     },
     "anomaly": {
       "title": "市场异动",

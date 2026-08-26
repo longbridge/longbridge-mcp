@@ -821,6 +821,7 @@ const TOOL_ENDPOINTS: &[(&str, u8)] = &[
     ("ipo_orders", 0),
     ("ipo_profit_loss", 0),
     ("replace_order", 0),
+    ("submit_multileg_order", 0),
     ("submit_order", 0),
     ("withdrawals", 0),
     // Reverse-auth tool — only surfaced on the unauthenticated `/agent`
@@ -1130,7 +1131,7 @@ use crate::tools::quote::{
 };
 use crate::tools::trade::{
     CashFlowParam, EstimateMaxQtyParam, HistoryOrdersParam, OrderIdParam, ReplaceOrderParam,
-    SubmitOrderParam,
+    SubmitMultiLegOrderParam, SubmitOrderParam,
 };
 
 #[tool_router(vis = "pub(crate)")]
@@ -2013,6 +2014,30 @@ impl Longbridge {
         measured_tool_call("submit_order", || trade::submit_order(&mctx, p)).await
     }
 
+    /// Submit a multi-leg option combination order.
+    #[tool(
+        title = "Submit Multi-Leg Order",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false,
+            open_world_hint = true
+        ),
+        output_schema = schema_for::<output::OrderIdResponse>(),
+        description = "Submit a multi-leg option combination order; all legs fill or rest together as one strategy order. strategy: CoveredCall / CoveredPut / VerticalCallSpread / VerticalPutSpread / Collar / Straddle / Strangle. side: Buy/Sell (direction of the whole strategy). order_type: LO (needs submitted_price, a net price for the combination) or MO. legs[]: {symbol, ratio_quantity} in strategy order, option symbols only; ratio_quantity is always positive — each leg's buy/sell direction is implied by strategy plus side."
+    )]
+    async fn submit_multileg_order(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<SubmitMultiLegOrderParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("submit_multileg_order", || {
+            trade::submit_multileg_order(&mctx, p)
+        })
+        .await
+    }
+
     /// Replace (modify) an order.
     #[tool(
         title = "Replace Order",
@@ -2758,7 +2783,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::social::AlertListResponse>(),
-        description = "Get all configured price alerts. Returns lists[]{counter_id, indicators[]{id, indicator_id, condition, price, frequency, enabled, triggered_at}}."
+        description = "Get all configured price alerts. Returns lists[]{symbol, indicators[]{id, indicator_id, condition, price, frequency, enabled, triggered_at}}."
     )]
     async fn alert_list(
         &self,
@@ -5022,6 +5047,7 @@ mod tests {
             "dca_update",
             // Order write operations.
             "submit_order",
+            "submit_multileg_order",
             "cancel_order",
             "replace_order",
             // IPO order management.

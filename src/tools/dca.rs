@@ -5,7 +5,6 @@ use rmcp::model::CallToolResult;
 use rmcp::schemars::JsonSchema;
 use rmcp::serde::Deserialize;
 
-use crate::counter::symbol_to_counter_id;
 use crate::tools::support::http_client::{http_get_tool, http_get_tool_unix, http_post_tool};
 use crate::tools::support::tolerant::{
     tolerant_option_bool, tolerant_option_u32, tolerant_vec_string,
@@ -99,14 +98,13 @@ pub async fn dca_list(
     let client = mctx.create_http_client();
     let page = p.page.unwrap_or(1).to_string();
     let limit = p.limit.unwrap_or(20).to_string();
-    let cid = p.symbol.as_deref().map(symbol_to_counter_id);
 
     let mut params: Vec<(&str, &str)> = vec![("page", &page), ("limit", &limit)];
     if let Some(ref s) = p.status {
         params.push(("status", s.as_str()));
     }
-    if let Some(ref c) = cid {
-        params.push(("counter_id", c.as_str()));
+    if let Some(ref sym) = p.symbol {
+        params.push(("symbol", sym.as_str()));
     }
     http_get_tool_unix(
         &client,
@@ -122,7 +120,6 @@ pub async fn dca_create(
     p: DcaCreateParam,
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
-    let cid = symbol_to_counter_id(&p.symbol);
     let allow_margin = if p.allow_margin.unwrap_or(false) {
         1
     } else {
@@ -130,7 +127,7 @@ pub async fn dca_create(
     };
 
     let mut body = serde_json::json!({
-        "counter_id": cid,
+        "symbol": p.symbol,
         "per_invest_amount": p.amount,
         "invest_frequency": p.frequency,
         "allow_margin_finance": allow_margin,
@@ -219,10 +216,9 @@ pub async fn dca_stats(
     p: DcaStatsParam,
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
-    let cid = p.symbol.as_deref().map(symbol_to_counter_id);
     let mut params: Vec<(&str, &str)> = Vec::new();
-    if let Some(ref c) = cid {
-        params.push(("counter_id", c.as_str()));
+    if let Some(ref sym) = p.symbol {
+        params.push(("symbol", sym.as_str()));
     }
     http_get_tool(&client, "/v1/dailycoins/statistic", &params).await
 }
@@ -232,7 +228,6 @@ pub async fn dca_check(
     p: DcaCheckParam,
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
-    let cids: Vec<String> = p.symbols.iter().map(|s| symbol_to_counter_id(s)).collect();
-    let body = serde_json::json!({ "counter_ids": cids });
+    let body = serde_json::json!({ "symbols": p.symbols });
     http_post_tool(&client, "/v1/dailycoins/batch-check-support", body).await
 }

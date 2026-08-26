@@ -6,7 +6,6 @@ use rmcp::model::CallToolResult;
 use rmcp::schemars::JsonSchema;
 use rmcp::serde::Deserialize;
 
-use crate::counter::symbol_to_counter_id;
 use crate::error::Error;
 use crate::tools::output;
 use crate::tools::support::http_client::{http_get_tool, http_get_tool_unix};
@@ -871,7 +870,6 @@ pub async fn short_positions(
     p: ShortPositionsParam,
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
-    let cid = symbol_to_counter_id(&p.symbol);
     let count = p.count.unwrap_or(20).clamp(1, 100);
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -880,7 +878,7 @@ pub async fn short_positions(
         .to_string();
     let page_size = count.to_string();
     let params = [
-        ("counter_id", cid.as_str()),
+        ("symbol", p.symbol.as_str()),
         ("last_timestamp", now.as_str()),
         ("page_size", page_size.as_str()),
     ];
@@ -966,8 +964,7 @@ pub async fn option_volume(
     p: OptionVolumeParam,
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
-    let cid = symbol_to_counter_id(&p.symbol);
-    let params = [("underlying_counter_id", cid.as_str())];
+    let params = [("symbol", p.symbol.as_str())];
     http_get_tool(&client, "/v1/quote/option-volume-stats", &params).await
 }
 
@@ -976,7 +973,6 @@ pub async fn option_volume_daily(
     p: OptionVolumeDailyParam,
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
-    let cid = symbol_to_counter_id(&p.symbol);
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -984,7 +980,7 @@ pub async fn option_volume_daily(
         .to_string();
     let line_num = p.count.unwrap_or(20).to_string();
     let params = [
-        ("counter_id", cid.as_str()),
+        ("symbol", p.symbol.as_str()),
         ("timestamp", now.as_str()),
         ("line_num", line_num.as_str()),
         ("direction", "1"),

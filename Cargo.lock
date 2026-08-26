@@ -1491,7 +1491,7 @@ checksum = "0ceec5bc11778974d1bcb055b18002eba7f4b3518b6a0081b3af5f21666da9ad"
 [[package]]
 name = "longbridge"
 version = "4.5.0"
-source = "git+https://github.com/longbridge/openapi.git?branch=main#32cb424b58745bdfd832d4196cbbe2842c9ea9c0"
+source = "git+https://github.com/longbridge/openapi.git?branch=feat%2Fremove-counter-id-conversion#a97fd93dae8157c6fafe9efc3dd5864c5d2114b8"
 dependencies = [
  "anyhow",
  "bitflags 2.13.1",
@@ -1527,7 +1527,7 @@ dependencies = [
 [[package]]
 name = "longbridge-candlesticks"
 version = "4.5.0"
-source = "git+https://github.com/longbridge/openapi.git?branch=main#32cb424b58745bdfd832d4196cbbe2842c9ea9c0"
+source = "git+https://github.com/longbridge/openapi.git?branch=feat%2Fremove-counter-id-conversion#a97fd93dae8157c6fafe9efc3dd5864c5d2114b8"
 dependencies = [
  "bitflags 2.13.1",
  "num-traits",
@@ -1539,7 +1539,7 @@ dependencies = [
 [[package]]
 name = "longbridge-geo"
 version = "4.5.0"
-source = "git+https://github.com/longbridge/openapi.git?branch=main#32cb424b58745bdfd832d4196cbbe2842c9ea9c0"
+source = "git+https://github.com/longbridge/openapi.git?branch=feat%2Fremove-counter-id-conversion#a97fd93dae8157c6fafe9efc3dd5864c5d2114b8"
 dependencies = [
  "reqwest 0.12.28",
 ]
@@ -1547,7 +1547,7 @@ dependencies = [
 [[package]]
 name = "longbridge-httpcli"
 version = "4.5.0"
-source = "git+https://github.com/longbridge/openapi.git?branch=main#32cb424b58745bdfd832d4196cbbe2842c9ea9c0"
+source = "git+https://github.com/longbridge/openapi.git?branch=feat%2Fremove-counter-id-conversion#a97fd93dae8157c6fafe9efc3dd5864c5d2114b8"
 dependencies = [
  "dotenv",
  "eventsource-stream",
@@ -1602,7 +1602,7 @@ dependencies = [
 [[package]]
 name = "longbridge-oauth"
 version = "4.5.0"
-source = "git+https://github.com/longbridge/openapi.git?branch=main#32cb424b58745bdfd832d4196cbbe2842c9ea9c0"
+source = "git+https://github.com/longbridge/openapi.git?branch=feat%2Fremove-counter-id-conversion#a97fd93dae8157c6fafe9efc3dd5864c5d2114b8"
 dependencies = [
  "dirs",
  "futures-util",
@@ -1619,7 +1619,7 @@ dependencies = [
 [[package]]
 name = "longbridge-proto"
 version = "4.5.0"
-source = "git+https://github.com/longbridge/openapi.git?branch=main#32cb424b58745bdfd832d4196cbbe2842c9ea9c0"
+source = "git+https://github.com/longbridge/openapi.git?branch=feat%2Fremove-counter-id-conversion#a97fd93dae8157c6fafe9efc3dd5864c5d2114b8"
 dependencies = [
  "prost",
  "serde",
@@ -1628,7 +1628,7 @@ dependencies = [
 [[package]]
 name = "longbridge-wscli"
 version = "4.5.0"
-source = "git+https://github.com/longbridge/openapi.git?branch=main#32cb424b58745bdfd832d4196cbbe2842c9ea9c0"
+source = "git+https://github.com/longbridge/openapi.git?branch=feat%2Fremove-counter-id-conversion#a97fd93dae8157c6fafe9efc3dd5864c5d2114b8"
 dependencies = [
  "byteorder",
  "flate2",

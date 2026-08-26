@@ -8,7 +8,6 @@
 //! shapes mirror the post-transform JSON produced by `http_get_tool`:
 //!
 //! - object keys are camelCase → snake_case
-//! - `counter_id` → `symbol` (string), `counter_ids` → `symbols`
 //! - `*_at` integer / `OffsetDateTime` timestamps → RFC3339 `String`
 //! - the `unix_paths` arg of `http_get_tool_unix` rewrites those unix-epoch
 //!   integer fields into RFC3339 `String`
@@ -526,7 +525,7 @@ pub struct IndustryValuationResponse {
 /// Subset of documented fields; upstream may return more.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct IndustryValuationItem {
-    /// Security symbol (transformed from `counter_id`).
+    /// Security symbol, e.g. `"AAPL.US"`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub symbol: Option<String>,
     /// Display name.
@@ -952,10 +951,9 @@ pub struct EvaluateHistoryItem {
 /// Returned by `institution_rating_industry_rank`. Peers ranked by analyst
 /// ratings.
 ///
-/// The tool description says `list[]`, while the implementation transforms a
-/// top-level `items[]` array (rewriting `counter_id` → `symbol`). Both names
-/// are modelled so the schema matches whichever the upstream emits. Subset of
-/// documented fields; upstream may return more.
+/// The tool description says `list[]`, while upstream emits a top-level
+/// `items[]` array. Both names are modelled so the schema matches whichever
+/// the upstream emits. Subset of documented fields; upstream may return more.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct InstitutionRatingIndustryRankResponse {
     /// Ranked peers (description's documented key).
@@ -971,7 +969,7 @@ pub struct InstitutionRatingIndustryRankResponse {
 /// Subset of documented fields; upstream may return more.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct InstitutionRatingIndustryRankItem {
-    /// Security symbol (transformed from `counter_id`).
+    /// Security symbol, e.g. `"AAPL.US"`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub symbol: Option<String>,
     /// Display name.
@@ -1102,7 +1100,8 @@ pub struct IndustryPeersNode {
     /// Node name.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
-    /// Node identifier (transformed from `counter_id`).
+    /// Node identifier, a BK counter_id such as `"BK/US/IN00258"`. Pass it
+    /// back to `industry_peers` to walk into the sub-sector.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub counter_id: Option<String>,
     /// Number of stocks in this sub-sector.
@@ -1307,7 +1306,7 @@ pub struct ValuationComparisonResponse {
 /// Subset of documented fields; upstream may return more.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct ValuationComparisonItem {
-    /// Security symbol (transformed from `counter_id`).
+    /// Security symbol, e.g. `"AAPL.US"`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub symbol: Option<String>,
     /// Display name.

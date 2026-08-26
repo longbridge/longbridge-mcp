@@ -1,5 +1,4 @@
 mod auth;
-mod counter;
 mod error;
 mod logging;
 mod metrics;

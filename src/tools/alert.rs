@@ -3,7 +3,6 @@ use rmcp::model::CallToolResult;
 use rmcp::schemars::JsonSchema;
 use rmcp::serde::Deserialize;
 
-use crate::counter::symbol_to_counter_id;
 use crate::tools::support::http_client::{http_delete_tool, http_get_tool, http_post_tool};
 use crate::tools::tool_json;
 
@@ -35,7 +34,6 @@ pub async fn alert_add(
     p: AlertAddParam,
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
-    let cid = symbol_to_counter_id(&p.symbol);
     let indicator_id: i32 = match p.condition.as_str() {
         "percent_fall" => 4,
         "percent_rise" => 3,
@@ -53,7 +51,7 @@ pub async fn alert_add(
         "price"
     };
     let body = serde_json::json!({
-        "counter_id": cid,
+        "symbol": p.symbol,
         "indicator_id": indicator_id.to_string(),
         "value_map": { setting_key: p.price },
         "frequency": freq,
@@ -121,7 +119,6 @@ async fn alert_set_enabled(
         .unwrap_or_default();
 
     for stock in &stocks {
-        let counter_id = stock["counter_id"].as_str().unwrap_or("");
         if let Some(indicators) = stock["indicators"].as_array() {
             for ind in indicators {
                 let ind_id = ind["id"]
@@ -131,7 +128,6 @@ async fn alert_set_enabled(
                 if ind_id == id_num {
                     let body = serde_json::json!({
                         "id": ind_id,
-                        "counter_id": counter_id,
                         "indicator_id": ind["indicator_id"].as_str().unwrap_or("1"),
                         "value_map": ind["value_map"],
                         "frequency": ind["frequency"],

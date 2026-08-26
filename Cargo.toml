@@ -4,8 +4,10 @@ version = "0.9.0"
 edition = "2024"
 
 [dependencies]
-# TODO: switch back to crates.io after the next openapi release
-longbridge = { git = "https://github.com/longbridge/openapi.git", branch = "main" }
+# TODO: switch back to crates.io after the next openapi release. The branch
+# carries the symbol-based (counter-id-free) request contract; move back to
+# `main` once it lands there.
+longbridge = { git = "https://github.com/longbridge/openapi.git", branch = "feat/remove-counter-id-conversion" }
 rust_decimal = "1"
 rmcp = { version = "1.4", features = [
     "server",

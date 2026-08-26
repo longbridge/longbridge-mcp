@@ -278,6 +278,19 @@
         "remark": "委託備註（最多 255 字符）"
       }
     },
+    "submit_multileg_order": {
+      "title": "提交組合期權委託",
+      "description": "提交多腿期權組合委託，各腿作為一個策略單一起成交或掛單。strategy：CoveredCall（備兌認購）/ CoveredPut（備兌認沽）/ VerticalCallSpread（垂直認購價差）/ VerticalPutSpread（垂直認沽價差）/ Collar（領口）/ Straddle（跨式）/ Strangle（寬跨式）；side：Buy/Sell（整個策略的方向）；order_type：LO（需 submitted_price，為組合淨價）或 MO；legs[]：{symbol, ratio_quantity}，按策略順序排列，僅接受期權代碼；ratio_quantity 恆為正數——每條腿的買賣方向由 strategy 與 side 共同決定",
+      "properties": {
+        "strategy": "組合策略，決定所需腿數與每條腿的方向：`CoveredCall`（備兌認購）/ `CoveredPut`（備兌認沽）/ `VerticalCallSpread`（垂直認購價差）/ `VerticalPutSpread`（垂直認沽價差）/ `Collar`（領口）/ `Straddle`（跨式）/ `Strangle`（寬跨式）",
+        "side": "買賣方向：`Buy`（買入）或 `Sell`（賣出），指整個策略的方向",
+        "order_type": "委託類型：`LO`（限價，需 `submitted_price`）或 `MO`（市價）",
+        "submitted_quantity": "委託組數（每組為一套按 `legs` 比例構成的腿）",
+        "legs": "組合的各條腿，按策略順序排列，僅接受期權代碼",
+        "submitted_price": "整個組合的淨限價，`LO` 必填",
+        "remark": "委託備註（最多 255 字符）"
+      }
+    },
     "ah_premium": {
       "title": "A/H 溢價",
       "description": "獲取 A/H 股溢價歷史 K 線數據，返回 items[]{timestamp, open, high, low, close}，表示溢價百分比",
@@ -327,7 +340,7 @@
     },
     "alert_list": {
       "title": "價格預警列表",
-      "description": "獲取所有已配置的價格預警，返回 lists[]{counter_id, indicators[]{id, condition, price, frequency, enabled, triggered_at}}"
+      "description": "獲取所有已配置的價格預警，返回 lists[]{symbol, indicators[]{id, condition, price, frequency, enabled, triggered_at}}"
     },
     "anomaly": {
       "title": "市場異動",

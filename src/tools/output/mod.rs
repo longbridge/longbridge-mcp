@@ -1,6 +1,6 @@
 //! Typed output schemas for tools whose post-transform JSON shape is known
 //! statically. Mirrors the shape produced by [`tool_json`] after the standard
-//! snake_case + RFC3339 + counter_id transforms run against the upstream SDK
+//! snake_case + RFC3339 transforms run against the upstream SDK
 //! response.
 //!
 //! Each struct here is referenced from `#[tool(output_schema = ...)]` on the
