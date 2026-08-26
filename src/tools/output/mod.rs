@@ -11,11 +11,13 @@
 
 pub mod account;
 pub mod discovery;
+pub mod fact;
 pub mod fundamental;
 pub mod grid;
 pub mod macrodata;
 pub mod market;
 pub mod quote;
+pub mod signal;
 pub mod social;
 pub mod us_market;
 
