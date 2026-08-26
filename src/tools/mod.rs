@@ -2864,7 +2864,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::signal::SignalsResponse>(),
-        description = "Query strategy signals — a strategy's take on a security, triggered by a catalyst. Filter by symbol, strategy, catalyst and time range; page with limit/offset. Returns each signal's title, summary, outlook, risk level and conservative/benchmark/optimistic target prices, plus the total for paging. The full strategy analysis is omitted here — fetch it with signal_detail."
+        description = "Query strategy signals — a strategy's take on a security, triggered by a catalyst. Filter by symbol, strategy, catalyst and time range; page with limit/offset. Returns each signal's title, summary, outlook and conservative/benchmark/optimistic target prices, plus the total for paging. The full strategy analysis is omitted here — fetch it with signal_detail."
     )]
     async fn signals(
         &self,

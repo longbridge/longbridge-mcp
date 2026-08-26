@@ -1316,7 +1316,7 @@
     },
     "signals": {
       "title": "策略訊號",
-      "description": "查詢策略訊號 —— 策略基於催化劑對某隻證券給出的判斷。支援按股票代碼、策略、催化劑和時間範圍篩選，用 limit/offset 分頁。返回標題、摘要、看法、風險等級與保守/基準/樂觀目標價，以及用於翻頁的 total。完整策略分析請用 signal_detail 取得",
+      "description": "查詢策略訊號 —— 策略基於催化劑對某隻證券給出的判斷。支援按股票代碼、策略、催化劑和時間範圍篩選，用 limit/offset 分頁。返回標題、摘要、看法與保守/基準/樂觀目標價，以及用於翻頁的 total。完整策略分析請用 signal_detail 取得",
       "properties": {
         "symbol_name": "按證券代碼篩選，例如 `AAPL.US` 或 `700.HK`；省略則返回全部股票",
         "strategy_id": "按策略 id 篩選，例如 buffett-value。優先於已廢棄的 strategy_name，兩者同時傳入時以此為準",

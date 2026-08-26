@@ -1316,7 +1316,7 @@
     },
     "signals": {
       "title": "策略信号",
-      "description": "查询策略信号 —— 策略基于催化剂对某只证券给出的判断。支持按股票代码、策略、催化剂和时间范围筛选，用 limit/offset 分页。返回标题、摘要、看法、风险等级与保守/基准/乐观目标价，以及用于翻页的 total。完整策略分析请用 signal_detail 获取",
+      "description": "查询策略信号 —— 策略基于催化剂对某只证券给出的判断。支持按股票代码、策略、催化剂和时间范围筛选，用 limit/offset 分页。返回标题、摘要、看法与保守/基准/乐观目标价，以及用于翻页的 total。完整策略分析请用 signal_detail 获取",
       "properties": {
         "symbol_name": "按证券代码筛选，例如 `AAPL.US` 或 `700.HK`；省略则返回全部股票",
         "strategy_id": "按策略 id 筛选，例如 buffett-value。优先于已废弃的 strategy_name，两者同时传入时以此为准",
