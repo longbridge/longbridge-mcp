@@ -2,7 +2,7 @@
 //! tool families ("discovery" tools).
 //!
 //! Mirrors the shape produced by each tool *after* its post-transform pipeline
-//! runs (snake_case + RFC3339 + `counter_id`→`symbol` + `Decimal`→`String`).
+//! runs (snake_case + RFC3339 + `Decimal`→`String`).
 //! Most tools here are HTTP passthroughs whose full upstream payload is not
 //! statically known, so every struct below intentionally models only the
 //! subset of fields named in the tool's `description`. All such fields are

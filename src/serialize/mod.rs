@@ -3,13 +3,10 @@
 //! - Fields ending with `_at` containing i64/u64 -> RFC3339 UTC string
 //! - Any string in `time`'s default `OffsetDateTime` shape (e.g.
 //!   `2026-06-02 20:00:00.0 +00:00:00`) -> RFC3339, regardless of field name
-//! - Field `counter_id` (string) -> renamed to `symbol`, value converted
-//! - Field `counter_ids` (array of strings) -> renamed to `symbols`, each converted
 //! - Fields `aaid` and `account_channel` -> value set to null
 //!
 //! Zero intermediate allocation for SDK types (`to_tool_json`).
 
-mod counter_id;
 mod timestamp;
 pub mod transform;
 
@@ -45,34 +42,20 @@ pub fn transform_json(input: &[u8]) -> Result<String, serde_json::Error> {
     Ok(String::from_utf8(buf).expect("serde_json produces valid UTF-8"))
 }
 
-/// Return `true` iff `s` matches the `<PREFIX>/<MARKET>/<CODE>` counter_id
-/// pattern used internally by Longbridge (e.g. `ST/US/AAPL`, `ETF/HK/2800`,
-/// `IX/HK/HSI`, `OP/US/AAPL270115C300000`). Used to distinguish dynamic map
-/// keys that happen to carry a counter_id value from ordinary camelCase field
-/// names which must still go through snake_case conversion.
+/// Return `true` iff `s` is shaped like a field name — ASCII letters, digits
+/// and underscores only.
 ///
-/// Zero-allocation: does not allocate on the common (negative) path.
-pub(crate) fn looks_like_counter_id(s: &str) -> bool {
-    // Prefix must be 1-4 ASCII uppercase letters followed by '/'.
-    let rest = match s.as_bytes().iter().position(|&b| b == b'/') {
-        Some(i) if (1..=4).contains(&i) => {
-            if !s.as_bytes()[..i].iter().all(|&b| b.is_ascii_uppercase()) {
-                return false;
-            }
-            &s[i + 1..]
-        }
-        _ => return false,
-    };
-    // Market must be exactly 2 ASCII uppercase letters followed by '/'.
-    if rest.len() < 3 || rest.as_bytes()[2] != b'/' {
-        return false;
-    }
-    if !rest.as_bytes()[..2].iter().all(|&b| b.is_ascii_uppercase()) {
-        return false;
-    }
-    let code = &rest[3..];
-    // Code must be non-empty and not contain a further slash.
-    !code.is_empty() && !code.as_bytes().contains(&b'/')
+/// Map keys are not always field names: several endpoints key a map by the
+/// security itself (e.g. `{"symbols": {"AAPL.US": {...}}}`). Those keys are
+/// data and must be passed through verbatim, since snake_case conversion would
+/// mangle `AAPL.US` into `a_a_p_l._u_s`.
+///
+/// Zero-allocation: inspects bytes without allocating.
+pub(crate) fn is_field_name(s: &str) -> bool {
+    !s.is_empty()
+        && s.as_bytes()
+            .iter()
+            .all(|&b| b.is_ascii_alphanumeric() || b == b'_')
 }
 
 pub(crate) fn to_snake_case(s: &str) -> String {
@@ -191,17 +174,11 @@ fn walk_convert(value: &mut serde_json::Value, segments: &[&str]) {
 pub(crate) enum FieldKind {
     Normal,
     Timestamp,
-    CounterId,
-    CounterIds,
     Nullified,
 }
 
 pub(crate) fn classify_field(snake_name: &str) -> FieldKind {
-    if snake_name.contains("counter_ids") {
-        FieldKind::CounterIds
-    } else if snake_name.contains("counter_id") {
-        FieldKind::CounterId
-    } else if snake_name.ends_with("_at") {
+    if snake_name.ends_with("_at") {
         FieldKind::Timestamp
     } else if matches!(snake_name, "aaid" | "account_channel") {
         FieldKind::Nullified
@@ -210,24 +187,8 @@ pub(crate) fn classify_field(snake_name: &str) -> FieldKind {
     }
 }
 
-pub(crate) fn output_key<'a>(snake_name: &'a str, kind: FieldKind) -> std::borrow::Cow<'a, str> {
-    match kind {
-        FieldKind::CounterId => {
-            if snake_name == "counter_id" {
-                std::borrow::Cow::Borrowed("symbol")
-            } else {
-                std::borrow::Cow::Owned(snake_name.replace("counter_id", "symbol"))
-            }
-        }
-        FieldKind::CounterIds => {
-            if snake_name == "counter_ids" {
-                std::borrow::Cow::Borrowed("symbols")
-            } else {
-                std::borrow::Cow::Owned(snake_name.replace("counter_ids", "symbols"))
-            }
-        }
-        _ => std::borrow::Cow::Borrowed(snake_name),
-    }
+pub(crate) fn output_key<'a>(snake_name: &'a str, _kind: FieldKind) -> std::borrow::Cow<'a, str> {
+    std::borrow::Cow::Borrowed(snake_name)
 }
 
 pub(crate) struct Transformed<'a, T: ?Sized> {
@@ -279,61 +240,36 @@ mod tests {
     }
 
     #[test]
-    fn counter_id_field() {
-        #[derive(Serialize)]
-        struct Data {
-            counter_id: String,
-        }
-        let d = Data {
-            counter_id: "ST/US/TSLA".to_string(),
-        };
-        let json = to_tool_json(&d).unwrap();
-        assert!(json.contains("\"symbol\":\"TSLA.US\""), "got: {json}");
-        assert!(!json.contains("counter_id"), "got: {json}");
-    }
-
-    #[test]
-    fn counter_ids_field() {
-        #[derive(Serialize)]
-        struct Data {
-            counter_ids: Vec<String>,
-        }
-        let d = Data {
-            counter_ids: vec!["ST/US/TSLA".to_string(), "ETF/US/SPY".to_string()],
-        };
-        let json = to_tool_json(&d).unwrap();
-        assert!(json.contains("\"symbols\""), "got: {json}");
-        assert!(json.contains("TSLA.US"), "got: {json}");
-        assert!(json.contains("SPY.US"), "got: {json}");
-    }
-
-    #[test]
     fn transform_json_via_value() {
         let input: serde_json::Value =
-            serde_json::from_str(r#"{"counterId":"ST/US/TSLA","createdAt":1700000000}"#).unwrap();
+            serde_json::from_str(r#"{"lastDone":"250.5","createdAt":1700000000}"#).unwrap();
         let output = to_tool_json(&input).unwrap();
-        assert!(output.contains("\"symbol\":\"TSLA.US\""), "got: {output}");
+        assert!(output.contains("\"last_done\":\"250.5\""), "got: {output}");
         assert!(output.contains("2023-11-14T"), "got: {output}");
     }
 
     #[test]
     fn nested_objects() {
         let input: serde_json::Value =
-            serde_json::from_str(r#"{"order":{"counterId":"ST/HK/700","submittedAt":1700000000}}"#)
+            serde_json::from_str(r#"{"order":{"stockName":"Tencent","submittedAt":1700000000}}"#)
                 .unwrap();
         let output = to_tool_json(&input).unwrap();
-        assert!(output.contains("\"symbol\":\"700.HK\""), "got: {output}");
+        assert!(
+            output.contains("\"stock_name\":\"Tencent\""),
+            "got: {output}"
+        );
         assert!(output.contains("2023-11-14T"), "got: {output}");
     }
 
     #[test]
     fn array_of_objects() {
         let input: serde_json::Value =
-            serde_json::from_str(r#"[{"counterId":"ST/US/AAPL"},{"counterId":"ST/HK/700"}]"#)
-                .unwrap();
+            serde_json::from_str(r#"[{"lastDone":"1"},{"lastDone":"2"}]"#).unwrap();
         let output = to_tool_json(&input).unwrap();
-        assert!(output.contains("AAPL.US"), "got: {output}");
-        assert!(output.contains("700.HK"), "got: {output}");
+        assert_eq!(
+            output, r#"[{"last_done":"1"},{"last_done":"2"}]"#,
+            "got: {output}"
+        );
     }
 
     #[test]
@@ -346,61 +282,42 @@ mod tests {
     }
 
     #[test]
-    fn prefixed_counter_id_field() {
+    fn counter_id_is_passed_through_untouched() {
+        // The backend sends `symbol` alongside every `counter_id`, so the
+        // transform no longer rewrites either one -- doing so would emit the
+        // key `symbol` twice.
         let input: serde_json::Value =
-            serde_json::from_str(r#"{"underlyingCounterId":"ST/US/AAPL"}"#).unwrap();
+            serde_json::from_str(r#"{"counter_id":"ST/HK/700","symbol":"700.HK"}"#).unwrap();
         let output = to_tool_json(&input).unwrap();
-        assert!(output.contains("\"underlying_symbol\""), "got: {output}");
-        assert!(output.contains("\"AAPL.US\""), "got: {output}");
-        assert!(!output.contains("counter_id"), "got: {output}");
-    }
-
-    #[test]
-    fn counter_id_as_map_key() {
-        let input: serde_json::Value = serde_json::from_str(
-            r#"{"stocks":{"ST/US/AAPL":{"name":"苹果"},"ST/US/SNDK":{"name":"闪迪"},"IX/HK/HSI":{"name":"恒生指数"}}}"#,
-        )
-        .unwrap();
-        let output = to_tool_json(&input).unwrap();
-        assert!(output.contains("\"AAPL.US\""), "got: {output}");
-        assert!(output.contains("\"SNDK.US\""), "got: {output}");
-        assert!(output.contains("\"HSI.HK\""), "got: {output}");
-        assert!(!output.contains("s_t/"), "leaked snake-cased key: {output}");
-        assert!(
-            !output.contains("i_x/"),
-            "leaked snake-cased IX key: {output}"
+        assert_eq!(
+            output, r#"{"counter_id":"ST/HK/700","symbol":"700.HK"}"#,
+            "got: {output}"
         );
     }
 
     #[test]
-    fn looks_like_counter_id_positive() {
-        assert!(looks_like_counter_id("ST/US/AAPL"));
-        assert!(looks_like_counter_id("ETF/US/SPY"));
-        assert!(looks_like_counter_id("IX/HK/HSI"));
-        assert!(looks_like_counter_id("OP/US/AAPL270115C300000"));
-        assert!(looks_like_counter_id("ST/HK/00700"));
-    }
-
-    #[test]
-    fn looks_like_counter_id_negative() {
-        assert!(!looks_like_counter_id("AAPL.US"));
-        assert!(!looks_like_counter_id("lastPrice"));
-        assert!(!looks_like_counter_id("created_at"));
-        assert!(!looks_like_counter_id("ST/US")); // incomplete
-        assert!(!looks_like_counter_id("")); // empty
-        assert!(!looks_like_counter_id("st/us/aapl")); // lowercase prefix/market
-        assert!(!looks_like_counter_id("ST/USA/AAPL")); // 3-letter market
-        assert!(!looks_like_counter_id("ST/US/")); // empty code
-    }
-
-    #[test]
-    fn prefixed_counter_ids_field() {
-        let input: serde_json::Value =
-            serde_json::from_str(r#"{"underlyingCounterIds":["ST/US/AAPL","ST/HK/700"]}"#).unwrap();
+    fn symbol_map_keys_survive_snake_case() {
+        let input: serde_json::Value = serde_json::from_str(
+            r#"{"symbols":{"AAPL.US":{"lastPrice":1},"700.HK":{"lastPrice":2}}}"#,
+        )
+        .unwrap();
         let output = to_tool_json(&input).unwrap();
-        assert!(output.contains("\"underlying_symbols\""), "got: {output}");
-        assert!(output.contains("AAPL.US"), "got: {output}");
-        assert!(output.contains("700.HK"), "got: {output}");
+        assert!(output.contains("\"AAPL.US\""), "got: {output}");
+        assert!(output.contains("\"700.HK\""), "got: {output}");
+        assert!(!output.contains("a_a_p_l"), "mangled symbol key: {output}");
+        // Field names nested under a data key are still converted.
+        assert!(output.contains("\"last_price\""), "got: {output}");
+    }
+
+    #[test]
+    fn is_field_name_separates_field_names_from_data_keys() {
+        assert!(is_field_name("lastPrice"));
+        assert!(is_field_name("created_at"));
+        assert!(is_field_name("counter_id"));
+        assert!(!is_field_name("AAPL.US"));
+        assert!(!is_field_name("ST/US/AAPL"));
+        assert!(!is_field_name(".DJI.US"));
+        assert!(!is_field_name(""));
     }
 
     #[test]

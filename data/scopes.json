@@ -197,6 +197,7 @@
         "grid_submit",
         "grid_suspend",
         "replace_order",
+        "submit_multileg_order",
         "submit_order"
       ]
     }

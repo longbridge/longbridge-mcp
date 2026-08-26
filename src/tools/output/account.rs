@@ -2,7 +2,7 @@
 //! statement / atm) whose post-transform JSON shape is known statically.
 //!
 //! Mirrors the shape produced by [`crate::serialize::to_tool_json`] after the
-//! standard snake_case + RFC3339 + counter_id transforms run against the
+//! standard snake_case + RFC3339 transforms run against the
 //! upstream SDK response. Same conventions as [`super`]: a struct is declared
 //! only when the response root is a JSON object (MCP requires outputSchema root
 //! `type: "object"`) and the shape is small and stable.
@@ -24,8 +24,7 @@ use rmcp::serde::Serialize;
 /// Wraps a `list` array of statement entries. The SDK's `StatementItem`
 /// (`{ dt: i32, file_key: String }`) is emitted unchanged by the transform
 /// pipeline: `dt` is a plain integer date (`yyyymmdd`, e.g. `20240115`) that is
-/// not a `*_at` field and so is left as a number, and `file_key` does not match
-/// the counter_id pattern.
+/// not a `*_at` field and so is left as a number.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct StatementListResponse {
     /// Available statements in the requested range.

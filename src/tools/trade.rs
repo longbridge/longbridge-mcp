@@ -84,6 +84,38 @@ pub struct SubmitOrderParam {
     pub remark: Option<String>,
 }
 
+/// One leg of a multi-leg combination order.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct MultiLegParam {
+    /// Option symbol in `<CODE>.<MARKET>` format, e.g. "QQQ260731C764000.US"
+    pub symbol: String,
+    /// Leg ratio, a positive number (e.g. "1", "2"). The buy/sell direction of
+    /// each leg comes from `strategy` together with the order `side`, never
+    /// from the sign here — a zero or negative ratio is rejected upstream.
+    pub ratio_quantity: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct SubmitMultiLegOrderParam {
+    /// Strategy, which fixes how many legs are required and the direction of
+    /// each: CoveredCall / CoveredPut (stock + option) / VerticalCallSpread /
+    /// VerticalPutSpread / Collar / Straddle / Strangle
+    pub strategy: String,
+    /// Buy or Sell — the direction of the strategy as a whole
+    pub side: String,
+    /// Order type: LO (Limit, requires submitted_price) or MO (Market)
+    pub order_type: String,
+    /// Number of strategy units to trade (each unit is one set of legs in the
+    /// ratios given by `legs`)
+    pub submitted_quantity: String,
+    /// The legs of the combination, in strategy order. Option symbols only.
+    pub legs: Vec<MultiLegParam>,
+    /// Net limit price for the whole combination. Required for LO.
+    pub submitted_price: Option<String>,
+    /// Order remark (max 255 characters)
+    pub remark: Option<String>,
+}
+
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ReplaceOrderParam {
     /// Order ID to replace (returned by submit_order or listed in today_orders / history_orders)
@@ -490,6 +522,79 @@ pub async fn submit_order(
 
     let (ctx, _) = TradeContext::new(mctx.create_config());
     let result = ctx.submit_order(opts).await.map_err(Error::longbridge)?;
+    tool_json(&result)
+}
+
+/// Submit a multi-leg option combination order (vertical spreads, straddles,
+/// strangles, collars, covered calls/puts). Every leg is submitted together as
+/// a single strategy order and fills or rests as one.
+pub async fn submit_multileg_order(
+    mctx: &crate::tools::McpContext,
+    p: SubmitMultiLegOrderParam,
+) -> Result<CallToolResult, McpError> {
+    use longbridge::Decimal;
+    use longbridge::trade::{
+        MultiLegStrategy, OrderSide, OrderType, SubmitMultiLegOrderLeg, SubmitMultiLegOrderOptions,
+    };
+    use std::str::FromStr;
+
+    if p.legs.is_empty() {
+        return Err(McpError::invalid_params(
+            "legs must not be empty: a multi-leg order needs at least one leg",
+            None,
+        ));
+    }
+
+    let strategy = p
+        .strategy
+        .parse::<MultiLegStrategy>()
+        .map_err(|e| McpError::invalid_params(format!("invalid strategy: {e}"), None))?;
+    let side = p
+        .side
+        .parse::<OrderSide>()
+        .map_err(|e| McpError::invalid_params(format!("invalid side: {e}"), None))?;
+    let order_type = p
+        .order_type
+        .parse::<OrderType>()
+        .map_err(|e| McpError::invalid_params(format!("invalid order_type: {e}"), None))?;
+    let quantity = Decimal::from_str(&p.submitted_quantity)
+        .map_err(|e| McpError::invalid_params(format!("invalid submitted_quantity: {e}"), None))?;
+
+    let legs = p
+        .legs
+        .into_iter()
+        .map(|leg| {
+            let ratio = Decimal::from_str(&leg.ratio_quantity).map_err(|e| {
+                McpError::invalid_params(
+                    format!("invalid ratio_quantity for leg `{}`: {e}", leg.symbol),
+                    None,
+                )
+            })?;
+            if ratio <= Decimal::ZERO {
+                return Err(McpError::invalid_params(
+                    format!(
+                        "ratio_quantity for leg `{}` must be positive; leg direction comes from `strategy` and `side`",
+                        leg.symbol
+                    ),
+                    None,
+                ));
+            }
+            Ok(SubmitMultiLegOrderLeg::new(leg.symbol, ratio))
+        })
+        .collect::<Result<Vec<_>, McpError>>()?;
+
+    let mut opts = SubmitMultiLegOrderOptions::new(side, order_type, quantity, strategy, legs);
+    if let Some(ref price) = p.submitted_price {
+        opts = opts.submitted_price(Decimal::from_str(price).map_err(|e| {
+            McpError::invalid_params(format!("invalid submitted_price: {e}"), None)
+        })?);
+    }
+    if let Some(ref v) = p.remark {
+        opts = opts.remark(v.clone());
+    }
+
+    let (ctx, _) = TradeContext::new(mctx.create_config());
+    let result = ctx.submit_multileg(opts).await.map_err(Error::longbridge)?;
     tool_json(&result)
 }
 
