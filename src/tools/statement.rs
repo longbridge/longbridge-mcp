@@ -17,7 +17,12 @@ pub struct StatementListParam {
     /// Start date (yyyy-mm-dd). Defaults to 30 days ago for "daily" or 12 months ago for "monthly".
     pub start_date: Option<String>,
     /// Number of records to return. Defaults to 30 for "daily" or 12 for "monthly".
+    ///
+    /// The default depends on `statement_type`, so the schema declares none:
+    /// `skip_serializing_if` is what stops schemars deriving `default: null`
+    /// from `serde(default)`, which would contradict the integer type.
     #[serde(default, deserialize_with = "tolerant_option_i32")]
+    #[schemars(skip_serializing_if = "Option::is_none")]
     pub limit: Option<i32>,
 }
 

@@ -2905,6 +2905,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
+        output_schema = schema_for::<output::fact::SecurityFactsResponse>(),
         description = "List a security's fact (catalyst) events — anomaly detections, factor readings, data sources and natural-language summaries — filtered by time range and count. Facts are what strategies react to: a signal names its trigger in key_fact_id."
     )]
     async fn security_facts(

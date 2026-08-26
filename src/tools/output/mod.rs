@@ -11,6 +11,7 @@
 
 pub mod account;
 pub mod discovery;
+pub mod fact;
 pub mod fundamental;
 pub mod grid;
 pub mod macrodata;

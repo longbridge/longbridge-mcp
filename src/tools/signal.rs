@@ -8,6 +8,7 @@ use rmcp::schemars::JsonSchema;
 use rmcp::serde::Deserialize;
 
 use crate::error::Error;
+use crate::tools::output::fact::{SecurityFactItem, SecurityFactsResponse};
 use crate::tools::output::signal::{SignalItem, SignalsResponse};
 use crate::tools::support::parse::parse_rfc3339;
 use crate::tools::support::tolerant::tolerant_option_i32;
@@ -31,9 +32,11 @@ pub struct SignalsParam {
     pub end_time: Option<String>,
     /// Maximum number of results to return. Defaults to 20.
     #[serde(default, deserialize_with = "tolerant_option_i32")]
+    #[schemars(extend("default" = 20))]
     pub limit: Option<i32>,
     /// Number of results to skip for pagination. Defaults to 0.
     #[serde(default, deserialize_with = "tolerant_option_i32")]
+    #[schemars(extend("default" = 0))]
     pub offset: Option<i32>,
 }
 
@@ -53,6 +56,7 @@ pub struct SecurityFactsParam {
     pub end_time: Option<String>,
     /// The maximum number of facts to return. If the number of facts in the time range exceeds this limit, only the latest 'limit' facts will be returned. Defaults to 100.
     #[serde(default, deserialize_with = "tolerant_option_i32")]
+    #[schemars(extend("default" = 100))]
     pub limit: Option<i32>,
 }
 
@@ -92,20 +96,6 @@ fn unwrap_embedded_json(raw: &str) -> serde_json::Value {
     serde_json::from_str(raw).unwrap_or_else(|_| serde_json::Value::String(raw.to_owned()))
 }
 
-/// Unwrap the `{tag, value}` documents `nl_info.summary`, `invest_anal` and
-/// `eli_explain` carry as strings, in place.
-fn unwrap_fact_nl_info(fact: &mut serde_json::Value) {
-    let Some(nl_info) = fact.get_mut("nl_info") else {
-        return;
-    };
-    for field in ["summary", "invest_anal", "eli_explain"] {
-        if let Some(raw) = nl_info.get(field).and_then(|v| v.as_str()) {
-            let unwrapped = unwrap_embedded_json(raw);
-            nl_info[field] = unwrapped;
-        }
-    }
-}
-
 /// `GET /v1/signals/{signal_id}` — one signal with its full analysis.
 pub async fn signal_detail(
     mctx: &crate::tools::McpContext,
@@ -136,13 +126,9 @@ pub async fn security_facts(
         .await
         .map_err(Error::longbridge)?;
 
-    let mut facts = serde_json::to_value(facts).map_err(Error::Serialize)?;
-    if let Some(list) = facts.as_array_mut() {
-        for fact in list {
-            unwrap_fact_nl_info(fact);
-        }
-    }
-    tool_json(&serde_json::json!({ "facts": facts }))
+    tool_json(&SecurityFactsResponse {
+        facts: facts.into_iter().map(SecurityFactItem::from).collect(),
+    })
 }
 
 #[cfg(test)]
@@ -162,27 +148,6 @@ mod tests {
             v,
             serde_json::Value::String("not json".into()),
             "an unparsable payload must survive rather than be dropped"
-        );
-    }
-
-    #[test]
-    fn fact_nl_info_documents_are_unwrapped() {
-        let mut fact = serde_json::json!({
-            "fact_id": "technical_rsi_14_short_1",
-            "nl_info": {
-                "title": "RSI_14",
-                "summary": r#"[{"tag":"RSI","value":"balanced"}]"#,
-                "invest_anal": "not json",
-            }
-        });
-        unwrap_fact_nl_info(&mut fact);
-        assert_eq!(
-            fact["nl_info"]["summary"][0]["tag"], "RSI",
-            "summary must become a real array"
-        );
-        assert_eq!(
-            fact["nl_info"]["invest_anal"], "not json",
-            "an unparsable field must survive as its original string"
         );
     }
 }
