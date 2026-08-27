@@ -5,6 +5,7 @@ use rmcp::schemars::JsonSchema;
 use rmcp::serde::Deserialize;
 
 use crate::error::Error;
+use crate::tools::support::dry_run;
 use crate::tools::support::http_client::http_get_tool;
 use crate::tools::support::parse;
 use crate::tools::{tool_json, tool_result};
@@ -82,16 +83,20 @@ pub struct SubmitOrderParam {
     pub outside_rth: Option<String>,
     /// Order remark (max 255 characters)
     pub remark: Option<String>,
-    /// Set to true ONLY to actually place/modify/cancel the order.
+    /// The `confirmation_code` from this order's dry run. WITHOUT IT NOTHING IS
+    /// SENT.
     ///
-    /// Omitted or false (the default) makes this a DRY RUN: the request is
-    /// validated and echoed back, and nothing reaches the exchange.
+    /// Omitted (the default) makes this a DRY RUN: the request is validated and
+    /// echoed back with a three-digit `confirmation_code`, and nothing reaches
+    /// the exchange.
     ///
     /// Required protocol: call once without `execute`, show the returned
-    /// preview to the user, and call again with `execute: true` only after the
-    /// user has explicitly confirmed that exact order. Never set it on your own
-    /// initiative, and never set it in the same turn the user first asks.
-    pub execute: Option<bool>,
+    /// preview to the user, and call again quoting the code only after the user
+    /// has explicitly confirmed that exact order. The code is single use,
+    /// expires in 10 minutes, and applies only to this exact order — change any
+    /// field and it stops working. Never quote it back on your own initiative,
+    /// and never in the same turn the user first asks.
+    pub execute: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -110,32 +115,40 @@ pub struct ReplaceOrderParam {
     pub trailing_amount: Option<String>,
     /// New trailing percent as decimal e.g. 0.05 = 5% (for TSLPPCT)
     pub trailing_percent: Option<String>,
-    /// Set to true ONLY to actually place/modify/cancel the order.
+    /// The `confirmation_code` from this order's dry run. WITHOUT IT NOTHING IS
+    /// SENT.
     ///
-    /// Omitted or false (the default) makes this a DRY RUN: the request is
-    /// validated and echoed back, and nothing reaches the exchange.
+    /// Omitted (the default) makes this a DRY RUN: the request is validated and
+    /// echoed back with a three-digit `confirmation_code`, and nothing reaches
+    /// the exchange.
     ///
     /// Required protocol: call once without `execute`, show the returned
-    /// preview to the user, and call again with `execute: true` only after the
-    /// user has explicitly confirmed that exact order. Never set it on your own
-    /// initiative, and never set it in the same turn the user first asks.
-    pub execute: Option<bool>,
+    /// preview to the user, and call again quoting the code only after the user
+    /// has explicitly confirmed that exact order. The code is single use,
+    /// expires in 10 minutes, and applies only to this exact order — change any
+    /// field and it stops working. Never quote it back on your own initiative,
+    /// and never in the same turn the user first asks.
+    pub execute: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct CancelOrderParam {
     /// Order ID to cancel (from today's orders or order history)
     pub order_id: String,
-    /// Set to true ONLY to actually place/modify/cancel the order.
+    /// The `confirmation_code` from this order's dry run. WITHOUT IT NOTHING IS
+    /// SENT.
     ///
-    /// Omitted or false (the default) makes this a DRY RUN: the request is
-    /// validated and echoed back, and nothing reaches the exchange.
+    /// Omitted (the default) makes this a DRY RUN: the request is validated and
+    /// echoed back with a three-digit `confirmation_code`, and nothing reaches
+    /// the exchange.
     ///
     /// Required protocol: call once without `execute`, show the returned
-    /// preview to the user, and call again with `execute: true` only after the
-    /// user has explicitly confirmed that exact order. Never set it on your own
-    /// initiative, and never set it in the same turn the user first asks.
-    pub execute: Option<bool>,
+    /// preview to the user, and call again quoting the code only after the user
+    /// has explicitly confirmed that exact order. The code is single use,
+    /// expires in 10 minutes, and applies only to this exact order — change any
+    /// field and it stops working. Never quote it back on your own initiative,
+    /// and never in the same turn the user first asks.
+    pub execute: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -336,15 +349,21 @@ pub async fn cancel_order(
     p: CancelOrderParam,
 ) -> Result<CallToolResult, McpError> {
     let (ctx, _) = TradeContext::new(mctx.create_config());
-    // Two-step by design: without execute=true this cancels nothing.
-    if !p.execute.unwrap_or(false) {
+    let request = dry_run::fingerprint(&["cancel_order", &p.order_id]);
+    // Two-step by design: without a confirmation code this cancels nothing.
+    let Some(code) = p.execute.clone() else {
         let existing = preview_existing_order(mctx, &ctx, &p.order_id).await;
-        return crate::tools::support::dry_run::result(serde_json::json!({
-            "action": "cancel_order",
-            "order_id": p.order_id,
-            "order": existing,
-        }));
-    }
+        return dry_run::result(
+            &mctx.token,
+            &request,
+            serde_json::json!({
+                "action": "cancel_order",
+                "order_id": p.order_id,
+                "order": existing,
+            }),
+        );
+    };
+    dry_run::consume(&mctx.token, &request, &code)?;
     ctx.cancel_order(p.order_id)
         .await
         .map_err(Error::longbridge)?;
@@ -559,25 +578,48 @@ pub async fn submit_order(
         opts = opts.remark(v.clone());
     }
 
-    // Two-step by design: without execute=true this places nothing.
-    if !p.execute.unwrap_or(false) {
-        return crate::tools::support::dry_run::result(serde_json::json!({
-            "action": "submit_order",
-            "symbol": p.symbol,
-            "side": p.side,
-            "order_type": p.order_type,
-            "quantity": p.submitted_quantity,
-            "time_in_force": p.time_in_force,
-            "price": p.submitted_price,
-            "trigger_price": p.trigger_price,
-            "limit_offset": p.limit_offset,
-            "trailing_amount": p.trailing_amount,
-            "trailing_percent": p.trailing_percent,
-            "expire_date": p.expire_date,
-            "outside_rth": p.outside_rth,
-            "remark": p.remark,
-        }));
-    }
+    // Fingerprint every field that defines the order, so a code read from one
+    // preview cannot be quoted back for a different order.
+    let request = dry_run::fingerprint(&[
+        "submit_order",
+        &p.symbol,
+        &p.side,
+        &p.order_type,
+        &p.submitted_quantity,
+        &p.time_in_force,
+        p.submitted_price.as_deref().unwrap_or(""),
+        p.trigger_price.as_deref().unwrap_or(""),
+        p.limit_offset.as_deref().unwrap_or(""),
+        p.trailing_amount.as_deref().unwrap_or(""),
+        p.trailing_percent.as_deref().unwrap_or(""),
+        p.expire_date.as_deref().unwrap_or(""),
+        p.outside_rth.as_deref().unwrap_or(""),
+        p.remark.as_deref().unwrap_or(""),
+    ]);
+    // Two-step by design: without a confirmation code this places nothing.
+    let Some(code) = p.execute.clone() else {
+        return dry_run::result(
+            &mctx.token,
+            &request,
+            serde_json::json!({
+                "action": "submit_order",
+                "symbol": p.symbol,
+                "side": p.side,
+                "order_type": p.order_type,
+                "quantity": p.submitted_quantity,
+                "time_in_force": p.time_in_force,
+                "price": p.submitted_price,
+                "trigger_price": p.trigger_price,
+                "limit_offset": p.limit_offset,
+                "trailing_amount": p.trailing_amount,
+                "trailing_percent": p.trailing_percent,
+                "expire_date": p.expire_date,
+                "outside_rth": p.outside_rth,
+                "remark": p.remark,
+            }),
+        );
+    };
+    dry_run::consume(&mctx.token, &request, &code)?;
 
     let (ctx, _) = TradeContext::new(mctx.create_config());
     let result = ctx.submit_order(opts).await.map_err(Error::longbridge)?;
@@ -629,21 +671,36 @@ pub async fn replace_order(
         })?);
     }
     let (ctx, _) = TradeContext::new(mctx.create_config());
-    // Two-step by design: without execute=true this changes nothing.
-    if !p.execute.unwrap_or(false) {
+    let request = dry_run::fingerprint(&[
+        "replace_order",
+        &p.order_id,
+        &p.quantity,
+        p.price.as_deref().unwrap_or(""),
+        p.trigger_price.as_deref().unwrap_or(""),
+        p.limit_offset.as_deref().unwrap_or(""),
+        p.trailing_amount.as_deref().unwrap_or(""),
+        p.trailing_percent.as_deref().unwrap_or(""),
+    ]);
+    // Two-step by design: without a confirmation code this changes nothing.
+    let Some(code) = p.execute.clone() else {
         let existing = preview_existing_order(mctx, &ctx, &p.order_id).await;
-        return crate::tools::support::dry_run::result(serde_json::json!({
-            "action": "replace_order",
-            "order_id": p.order_id,
-            "current_order": existing,
-            "new_quantity": p.quantity,
-            "new_price": p.price,
-            "new_trigger_price": p.trigger_price,
-            "new_limit_offset": p.limit_offset,
-            "new_trailing_amount": p.trailing_amount,
-            "new_trailing_percent": p.trailing_percent,
-        }));
-    }
+        return dry_run::result(
+            &mctx.token,
+            &request,
+            serde_json::json!({
+                "action": "replace_order",
+                "order_id": p.order_id,
+                "current_order": existing,
+                "new_quantity": p.quantity,
+                "new_price": p.price,
+                "new_trigger_price": p.trigger_price,
+                "new_limit_offset": p.limit_offset,
+                "new_trailing_amount": p.trailing_amount,
+                "new_trailing_percent": p.trailing_percent,
+            }),
+        );
+    };
+    dry_run::consume(&mctx.token, &request, &code)?;
     ctx.replace_order(opts).await.map_err(Error::longbridge)?;
     Ok(tool_result("order replaced".to_string()))
 }
@@ -728,22 +785,37 @@ mod execute_gate_tests {
             "time_in_force": "Day",
         }))
         .expect("submit_order params without execute must deserialize");
-        assert!(!submit.execute.unwrap_or(false));
+        assert!(submit.execute.is_none());
 
         let cancel: CancelOrderParam =
             serde_json::from_value(serde_json::json!({ "order_id": "1" }))
                 .expect("cancel_order params without execute must deserialize");
-        assert!(!cancel.execute.unwrap_or(false));
+        assert!(cancel.execute.is_none());
 
         let replace: ReplaceOrderParam =
             serde_json::from_value(serde_json::json!({ "order_id": "1", "quantity": "10" }))
                 .expect("replace_order params without execute must deserialize");
-        assert!(!replace.execute.unwrap_or(false));
+        assert!(replace.execute.is_none());
 
         let grid: crate::tools::grid::GridOrderIdParam =
             serde_json::from_value(serde_json::json!({ "order_id": "1" }))
                 .expect("grid cancel/suspend/restart params without execute must deserialize");
-        assert!(!grid.execute.unwrap_or(false));
+        assert!(grid.execute.is_none());
+    }
+
+    #[test]
+    fn execute_is_a_code_string_not_a_boolean() {
+        // `execute: true` was the earlier shape. Accepting it now would let a
+        // caller go live without ever producing a preview.
+        let boolean = serde_json::from_value::<CancelOrderParam>(
+            serde_json::json!({ "order_id": "1", "execute": true }),
+        );
+        assert!(boolean.is_err(), "execute must not accept a boolean");
+
+        let coded: CancelOrderParam =
+            serde_json::from_value(serde_json::json!({ "order_id": "1", "execute": "473" }))
+                .expect("a confirmation code must deserialize");
+        assert_eq!(coded.execute.as_deref(), Some("473"));
     }
 
     #[test]
@@ -810,7 +882,7 @@ mod execute_gate_tests {
                 .find(|t| t.name == name)
                 .and_then(|t| t.description.clone())
                 .unwrap_or_else(|| panic!("{name} must have a description"));
-            for needle in ["execute=true", "DRY RUN", "confirm"] {
+            for needle in ["confirmation_code", "DRY RUN", "confirm"] {
                 assert!(
                     description.contains(needle),
                     "{name} description must mention `{needle}`"
