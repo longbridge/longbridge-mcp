@@ -60,6 +60,26 @@ pub async fn financial_report(
     http_get_tool(&client, "/v1/quote/financial-reports", &params).await
 }
 
+/// Pull one half of `institution_rating`'s response out of a sub-request,
+/// turning a failure into a JSON `null` plus a warning that names the cause.
+fn rating_part(label: &str, result: Result<CallToolResult, McpError>) -> (String, Option<String>) {
+    match result {
+        Ok(part) => {
+            let text = part
+                .content
+                .first()
+                .and_then(|c| c.as_text())
+                .map(|t| t.text.clone())
+                .unwrap_or_else(|| "null".to_string());
+            (text, None)
+        }
+        Err(e) => (
+            "null".to_string(),
+            Some(format!("{label} is unavailable: {}", e.message)),
+        ),
+    }
+}
+
 pub async fn institution_rating(
     mctx: &crate::tools::McpContext,
     p: SymbolParam,
@@ -67,39 +87,49 @@ pub async fn institution_rating(
     let client = mctx.create_http_client();
     let cid = symbol_to_counter_id(&p.symbol);
     let params = [("counter_id", cid.as_str())];
-    let ratings = http_get_tool(&client, "/v1/quote/institution-rating-latest", &params).await;
-    let instratings = http_get_tool(&client, "/v1/quote/institution-ratings", &params).await;
-    match (ratings, instratings) {
-        (Ok(r), Ok(i)) => {
-            let r_text = r
-                .content
-                .first()
-                .and_then(|c| c.as_text())
-                .map(|t| t.text.as_str())
-                .unwrap_or("null");
-            let i_text = i
-                .content
-                .first()
-                .and_then(|c| c.as_text())
-                .map(|t| t.text.as_str())
-                .unwrap_or("null");
-            let combined = format!(r#"{{"analyst":{r_text},"instratings":{i_text}}}"#);
-            let mut value: serde_json::Value =
-                serde_json::from_str(&combined).map_err(crate::error::Error::Serialize)?;
-            convert_unix_paths(
-                &mut value,
-                &[
-                    "analyst.evaluate.start_date",
-                    "analyst.evaluate.end_date",
-                    "analyst.target.start_date",
-                    "analyst.target.end_date",
-                ],
-            );
-            let out = serde_json::to_string(&value).map_err(crate::error::Error::Serialize)?;
-            Ok(crate::tools::tool_result(out))
-        }
-        (Err(e), _) | (_, Err(e)) => Err(e),
+
+    // Two independent upstream calls. Run them concurrently, and let one
+    // failure degrade the response instead of discarding the half that worked.
+    let (analyst, instratings) = tokio::join!(
+        http_get_tool(&client, "/v1/quote/institution-rating-latest", &params),
+        http_get_tool(&client, "/v1/quote/institution-ratings", &params),
+    );
+
+    // Nothing to report if neither half came back — surface the first cause.
+    if let (Err(e), Err(_)) = (&analyst, &instratings) {
+        return Err(e.clone());
     }
+
+    let (analyst_text, analyst_warning) = rating_part("analyst", analyst);
+    let (instratings_text, instratings_warning) = rating_part("instratings", instratings);
+    let warnings: Vec<String> = [analyst_warning, instratings_warning]
+        .into_iter()
+        .flatten()
+        .collect();
+
+    let combined = if warnings.is_empty() {
+        format!(r#"{{"analyst":{analyst_text},"instratings":{instratings_text}}}"#)
+    } else {
+        let warnings_json =
+            serde_json::to_string(&warnings).map_err(crate::error::Error::Serialize)?;
+        format!(
+            r#"{{"analyst":{analyst_text},"instratings":{instratings_text},"warnings":{warnings_json}}}"#
+        )
+    };
+
+    let mut value: serde_json::Value =
+        serde_json::from_str(&combined).map_err(crate::error::Error::Serialize)?;
+    convert_unix_paths(
+        &mut value,
+        &[
+            "analyst.evaluate.start_date",
+            "analyst.evaluate.end_date",
+            "analyst.target.start_date",
+            "analyst.target.end_date",
+        ],
+    );
+    let out = serde_json::to_string(&value).map_err(crate::error::Error::Serialize)?;
+    Ok(crate::tools::tool_result(out))
 }
 
 pub async fn institution_rating_detail(
@@ -866,4 +896,40 @@ pub async fn valuation_comparison(
         &["list.*.history.*.date"],
     )
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::rating_part;
+    use rmcp::ErrorData as McpError;
+    use rmcp::model::Content;
+
+    #[test]
+    fn rating_part_returns_the_payload_and_no_warning_on_success() {
+        let ok = rmcp::model::CallToolResult::success(vec![Content::text(r#"{"a":1}"#)]);
+        let (text, warning) = rating_part("analyst", Ok(ok));
+        assert_eq!(text, r#"{"a":1}"#);
+        assert!(warning.is_none());
+    }
+
+    #[test]
+    fn rating_part_degrades_to_null_and_names_the_cause() {
+        let err = McpError::internal_error("upstream 503", None);
+        let (text, warning) = rating_part("instratings", Err(err));
+        assert_eq!(text, "null");
+        let warning = warning.expect("a failure must produce a warning");
+        assert!(
+            warning.contains("instratings") && warning.contains("upstream 503"),
+            "warning should name the part and the cause, got: {warning}"
+        );
+    }
+
+    #[test]
+    fn rating_part_treats_an_empty_body_as_json_null() {
+        let empty = rmcp::model::CallToolResult::success(vec![]);
+        let (text, warning) = rating_part("analyst", Ok(empty));
+        assert_eq!(text, "null");
+        // An empty-but-successful response is not a failure.
+        assert!(warning.is_none());
+    }
 }

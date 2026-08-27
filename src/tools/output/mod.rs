@@ -90,6 +90,10 @@ pub struct StockPositionsResponse {
     /// US-specific endpoint.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub us_asset_overview: Option<us_market::UsAssetOverview>,
+    /// Present when the US overview call failed: positions are still returned,
+    /// and this names what is missing and why.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub warnings: Option<Vec<String>>,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
