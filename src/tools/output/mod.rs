@@ -24,12 +24,27 @@ pub mod us_market;
 use rmcp::schemars::JsonSchema;
 use rmcp::serde::Serialize;
 
-/// Returned by `submit_order`.
+/// Returned by `submit_order`, which is a dry run unless `execute=true`.
+///
+/// One struct covers both outcomes because the MCP spec requires every response
+/// from a tool declaring an `outputSchema` to validate against it, and the dry
+/// run has no order ID to report.
 #[derive(Debug, Serialize, JsonSchema)]
-pub struct OrderIdResponse {
+pub struct SubmitOrderResult {
+    /// True when nothing was sent to the exchange. The caller must show
+    /// `preview` to the user and only re-call with `execute=true` once the user
+    /// has explicitly confirmed that order.
+    pub dry_run: bool,
     /// The newly-created order ID. Pass this to `cancel_order` /
-    /// `replace_order` / `order_detail`.
-    pub order_id: String,
+    /// `replace_order` / `order_detail`. Absent on a dry run.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub order_id: Option<String>,
+    /// The order that would have been placed. Present only on a dry run.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preview: Option<serde_json::Value>,
+    /// What the caller must do next. Present only on a dry run.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_step: Option<String>,
 }
 
 /// Returned by `statement_export`.
