@@ -7,9 +7,19 @@ use rmcp::serde::Deserialize;
 
 use crate::error::Error;
 use crate::serialize::{convert_unix_paths, transform_json};
+use crate::tools::support::parse;
 
 /// Maximum pages to fetch per request (matches CLI behaviour).
 const MAX_PAGES: usize = 20;
+
+/// Accepted `category` values, in the order shown to callers on a bad input.
+const CATEGORIES: [&str; 6] = ["report", "dividend", "split", "ipo", "macrodata", "closed"];
+
+/// Window length used when the caller supplies `start` but omits `end`.
+const DEFAULT_RANGE_DAYS: i64 = 7;
+
+const DATE_FORMAT: &[time::format_description::FormatItem<'_>] =
+    time::macros::format_description!("[year]-[month]-[day]");
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct FinanceCalendarParam {
@@ -21,10 +31,10 @@ pub struct FinanceCalendarParam {
     /// - "macrodata": macro economic data releases (CPI, NFP, rate decisions, etc.)
     /// - "closed": market closure days
     pub category: String,
-    /// Start date in YYYY-MM-DD format (inclusive)
-    pub start: String,
-    /// End date in YYYY-MM-DD format (inclusive)
-    pub end: String,
+    /// Start date in YYYY-MM-DD format (inclusive). Defaults to today (UTC).
+    pub start: Option<String>,
+    /// End date in YYYY-MM-DD format (inclusive). Defaults to 7 days after `start`.
+    pub end: Option<String>,
     /// Optional market filter. One of: HK, US, CN, SG, JP, UK, DE, AU.
     /// Omit to include all markets.
     pub market: Option<String>,
@@ -76,20 +86,74 @@ fn merge_pages(pages: impl IntoIterator<Item = serde_json::Value>) -> serde_json
     serde_json::json!({ "list": list })
 }
 
+/// Normalize `category`, accepting any capitalization and surrounding space.
+fn normalize_category(raw: &str) -> Result<String, McpError> {
+    let lower = raw.trim().to_lowercase();
+    if CATEGORIES.contains(&lower.as_str()) {
+        Ok(lower)
+    } else {
+        Err(McpError::invalid_params(
+            format!(
+                "invalid category '{raw}', expected one of: {}",
+                CATEGORIES.join(", ")
+            ),
+            None,
+        ))
+    }
+}
+
+/// Resolve the requested window: `start` defaults to today (UTC), `end` to
+/// [`DEFAULT_RANGE_DAYS`] after `start`.
+fn resolve_range(start: Option<&str>, end: Option<&str>) -> Result<(String, String), McpError> {
+    let start_date = match start {
+        Some(s) => parse::parse_date(s)?,
+        None => time::OffsetDateTime::now_utc().date(),
+    };
+    let end_date = match end {
+        Some(s) => parse::parse_date(s)?,
+        None => start_date.saturating_add(time::Duration::days(DEFAULT_RANGE_DAYS)),
+    };
+    if end_date < start_date {
+        return Err(McpError::invalid_params(
+            format!("end date {end_date} is earlier than start date {start_date}"),
+            None,
+        ));
+    }
+
+    let fmt = |d: time::Date| -> Result<String, McpError> {
+        d.format(DATE_FORMAT)
+            .map_err(|e| Error::Other(format!("failed to format date: {e}")).into())
+    };
+    Ok((fmt(start_date)?, fmt(end_date)?))
+}
+
 pub async fn finance_calendar(
     mctx: &crate::tools::McpContext,
     p: FinanceCalendarParam,
 ) -> Result<CallToolResult, McpError> {
+    let category = normalize_category(&p.category)?;
+    let (start, end) = resolve_range(p.start.as_deref(), p.end.as_deref())?;
     let market_upper = p.market.as_deref().map(str::to_uppercase);
 
     let mut pages: Vec<serde_json::Value> = Vec::new();
-    let mut current_date = p.start.clone();
+    let mut current_date = start.clone();
+    // Set when the walk stops before covering the whole window, so the caller
+    // is told the result is short rather than silently reading it as complete.
+    let mut partial_reason: Option<String> = None;
 
-    for _ in 0..MAX_PAGES {
+    let mut fetched = 0usize;
+    loop {
+        if fetched >= MAX_PAGES {
+            partial_reason = Some(format!(
+                "stopped after {MAX_PAGES} pages; events from {current_date} to {end} are not included"
+            ));
+            break;
+        }
+
         let mut params: Vec<(&str, &str)> = vec![
             ("date", current_date.as_str()),
-            ("date_end", p.end.as_str()),
-            ("types[]", p.category.as_str()),
+            ("date_end", end.as_str()),
+            ("types[]", category.as_str()),
             ("next", "later"),
             ("count", "100"),
             ("offset", "0"),
@@ -100,23 +164,34 @@ pub async fn finance_calendar(
 
         // Create a fresh client per page — the upstream server closes the
         // connection after each response, causing SendRequest on reuse.
-        let resp: String = mctx
+        let resp = mctx
             .create_http_client()
             .request(reqwest::Method::GET, "/v1/quote/finance_calendar")
             .query_params(params)
             .response::<String>()
             .send()
-            .await
-            .map_err(|e| Error::Other(e.to_string()))?;
+            .await;
+
+        // One bad page should not discard the pages that already succeeded:
+        // report what was collected and say where the walk stopped.
+        let resp: String = match resp {
+            Ok(resp) => resp,
+            Err(e) if pages.is_empty() => return Err(Error::Other(e.to_string()).into()),
+            Err(e) => {
+                partial_reason = Some(format!(
+                    "upstream request failed at {current_date}: {e}; events from {current_date} to {end} are not included"
+                ));
+                break;
+            }
+        };
 
         let raw: serde_json::Value = serde_json::from_str(&resp).map_err(Error::Serialize)?;
         let next_date = next_date_of(&raw);
         pages.push(raw);
+        fetched += 1;
 
         match next_date {
-            Some(nd) if nd.as_str() <= p.end.as_str() && nd != current_date => {
-                current_date = nd;
-            }
+            Some(nd) if nd.as_str() <= end.as_str() && nd != current_date => current_date = nd,
             _ => break,
         }
     }
@@ -131,6 +206,10 @@ pub async fn finance_calendar(
     let mut value: serde_json::Value =
         serde_json::from_str(&transformed).map_err(Error::Serialize)?;
     convert_unix_paths(&mut value, &["list.*.infos.*.datetime"]);
+    if let Some(reason) = partial_reason {
+        value["partial"] = serde_json::Value::Bool(true);
+        value["partial_reason"] = serde_json::Value::String(reason);
+    }
     let json = serde_json::to_string(&value).map_err(Error::Serialize)?;
     Ok(crate::tools::tool_result(json))
 }
@@ -253,5 +332,63 @@ mod tests {
     #[test]
     fn next_date_equal_end_continues() {
         assert!("2026-05-30" <= "2026-05-30");
+    }
+
+    #[test]
+    fn normalize_category_accepts_known_values_case_insensitively() {
+        assert_eq!(normalize_category("report").unwrap(), "report");
+        assert_eq!(normalize_category("  MacroData ").unwrap(), "macrodata");
+    }
+
+    #[test]
+    fn normalize_category_rejects_unknown_value_and_lists_candidates() {
+        let err = normalize_category("financial").unwrap_err();
+        assert!(
+            err.message.contains("report") && err.message.contains("macrodata"),
+            "error should list the accepted categories, got: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn resolve_range_defaults_to_today_plus_a_week() {
+        let (start, end) = resolve_range(None, None).unwrap();
+        let today = time::OffsetDateTime::now_utc().date();
+        assert_eq!(start, today.format(DATE_FORMAT).unwrap());
+        assert_eq!(
+            end,
+            today
+                .saturating_add(time::Duration::days(DEFAULT_RANGE_DAYS))
+                .format(DATE_FORMAT)
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn resolve_range_defaults_end_relative_to_given_start() {
+        let (start, end) = resolve_range(Some("2026-01-01"), None).unwrap();
+        assert_eq!(start, "2026-01-01");
+        assert_eq!(end, "2026-01-08");
+    }
+
+    #[test]
+    fn resolve_range_keeps_an_explicit_window() {
+        let (start, end) = resolve_range(Some("2026-01-01"), Some("2026-01-05")).unwrap();
+        assert_eq!((start.as_str(), end.as_str()), ("2026-01-01", "2026-01-05"));
+    }
+
+    #[test]
+    fn resolve_range_rejects_an_inverted_window() {
+        let err = resolve_range(Some("2026-01-10"), Some("2026-01-01")).unwrap_err();
+        assert!(
+            err.message.contains("earlier than"),
+            "unexpected message: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn resolve_range_rejects_a_malformed_date() {
+        assert!(resolve_range(Some("2026/01/01"), None).is_err());
     }
 }

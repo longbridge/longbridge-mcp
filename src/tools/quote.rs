@@ -84,20 +84,25 @@ fn default_trade_sessions() -> String {
 pub struct HistoryCandlesticksByOffsetParam {
     /// Security symbol, e.g. "700.HK"
     pub symbol: String,
-    /// Period: 1m, 5m, 15m, 30m, 60m, day, week, month, year
+    /// Period: 1m, 5m, 15m, 30m, 60m, day, week, month, year (default: day)
+    #[serde(default = "default_candlestick_period")]
     pub period: String,
-    /// Whether to forward-adjust for splits/dividends
-    #[serde(deserialize_with = "tolerant_bool")]
+    /// Whether to forward-adjust for splits/dividends (default: false / no adjust)
+    #[serde(default, deserialize_with = "tolerant_bool")]
     pub forward_adjust: bool,
-    /// Whether to query forward in time (true) or backward (false)
-    #[serde(deserialize_with = "tolerant_bool")]
+    /// Whether to query forward in time (true) or backward (false; default)
+    #[serde(default, deserialize_with = "tolerant_bool")]
     pub forward: bool,
     /// Reference datetime (yyyy-mm-ddTHH:MM:SS), omit to start from latest
     pub time: Option<String>,
-    /// Number of candlesticks (max 1000)
-    #[serde(deserialize_with = "tolerant_usize")]
+    /// Number of candlesticks (optional, max 1000; default 100)
+    #[serde(
+        default = "default_candlestick_count",
+        deserialize_with = "tolerant_usize"
+    )]
     pub count: usize,
-    /// Trade sessions: "intraday" (regular hours only) or "all" (include pre-market and post-market)
+    /// Trade sessions: "intraday" (regular hours only) or "all" (include pre-market and post-market; default "all")
+    #[serde(default = "default_trade_sessions")]
     pub trade_sessions: String,
 }
 
@@ -105,16 +110,18 @@ pub struct HistoryCandlesticksByOffsetParam {
 pub struct HistoryCandlesticksByDateParam {
     /// Security symbol, e.g. "700.HK"
     pub symbol: String,
-    /// Period: 1m, 5m, 15m, 30m, 60m, day, week, month, year
+    /// Period: 1m, 5m, 15m, 30m, 60m, day, week, month, year (default: day)
+    #[serde(default = "default_candlestick_period")]
     pub period: String,
-    /// Whether to forward-adjust for splits/dividends
-    #[serde(deserialize_with = "tolerant_bool")]
+    /// Whether to forward-adjust for splits/dividends (default: false / no adjust)
+    #[serde(default, deserialize_with = "tolerant_bool")]
     pub forward_adjust: bool,
     /// Start date (yyyy-mm-dd), optional
     pub start: Option<String>,
     /// End date (yyyy-mm-dd), optional
     pub end: Option<String>,
-    /// Trade sessions: "intraday" (regular hours only) or "all" (include pre-market and post-market)
+    /// Trade sessions: "intraday" (regular hours only) or "all" (include pre-market and post-market; default "all")
+    #[serde(default = "default_trade_sessions")]
     pub trade_sessions: String,
 }
 
@@ -1047,5 +1054,45 @@ mod tests {
         assert!(obj["post_market"].is_object());
         assert!(obj["overnight"].is_null());
         assert!(obj["pre_market"].is_null());
+    }
+
+    #[test]
+    fn history_candlesticks_by_date_fills_defaults_from_symbol_alone() {
+        let p: super::HistoryCandlesticksByDateParam =
+            serde_json::from_value(json!({"symbol": "700.HK"}))
+                .expect("symbol alone should be a valid call");
+        assert_eq!(p.period, "day");
+        assert_eq!(p.trade_sessions, "all");
+        assert!(!p.forward_adjust);
+        assert!(p.start.is_none() && p.end.is_none());
+    }
+
+    #[test]
+    fn history_candlesticks_by_offset_fills_defaults_from_symbol_alone() {
+        let p: super::HistoryCandlesticksByOffsetParam =
+            serde_json::from_value(json!({"symbol": "AAPL.US"}))
+                .expect("symbol alone should be a valid call");
+        assert_eq!(p.period, "day");
+        assert_eq!(p.trade_sessions, "all");
+        assert_eq!(p.count, 100);
+        assert!(!p.forward_adjust);
+        assert!(!p.forward);
+        assert!(p.time.is_none());
+    }
+
+    #[test]
+    fn history_candlesticks_params_still_honour_explicit_values() {
+        let p: super::HistoryCandlesticksByDateParam = serde_json::from_value(json!({
+            "symbol": "700.HK",
+            "period": "week",
+            "forward_adjust": "true",
+            "trade_sessions": "intraday",
+            "start": "2026-01-01",
+        }))
+        .expect("explicit values should deserialize");
+        assert_eq!(p.period, "week");
+        assert_eq!(p.trade_sessions, "intraday");
+        assert!(p.forward_adjust);
+        assert_eq!(p.start.as_deref(), Some("2026-01-01"));
     }
 }

@@ -378,6 +378,13 @@ pub struct FinanceCalendarResponse {
     /// Date buckets, sorted ascending by date.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub list: Option<Vec<FinanceCalendarBucket>>,
+    /// Present and `true` when the walk stopped before covering the whole
+    /// requested window, so `list` is known to be incomplete.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub partial: Option<bool>,
+    /// Why the result is partial, and which part of the window is missing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub partial_reason: Option<String>,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
