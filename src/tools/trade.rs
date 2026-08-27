@@ -82,6 +82,16 @@ pub struct SubmitOrderParam {
     pub outside_rth: Option<String>,
     /// Order remark (max 255 characters)
     pub remark: Option<String>,
+    /// Set to true ONLY to actually place/modify/cancel the order.
+    ///
+    /// Omitted or false (the default) makes this a DRY RUN: the request is
+    /// validated and echoed back, and nothing reaches the exchange.
+    ///
+    /// Required protocol: call once without `execute`, show the returned
+    /// preview to the user, and call again with `execute: true` only after the
+    /// user has explicitly confirmed that exact order. Never set it on your own
+    /// initiative, and never set it in the same turn the user first asks.
+    pub execute: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -100,6 +110,32 @@ pub struct ReplaceOrderParam {
     pub trailing_amount: Option<String>,
     /// New trailing percent as decimal e.g. 0.05 = 5% (for TSLPPCT)
     pub trailing_percent: Option<String>,
+    /// Set to true ONLY to actually place/modify/cancel the order.
+    ///
+    /// Omitted or false (the default) makes this a DRY RUN: the request is
+    /// validated and echoed back, and nothing reaches the exchange.
+    ///
+    /// Required protocol: call once without `execute`, show the returned
+    /// preview to the user, and call again with `execute: true` only after the
+    /// user has explicitly confirmed that exact order. Never set it on your own
+    /// initiative, and never set it in the same turn the user first asks.
+    pub execute: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct CancelOrderParam {
+    /// Order ID to cancel (from today's orders or order history)
+    pub order_id: String,
+    /// Set to true ONLY to actually place/modify/cancel the order.
+    ///
+    /// Omitted or false (the default) makes this a DRY RUN: the request is
+    /// validated and echoed back, and nothing reaches the exchange.
+    ///
+    /// Required protocol: call once without `execute`, show the returned
+    /// preview to the user, and call again with `execute: true` only after the
+    /// user has explicitly confirmed that exact order. Never set it on your own
+    /// initiative, and never set it in the same turn the user first asks.
+    pub execute: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -144,6 +180,32 @@ fn default_order_side() -> String {
 
 fn default_order_type() -> String {
     "LO".to_string()
+}
+
+/// Best-effort snapshot of the order a cancel/replace preview is about to touch,
+/// so the user can confirm it is the order they meant. A lookup failure must not
+/// break the dry run, so every error collapses to `null`.
+async fn preview_existing_order(
+    mctx: &crate::tools::McpContext,
+    ctx: &TradeContext,
+    order_id: &str,
+) -> serde_json::Value {
+    if mctx.dc_region().await == longbridge::DcRegion::Us {
+        let Ok(result) = ctx.us_order_detail(order_id.to_string()).await else {
+            return serde_json::Value::Null;
+        };
+        let Ok(mut value) = serde_json::to_value(&result) else {
+            return serde_json::Value::Null;
+        };
+        if let Some(order) = value.get_mut("order") {
+            crate::tools::support::us_normalize::normalize_us_order(order);
+        }
+        return value;
+    }
+    match ctx.order_detail(order_id.to_string()).await {
+        Ok(result) => serde_json::to_value(&result).unwrap_or(serde_json::Value::Null),
+        Err(_) => serde_json::Value::Null,
+    }
 }
 
 pub async fn account_balance(
@@ -271,9 +333,18 @@ pub async fn order_detail(
 
 pub async fn cancel_order(
     mctx: &crate::tools::McpContext,
-    p: OrderIdParam,
+    p: CancelOrderParam,
 ) -> Result<CallToolResult, McpError> {
     let (ctx, _) = TradeContext::new(mctx.create_config());
+    // Two-step by design: without execute=true this cancels nothing.
+    if !p.execute.unwrap_or(false) {
+        let existing = preview_existing_order(mctx, &ctx, &p.order_id).await;
+        return crate::tools::support::dry_run::result(serde_json::json!({
+            "action": "cancel_order",
+            "order_id": p.order_id,
+            "order": existing,
+        }));
+    }
     ctx.cancel_order(p.order_id)
         .await
         .map_err(Error::longbridge)?;
@@ -446,7 +517,7 @@ pub async fn submit_order(
         .parse::<TimeInForceType>()
         .map_err(|e| McpError::invalid_params(format!("invalid time_in_force: {e}"), None))?;
 
-    let mut opts = SubmitOrderOptions::new(p.symbol, order_type, side, quantity, tif);
+    let mut opts = SubmitOrderOptions::new(p.symbol.clone(), order_type, side, quantity, tif);
 
     if let Some(ref price) = p.submitted_price {
         opts = opts.submitted_price(Decimal::from_str(price).map_err(|e| {
@@ -488,9 +559,34 @@ pub async fn submit_order(
         opts = opts.remark(v.clone());
     }
 
+    // Two-step by design: without execute=true this places nothing.
+    if !p.execute.unwrap_or(false) {
+        return crate::tools::support::dry_run::result(serde_json::json!({
+            "action": "submit_order",
+            "symbol": p.symbol,
+            "side": p.side,
+            "order_type": p.order_type,
+            "quantity": p.submitted_quantity,
+            "time_in_force": p.time_in_force,
+            "price": p.submitted_price,
+            "trigger_price": p.trigger_price,
+            "limit_offset": p.limit_offset,
+            "trailing_amount": p.trailing_amount,
+            "trailing_percent": p.trailing_percent,
+            "expire_date": p.expire_date,
+            "outside_rth": p.outside_rth,
+            "remark": p.remark,
+        }));
+    }
+
     let (ctx, _) = TradeContext::new(mctx.create_config());
     let result = ctx.submit_order(opts).await.map_err(Error::longbridge)?;
-    tool_json(&result)
+    // Same envelope as the dry run so both outcomes validate against
+    // `output::SubmitOrderResult`, and `dry_run` alone tells them apart.
+    tool_json(&serde_json::json!({
+        "dry_run": false,
+        "order_id": result.order_id,
+    }))
 }
 
 pub async fn replace_order(
@@ -503,7 +599,7 @@ pub async fn replace_order(
 
     let quantity = Decimal::from_str(&p.quantity)
         .map_err(|e| McpError::invalid_params(format!("invalid quantity: {e}"), None))?;
-    let mut opts = ReplaceOrderOptions::new(p.order_id, quantity);
+    let mut opts = ReplaceOrderOptions::new(p.order_id.clone(), quantity);
     if let Some(ref v) = p.price {
         opts = opts.price(
             Decimal::from_str(v)
@@ -533,6 +629,21 @@ pub async fn replace_order(
         })?);
     }
     let (ctx, _) = TradeContext::new(mctx.create_config());
+    // Two-step by design: without execute=true this changes nothing.
+    if !p.execute.unwrap_or(false) {
+        let existing = preview_existing_order(mctx, &ctx, &p.order_id).await;
+        return crate::tools::support::dry_run::result(serde_json::json!({
+            "action": "replace_order",
+            "order_id": p.order_id,
+            "current_order": existing,
+            "new_quantity": p.quantity,
+            "new_price": p.price,
+            "new_trigger_price": p.trigger_price,
+            "new_limit_offset": p.limit_offset,
+            "new_trailing_amount": p.trailing_amount,
+            "new_trailing_percent": p.trailing_percent,
+        }));
+    }
     ctx.replace_order(opts).await.map_err(Error::longbridge)?;
     Ok(tool_result("order replaced".to_string()))
 }
@@ -581,6 +692,132 @@ pub async fn estimate_max_purchase_quantity(
 pub async fn short_margin(mctx: &crate::tools::McpContext) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
     http_get_tool(&client, "/v1/asset/cash/short-margin", &[]).await
+}
+
+#[cfg(test)]
+mod execute_gate_tests {
+    //! The order-execution safety gate.
+    //!
+    //! `submit_order` / `cancel_order` / `replace_order` must stay dry-run by
+    //! default, so a model can never move real money without a human first
+    //! seeing the order. A failure here is a safety regression, not a chore.
+
+    use super::{CancelOrderParam, ReplaceOrderParam, SubmitOrderParam};
+
+    /// Every tool that can move real money. Grid writes count: a live grid keeps
+    /// placing orders on its own, so it is at least as consequential as a single
+    /// order.
+    const GATED_TOOLS: [&str; 8] = [
+        "submit_order",
+        "cancel_order",
+        "replace_order",
+        "grid_submit",
+        "grid_replace",
+        "grid_cancel",
+        "grid_suspend",
+        "grid_restart",
+    ];
+
+    #[test]
+    fn omitting_execute_deserializes_to_a_dry_run() {
+        let submit: SubmitOrderParam = serde_json::from_value(serde_json::json!({
+            "symbol": "TSLA.US",
+            "order_type": "LO",
+            "side": "Buy",
+            "submitted_quantity": "10",
+            "time_in_force": "Day",
+        }))
+        .expect("submit_order params without execute must deserialize");
+        assert!(!submit.execute.unwrap_or(false));
+
+        let cancel: CancelOrderParam =
+            serde_json::from_value(serde_json::json!({ "order_id": "1" }))
+                .expect("cancel_order params without execute must deserialize");
+        assert!(!cancel.execute.unwrap_or(false));
+
+        let replace: ReplaceOrderParam =
+            serde_json::from_value(serde_json::json!({ "order_id": "1", "quantity": "10" }))
+                .expect("replace_order params without execute must deserialize");
+        assert!(!replace.execute.unwrap_or(false));
+
+        let grid: crate::tools::grid::GridOrderIdParam =
+            serde_json::from_value(serde_json::json!({ "order_id": "1" }))
+                .expect("grid cancel/suspend/restart params without execute must deserialize");
+        assert!(!grid.execute.unwrap_or(false));
+    }
+
+    #[test]
+    fn execute_is_an_optional_schema_property_on_every_gated_tool() {
+        let tools = crate::tools::list_tools();
+        for name in GATED_TOOLS {
+            let tool = tools
+                .iter()
+                .find(|t| t.name == name)
+                .unwrap_or_else(|| panic!("{name} must be a live tool"));
+            let schema = tool.input_schema.as_ref();
+            assert!(
+                schema
+                    .get("properties")
+                    .and_then(|v| v.as_object())
+                    .is_some_and(|props| props.contains_key("execute")),
+                "{name} must expose an `execute` parameter"
+            );
+            // Required would force the model to answer the question every call;
+            // optional-and-absent is what makes the default a dry run.
+            let required = schema
+                .get("required")
+                .and_then(|v| v.as_array())
+                .map(|a| a.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>())
+                .unwrap_or_default();
+            assert!(
+                !required.contains(&"execute"),
+                "{name}'s `execute` must stay optional so the default is a dry run"
+            );
+        }
+    }
+
+    #[test]
+    fn gated_output_schemas_admit_the_dry_run_shape() {
+        // MCP requires every response from a tool with an `outputSchema` to
+        // validate against it. The dry run has no order ID, so `order_id` must
+        // not be required — otherwise the safe path returns an invalid result.
+        let tools = crate::tools::list_tools();
+        for name in ["submit_order", "grid_submit"] {
+            let schema = tools
+                .iter()
+                .find(|t| t.name == name)
+                .and_then(|t| t.output_schema.clone())
+                .unwrap_or_else(|| panic!("{name} must declare an output schema"));
+            let required = schema
+                .get("required")
+                .and_then(|v| v.as_array())
+                .map(|a| a.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>())
+                .unwrap_or_default();
+            assert_eq!(
+                required,
+                ["dry_run"],
+                "{name}: only `dry_run` may be required so both outcomes validate"
+            );
+        }
+    }
+
+    #[test]
+    fn every_gated_tool_description_states_the_two_step_protocol() {
+        let tools = crate::tools::list_tools();
+        for name in GATED_TOOLS {
+            let description = tools
+                .iter()
+                .find(|t| t.name == name)
+                .and_then(|t| t.description.clone())
+                .unwrap_or_else(|| panic!("{name} must have a description"));
+            for needle in ["execute=true", "DRY RUN", "confirm"] {
+                assert!(
+                    description.contains(needle),
+                    "{name} description must mention `{needle}`"
+                );
+            }
+        }
+    }
 }
 
 #[cfg(test)]

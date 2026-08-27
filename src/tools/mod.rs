@@ -1905,12 +1905,12 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Cancel an open order by order_id. Returns plain text \"order cancelled\" on success; errors if the order is already filled or cancelled."
+        description = "Cancel an open order by order_id. Returns plain text \"order cancelled\" on success; errors if the order is already filled or cancelled. TWO-STEP CONFIRMATION IS MANDATORY: this tool is a DRY RUN unless you pass execute=true. Call it first without execute, show the returned preview to the user, and only call it again with execute=true after the user has explicitly confirmed that exact order. Never set execute=true on your own initiative, and never in the same turn the user first asks. The dry run also echoes the order being targeted so the user can verify it is the right one."
     )]
     async fn cancel_order(
         &self,
         ctx: RequestContext<RoleServer>,
-        Parameters(p): Parameters<OrderIdParam>,
+        Parameters(p): Parameters<trade::CancelOrderParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
         measured_tool_call("cancel_order", || trade::cancel_order(&mctx, p)).await
@@ -2005,8 +2005,8 @@ impl Longbridge {
             idempotent_hint = false,
             open_world_hint = true
         ),
-        output_schema = schema_for::<output::OrderIdResponse>(),
-        description = "Submit a buy/sell order. order_type: LO (Limit) / ELO (Enhanced Limit, HK) / MO (Market) / AO (At-auction, HK) / ALO (At-auction Limit, HK) / ODD (Odd Lots, HK) / LIT (Limit If Touched) / MIT (Market If Touched) / TSLPAMT (Trailing Limit by Amount) / TSLPPCT (Trailing Limit by Percent) / SLO (Special Limit, HK). side: Buy/Sell. time_in_force: Day/GTC/GTD"
+        output_schema = schema_for::<output::SubmitOrderResult>(),
+        description = "Submit a buy/sell order. DRY RUN unless execute=true: call once without execute, show the preview to the user, then re-call with execute=true only after they explicitly confirm. Never set execute=true unprompted. order_type: LO (Limit) / ELO (Enhanced Limit, HK) / MO (Market) / AO (At-auction, HK) / ALO (At-auction Limit, HK) / ODD (Odd Lots, HK) / LIT (Limit If Touched) / MIT (Market If Touched) / TSLPAMT (Trailing Limit by Amount) / TSLPPCT (Trailing Limit by Percent) / SLO (Special Limit, HK). side: Buy/Sell. time_in_force: Day/GTC/GTD"
     )]
     async fn submit_order(
         &self,
@@ -2026,7 +2026,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Modify an open order's quantity, price, trigger_price, or trailing params. Returns \"order replaced\" on success. Only open/pending orders can be modified."
+        description = "Modify an open order's quantity, price, trigger_price, or trailing params. Returns \"order replaced\" on success. Only open/pending orders can be modified. TWO-STEP CONFIRMATION IS MANDATORY: this tool is a DRY RUN unless you pass execute=true. Call it first without execute, show the returned preview to the user, and only call it again with execute=true after the user has explicitly confirmed that exact order. Never set execute=true on your own initiative, and never in the same turn the user first asks. The dry run echoes the current order alongside the requested change."
     )]
     async fn replace_order(
         &self,
@@ -3441,7 +3441,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::grid::GridSubmitResponse>(),
-        description = "Submit a grid trading order. Requires symbol, settlement_currency, and the grid rule: base/upper/lower price, trigger_price_type (1=spread, 2=percent) with the matching spread/percent up/down, trigger_quantity, upper/lower_limit_quantity, time_in_force (0=Day, 1=GTC, 6=GTD), grid_order_type_up/down (GMO/GLO/GTG), and boundary events (1=ignore, 2=close-at-last). Prices/quantities are decimal strings. Requires the one-time grid_questionnaire consent."
+        description = "Submit a grid trading order. DRY RUN unless execute=true: call once without execute, show the preview to the user, then re-call with execute=true only after they explicitly confirm. A live grid keeps trading on its own. Requires symbol, settlement_currency, and the grid rule: base/upper/lower price, trigger_price_type (1=spread, 2=percent) with the matching spread/percent up/down, trigger_quantity, upper/lower_limit_quantity, time_in_force (0=Day, 1=GTC, 6=GTD), grid_order_type_up/down (GMO/GLO/GTG), and boundary events (1=ignore, 2=close-at-last). Prices/quantities are decimal strings. Requires the one-time grid_questionnaire consent."
     )]
     async fn grid_submit(
         &self,
@@ -3461,7 +3461,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Replace an existing grid order's rule by order_id. Accepts the same grid rule fields as grid_submit. Overwrites the order's entire rule."
+        description = "Replace an existing grid order's rule by order_id. Accepts the same grid rule fields as grid_submit. Overwrites the order's entire rule. TWO-STEP CONFIRMATION IS MANDATORY: this tool is a DRY RUN unless you pass execute=true. Call it first without execute, show the returned preview to the user, and only call it again with execute=true after the user has explicitly confirmed it. Never set execute=true on your own initiative. The dry run echoes the rule that would replace the current one."
     )]
     async fn grid_replace(
         &self,
@@ -3481,7 +3481,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Cancel (terminate) a grid order by order_id."
+        description = "Cancel (terminate) a grid order by order_id. TWO-STEP CONFIRMATION IS MANDATORY: this tool is a DRY RUN unless you pass execute=true. Call it first without execute, show the returned preview to the user, and only call it again with execute=true after the user has explicitly confirmed it. Never set execute=true on your own initiative."
     )]
     async fn grid_cancel(
         &self,
@@ -3501,7 +3501,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Suspend (pause) a running grid order by order_id. Resume with grid_restart."
+        description = "Suspend (pause) a running grid order by order_id. Resume with grid_restart. TWO-STEP CONFIRMATION IS MANDATORY: this tool is a DRY RUN unless you pass execute=true. Call it first without execute, show the returned preview to the user, and only call it again with execute=true after the user has explicitly confirmed it. Never set execute=true on your own initiative."
     )]
     async fn grid_suspend(
         &self,
@@ -3521,7 +3521,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Restart (resume) a suspended grid order by order_id."
+        description = "Restart (resume) a suspended grid order by order_id. TWO-STEP CONFIRMATION IS MANDATORY: this tool is a DRY RUN unless you pass execute=true. Call it first without execute, show the returned preview to the user, and only call it again with execute=true after the user has explicitly confirmed it. Never set execute=true on your own initiative. A restarted grid resumes placing orders on its own."
     )]
     async fn grid_restart(
         &self,
@@ -4571,7 +4571,7 @@ impl Longbridge {
 
 #[tool_handler(
     name = "longbridge-mcp",
-    instructions = "Longbridge OpenAPI MCP Server - provides market data, trading, and financial analysis tools"
+    instructions = "Longbridge OpenAPI MCP Server - provides market data, trading, and financial analysis tools. Order execution requires two-step confirmation: submit_order, cancel_order, replace_order and every grid write (grid_submit, grid_replace, grid_cancel, grid_suspend, grid_restart) are dry runs unless you pass execute=true. Always call them once without execute, show the returned preview to the user, and only re-call with execute=true after the user has explicitly confirmed it."
 )]
 impl ServerHandler for Longbridge {
     // `get_info` mirrors the `#[tool_handler]` default tool metadata, plus the
@@ -4593,7 +4593,7 @@ impl ServerHandler for Longbridge {
             env!("CARGO_PKG_VERSION"),
         ))
         .with_instructions(
-            "Longbridge OpenAPI MCP Server - provides market data, trading, and financial analysis tools",
+            "Longbridge OpenAPI MCP Server - provides market data, trading, and financial analysis tools. Order execution requires two-step confirmation: submit_order, cancel_order, replace_order and every grid write (grid_submit, grid_replace, grid_cancel, grid_suspend, grid_restart) are dry runs unless you pass execute=true. Always call them once without execute, show the returned preview to the user, and only re-call with execute=true after the user has explicitly confirmed it.",
         )
     }
 
