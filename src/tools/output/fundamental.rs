@@ -43,6 +43,10 @@ pub struct InstitutionRatingResponse {
     /// description; passed through as raw JSON.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub instratings: Option<serde_json::Value>,
+    /// Present when one of the two upstream calls failed: the other half is
+    /// still returned, and this names what is missing and why.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub warnings: Option<Vec<String>>,
 }
 
 /// Analyst consensus block of `institution_rating`.
