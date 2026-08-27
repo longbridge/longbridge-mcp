@@ -488,12 +488,12 @@
     },
     "finance_calendar": {
       "title": "财经日历",
-      "description": "获取财经日历事件。category：report（财报+业绩）/ dividend（除息日与派发日）/ split（拆股/反拆）/ ipo / macrodata（CPI、非农、议息等）/ closed（休市日）；market：HK/US/CN/SG/JP/UK/DE/AU。日期范围建议不超过 2 周；如需查询更长时间段，请拆分为多次调用以避免数据截断。",
+      "description": "获取财经日历事件。category：report（财报）/ dividend（除息与派息）/ split（拆股与反向拆股）/ ipo / macrodata（CPI、非农、议息等）/ closed（休市日）。start、end（`yyyy-mm-dd`）均可选，默认为今天起 7 天；范围建议不超过 2 周，否则结果会被截断。",
       "properties": {
         "market": "市场代码：HK、US、CN、SG，省略则查询所有市场",
-        "start": "起始日期（`yyyy-mm-dd`）",
-        "end": "结束日期（`yyyy-mm-dd`）",
-        "category": "事件类别：<br>- `financial`：业绩 / 财报公告<br>- `report`：财报披露排期<br>- `dividend`：除息日与派发日<br>- `ipo`：IPO 上市日期<br>- `macrodata`：宏观数据发布（GDP、CPI 等）<br>- `closed`：市场休市 / 停牌日期"
+        "start": "起始日期（`yyyy-mm-dd`），可选，默认为今天",
+        "end": "结束日期（`yyyy-mm-dd`），可选，默认为起始日期之后 7 天",
+        "category": "事件类别：`report`（财报披露）/ `dividend`（除息日与派发日）/ `split`（拆股与反向拆股）/ `ipo`（IPO 上市日期）/ `macrodata`（宏观数据发布，如 GDP、CPI、非农）/ `closed`（市场休市日）"
       }
     },
     "financial_report": {
@@ -662,27 +662,27 @@
     },
     "history_candlesticks_by_date": {
       "title": "历史 K 线（按日期）",
-      "description": "按日期区间获取历史 K 线（OHLCV）数据。period：1m/5m/15m/30m/60m/day/week/month/year",
+      "description": "按日期区间获取历史 K 线（OHLCV）数据。仅 symbol 必填，period 默认 day、forward_adjust 默认 false、trade_sessions 默认 all。period：1m/5m/15m/30m/60m/day/week/month/year",
       "properties": {
         "symbol": "证券代码",
-        "period": "K 线周期：`1m`、`5m`、`15m`、`30m`、`60m`、`day`、`week`、`month`、`year`",
-        "forward_adjust": "是否对拆股 / 派息进行前复权",
+        "period": "K 线周期：`1m`、`5m`、`15m`、`30m`、`60m`、`day`、`week`、`month`、`year`（默认 `day`）",
+        "forward_adjust": "是否对拆股 / 派息进行前复权（默认 `false`，不复权）",
         "start": "起始日期（`yyyy-mm-dd`），可选",
         "end": "结束日期（`yyyy-mm-dd`），可选",
-        "trade_sessions": "交易时段：`intraday`（仅常规时段）或 `all`（含盘前盘后）"
+        "trade_sessions": "交易时段：`intraday`（仅常规时段）或 `all`（含盘前盘后，默认）"
       }
     },
     "history_candlesticks_by_offset": {
       "title": "历史 K 线（按偏移）",
-      "description": "以参考时间为锚点按偏移量获取历史 K 线（OHLCV）数据。period：1m/5m/15m/30m/60m/day/week/month/year",
+      "description": "以参考时间为锚点按偏移量获取历史 K 线（OHLCV）数据。仅 symbol 必填，period 默认 day、count 默认 100、forward_adjust 与 forward 默认 false、trade_sessions 默认 all。",
       "properties": {
         "symbol": "证券代码",
-        "period": "K 线周期：`1m`、`5m`、`15m`、`30m`、`60m`、`day`、`week`、`month`、`year`",
-        "forward_adjust": "是否对拆股 / 派息进行前复权",
-        "forward": "查询方向：`true` 向后（向未来），`false` 向前（向过去）",
+        "period": "K 线周期：`1m`、`5m`、`15m`、`30m`、`60m`、`day`、`week`、`month`、`year`（默认 `day`）",
+        "forward_adjust": "是否对拆股 / 派息进行前复权（默认 `false`，不复权）",
+        "forward": "查询方向：`true` 向后（向未来），`false` 向前（向过去，默认）",
         "time": "参考时间（`yyyy-mm-ddTHH:MM:SS`），省略则以最新时间为起点",
-        "count": "K 线数量（最多 1000）",
-        "trade_sessions": "交易时段：`intraday`（仅常规时段）或 `all`（含盘前盘后）"
+        "count": "K 线数量（最多 1000，默认 100）",
+        "trade_sessions": "交易时段：`intraday`（仅常规时段）或 `all`（含盘前盘后，默认）"
       }
     },
     "history_market_temperature": {

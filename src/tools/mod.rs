@@ -48,9 +48,64 @@ where
             let result = f().await;
             let duration = start.elapsed().as_secs_f64();
             crate::metrics::record_tool_call(name, duration, result.is_err());
-            result
+            // The request was routed and the tool ran, so a failure here is a
+            // tool-level error, not a protocol one. MCP clients render protocol
+            // errors opaquely ("tool result missing due to internal error"),
+            // which hides the reason from the model and denies it any chance to
+            // correct the call. Returning `isError` puts the message in front of
+            // the model instead. Protocol errors stay with the framework, which
+            // rejects unroutable calls (unknown tool, unparseable arguments)
+            // before this wrapper is ever reached.
+            Ok(result.unwrap_or_else(|err| tool_error(name, &err)))
         })
         .await
+}
+
+/// Render a failed tool call as a caller-visible `isError` result.
+///
+/// `structured_content` is deliberately left unset: a tool that declares an
+/// `outputSchema` must not return structured content that fails to match it,
+/// and an error payload never does.
+fn tool_error(name: &str, err: &McpError) -> CallToolResult {
+    let mut text = format!("{name} failed: {}", err.message);
+    if let Some(hint) = error_hint(err) {
+        text.push_str("\n\n");
+        text.push_str(hint);
+    }
+    CallToolResult::error(vec![Content::text(text)])
+}
+
+/// Actionable follow-up for the error classes users hit most, so the model can
+/// either fix the call itself or tell the user what to do.
+fn error_hint(err: &McpError) -> Option<&'static str> {
+    if err.code == rmcp::model::ErrorCode::INVALID_PARAMS {
+        return Some(
+            "Hint: check the argument values against this tool's input schema, then retry.",
+        );
+    }
+
+    let msg = err.message.to_lowercase();
+    if ["permission", "forbidden", "not authorized", "403", "scope"]
+        .iter()
+        .any(|needle| msg.contains(needle))
+    {
+        return Some(
+            "Hint: this is a permission error. The most common cause is that the OAuth \
+             authorization was granted with only part of the available scopes. Ask the user to \
+             reconnect this MCP server and approve the full set of permissions (watchlist, \
+             portfolio, and trading scopes) before retrying.",
+        );
+    }
+    if ["unauthorized", "401", "token", "expired"]
+        .iter()
+        .any(|needle| msg.contains(needle))
+    {
+        return Some(
+            "Hint: the access token is missing, expired, or invalid. Ask the user to reconnect \
+             this MCP server to re-authorize, granting the full set of permissions.",
+        );
+    }
+    None
 }
 
 mod alert;
@@ -1379,7 +1434,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get historical candlestick data by offset from a reference time. period: 1m/5m/15m/30m/60m/day/week/month/year"
+        description = "Get historical candlestick data by offset from a reference time. Only symbol is required; period defaults to day (1m/5m/15m/30m/60m/day/week/month/year), count to 100, forward_adjust/forward to false, trade_sessions to all."
     )]
     async fn history_candlesticks_by_offset(
         &self,
@@ -1402,7 +1457,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get historical candlestick data by date range. period: 1m/5m/15m/30m/60m/day/week/month/year"
+        description = "Get historical candlestick data by date range. Only symbol is required; period defaults to day (1m/5m/15m/30m/60m/day/week/month/year), forward_adjust to false, trade_sessions to all."
     )]
     async fn history_candlesticks_by_date(
         &self,
@@ -2655,7 +2710,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::market::FinanceCalendarResponse>(),
-        description = "Get finance calendar events by category and date range. category: report (earnings + financials) / dividend / split (splits & reverse splits) / ipo / macrodata (CPI, NFP, rate decisions) / closed (market holidays). market: HK/US/CN/SG/JP/UK/DE/AU (optional). Keep the date range to 2 weeks or less; for longer periods split into multiple calls to avoid truncation."
+        description = "Finance calendar by category: report (earnings) / dividend / split / ipo / macrodata (CPI, NFP, rates) / closed (holidays). start and end (YYYY-MM-DD) are optional, default today plus 7 days; keep ranges under 2 weeks or results truncate."
     )]
     async fn finance_calendar(
         &self,
@@ -5612,6 +5667,102 @@ mod quote_cmd_tests {
             hot_us * 5.0 < rebuild_us,
             "expected hot path ({hot_us:.1}µs) to be at least 5× faster \
              than rebuild ({rebuild_us:.1}µs)"
+        );
+    }
+}
+
+#[cfg(test)]
+mod tool_error_tests {
+    use super::{error_hint, measured_tool_call, tool_error, tool_result};
+    use rmcp::ErrorData as McpError;
+    use rmcp::model::CallToolResult;
+
+    fn text_of(result: &CallToolResult) -> String {
+        result
+            .content
+            .iter()
+            .filter_map(|c| c.as_text().map(|t| t.text.clone()))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn tool_error_marks_the_result_and_names_the_tool() {
+        let err = McpError::internal_error("upstream exploded", None);
+        let result = tool_error("finance_calendar", &err);
+        assert_eq!(result.is_error, Some(true));
+        assert!(result.structured_content.is_none());
+        let text = text_of(&result);
+        assert!(
+            text.contains("finance_calendar") && text.contains("upstream exploded"),
+            "unexpected error text: {text}"
+        );
+    }
+
+    #[test]
+    fn invalid_params_hint_points_at_the_input_schema() {
+        let err = McpError::invalid_params("invalid period 'daily'", None);
+        assert!(
+            error_hint(&err).is_some_and(|h| h.contains("input schema")),
+            "expected an input-schema hint"
+        );
+    }
+
+    #[test]
+    fn permission_errors_hint_at_reconnecting_for_full_scopes() {
+        for message in [
+            "403 Forbidden",
+            "no permission for this endpoint",
+            "missing scope: trade",
+        ] {
+            let err = McpError::internal_error(message.to_string(), None);
+            let hint = error_hint(&err).unwrap_or_else(|| panic!("no hint for {message:?}"));
+            assert!(
+                hint.contains("reconnect") && hint.contains("scopes"),
+                "hint for {message:?} should mention reconnecting for full scopes, got: {hint}"
+            );
+        }
+    }
+
+    #[test]
+    fn expired_token_errors_hint_at_reauthorizing() {
+        let err = McpError::internal_error("access token expired", None);
+        assert!(
+            error_hint(&err).is_some_and(|h| h.contains("reconnect")),
+            "expected a re-authorization hint"
+        );
+    }
+
+    #[test]
+    fn ordinary_errors_get_no_hint() {
+        let err = McpError::internal_error("symbol not found", None);
+        assert!(error_hint(&err).is_none());
+    }
+
+    #[tokio::test]
+    async fn measured_tool_call_reports_failures_as_tool_errors() {
+        let result = measured_tool_call("some_tool", || async {
+            Err(McpError::internal_error("upstream 500", None))
+        })
+        .await
+        .expect("a failing tool must not surface as a protocol error");
+
+        assert_eq!(result.is_error, Some(true));
+        assert!(text_of(&result).contains("upstream 500"));
+    }
+
+    #[tokio::test]
+    async fn measured_tool_call_passes_success_through_untouched() {
+        let result = measured_tool_call("some_tool", || async {
+            Ok(tool_result(r#"{"ok":true}"#.to_string()))
+        })
+        .await
+        .expect("successful call");
+
+        assert_eq!(result.is_error, Some(false));
+        assert_eq!(
+            result.structured_content,
+            Some(serde_json::json!({"ok": true}))
         );
     }
 }
