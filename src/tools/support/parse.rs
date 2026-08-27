@@ -40,11 +40,11 @@ pub fn parse_period(s: &str) -> Result<Period, McpError> {
 }
 
 pub fn parse_trade_sessions(s: &str) -> Result<TradeSessions, McpError> {
-    match s {
+    match s.to_lowercase().as_str() {
         "intraday" => Ok(TradeSessions::Intraday),
         "all" => Ok(TradeSessions::All),
         _ => Err(McpError::invalid_params(
-            format!("invalid trade_sessions: {s}, expected 'intraday' or 'all'"),
+            format!("invalid trade_sessions: '{s}', expected 'intraday' or 'all'"),
             None,
         )),
     }

@@ -67,39 +67,71 @@ pub async fn institution_rating(
     let client = mctx.create_http_client();
     let cid = symbol_to_counter_id(&p.symbol);
     let params = [("counter_id", cid.as_str())];
-    let ratings = http_get_tool(&client, "/v1/quote/institution-rating-latest", &params).await;
-    let instratings = http_get_tool(&client, "/v1/quote/institution-ratings", &params).await;
-    match (ratings, instratings) {
-        (Ok(r), Ok(i)) => {
-            let r_text = r
-                .content
-                .first()
-                .and_then(|c| c.as_text())
-                .map(|t| t.text.as_str())
-                .unwrap_or("null");
-            let i_text = i
-                .content
-                .first()
-                .and_then(|c| c.as_text())
-                .map(|t| t.text.as_str())
-                .unwrap_or("null");
-            let combined = format!(r#"{{"analyst":{r_text},"instratings":{i_text}}}"#);
-            let mut value: serde_json::Value =
-                serde_json::from_str(&combined).map_err(crate::error::Error::Serialize)?;
-            convert_unix_paths(
-                &mut value,
-                &[
-                    "analyst.evaluate.start_date",
-                    "analyst.evaluate.end_date",
-                    "analyst.target.start_date",
-                    "analyst.target.end_date",
-                ],
-            );
-            let out = serde_json::to_string(&value).map_err(crate::error::Error::Serialize)?;
-            Ok(crate::tools::tool_result(out))
+
+    // Run both sub-requests concurrently; use partial-success mode so a single
+    // sub-request failure does not discard the successful result.
+    let (ratings_res, instratings_res) = tokio::join!(
+        http_get_tool(&client, "/v1/quote/institution-rating-latest", &params),
+        http_get_tool(&client, "/v1/quote/institution-ratings", &params),
+    );
+
+    let mut warnings: Vec<String> = Vec::new();
+
+    let r_text = match ratings_res {
+        Ok(r) => r
+            .content
+            .first()
+            .and_then(|c| c.as_text())
+            .map(|t| t.text.clone())
+            .unwrap_or_else(|| "null".to_string()),
+        Err(_) => {
+            warnings.push("analyst data temporarily unavailable".to_string());
+            "null".to_string()
         }
-        (Err(e), _) | (_, Err(e)) => Err(e),
+    };
+
+    let i_text = match instratings_res {
+        Ok(i) => i
+            .content
+            .first()
+            .and_then(|c| c.as_text())
+            .map(|t| t.text.clone())
+            .unwrap_or_else(|| "null".to_string()),
+        Err(_) => {
+            warnings.push("instratings data temporarily unavailable".to_string());
+            "null".to_string()
+        }
+    };
+
+    // Both failed — propagate as an error rather than returning empty data.
+    if r_text == "null" && i_text == "null" {
+        return Err(McpError::internal_error(
+            "both institution rating requests failed",
+            None,
+        ));
     }
+
+    let combined = if warnings.is_empty() {
+        format!(r#"{{"analyst":{r_text},"instratings":{i_text}}}"#)
+    } else {
+        let warnings_json =
+            serde_json::to_string(&warnings).map_err(crate::error::Error::Serialize)?;
+        format!(r#"{{"analyst":{r_text},"instratings":{i_text},"warnings":{warnings_json}}}"#)
+    };
+
+    let mut value: serde_json::Value =
+        serde_json::from_str(&combined).map_err(crate::error::Error::Serialize)?;
+    convert_unix_paths(
+        &mut value,
+        &[
+            "analyst.evaluate.start_date",
+            "analyst.evaluate.end_date",
+            "analyst.target.start_date",
+            "analyst.target.end_date",
+        ],
+    );
+    let out = serde_json::to_string(&value).map_err(crate::error::Error::Serialize)?;
+    Ok(crate::tools::tool_result(out))
 }
 
 pub async fn institution_rating_detail(
