@@ -1905,7 +1905,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Cancel an open order by order_id. Returns plain text \"order cancelled\" on success; errors if the order is already filled or cancelled. TWO-STEP CONFIRMATION IS MANDATORY: this tool is a DRY RUN unless you pass the confirmation_code its own dry run returned. Call it first without execute, show the returned preview to the user, and only call it again with execute=\"<confirmation_code>\" after the user has explicitly confirmed that exact order. The code is single use, expires in 10 minutes, and applies only to that exact order. Never quote it back on your own initiative, and never in the same turn the user first asks. The dry run also echoes the order being targeted so the user can verify it is the right one."
+        description = "Cancel an open order by order_id. Returns plain text \"order cancelled\" on success; errors if the order is already filled or cancelled. TWO-STEP CONFIRMATION IS MANDATORY: this tool is a DRY RUN unless you pass the confirmation_code its own dry run returned. Call it first without execute, show the returned preview to the user, and only call it again with execute=\"<confirmation_code>\" after the user has explicitly confirmed that exact order. The code is derived from the order itself, so it applies only to that exact order. Never quote it back on your own initiative, and never in the same turn the user first asks. The dry run also echoes the order being targeted so the user can verify it is the right one."
     )]
     async fn cancel_order(
         &self,
@@ -2026,7 +2026,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Modify an open order's quantity, price, trigger_price, or trailing params. Returns \"order replaced\" on success. Only open/pending orders can be modified. TWO-STEP CONFIRMATION IS MANDATORY: this tool is a DRY RUN unless you pass the confirmation_code its own dry run returned. Call it first without execute, show the returned preview to the user, and only call it again with execute=\"<confirmation_code>\" after the user has explicitly confirmed that exact order. The code is single use, expires in 10 minutes, and applies only to that exact order. Never quote it back on your own initiative, and never in the same turn the user first asks. The dry run echoes the current order alongside the requested change."
+        description = "Modify an open order's quantity, price, trigger_price, or trailing params. Returns \"order replaced\" on success. Only open/pending orders can be modified. TWO-STEP CONFIRMATION IS MANDATORY: this tool is a DRY RUN unless you pass the confirmation_code its own dry run returned. Call it first without execute, show the returned preview to the user, and only call it again with execute=\"<confirmation_code>\" after the user has explicitly confirmed that exact order. The code is derived from the order itself, so it applies only to that exact order. Never quote it back on your own initiative, and never in the same turn the user first asks. The dry run echoes the current order alongside the requested change."
     )]
     async fn replace_order(
         &self,
@@ -3461,7 +3461,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Replace an existing grid order's rule by order_id. Accepts the same grid rule fields as grid_submit. Overwrites the order's entire rule. TWO-STEP CONFIRMATION IS MANDATORY: this tool is a DRY RUN unless you pass the confirmation_code its own dry run returned. Call it first without execute, show the returned preview to the user, and only call it again with execute=\"<confirmation_code>\" after the user has explicitly confirmed it. The code is single use, expires in 10 minutes, and applies only to that exact request. Never quote it back on your own initiative. The dry run echoes the rule that would replace the current one."
+        description = "Replace an existing grid order's rule by order_id. Accepts the same grid rule fields as grid_submit. Overwrites the order's entire rule. TWO-STEP CONFIRMATION IS MANDATORY: this tool is a DRY RUN unless you pass the confirmation_code its own dry run returned. Call it first without execute, show the returned preview to the user, and only call it again with execute=\"<confirmation_code>\" after the user has explicitly confirmed it. The code is derived from the order itself, so it applies only to that exact request. Never quote it back on your own initiative. The dry run echoes the rule that would replace the current one."
     )]
     async fn grid_replace(
         &self,
@@ -3481,7 +3481,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Cancel (terminate) a grid order by order_id. TWO-STEP CONFIRMATION IS MANDATORY: this tool is a DRY RUN unless you pass the confirmation_code its own dry run returned. Call it first without execute, show the returned preview to the user, and only call it again with execute=\"<confirmation_code>\" after the user has explicitly confirmed it. The code is single use, expires in 10 minutes, and applies only to that exact request. Never quote it back on your own initiative."
+        description = "Cancel (terminate) a grid order by order_id. TWO-STEP CONFIRMATION IS MANDATORY: this tool is a DRY RUN unless you pass the confirmation_code its own dry run returned. Call it first without execute, show the returned preview to the user, and only call it again with execute=\"<confirmation_code>\" after the user has explicitly confirmed it. The code is derived from the order itself, so it applies only to that exact request. Never quote it back on your own initiative."
     )]
     async fn grid_cancel(
         &self,
@@ -3501,7 +3501,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Suspend (pause) a running grid order by order_id. Resume with grid_restart. TWO-STEP CONFIRMATION IS MANDATORY: this tool is a DRY RUN unless you pass the confirmation_code its own dry run returned. Call it first without execute, show the returned preview to the user, and only call it again with execute=\"<confirmation_code>\" after the user has explicitly confirmed it. The code is single use, expires in 10 minutes, and applies only to that exact request. Never quote it back on your own initiative."
+        description = "Suspend (pause) a running grid order by order_id. Resume with grid_restart. TWO-STEP CONFIRMATION IS MANDATORY: this tool is a DRY RUN unless you pass the confirmation_code its own dry run returned. Call it first without execute, show the returned preview to the user, and only call it again with execute=\"<confirmation_code>\" after the user has explicitly confirmed it. The code is derived from the order itself, so it applies only to that exact request. Never quote it back on your own initiative."
     )]
     async fn grid_suspend(
         &self,
@@ -3521,7 +3521,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Restart (resume) a suspended grid order by order_id. TWO-STEP CONFIRMATION IS MANDATORY: this tool is a DRY RUN unless you pass the confirmation_code its own dry run returned. Call it first without execute, show the returned preview to the user, and only call it again with execute=\"<confirmation_code>\" after the user has explicitly confirmed it. The code is single use, expires in 10 minutes, and applies only to that exact request. Never quote it back on your own initiative. A restarted grid resumes placing orders on its own."
+        description = "Restart (resume) a suspended grid order by order_id. TWO-STEP CONFIRMATION IS MANDATORY: this tool is a DRY RUN unless you pass the confirmation_code its own dry run returned. Call it first without execute, show the returned preview to the user, and only call it again with execute=\"<confirmation_code>\" after the user has explicitly confirmed it. The code is derived from the order itself, so it applies only to that exact request. Never quote it back on your own initiative. A restarted grid resumes placing orders on its own."
     )]
     async fn grid_restart(
         &self,

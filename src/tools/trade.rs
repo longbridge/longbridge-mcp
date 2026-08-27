@@ -349,13 +349,12 @@ pub async fn cancel_order(
     p: CancelOrderParam,
 ) -> Result<CallToolResult, McpError> {
     let (ctx, _) = TradeContext::new(mctx.create_config());
-    let request = dry_run::fingerprint(&["cancel_order", &p.order_id]);
+    let scope = dry_run::Scope::on_order("cancel", &p.order_id);
     // Two-step by design: without a confirmation code this cancels nothing.
     let Some(code) = p.execute.clone() else {
         let existing = preview_existing_order(mctx, &ctx, &p.order_id).await;
         return dry_run::result(
-            &mctx.token,
-            &request,
+            &scope,
             serde_json::json!({
                 "action": "cancel_order",
                 "order_id": p.order_id,
@@ -363,7 +362,7 @@ pub async fn cancel_order(
             }),
         );
     };
-    dry_run::consume(&mctx.token, &request, &code)?;
+    scope.verify(&code)?;
     ctx.cancel_order(p.order_id)
         .await
         .map_err(Error::longbridge)?;
@@ -578,29 +577,16 @@ pub async fn submit_order(
         opts = opts.remark(v.clone());
     }
 
-    // Fingerprint every field that defines the order, so a code read from one
-    // preview cannot be quoted back for a different order.
-    let request = dry_run::fingerprint(&[
-        "submit_order",
-        &p.symbol,
+    let scope = dry_run::Scope::order(
         &p.side,
-        &p.order_type,
+        &p.symbol,
         &p.submitted_quantity,
-        &p.time_in_force,
         p.submitted_price.as_deref().unwrap_or(""),
-        p.trigger_price.as_deref().unwrap_or(""),
-        p.limit_offset.as_deref().unwrap_or(""),
-        p.trailing_amount.as_deref().unwrap_or(""),
-        p.trailing_percent.as_deref().unwrap_or(""),
-        p.expire_date.as_deref().unwrap_or(""),
-        p.outside_rth.as_deref().unwrap_or(""),
-        p.remark.as_deref().unwrap_or(""),
-    ]);
+    );
     // Two-step by design: without a confirmation code this places nothing.
     let Some(code) = p.execute.clone() else {
         return dry_run::result(
-            &mctx.token,
-            &request,
+            &scope,
             serde_json::json!({
                 "action": "submit_order",
                 "symbol": p.symbol,
@@ -619,7 +605,7 @@ pub async fn submit_order(
             }),
         );
     };
-    dry_run::consume(&mctx.token, &request, &code)?;
+    scope.verify(&code)?;
 
     let (ctx, _) = TradeContext::new(mctx.create_config());
     let result = ctx.submit_order(opts).await.map_err(Error::longbridge)?;
@@ -671,22 +657,12 @@ pub async fn replace_order(
         })?);
     }
     let (ctx, _) = TradeContext::new(mctx.create_config());
-    let request = dry_run::fingerprint(&[
-        "replace_order",
-        &p.order_id,
-        &p.quantity,
-        p.price.as_deref().unwrap_or(""),
-        p.trigger_price.as_deref().unwrap_or(""),
-        p.limit_offset.as_deref().unwrap_or(""),
-        p.trailing_amount.as_deref().unwrap_or(""),
-        p.trailing_percent.as_deref().unwrap_or(""),
-    ]);
+    let scope = dry_run::Scope::replace(&p.order_id, &p.quantity, p.price.as_deref().unwrap_or(""));
     // Two-step by design: without a confirmation code this changes nothing.
     let Some(code) = p.execute.clone() else {
         let existing = preview_existing_order(mctx, &ctx, &p.order_id).await;
         return dry_run::result(
-            &mctx.token,
-            &request,
+            &scope,
             serde_json::json!({
                 "action": "replace_order",
                 "order_id": p.order_id,
@@ -700,7 +676,7 @@ pub async fn replace_order(
             }),
         );
     };
-    dry_run::consume(&mctx.token, &request, &code)?;
+    scope.verify(&code)?;
     ctx.replace_order(opts).await.map_err(Error::longbridge)?;
     Ok(tool_result("order replaced".to_string()))
 }
