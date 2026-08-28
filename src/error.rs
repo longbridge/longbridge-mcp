@@ -13,11 +13,11 @@ pub enum Error {
     /// Catch-all for error text this crate already controls (e.g. a
     /// `serde_json`/`time` formatting failure). Do NOT build this from a
     /// `longbridge::Error`/`HttpClientError` via `.to_string()` — that skips
-    /// [`sanitize_longbridge_error`] and can leak a raw upstream HTTP
-    /// response body (stack traces, gateway internals) into both the ops
-    /// log and, more consequentially, `tool_error()`'s client-facing text.
-    /// Use `Error::longbridge(e.into())` instead; this exact mistake has
-    /// been found and fixed at 8+ call sites across this crate already.
+    /// [`sanitize_longbridge_error`] and can leak upstream response content
+    /// (stack traces, gateway internals, a mismatched field's raw value)
+    /// into both the ops log and, more consequentially, `tool_error()`'s
+    /// client-facing text. Use `Error::longbridge(e.into())` instead; this
+    /// exact mistake has recurred at call sites across this crate before.
     #[error("{0}")]
     Other(String),
 }
@@ -26,28 +26,44 @@ pub enum Error {
 /// `tool_error()`'s client-facing text, or to any other place a `longbridge`
 /// error's message ends up (e.g. `calendar.rs`'s `partial_reason`, which is
 /// not even an error path). Most variants' `Display` is already short,
-/// structured text (e.g. `"openapi error: code=... message=..."`, or a
-/// `serde_json`/OAuth-library error's own message for `DeserializeResponseBody`
-/// / `OAuth` / `Sse` — checked against the SDK source, none of those wrap a
-/// raw response body), safe either way. `HttpClientError::UnexpectedHttpResponse`
-/// is the exception: it embeds the raw upstream HTTP response body verbatim —
-/// an unparsed gateway error page, a backend stack trace, or worse. Strip the
-/// body at the source, in the one place every `longbridge` error should be
-/// rendered from, rather than trusting each of the ~15 call sites across the
-/// tool modules that handle a `longbridge`/`HttpClientError` directly to
-/// remember to route through here.
+/// structured text (e.g. `"openapi error: code=... message=..."`, the SDK's
+/// own business-error format), safe to pass through. Two variants aren't:
+///
+/// - `HttpClientError::UnexpectedHttpResponse` embeds the raw upstream HTTP
+///   response body verbatim — an unparsed gateway error page, a backend
+///   stack trace, or worse.
+/// - `HttpClientError::DeserializeResponseBody` wraps a `serde_json::Error`
+///   whose `Display` embeds the actual offending JSON value verbatim, with
+///   no length cap (verified: a 500-character value came through in full).
+///   For the envelope-level parse failure specifically, that "value" can be
+///   the entire response body.
+///
+/// Both are stripped at the source, in the one place every `longbridge`
+/// error should be rendered from, rather than trusting every call site that
+/// handles a `longbridge`/`HttpClientError` directly to remember to route
+/// through here. (`OAuth`/`SerializeRequestBody`/`Sse` construct their text
+/// from a locally-raised error — token acquisition, our own outgoing body,
+/// or an SSE transport error — not upstream response content, so they're
+/// left as-is; they haven't been audited as rigorously as the two variants
+/// above, though, so treat that as "not yet found unsafe" rather than
+/// "verified safe.")
 pub(crate) fn sanitize_longbridge_error(err: &longbridge::Error) -> String {
-    if let longbridge::Error::HttpClient(
-        longbridge::httpclient::HttpClientError::UnexpectedHttpResponse {
-            status, trace_id, ..
-        },
-    ) = err
-    {
-        return format!(
+    use longbridge::httpclient::HttpClientError;
+    match err {
+        longbridge::Error::HttpClient(HttpClientError::UnexpectedHttpResponse {
+            status,
+            trace_id,
+            ..
+        }) => format!(
             "unexpected HTTP response: status={status}, trace_id={trace_id} (body omitted — unparseable as an OpenAPI response, likely a gateway or proxy error)"
-        );
+        ),
+        longbridge::Error::HttpClient(HttpClientError::DeserializeResponseBody(_)) => {
+            "response body did not match the expected shape (details omitted — the \
+             deserialize error can embed the raw offending value)"
+                .to_string()
+        }
+        _ => err.to_string(),
     }
-    err.to_string()
 }
 
 impl From<longbridge::Error> for Error {
@@ -97,6 +113,24 @@ mod tests {
         assert!(
             rendered.contains("502") && rendered.contains("trace-123"),
             "status and trace_id must still be present for triage: {rendered}"
+        );
+    }
+
+    #[test]
+    fn deserialize_response_body_omits_the_embedded_value() {
+        // serde_json's own message for a type mismatch embeds the actual
+        // offending value verbatim, uncapped — this is the exact string
+        // shape that construction produces.
+        let err = longbridge::Error::HttpClient(
+            longbridge::httpclient::HttpClientError::DeserializeResponseBody(
+                "invalid type: string \"SECRET_TOKEN_ABCDEF123456\", expected u64 at line 1 column 37"
+                    .to_string(),
+            ),
+        );
+        let rendered = sanitize_longbridge_error(&err);
+        assert!(
+            !rendered.contains("SECRET_TOKEN_ABCDEF123456"),
+            "embedded value leaked into rendered message: {rendered}"
         );
     }
 

@@ -308,7 +308,7 @@ pub async fn industry_rank(
         .response::<String>()
         .send()
         .await
-        .map_err(|e| crate::error::Error::longbridge(e.into()))?;
+        .map_err(|e| Error::longbridge(e.into()))?;
     let data: serde_json::Value =
         serde_json::from_str(&raw).map_err(crate::error::Error::Serialize)?;
     let out = serde_json::to_string(&data).map_err(crate::error::Error::Serialize)?;
