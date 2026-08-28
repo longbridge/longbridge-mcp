@@ -6,6 +6,8 @@ mod error;
 mod logging;
 mod metrics;
 mod serialize;
+#[cfg(test)]
+mod test_support;
 mod tools;
 mod ws_pool;
 

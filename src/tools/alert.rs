@@ -4,6 +4,7 @@ use rmcp::schemars::JsonSchema;
 use rmcp::serde::Deserialize;
 
 use crate::counter::symbol_to_counter_id;
+use crate::error::Error;
 use crate::tools::support::http_client::{http_delete_tool, http_get_tool, http_post_tool};
 use crate::tools::tool_json;
 
@@ -110,7 +111,7 @@ async fn alert_set_enabled(
             .response::<Json<serde_json::Value>>()
             .send()
             .await
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+            .map_err(|e| Error::longbridge(e.into()))?;
         resp.0
     };
 
