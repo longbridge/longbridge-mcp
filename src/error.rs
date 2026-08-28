@@ -10,6 +10,14 @@ pub enum Error {
     Http(#[from] reqwest::Error),
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
+    /// Catch-all for error text this crate already controls (e.g. a
+    /// `serde_json`/`time` formatting failure). Do NOT build this from a
+    /// `longbridge::Error`/`HttpClientError` via `.to_string()` — that skips
+    /// [`sanitize_longbridge_error`] and can leak a raw upstream HTTP
+    /// response body (stack traces, gateway internals) into both the ops
+    /// log and, more consequentially, `tool_error()`'s client-facing text.
+    /// Use `Error::longbridge(e.into())` instead; this exact mistake has
+    /// been found and fixed at 8+ call sites across this crate already.
     #[error("{0}")]
     Other(String),
 }
@@ -86,7 +94,10 @@ mod tests {
             !rendered.contains("stack trace") && !rendered.contains("secrets.rs"),
             "raw body leaked into rendered message: {rendered}"
         );
-        assert!(rendered.contains("502") && rendered.contains("trace-123"));
+        assert!(
+            rendered.contains("502") && rendered.contains("trace-123"),
+            "status and trace_id must still be present for triage: {rendered}"
+        );
     }
 
     #[test]
@@ -97,14 +108,23 @@ mod tests {
             trace_id: "trace-456".to_string(),
         });
         let rendered = sanitize_longbridge_error(&err);
-        assert!(rendered.contains("token verification failed"));
+        assert!(
+            rendered.contains("token verification failed"),
+            "non-UnexpectedHttpResponse variants must pass through unsanitized: {rendered}"
+        );
     }
 
     #[test]
     fn error_longbridge_display_and_mcp_conversion_use_the_sanitized_text() {
         let err = Error::longbridge(unexpected_http_response("<html>leaked</html>"));
-        assert!(!err.to_string().contains("leaked"));
+        assert!(
+            !err.to_string().contains("leaked"),
+            "Error::Longbridge's own Display must route through the sanitizer"
+        );
         let mcp: McpError = err.into();
-        assert!(!mcp.message.contains("leaked"));
+        assert!(
+            !mcp.message.contains("leaked"),
+            "the client-facing McpError message must never contain the raw upstream body"
+        );
     }
 }

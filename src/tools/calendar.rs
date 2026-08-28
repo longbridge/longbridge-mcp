@@ -5,7 +5,7 @@ use rmcp::model::CallToolResult;
 use rmcp::schemars::JsonSchema;
 use rmcp::serde::Deserialize;
 
-use crate::error::Error;
+use crate::error::{Error, sanitize_longbridge_error};
 use crate::serialize::{convert_unix_paths, transform_json};
 use crate::tools::support::parse;
 
@@ -178,7 +178,7 @@ pub async fn finance_calendar(
             Ok(resp) => resp,
             Err(e) if pages.is_empty() => return Err(Error::longbridge(e.into()).into()),
             Err(e) => {
-                let reason = crate::error::sanitize_longbridge_error(&e.into());
+                let reason = sanitize_longbridge_error(&e.into());
                 partial_reason = Some(format!(
                     "upstream request failed at {current_date}: {reason}; events from {current_date} to {end} are not included"
                 ));
