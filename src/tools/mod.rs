@@ -422,6 +422,21 @@ impl McpContext {
         crate::ws_pool::evict(&self.token);
     }
 
+    /// Return the cached `TradeContext` for this token, creating one on
+    /// first use.
+    pub async fn get_trade_context(&self) -> longbridge::trade::TradeContext {
+        // Pass a lazy closure: create_config() is only called on a cache miss.
+        // Cache hits avoid the Arc<Config> allocation entirely.
+        crate::trade_pool::get_or_init_trade(&self.token, || self.create_config()).await
+    }
+
+    /// Evict the cached `TradeContext` for this token. Call this after any
+    /// Longbridge error on a trade API so the next request creates a fresh
+    /// WebSocket connection rather than reusing a broken one.
+    pub fn evict_trade_context(&self) {
+        crate::trade_pool::evict(&self.token);
+    }
+
     /// Extracts `account_channel` from the JWT bearer token's `sub` claim.
     /// Falls back to `"lb"` when the token cannot be decoded.
     pub fn account_channel(&self) -> String {
@@ -1350,12 +1365,12 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get option quotes (max 500 symbols). Returns last_done, prev_close, open, high, low, volume, turnover, implied_volatility, delta, gamma, theta, vega, rho, open_interest per symbol."
+        description = "Get option quotes (max 500 symbols). Symbols must be option contract symbols (e.g. \"AAPL230317P160000.US\"), NOT plain stock symbols — obtain valid ones from option_chain_info_by_date's call.symbol/put.symbol fields. Returns last_done, prev_close, open, high, low, volume, turnover, implied_volatility, delta, gamma, theta, vega, rho, open_interest per symbol."
     )]
     async fn option_quote(
         &self,
         ctx: RequestContext<RoleServer>,
-        Parameters(p): Parameters<SymbolsParam>,
+        Parameters(p): Parameters<quote::OptionSymbolsParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
         measured_tool_call("option_quote", || quote::option_quote(&mctx, p)).await
@@ -5427,6 +5442,40 @@ mod quote_cmd_tests {
              All other code must use `mctx.get_quote_context()` so calls go \
              through the connection pool and the /v1/quote/cmd beacon. \
              Untracked constructor at:\n{}",
+            offenders.join("\n")
+        );
+    }
+
+    /// Guard: every trade tool must obtain its `TradeContext` via
+    /// `mctx.get_trade_context()`, never `TradeContext::new(...)` directly —
+    /// mirrors `quote_tools_use_tracking_context_constructor` above, so
+    /// trade tools share pooled WebSocket connections the same way quote
+    /// tools do instead of opening a fresh one per call.
+    #[test]
+    fn trade_tools_use_pooled_context_constructor() {
+        let src_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let allowed: std::collections::HashSet<_> = [
+            src_dir.join("trade_pool.rs"),
+            src_dir.join("tools").join("mod.rs"),
+        ]
+        .into();
+        let mut offenders = Vec::new();
+        for file in rs_files(&src_dir) {
+            if allowed.contains(&file) {
+                continue;
+            }
+            let src = std::fs::read_to_string(&file).unwrap();
+            for (i, line) in src.lines().enumerate() {
+                if line.contains("TradeContext::new(") {
+                    offenders.push(format!("{}:{}", file.display(), i + 1));
+                }
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "TradeContext::new() is only allowed in src/trade_pool.rs. \
+             All other code must use `mctx.get_trade_context()` so calls go \
+             through the connection pool. Untracked constructor at:\n{}",
             offenders.join("\n")
         );
     }

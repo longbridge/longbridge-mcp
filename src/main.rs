@@ -1,6 +1,7 @@
 #![recursion_limit = "256"]
 
 mod auth;
+mod context_pool;
 mod counter;
 mod error;
 mod logging;
@@ -9,6 +10,7 @@ mod serialize;
 #[cfg(test)]
 mod test_support;
 mod tools;
+mod trade_pool;
 mod ws_pool;
 
 use std::net::SocketAddr;
