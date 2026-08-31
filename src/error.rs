@@ -89,13 +89,47 @@ impl Error {
             Self::Serialize(_) | Self::Http(_) | Self::Io(_) | Self::Other(_) => None,
         }
     }
+
+    /// The restricted path and required/current data centers, when this
+    /// wraps a `longbridge::httpclient::HttpClientError::DcRegionRestricted`.
+    /// Same rationale as [`Self::openapi_error_code`]: lets `error_hint()`
+    /// match structurally instead of on the Display text.
+    pub fn dc_region_restricted(
+        &self,
+    ) -> Option<(&str, longbridge::DcRegion, longbridge::DcRegion)> {
+        match self {
+            Self::Longbridge(err) => match err.as_ref() {
+                longbridge::Error::HttpClient(
+                    longbridge::httpclient::HttpClientError::DcRegionRestricted {
+                        path,
+                        required,
+                        current,
+                    },
+                ) => Some((path.as_str(), *required, *current)),
+                _ => None,
+            },
+            Self::Serialize(_) | Self::Http(_) | Self::Io(_) | Self::Other(_) => None,
+        }
+    }
 }
 
 impl From<Error> for McpError {
     fn from(err: Error) -> Self {
-        let data = err
-            .openapi_error_code()
-            .map(|code| serde_json::json!({ "openapi_error_code": code }));
+        let mut data = serde_json::Map::new();
+        if let Some(code) = err.openapi_error_code() {
+            data.insert("openapi_error_code".to_string(), serde_json::json!(code));
+        }
+        if let Some((path, required, current)) = err.dc_region_restricted() {
+            data.insert(
+                "dc_region_restricted".to_string(),
+                serde_json::json!({
+                    "path": path,
+                    "required": format!("{required:?}"),
+                    "current": format!("{current:?}"),
+                }),
+            );
+        }
+        let data = (!data.is_empty()).then(|| serde_json::Value::Object(data));
         McpError::internal_error(err.to_string(), data)
     }
 }
@@ -218,5 +252,42 @@ mod tests {
             None,
             "errors not wrapping a longbridge::Error have no business code to surface"
         );
+    }
+
+    #[test]
+    fn dc_region_restricted_surfaces_the_structured_fields() {
+        let err = Error::longbridge(longbridge::Error::HttpClient(
+            longbridge::httpclient::HttpClientError::DcRegionRestricted {
+                path: "/v1/us/foo".to_string(),
+                required: longbridge::DcRegion::Us,
+                current: longbridge::DcRegion::Ap,
+            },
+        ));
+        let (path, required, current) = err
+            .dc_region_restricted()
+            .expect("DcRegionRestricted must be extractable without parsing the display text");
+        assert_eq!(path, "/v1/us/foo");
+        assert_eq!(required, longbridge::DcRegion::Us);
+        assert_eq!(current, longbridge::DcRegion::Ap);
+    }
+
+    #[test]
+    fn mcp_conversion_populates_the_structured_dc_region_fields() {
+        let err = Error::longbridge(longbridge::Error::HttpClient(
+            longbridge::httpclient::HttpClientError::DcRegionRestricted {
+                path: "/v1/us/foo".to_string(),
+                required: longbridge::DcRegion::Us,
+                current: longbridge::DcRegion::Ap,
+            },
+        ));
+        let mcp: McpError = err.into();
+        let dc = mcp
+            .data
+            .as_ref()
+            .and_then(|d| d.get("dc_region_restricted"))
+            .expect("McpError::data must carry the structured DC-region fields");
+        assert_eq!(dc.get("path").and_then(|v| v.as_str()), Some("/v1/us/foo"));
+        assert_eq!(dc.get("required").and_then(|v| v.as_str()), Some("Us"));
+        assert_eq!(dc.get("current").and_then(|v| v.as_str()), Some("Ap"));
     }
 }

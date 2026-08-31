@@ -157,6 +157,27 @@ fn openapi_error_code_of(err: &McpError) -> Option<i64> {
     err.data.as_ref()?.get("openapi_error_code")?.as_i64()
 }
 
+/// True if `err` matches a known error class, either by a structured business
+/// code (authoritative — the code is right even if the account/product's
+/// exact wording changes) or by a purely descriptive `text_needle` in the
+/// display text (safe to check unconditionally, since these phrases don't
+/// plausibly appear as substrings of unrelated fields like a trace/order id
+/// the way a bare 3-6 digit `numeric_needle` can). `numeric_needle`s are only
+/// checked when no structured code is present at all, since once we *have* a
+/// code, a coincidental digit match elsewhere in the text is more likely to
+/// be a false positive than a code we simply haven't enumerated.
+fn matches_error_class(
+    code: Option<i64>,
+    msg: &str,
+    known_codes: &[i64],
+    text_needles: &[&str],
+    numeric_needles: &[&str],
+) -> bool {
+    code.is_some_and(|c| known_codes.contains(&c))
+        || text_needles.iter().any(|needle| msg.contains(needle))
+        || (code.is_none() && numeric_needles.iter().any(|needle| msg.contains(needle)))
+}
+
 /// Actionable follow-up for the error classes users hit most, so the model can
 /// either fix the call itself or tell the user what to do.
 fn error_hint(err: &McpError) -> Option<&'static str> {
@@ -169,21 +190,26 @@ fn error_hint(err: &McpError) -> Option<&'static str> {
     let code = openapi_error_code_of(err);
     let msg = err.message.to_lowercase();
 
-    let is_rate_limited = code.is_some_and(|c| RATE_LIMIT_CODES.contains(&c))
-        || (code.is_none()
-            && ["429002", "429003", "rate limit", "区间调用上限", "最小间隔"]
-                .iter()
-                .any(|needle| msg.contains(needle)));
-    if is_rate_limited {
+    if matches_error_class(
+        code,
+        &msg,
+        RATE_LIMIT_CODES,
+        &["rate limit", "区间调用上限", "最小间隔"],
+        &["429002", "429003"],
+    ) {
         return Some(
             "Hint: this call was rate-limited by the upstream API. Wait a moment and retry — \
              if this recurs, space out repeated calls rather than firing them back-to-back.",
         );
     }
-    if ["data center", "dcregionrestricted"]
-        .iter()
-        .any(|needle| msg.contains(needle))
-    {
+    let is_dc_region_restricted = err
+        .data
+        .as_ref()
+        .is_some_and(|d| d.get("dc_region_restricted").is_some())
+        || ["data center", "dcregionrestricted"]
+            .iter()
+            .any(|needle| msg.contains(needle));
+    if is_dc_region_restricted {
         return Some(
             "Hint: this tool is restricted to accounts in a specific Longbridge data center \
              (US vs. AP/HK). It cannot succeed for this account regardless of retries or \
@@ -191,12 +217,13 @@ fn error_hint(err: &McpError) -> Option<&'static str> {
              the user this data isn't available for their account.",
         );
     }
-    let is_no_quote_access = code == Some(NO_QUOTE_ACCESS_CODE)
-        || (code.is_none()
-            && ["no quote access", "301604"]
-                .iter()
-                .any(|needle| msg.contains(needle)));
-    if is_no_quote_access {
+    if matches_error_class(
+        code,
+        &msg,
+        &[NO_QUOTE_ACCESS_CODE],
+        &["no quote access"],
+        &["301604"],
+    ) {
         return Some(
             "Hint: the account lacks a market data subscription/permission for this \
              symbol's market. Retrying won't help — tell the user they need to subscribe to \
@@ -5987,6 +6014,44 @@ mod tool_error_tests {
         );
         let hint = error_hint(&err).expect("expected a rate-limit hint from the structured code");
         assert!(hint.contains("rate-limited"), "unexpected hint: {hint}");
+    }
+
+    #[test]
+    fn descriptive_text_still_hints_under_an_unenumerated_error_code() {
+        // Regression test: an earlier version of error_hint() only fell back
+        // to string matching when `code` was entirely absent, so any
+        // structured code not in RATE_LIMIT_CODES/NO_QUOTE_ACCESS_CODE
+        // silently disabled the hint even when the message text plainly
+        // said "rate limit" / "no quote access".
+        let rate_limited = McpError::internal_error(
+            "openapi error: code=429001: rate limit exceeded".to_string(),
+            Some(serde_json::json!({ "openapi_error_code": 429001 })),
+        );
+        let hint = error_hint(&rate_limited)
+            .expect("an unenumerated rate-limit code with descriptive text must still hint");
+        assert!(hint.contains("rate-limited"), "unexpected hint: {hint}");
+
+        let no_quote_access = McpError::internal_error(
+            "longbridge: response error: 7: detail:Some(WsResponseErrorDetail { code: 301609, \
+             msg: \"no quote access\" })"
+                .to_string(),
+            Some(serde_json::json!({ "openapi_error_code": 301609 })),
+        );
+        let hint = error_hint(&no_quote_access)
+            .expect("an unenumerated no-quote-access code with descriptive text must still hint");
+        assert!(hint.contains("subscription"), "unexpected hint: {hint}");
+    }
+
+    #[test]
+    fn structured_dc_region_restriction_hints_without_matching_text() {
+        let err = McpError::internal_error(
+            "openapi error: unexpected rejection".to_string(),
+            Some(serde_json::json!({
+                "dc_region_restricted": { "path": "/v1/us/foo", "required": "Us", "current": "Ap" }
+            })),
+        );
+        let hint = error_hint(&err).expect("expected a DC-region hint from the structured field");
+        assert!(hint.contains("data center"), "unexpected hint: {hint}");
     }
 
     #[test]
