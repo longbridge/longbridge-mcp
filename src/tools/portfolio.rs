@@ -198,7 +198,7 @@ pub async fn profit_analysis_realized(
     mctx: &crate::tools::McpContext,
     p: ProfitAnalysisRealizedParam,
 ) -> Result<CallToolResult, McpError> {
-    let ctx = mctx.get_trade_context().await;
+    let (ctx, _) = longbridge::trade::TradeContext::new(mctx.create_config());
     let category = p
         .category
         .as_deref()
@@ -208,10 +208,7 @@ pub async fn profit_analysis_realized(
         currency: p.currency.unwrap_or_else(|| "USD".to_string()),
         category,
     };
-    let result = ctx.us_realized_pl(opts).await.map_err(|e| {
-        mctx.evict_trade_context();
-        Error::longbridge(e)
-    })?;
+    let result = ctx.us_realized_pl(opts).await.map_err(Error::longbridge)?;
     let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;
     crate::tools::support::us_normalize::normalize_us_realized_pl(&mut value);
     tool_json(&value)

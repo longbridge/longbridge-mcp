@@ -225,23 +225,17 @@ pub async fn account_balance(
     mctx: &crate::tools::McpContext,
     p: AccountBalanceParam,
 ) -> Result<CallToolResult, McpError> {
-    let ctx = mctx.get_trade_context().await;
+    let (ctx, _) = TradeContext::new(mctx.create_config());
     let result = ctx
         .account_balance(p.currency.as_deref())
         .await
-        .map_err(|e| {
-            mctx.evict_trade_context();
-            Error::longbridge(e)
-        })?;
+        .map_err(Error::longbridge)?;
     tool_json(&result)
 }
 
 pub async fn stock_positions(mctx: &crate::tools::McpContext) -> Result<CallToolResult, McpError> {
-    let ctx = mctx.get_trade_context().await;
-    let result = ctx.stock_positions(None).await.map_err(|e| {
-        mctx.evict_trade_context();
-        Error::longbridge(e)
-    })?;
+    let (ctx, _) = TradeContext::new(mctx.create_config());
+    let result = ctx.stock_positions(None).await.map_err(Error::longbridge)?;
     let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;
     if mctx.dc_region().await == longbridge::DcRegion::Us {
         // The US overview is supplementary: its failure should annotate the
@@ -258,7 +252,6 @@ pub async fn stock_positions(mctx: &crate::tools::McpContext) -> Result<CallTool
                 }
             }
             Err(e) => {
-                mctx.evict_trade_context();
                 if let Some(obj) = value.as_object_mut() {
                     obj.insert(
                         "warnings".to_string(),
@@ -272,11 +265,8 @@ pub async fn stock_positions(mctx: &crate::tools::McpContext) -> Result<CallTool
 }
 
 pub async fn fund_positions(mctx: &crate::tools::McpContext) -> Result<CallToolResult, McpError> {
-    let ctx = mctx.get_trade_context().await;
-    let result = ctx.fund_positions(None).await.map_err(|e| {
-        mctx.evict_trade_context();
-        Error::longbridge(e)
-    })?;
+    let (ctx, _) = TradeContext::new(mctx.create_config());
+    let result = ctx.fund_positions(None).await.map_err(Error::longbridge)?;
     tool_json(&result)
 }
 
@@ -284,11 +274,11 @@ pub async fn margin_ratio(
     mctx: &crate::tools::McpContext,
     p: SymbolParam,
 ) -> Result<CallToolResult, McpError> {
-    let ctx = mctx.get_trade_context().await;
-    let result = ctx.margin_ratio(p.symbol).await.map_err(|e| {
-        mctx.evict_trade_context();
-        Error::longbridge(e)
-    })?;
+    let (ctx, _) = TradeContext::new(mctx.create_config());
+    let result = ctx
+        .margin_ratio(p.symbol)
+        .await
+        .map_err(Error::longbridge)?;
     tool_json(&result)
 }
 
@@ -296,7 +286,7 @@ pub async fn today_orders(
     mctx: &crate::tools::McpContext,
     p: TodayOrdersParam,
 ) -> Result<CallToolResult, McpError> {
-    let ctx = mctx.get_trade_context().await;
+    let (ctx, _) = TradeContext::new(mctx.create_config());
     if mctx.dc_region().await == longbridge::DcRegion::Us {
         let side = match p.us_action.as_deref() {
             Some(s) if s.eq_ignore_ascii_case("buy") => longbridge::trade::OrderSide::Buy,
@@ -325,10 +315,7 @@ pub async fn today_orders(
             page: p.us_page.unwrap_or(1),
             limit: p.us_limit.unwrap_or(20),
         };
-        let result = ctx.us_query_orders(opts).await.map_err(|e| {
-            mctx.evict_trade_context();
-            Error::longbridge(e)
-        })?;
+        let result = ctx.us_query_orders(opts).await.map_err(Error::longbridge)?;
         let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;
         if let Some(orders) = value.get_mut("orders").and_then(|v| v.as_array_mut()) {
             for order in orders {
@@ -341,10 +328,7 @@ pub async fn today_orders(
     if let Some(symbol) = p.symbol {
         opts = opts.symbol(symbol);
     }
-    let result = ctx.today_orders(opts).await.map_err(|e| {
-        mctx.evict_trade_context();
-        Error::longbridge(e)
-    })?;
+    let result = ctx.today_orders(opts).await.map_err(Error::longbridge)?;
     tool_json(&result)
 }
 
@@ -352,12 +336,12 @@ pub async fn order_detail(
     mctx: &crate::tools::McpContext,
     p: OrderIdParam,
 ) -> Result<CallToolResult, McpError> {
-    let ctx = mctx.get_trade_context().await;
+    let (ctx, _) = TradeContext::new(mctx.create_config());
     if mctx.dc_region().await == longbridge::DcRegion::Us {
-        let result = ctx.us_order_detail(p.order_id).await.map_err(|e| {
-            mctx.evict_trade_context();
-            Error::longbridge(e)
-        })?;
+        let result = ctx
+            .us_order_detail(p.order_id)
+            .await
+            .map_err(Error::longbridge)?;
         let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;
         if let Some(order) = value.get_mut("order") {
             crate::tools::support::us_normalize::normalize_us_order(order);
@@ -367,10 +351,10 @@ pub async fn order_detail(
         }
         return tool_json(&value);
     }
-    let result = ctx.order_detail(p.order_id).await.map_err(|e| {
-        mctx.evict_trade_context();
-        Error::longbridge(e)
-    })?;
+    let result = ctx
+        .order_detail(p.order_id)
+        .await
+        .map_err(Error::longbridge)?;
     tool_json(&result)
 }
 
@@ -378,7 +362,7 @@ pub async fn cancel_order(
     mctx: &crate::tools::McpContext,
     p: CancelOrderParam,
 ) -> Result<CallToolResult, McpError> {
-    let ctx = mctx.get_trade_context().await;
+    let (ctx, _) = TradeContext::new(mctx.create_config());
     let scope = dry_run::Scope::on_order("cancel", &p.order_id);
     // Two-step by design: without a confirmation code this cancels nothing.
     let Some(code) = p.execute.clone() else {
@@ -393,10 +377,9 @@ pub async fn cancel_order(
         );
     };
     scope.verify(&code)?;
-    ctx.cancel_order(p.order_id).await.map_err(|e| {
-        mctx.evict_trade_context();
-        Error::longbridge(e)
-    })?;
+    ctx.cancel_order(p.order_id)
+        .await
+        .map_err(Error::longbridge)?;
     Ok(tool_result("order cancelled".to_string()))
 }
 
@@ -416,15 +399,12 @@ pub async fn today_executions(
         exec_opts = exec_opts.order_id(order_id);
     }
 
-    let ctx = mctx.get_trade_context().await;
+    let (ctx, _) = TradeContext::new(mctx.create_config());
     let (executions, orders) = tokio::try_join!(
         ctx.today_executions(exec_opts),
         ctx.today_orders(order_opts),
     )
-    .map_err(|e| {
-        mctx.evict_trade_context();
-        Error::longbridge(e)
-    })?;
+    .map_err(Error::longbridge)?;
 
     let side_map: HashMap<String, String> = orders
         .into_iter()
@@ -451,7 +431,7 @@ pub async fn history_orders(
 ) -> Result<CallToolResult, McpError> {
     let start = parse::parse_rfc3339(&p.start_at)?;
     let end = parse::parse_rfc3339(&p.end_at)?;
-    let ctx = mctx.get_trade_context().await;
+    let (ctx, _) = TradeContext::new(mctx.create_config());
     if mctx.dc_region().await == longbridge::DcRegion::Us {
         let opts = longbridge::trade::GetUSHistoryOrders {
             symbol: p.symbol,
@@ -467,10 +447,7 @@ pub async fn history_orders(
             page: p.us_page.unwrap_or(1),
             limit: p.us_limit.unwrap_or(20),
         };
-        let result = ctx.us_query_orders(opts).await.map_err(|e| {
-            mctx.evict_trade_context();
-            Error::longbridge(e)
-        })?;
+        let result = ctx.us_query_orders(opts).await.map_err(Error::longbridge)?;
         let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;
         if let Some(orders) = value.get_mut("orders").and_then(|v| v.as_array_mut()) {
             for order in orders {
@@ -485,10 +462,7 @@ pub async fn history_orders(
     if let Some(symbol) = p.symbol {
         opts = opts.symbol(symbol);
     }
-    let result = ctx.history_orders(opts).await.map_err(|e| {
-        mctx.evict_trade_context();
-        Error::longbridge(e)
-    })?;
+    let result = ctx.history_orders(opts).await.map_err(Error::longbridge)?;
     tool_json(&result)
 }
 
@@ -512,15 +486,12 @@ pub async fn history_executions(
         order_opts = order_opts.symbol(symbol.clone());
     }
 
-    let ctx = mctx.get_trade_context().await;
+    let (ctx, _) = TradeContext::new(mctx.create_config());
     let (executions, orders) = tokio::try_join!(
         ctx.history_executions(exec_opts),
         ctx.history_orders(order_opts),
     )
-    .map_err(|e| {
-        mctx.evict_trade_context();
-        Error::longbridge(e)
-    })?;
+    .map_err(Error::longbridge)?;
 
     let side_map: HashMap<String, String> = orders
         .into_iter()
@@ -548,11 +519,8 @@ pub async fn cash_flow(
     let start = parse::parse_rfc3339(&p.start_at)?;
     let end = parse::parse_rfc3339(&p.end_at)?;
     let opts = longbridge::trade::GetCashFlowOptions::new(start, end);
-    let ctx = mctx.get_trade_context().await;
-    let result = ctx.cash_flow(opts).await.map_err(|e| {
-        mctx.evict_trade_context();
-        Error::longbridge(e)
-    })?;
+    let (ctx, _) = TradeContext::new(mctx.create_config());
+    let result = ctx.cash_flow(opts).await.map_err(Error::longbridge)?;
     tool_json(&result)
 }
 
@@ -653,11 +621,8 @@ pub async fn submit_order(
     };
     scope.verify(&code)?;
 
-    let ctx = mctx.get_trade_context().await;
-    let result = ctx.submit_order(opts).await.map_err(|e| {
-        mctx.evict_trade_context();
-        Error::longbridge(e)
-    })?;
+    let (ctx, _) = TradeContext::new(mctx.create_config());
+    let result = ctx.submit_order(opts).await.map_err(Error::longbridge)?;
     // Same envelope as the dry run so both outcomes validate against
     // `output::SubmitOrderResult`, and `dry_run` alone tells them apart.
     tool_json(&serde_json::json!({
@@ -705,7 +670,7 @@ pub async fn replace_order(
             McpError::invalid_params(format!("invalid trailing_percent: {e}"), None)
         })?);
     }
-    let ctx = mctx.get_trade_context().await;
+    let (ctx, _) = TradeContext::new(mctx.create_config());
     let scope = dry_run::Scope::replace(&p.order_id, &p.quantity, p.price.as_deref().unwrap_or(""));
     // Two-step by design: without a confirmation code this changes nothing.
     let Some(code) = p.execute.clone() else {
@@ -726,10 +691,7 @@ pub async fn replace_order(
         );
     };
     scope.verify(&code)?;
-    ctx.replace_order(opts).await.map_err(|e| {
-        mctx.evict_trade_context();
-        Error::longbridge(e)
-    })?;
+    ctx.replace_order(opts).await.map_err(Error::longbridge)?;
     Ok(tool_result("order replaced".to_string()))
 }
 
@@ -765,14 +727,11 @@ pub async fn estimate_max_purchase_quantity(
                 .map_err(|e| McpError::invalid_params(format!("invalid price: {e}"), None))?,
         );
     }
-    let ctx = mctx.get_trade_context().await;
+    let (ctx, _) = TradeContext::new(mctx.create_config());
     let result = ctx
         .estimate_max_purchase_quantity(opts)
         .await
-        .map_err(|e| {
-            mctx.evict_trade_context();
-            Error::longbridge(e)
-        })?;
+        .map_err(Error::longbridge)?;
     tool_json(&result)
 }
 

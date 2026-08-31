@@ -62,29 +62,6 @@ static QUOTE_WS_POOL_ENTRIES: LazyLock<IntGauge> = LazyLock::new(|| {
     gauge
 });
 
-static TRADE_WS_POOL_EVENTS_TOTAL: LazyLock<IntCounterVec> = LazyLock::new(|| {
-    let counter = IntCounterVec::new(
-        Opts::new(
-            "mcp_trade_ws_pool_events_total",
-            "Trade WebSocket context pool events",
-        ),
-        &["event"],
-    )
-    .unwrap();
-    REGISTRY.register(Box::new(counter.clone())).unwrap();
-    counter
-});
-
-static TRADE_WS_POOL_ENTRIES: LazyLock<IntGauge> = LazyLock::new(|| {
-    let gauge = IntGauge::new(
-        "mcp_trade_ws_pool_entries",
-        "Current cached trade WebSocket contexts in this process",
-    )
-    .unwrap();
-    REGISTRY.register(Box::new(gauge.clone())).unwrap();
-    gauge
-});
-
 pub fn record_tool_call(tool_name: &str, duration_secs: f64, is_error: bool) {
     TOOL_CALLS_TOTAL.with_label_values(&[tool_name]).inc();
     TOOL_CALL_DURATION
@@ -103,16 +80,6 @@ pub fn record_quote_ws_pool_event(event: &str, count: u64) {
 
 pub fn set_quote_ws_pool_entries(entries: usize) {
     QUOTE_WS_POOL_ENTRIES.set(entries as i64);
-}
-
-pub fn record_trade_ws_pool_event(event: &str, count: u64) {
-    TRADE_WS_POOL_EVENTS_TOTAL
-        .with_label_values(&[event])
-        .inc_by(count);
-}
-
-pub fn set_trade_ws_pool_entries(entries: usize) {
-    TRADE_WS_POOL_ENTRIES.set(entries as i64);
 }
 
 pub async fn metrics_handler() -> impl IntoResponse {
