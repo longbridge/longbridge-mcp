@@ -77,11 +77,60 @@ impl Error {
     pub fn longbridge(err: longbridge::Error) -> Self {
         Self::Longbridge(Box::new(err))
     }
+
+    /// The upstream OpenAPI business error code, when this wraps a
+    /// `longbridge::Error` that carries one. Lets callers (e.g.
+    /// `error_hint()`) classify an error by its structured code instead of
+    /// pattern-matching the sanitized display text, which is fragile (a
+    /// short numeric code can appear as a substring of an unrelated field).
+    pub fn openapi_error_code(&self) -> Option<i64> {
+        match self {
+            Self::Longbridge(err) => err.openapi_error_code(),
+            Self::Serialize(_) | Self::Http(_) | Self::Io(_) | Self::Other(_) => None,
+        }
+    }
+
+    /// The restricted path and required/current data centers, when this
+    /// wraps a `longbridge::httpclient::HttpClientError::DcRegionRestricted`.
+    /// Same rationale as [`Self::openapi_error_code`]: lets `error_hint()`
+    /// match structurally instead of on the Display text.
+    pub fn dc_region_restricted(
+        &self,
+    ) -> Option<(&str, longbridge::DcRegion, longbridge::DcRegion)> {
+        use longbridge::httpclient::HttpClientError;
+
+        match self {
+            Self::Longbridge(err) => match err.as_ref() {
+                longbridge::Error::HttpClient(HttpClientError::DcRegionRestricted {
+                    path,
+                    required,
+                    current,
+                }) => Some((path.as_str(), *required, *current)),
+                _ => None,
+            },
+            Self::Serialize(_) | Self::Http(_) | Self::Io(_) | Self::Other(_) => None,
+        }
+    }
 }
 
 impl From<Error> for McpError {
     fn from(err: Error) -> Self {
-        McpError::internal_error(err.to_string(), None)
+        let mut data = serde_json::Map::new();
+        if let Some(code) = err.openapi_error_code() {
+            data.insert("openapi_error_code".to_string(), serde_json::json!(code));
+        }
+        if let Some((path, required, current)) = err.dc_region_restricted() {
+            data.insert(
+                "dc_region_restricted".to_string(),
+                serde_json::json!({
+                    "path": path,
+                    "required": required.as_str(),
+                    "current": current.as_str(),
+                }),
+            );
+        }
+        let data = (!data.is_empty()).then(|| serde_json::Value::Object(data));
+        McpError::internal_error(err.to_string(), data)
     }
 }
 
@@ -160,5 +209,85 @@ mod tests {
             !mcp.message.contains("leaked"),
             "the client-facing McpError message must never contain the raw upstream body"
         );
+    }
+
+    #[test]
+    fn openapi_error_code_surfaces_the_business_code() {
+        let err = Error::longbridge(longbridge::Error::HttpClient(
+            longbridge::httpclient::HttpClientError::OpenApi {
+                code: 301604,
+                message: "no quote access".to_string(),
+                trace_id: "trace-789".to_string(),
+            },
+        ));
+        assert_eq!(
+            err.openapi_error_code(),
+            Some(301604),
+            "the business error code must be extractable without parsing the display text"
+        );
+    }
+
+    #[test]
+    fn mcp_conversion_populates_the_structured_error_code() {
+        let err = Error::longbridge(longbridge::Error::HttpClient(
+            longbridge::httpclient::HttpClientError::OpenApi {
+                code: 301604,
+                message: "no quote access".to_string(),
+                trace_id: "trace-789".to_string(),
+            },
+        ));
+        let mcp: McpError = err.into();
+        assert_eq!(
+            mcp.data.as_ref().and_then(|d| d.get("openapi_error_code")),
+            Some(&serde_json::json!(301604)),
+            "McpError::data must carry the structured code for error_hint() to match on"
+        );
+    }
+
+    #[test]
+    fn non_longbridge_errors_have_no_structured_code() {
+        let err = Error::Other("something went wrong".to_string());
+        assert_eq!(
+            err.openapi_error_code(),
+            None,
+            "errors not wrapping a longbridge::Error have no business code to surface"
+        );
+    }
+
+    #[test]
+    fn dc_region_restricted_surfaces_the_structured_fields() {
+        let err = Error::longbridge(longbridge::Error::HttpClient(
+            longbridge::httpclient::HttpClientError::DcRegionRestricted {
+                path: "/v1/us/foo".to_string(),
+                required: longbridge::DcRegion::Us,
+                current: longbridge::DcRegion::Ap,
+            },
+        ));
+        let (path, required, current) = err
+            .dc_region_restricted()
+            .expect("DcRegionRestricted must be extractable without parsing the display text");
+        assert_eq!(path, "/v1/us/foo");
+        assert_eq!(required, longbridge::DcRegion::Us);
+        assert_eq!(current, longbridge::DcRegion::Ap);
+    }
+
+    #[test]
+    fn mcp_conversion_populates_the_structured_dc_region_fields() {
+        let err = Error::longbridge(longbridge::Error::HttpClient(
+            longbridge::httpclient::HttpClientError::DcRegionRestricted {
+                path: "/v1/us/foo".to_string(),
+                required: longbridge::DcRegion::Us,
+                current: longbridge::DcRegion::Ap,
+            },
+        ));
+        let mcp: McpError = err.into();
+        let dc = mcp
+            .data
+            .as_ref()
+            .and_then(|d| d.get("dc_region_restricted"))
+            .expect("McpError::data must carry the structured DC-region fields");
+        assert_eq!(dc.get("path").and_then(|v| v.as_str()), Some("/v1/us/foo"));
+        assert_eq!(dc.get("required").and_then(|v| v.as_str()), Some("us"));
+        assert_eq!(dc.get("current").and_then(|v| v.as_str()), Some("ap"));
     }
 }

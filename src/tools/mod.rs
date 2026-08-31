@@ -143,6 +143,51 @@ fn tool_error(name: &str, err: &McpError) -> CallToolResult {
     CallToolResult::error(vec![Content::text(text)])
 }
 
+/// Business error codes matched structurally in `error_hint()` — see
+/// `Error::openapi_error_code()`, which populates `McpError::data` with
+/// `{"openapi_error_code": ...}` for any error that wraps a `longbridge`
+/// business error. Preferred over string-matching the display text, which
+/// can misfire on an unrelated field (trace id, order id) that happens to
+/// contain the same digits.
+const NO_QUOTE_ACCESS_CODE: i64 = 301604;
+
+/// The structured `openapi_error_code` from `McpError::data`, when present.
+fn openapi_error_code_of(err: &McpError) -> Option<i64> {
+    err.data.as_ref()?.get("openapi_error_code")?.as_i64()
+}
+
+/// Needles for [`matches_error_class`]. A named struct (rather than two
+/// adjacent `&[&str]` parameters) so a future call site can't silently swap
+/// `text`/`numeric` — a transposed pair of same-typed positional args would
+/// still compile, quietly reintroducing the numeric-substring false-positive
+/// risk this whole mechanism exists to avoid.
+struct ErrorClassNeedles<'a> {
+    /// Descriptive phrases, safe to match unconditionally: these don't
+    /// plausibly appear as substrings of an unrelated field (trace id,
+    /// order id) the way a bare 3-6 digit numeric needle can.
+    text: &'a [&'a str],
+    /// Bare numeric substrings — only matched when no structured code is
+    /// present at all, since once we *have* a code, a coincidental digit
+    /// match elsewhere in the text is more likely to be a false positive
+    /// than a code we simply haven't enumerated.
+    numeric: &'a [&'a str],
+}
+
+/// True if `err` matches a known error class, either by a structured business
+/// code (authoritative — `known_code` decides, e.g. a numeric-range check
+/// for a whole code family, not just individually enumerated values) or by
+/// `needles` in the display text.
+fn matches_error_class(
+    code: Option<i64>,
+    msg: &str,
+    known_code: impl Fn(i64) -> bool,
+    needles: ErrorClassNeedles<'_>,
+) -> bool {
+    code.is_some_and(known_code)
+        || needles.text.iter().any(|needle| msg.contains(needle))
+        || (code.is_none() && needles.numeric.iter().any(|needle| msg.contains(needle)))
+}
+
 /// Actionable follow-up for the error classes users hit most, so the model can
 /// either fix the call itself or tell the user what to do.
 fn error_hint(err: &McpError) -> Option<&'static str> {
@@ -152,11 +197,74 @@ fn error_hint(err: &McpError) -> Option<&'static str> {
         );
     }
 
+    let code = openapi_error_code_of(err);
     let msg = err.message.to_lowercase();
-    if ["permission", "forbidden", "not authorized", "403", "scope"]
-        .iter()
-        .any(|needle| msg.contains(needle))
-    {
+
+    // Checked before the rate-limit class below: `openapi_error_code()` and
+    // `dc_region_restricted()` are mutually exclusive on any given
+    // `longbridge::Error`, so a DC-region-restricted error always has
+    // `code == None` — if this ran after the rate-limit check, its message
+    // text (a route path) would be exposed to that check's numeric-needle
+    // fallback before this authoritative structured signal gets a chance.
+    let is_dc_region_restricted = err
+        .data
+        .as_ref()
+        .is_some_and(|d| d.get("dc_region_restricted").is_some())
+        || ["data center", "dcregionrestricted"]
+            .iter()
+            .any(|needle| msg.contains(needle));
+    if is_dc_region_restricted {
+        return Some(
+            "Hint: this tool is restricted to accounts in a specific Longbridge data center \
+             (US vs. AP/HK). It cannot succeed for this account regardless of retries or \
+             arguments — use the equivalent tool for the account's own region instead, or tell \
+             the user this data isn't available for their account.",
+        );
+    }
+    if matches_error_class(
+        code,
+        &msg,
+        // Observed rate-limit codes (429002, 429003) share the HTTP
+        // 429-Too-Many-Requests prefix also seen elsewhere in this
+        // codebase's other business-code families (401xxx/403xxx) — a
+        // range check covers sibling codes in the same family that
+        // haven't been individually enumerated, instead of requiring an
+        // exact-match list that's one upstream addition away from stale.
+        |c| (429_000..430_000).contains(&c),
+        ErrorClassNeedles {
+            text: &["rate limit", "区间调用上限", "最小间隔"],
+            numeric: &["429002", "429003"],
+        },
+    ) {
+        return Some(
+            "Hint: this call was rate-limited by the upstream API. Wait a moment and retry — \
+             if this recurs, space out repeated calls rather than firing them back-to-back.",
+        );
+    }
+    if matches_error_class(
+        code,
+        &msg,
+        |c| c == NO_QUOTE_ACCESS_CODE,
+        ErrorClassNeedles {
+            text: &["no quote access"],
+            numeric: &["301604"],
+        },
+    ) {
+        return Some(
+            "Hint: the account lacks a market data subscription/permission for this \
+             symbol's market. Retrying won't help — tell the user they need to subscribe to \
+             the relevant market data package.",
+        );
+    }
+    if matches_error_class(
+        code,
+        &msg,
+        |c| (403_000..404_000).contains(&c),
+        ErrorClassNeedles {
+            text: &["permission", "forbidden", "not authorized", "scope"],
+            numeric: &["403"],
+        },
+    ) {
         return Some(
             "Hint: this is a permission error. The most common cause is that the OAuth \
              authorization was granted with only part of the available scopes. Ask the user to \
@@ -164,10 +272,15 @@ fn error_hint(err: &McpError) -> Option<&'static str> {
              portfolio, and trading scopes) before retrying.",
         );
     }
-    if ["unauthorized", "401", "token", "expired"]
-        .iter()
-        .any(|needle| msg.contains(needle))
-    {
+    if matches_error_class(
+        code,
+        &msg,
+        |c| (401_000..402_000).contains(&c),
+        ErrorClassNeedles {
+            text: &["unauthorized", "token", "expired"],
+            numeric: &["401"],
+        },
+    ) {
         return Some(
             "Hint: the access token is missing, expired, or invalid. Ask the user to reconnect \
              this MCP server to re-authorize, granting the full set of permissions.",
@@ -1350,12 +1463,12 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get option quotes (max 500 symbols). Returns last_done, prev_close, open, high, low, volume, turnover, implied_volatility, delta, gamma, theta, vega, rho, open_interest per symbol."
+        description = "Get option quotes (max 500 symbols). Symbols must be option contract symbols (e.g. \"AAPL230317P160000.US\"), NOT plain stock symbols — obtain valid ones from option_chain_info_by_date's call.symbol/put.symbol fields. Returns last_done, prev_close, open, high, low, volume, turnover, implied_volatility, delta, gamma, theta, vega, rho, open_interest per symbol."
     )]
     async fn option_quote(
         &self,
         ctx: RequestContext<RoleServer>,
-        Parameters(p): Parameters<SymbolsParam>,
+        Parameters(p): Parameters<quote::OptionSymbolsParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
         measured_tool_call("option_quote", || quote::option_quote(&mctx, p)).await
@@ -1481,7 +1594,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get candlestick data (OHLCV). Only symbol is required; period defaults to day, count to 100 (max 1000), forward_adjust to false, trade_sessions to all. period: 1m/5m/15m/30m/60m/day/week/month/year. trade_sessions: intraday/all"
+        description = "Get candlestick data (OHLCV). Only symbol is required; period defaults to day, count to 100 (max 1000), forward_adjust to false, trade_sessions to all. period: 1m/5m/15m/30m/60m/day/week/month/year. trade_sessions: intraday/all. If the account's entitlement caps out below the requested count, this returns as many candles as allowed instead of erroring — check the returned array length against count if an exact number matters."
     )]
     async fn candlesticks(
         &self,
@@ -1501,7 +1614,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get historical candlestick data by offset from a reference time. Only symbol is required; period defaults to day (1m/5m/15m/30m/60m/day/week/month/year), count to 100, forward_adjust/forward to false, trade_sessions to all."
+        description = "Get historical candlestick data by offset from a reference time. Only symbol is required; period defaults to day (1m/5m/15m/30m/60m/day/week/month/year), count to 100, forward_adjust/forward to false, trade_sessions to all. If the account's entitlement caps out below the requested count, this returns as many candles as allowed instead of erroring — check the returned array length against count if an exact number matters."
     )]
     async fn history_candlesticks_by_offset(
         &self,
@@ -5810,6 +5923,186 @@ mod tool_error_tests {
             error_hint(&err).is_some_and(|h| h.contains("reconnect")),
             "expected a re-authorization hint"
         );
+    }
+
+    #[test]
+    fn rate_limit_errors_hint_at_backing_off() {
+        for message in [
+            "openapi error: code=429002: 已达到 1S 区间调用上限，请 0.4 秒后重试",
+            "openapi error: code=429003: minimum interval between two calls should be 0.02 seconds",
+            "rate limit of 1-second interval has been reached, please retry after: 1s",
+        ] {
+            let err = McpError::internal_error(message.to_string(), None);
+            let hint = error_hint(&err).unwrap_or_else(|| panic!("no hint for {message:?}"));
+            assert!(
+                hint.contains("rate-limited"),
+                "hint for {message:?} should mention rate limiting, got: {hint}"
+            );
+        }
+    }
+
+    #[test]
+    fn dc_region_restricted_errors_hint_at_using_the_account_own_region() {
+        let err = McpError::internal_error(
+            "this API (/v1/us/stock-info/fin-keyfactor) is only available in the US data \
+             center and is not supported for your AP-region account"
+                .to_string(),
+            None,
+        );
+        let hint = error_hint(&err).expect("expected a DC-region hint");
+        assert!(
+            hint.contains("data center") && hint.contains("region"),
+            "unexpected hint: {hint}"
+        );
+    }
+
+    #[test]
+    fn no_quote_access_errors_hint_at_a_missing_subscription() {
+        let err = McpError::internal_error(
+            "response error: 7: detail:Some(WsResponseErrorDetail { code: 301604, msg: \
+             \"no quote access\" })"
+                .to_string(),
+            None,
+        );
+        let hint = error_hint(&err).expect("expected a no-quote-access hint");
+        assert!(hint.contains("subscription"), "unexpected hint: {hint}");
+    }
+
+    #[test]
+    fn structured_error_code_is_preferred_over_substring_matching() {
+        // A message that happens to embed "301604" in an unrelated field
+        // (e.g. a trace id) must NOT get the no-quote-access hint once a
+        // structured code is available and says otherwise.
+        let err = McpError::internal_error(
+            "openapi error: code=401103: token is expired (trace_id=301604-abc)".to_string(),
+            Some(serde_json::json!({ "openapi_error_code": 401103 })),
+        );
+        let hint = error_hint(&err).expect("expected a hint");
+        assert!(
+            hint.contains("reconnect") && !hint.contains("subscription"),
+            "structured code 401103 should win over the substring '301604' in the trace id, got: {hint}"
+        );
+    }
+
+    #[test]
+    fn structured_rate_limit_code_is_matched_even_without_matching_text() {
+        let err = McpError::internal_error(
+            "openapi error: unexpected rejection".to_string(),
+            Some(serde_json::json!({ "openapi_error_code": 429002 })),
+        );
+        let hint = error_hint(&err).expect("expected a rate-limit hint from the structured code");
+        assert!(hint.contains("rate-limited"), "unexpected hint: {hint}");
+    }
+
+    #[test]
+    fn descriptive_text_still_hints_under_an_unenumerated_error_code() {
+        // Regression test: an earlier version of error_hint() only fell back
+        // to string matching when `code` was entirely absent, so any
+        // structured code not in RATE_LIMIT_CODES/NO_QUOTE_ACCESS_CODE
+        // silently disabled the hint even when the message text plainly
+        // said "rate limit" / "no quote access".
+        let rate_limited = McpError::internal_error(
+            "openapi error: code=429001: rate limit exceeded".to_string(),
+            Some(serde_json::json!({ "openapi_error_code": 429001 })),
+        );
+        let hint = error_hint(&rate_limited)
+            .expect("an unenumerated rate-limit code with descriptive text must still hint");
+        assert!(hint.contains("rate-limited"), "unexpected hint: {hint}");
+
+        let no_quote_access = McpError::internal_error(
+            "longbridge: response error: 7: detail:Some(WsResponseErrorDetail { code: 301609, \
+             msg: \"no quote access\" })"
+                .to_string(),
+            Some(serde_json::json!({ "openapi_error_code": 301609 })),
+        );
+        let hint = error_hint(&no_quote_access)
+            .expect("an unenumerated no-quote-access code with descriptive text must still hint");
+        assert!(hint.contains("subscription"), "unexpected hint: {hint}");
+    }
+
+    #[test]
+    fn structured_dc_region_restriction_hints_without_matching_text() {
+        let err = McpError::internal_error(
+            "openapi error: unexpected rejection".to_string(),
+            Some(serde_json::json!({
+                "dc_region_restricted": { "path": "/v1/us/foo", "required": "us", "current": "ap" }
+            })),
+        );
+        let hint = error_hint(&err).expect("expected a DC-region hint from the structured field");
+        assert!(hint.contains("data center"), "unexpected hint: {hint}");
+    }
+
+    #[test]
+    fn dc_region_check_runs_before_rate_limit_so_it_cannot_be_shadowed() {
+        // A DC-region-restricted error always has code=None (mutually
+        // exclusive with openapi_error_code on any given longbridge::Error),
+        // so its message text is visible to the rate-limit check's
+        // numeric-needle fallback. If the DC-region check ran second, this
+        // message (which happens to contain "429002" in its path) would get
+        // the wrong hint.
+        let err = McpError::internal_error(
+            "this API (/v1/us/429002/foo) is only available in the US data center".to_string(),
+            Some(serde_json::json!({
+                "dc_region_restricted": { "path": "/v1/us/429002/foo", "required": "us", "current": "ap" }
+            })),
+        );
+        let hint = error_hint(&err).expect("expected a hint");
+        assert!(
+            hint.contains("data center") && !hint.contains("rate-limited"),
+            "DC-region's structured signal must win even though the path contains a \
+             rate-limit-looking numeric needle, got: {hint}"
+        );
+    }
+
+    #[test]
+    fn a_rate_limit_code_outside_the_hardcoded_list_still_matches_via_the_429_range() {
+        // No text needle matches here on purpose — this must be caught by
+        // the numeric-range check on the structured code, not by string
+        // matching, unlike descriptive_text_still_hints_under_an_unenumerated_error_code
+        // above which covers the text-needle path for an unenumerated code.
+        let err = McpError::internal_error(
+            "openapi error: code=429001: too many concurrent connections".to_string(),
+            Some(serde_json::json!({ "openapi_error_code": 429001 })),
+        );
+        let hint = error_hint(&err).expect("429xxx codes must match via the range check");
+        assert!(hint.contains("rate-limited"), "unexpected hint: {hint}");
+    }
+
+    #[test]
+    fn a_bare_401_substring_does_not_misfire_when_a_different_code_is_present() {
+        // Same false-positive class the rate-limit/no-quote-access branches
+        // were hardened against: a bare "401" can appear in an unrelated
+        // field (here, a trace id) — it must not win once a different,
+        // authoritative structured code is present.
+        let err = McpError::internal_error(
+            "openapi error: code=403308: scope not authorized (trace_id=401-abc)".to_string(),
+            Some(serde_json::json!({ "openapi_error_code": 403308 })),
+        );
+        let hint = error_hint(&err).expect("expected a permission hint");
+        assert!(
+            hint.contains("scopes") && !hint.contains("re-authorize"),
+            "structured code 403308 should win over the substring '401' in the trace id, got: {hint}"
+        );
+    }
+
+    #[test]
+    fn a_permission_code_outside_the_hardcoded_needles_still_matches_via_the_403_range() {
+        let err = McpError::internal_error(
+            "openapi error: code=403309: unexpected access rejection".to_string(),
+            Some(serde_json::json!({ "openapi_error_code": 403309 })),
+        );
+        let hint = error_hint(&err).expect("403xxx codes must match via the range check");
+        assert!(hint.contains("scopes"), "unexpected hint: {hint}");
+    }
+
+    #[test]
+    fn a_token_code_outside_the_hardcoded_needles_still_matches_via_the_401_range() {
+        let err = McpError::internal_error(
+            "openapi error: code=401104: session invalid".to_string(),
+            Some(serde_json::json!({ "openapi_error_code": 401104 })),
+        );
+        let hint = error_hint(&err).expect("401xxx codes must match via the range check");
+        assert!(hint.contains("re-authorize"), "unexpected hint: {hint}");
     }
 
     #[test]
