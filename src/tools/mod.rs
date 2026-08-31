@@ -153,6 +153,36 @@ fn error_hint(err: &McpError) -> Option<&'static str> {
     }
 
     let msg = err.message.to_lowercase();
+    if ["429002", "429003", "rate limit", "区间调用上限", "最小间隔"]
+        .iter()
+        .any(|needle| msg.contains(needle))
+    {
+        return Some(
+            "Hint: this call was rate-limited by the upstream API. Wait a moment and retry — \
+             if this recurs, space out repeated calls rather than firing them back-to-back.",
+        );
+    }
+    if ["data center", "dcregionrestricted"]
+        .iter()
+        .any(|needle| msg.contains(needle))
+    {
+        return Some(
+            "Hint: this tool is restricted to accounts in a specific Longbridge data center \
+             (US vs. AP/HK). It cannot succeed for this account regardless of retries or \
+             arguments — use the equivalent tool for the account's own region instead, or tell \
+             the user this data isn't available for their account.",
+        );
+    }
+    if ["no quote access", "301604"]
+        .iter()
+        .any(|needle| msg.contains(needle))
+    {
+        return Some(
+            "Hint: the account lacks a market data subscription/permission for this \
+             symbol's market. Retrying won't help — tell the user they need to subscribe to \
+             the relevant market data package.",
+        );
+    }
     if ["permission", "forbidden", "not authorized", "403", "scope"]
         .iter()
         .any(|needle| msg.contains(needle))
@@ -5859,6 +5889,49 @@ mod tool_error_tests {
             error_hint(&err).is_some_and(|h| h.contains("reconnect")),
             "expected a re-authorization hint"
         );
+    }
+
+    #[test]
+    fn rate_limit_errors_hint_at_backing_off() {
+        for message in [
+            "openapi error: code=429002: 已达到 1S 区间调用上限，请 0.4 秒后重试",
+            "openapi error: code=429003: minimum interval between two calls should be 0.02 seconds",
+            "rate limit of 1-second interval has been reached, please retry after: 1s",
+        ] {
+            let err = McpError::internal_error(message.to_string(), None);
+            let hint = error_hint(&err).unwrap_or_else(|| panic!("no hint for {message:?}"));
+            assert!(
+                hint.contains("rate-limited"),
+                "hint for {message:?} should mention rate limiting, got: {hint}"
+            );
+        }
+    }
+
+    #[test]
+    fn dc_region_restricted_errors_hint_at_using_the_account_own_region() {
+        let err = McpError::internal_error(
+            "this API (/v1/us/stock-info/fin-keyfactor) is only available in the US data \
+             center and is not supported for your AP-region account"
+                .to_string(),
+            None,
+        );
+        let hint = error_hint(&err).expect("expected a DC-region hint");
+        assert!(
+            hint.contains("data center") && hint.contains("region"),
+            "unexpected hint: {hint}"
+        );
+    }
+
+    #[test]
+    fn no_quote_access_errors_hint_at_a_missing_subscription() {
+        let err = McpError::internal_error(
+            "response error: 7: detail:Some(WsResponseErrorDetail { code: 301604, msg: \
+             \"no quote access\" })"
+                .to_string(),
+            None,
+        );
+        let hint = error_hint(&err).expect("expected a no-quote-access hint");
+        assert!(hint.contains("subscription"), "unexpected hint: {hint}");
     }
 
     #[test]
