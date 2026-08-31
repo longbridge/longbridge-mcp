@@ -381,7 +381,7 @@
     },
     "candlesticks": {
       "title": "K 线数据",
-      "description": "获取 K 线数据（OHLCV）。period：1m/5m/15m/30m/60m/day/week/month/year；trade_sessions：intraday（默认，仅正常时段）或 all（含盘前盘后）",
+      "description": "获取 K 线数据（OHLCV）。period：1m/5m/15m/30m/60m/day/week/month/year；trade_sessions：intraday（默认，仅正常时段）或 all（含盘前盘后）。若账号权限上限低于请求的 count，会返回权限允许范围内尽量多的数据而不报错——如果需要精确数量，请检查返回数组的长度。",
       "properties": {
         "symbol": "证券代码",
         "period": "K 线周期：`1m`、`5m`、`15m`、`30m`、`60m`、`day`、`week`、`month`、`year`",
@@ -674,7 +674,7 @@
     },
     "history_candlesticks_by_offset": {
       "title": "历史 K 线（按偏移）",
-      "description": "以参考时间为锚点按偏移量获取历史 K 线（OHLCV）数据。仅 symbol 必填，period 默认 day、count 默认 100、forward_adjust 与 forward 默认 false、trade_sessions 默认 all。",
+      "description": "以参考时间为锚点按偏移量获取历史 K 线（OHLCV）数据。仅 symbol 必填，period 默认 day、count 默认 100、forward_adjust 与 forward 默认 false、trade_sessions 默认 all。若账号权限上限低于请求的 count，会返回权限允许范围内尽量多的数据而不报错——如果需要精确数量，请检查返回数组的长度。",
       "properties": {
         "symbol": "证券代码",
         "period": "K 线周期：`1m`、`5m`、`15m`、`30m`、`60m`、`day`、`week`、`month`、`year`（默认 `day`）",
@@ -811,9 +811,9 @@
     },
     "option_quote": {
       "title": "期权报价",
-      "description": "获取期权行情（最多 500 个），返回各标的：last_done（最新价）, prev_close, open, high, low, volume（成交量）, turnover（成交额）, implied_volatility（隐含波动率）, delta/gamma/theta/vega/rho（Greeks）, open_interest（未平仓量）",
+      "description": "获取期权行情（最多 500 个）。symbols 必须是期权合约代码（例如 \"AAPL230317P160000.US\"），不能用普通股票代码——请先用 option_chain_info_by_date 返回的 call.symbol/put.symbol 字段获取有效的期权代码。返回各标的：last_done（最新价）, prev_close, open, high, low, volume（成交量）, turnover（成交额）, implied_volatility（隐含波动率）, delta/gamma/theta/vega/rho（Greeks）, open_interest（未平仓量）",
       "properties": {
-        "symbols": "证券代码，例如 `[\"700.HK\", \"AAPL.US\"]`"
+        "symbols": "期权合约代码，例如 `[\"AAPL230317P160000.US\"]`。不是普通股票代码——请先用 option_chain_expiry_date_list 列出到期日，再用 option_chain_info_by_date 按行权价获取的 call.symbol/put.symbol 字段拿到有效代码"
       }
     },
     "option_volume": {
