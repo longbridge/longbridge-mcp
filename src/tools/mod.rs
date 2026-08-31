@@ -143,6 +143,20 @@ fn tool_error(name: &str, err: &McpError) -> CallToolResult {
     CallToolResult::error(vec![Content::text(text)])
 }
 
+/// Business error codes matched structurally in `error_hint()` — see
+/// `Error::openapi_error_code()`, which populates `McpError::data` with
+/// `{"openapi_error_code": ...}` for any error that wraps a `longbridge`
+/// business error. Preferred over string-matching the display text, which
+/// can misfire on an unrelated field (trace id, order id) that happens to
+/// contain the same digits.
+const RATE_LIMIT_CODES: &[i64] = &[429002, 429003];
+const NO_QUOTE_ACCESS_CODE: i64 = 301604;
+
+/// The structured `openapi_error_code` from `McpError::data`, when present.
+fn openapi_error_code_of(err: &McpError) -> Option<i64> {
+    err.data.as_ref()?.get("openapi_error_code")?.as_i64()
+}
+
 /// Actionable follow-up for the error classes users hit most, so the model can
 /// either fix the call itself or tell the user what to do.
 fn error_hint(err: &McpError) -> Option<&'static str> {
@@ -152,11 +166,15 @@ fn error_hint(err: &McpError) -> Option<&'static str> {
         );
     }
 
+    let code = openapi_error_code_of(err);
     let msg = err.message.to_lowercase();
-    if ["429002", "429003", "rate limit", "区间调用上限", "最小间隔"]
-        .iter()
-        .any(|needle| msg.contains(needle))
-    {
+
+    let is_rate_limited = code.is_some_and(|c| RATE_LIMIT_CODES.contains(&c))
+        || (code.is_none()
+            && ["429002", "429003", "rate limit", "区间调用上限", "最小间隔"]
+                .iter()
+                .any(|needle| msg.contains(needle)));
+    if is_rate_limited {
         return Some(
             "Hint: this call was rate-limited by the upstream API. Wait a moment and retry — \
              if this recurs, space out repeated calls rather than firing them back-to-back.",
@@ -173,10 +191,12 @@ fn error_hint(err: &McpError) -> Option<&'static str> {
              the user this data isn't available for their account.",
         );
     }
-    if ["no quote access", "301604"]
-        .iter()
-        .any(|needle| msg.contains(needle))
-    {
+    let is_no_quote_access = code == Some(NO_QUOTE_ACCESS_CODE)
+        || (code.is_none()
+            && ["no quote access", "301604"]
+                .iter()
+                .any(|needle| msg.contains(needle)));
+    if is_no_quote_access {
         return Some(
             "Hint: the account lacks a market data subscription/permission for this \
              symbol's market. Retrying won't help — tell the user they need to subscribe to \
@@ -454,6 +474,15 @@ impl McpContext {
 
     /// Return the cached `TradeContext` for this token, creating one on
     /// first use.
+    ///
+    /// Known limitation: unlike [`Self::get_quote_context`], this does not
+    /// fire a per-call tracking beacon. `create_config()`'s `x-mcp-tool` and
+    /// language are only applied at connect time (a cache miss), so a cache
+    /// hit reuses whichever tool/language connected the pooled WebSocket
+    /// first — server-side per-tool attribution and response language can
+    /// go stale for the rest of the pool's idle TTL. Quote tools avoid this
+    /// via `track_quote_cmd()`'s `GET /v1/quote/cmd` beacon; there is no
+    /// known trade-gateway equivalent to fire the same way for trade calls.
     pub async fn get_trade_context(&self) -> longbridge::trade::TradeContext {
         // Pass a lazy closure: create_config() is only called on a cache miss.
         // Cache hits avoid the Arc<Config> allocation entirely.
@@ -1526,7 +1555,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get candlestick data (OHLCV). Only symbol is required; period defaults to day, count to 100 (max 1000), forward_adjust to false, trade_sessions to all. period: 1m/5m/15m/30m/60m/day/week/month/year. trade_sessions: intraday/all"
+        description = "Get candlestick data (OHLCV). Only symbol is required; period defaults to day, count to 100 (max 1000), forward_adjust to false, trade_sessions to all. period: 1m/5m/15m/30m/60m/day/week/month/year. trade_sessions: intraday/all. If the account's entitlement caps out below the requested count, this returns as many candles as allowed instead of erroring — check the returned array length against count if an exact number matters."
     )]
     async fn candlesticks(
         &self,
@@ -1546,7 +1575,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get historical candlestick data by offset from a reference time. Only symbol is required; period defaults to day (1m/5m/15m/30m/60m/day/week/month/year), count to 100, forward_adjust/forward to false, trade_sessions to all."
+        description = "Get historical candlestick data by offset from a reference time. Only symbol is required; period defaults to day (1m/5m/15m/30m/60m/day/week/month/year), count to 100, forward_adjust/forward to false, trade_sessions to all. If the account's entitlement caps out below the requested count, this returns as many candles as allowed instead of erroring — check the returned array length against count if an exact number matters."
     )]
     async fn history_candlesticks_by_offset(
         &self,
@@ -5932,6 +5961,32 @@ mod tool_error_tests {
         );
         let hint = error_hint(&err).expect("expected a no-quote-access hint");
         assert!(hint.contains("subscription"), "unexpected hint: {hint}");
+    }
+
+    #[test]
+    fn structured_error_code_is_preferred_over_substring_matching() {
+        // A message that happens to embed "301604" in an unrelated field
+        // (e.g. a trace id) must NOT get the no-quote-access hint once a
+        // structured code is available and says otherwise.
+        let err = McpError::internal_error(
+            "openapi error: code=401103: token is expired (trace_id=301604-abc)".to_string(),
+            Some(serde_json::json!({ "openapi_error_code": 401103 })),
+        );
+        let hint = error_hint(&err).expect("expected a hint");
+        assert!(
+            hint.contains("reconnect") && !hint.contains("subscription"),
+            "structured code 401103 should win over the substring '301604' in the trace id, got: {hint}"
+        );
+    }
+
+    #[test]
+    fn structured_rate_limit_code_is_matched_even_without_matching_text() {
+        let err = McpError::internal_error(
+            "openapi error: unexpected rejection".to_string(),
+            Some(serde_json::json!({ "openapi_error_code": 429002 })),
+        );
+        let hint = error_hint(&err).expect("expected a rate-limit hint from the structured code");
+        assert!(hint.contains("rate-limited"), "unexpected hint: {hint}");
     }
 
     #[test]

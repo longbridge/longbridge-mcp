@@ -1160,8 +1160,14 @@ mod tests {
 
     #[test]
     fn validate_candlestick_count_rejects_zero() {
-        assert!(super::validate_candlestick_count(0).is_err());
-        assert!(super::validate_candlestick_count(1).is_ok());
+        assert!(
+            super::validate_candlestick_count(0).is_err(),
+            "count=0 must be rejected"
+        );
+        assert!(
+            super::validate_candlestick_count(1).is_ok(),
+            "count=1 is the minimum valid value"
+        );
     }
 
     #[tokio::test]
@@ -1191,7 +1197,10 @@ mod tests {
         })
         .await;
         assert_eq!(attempts, vec![1]);
-        assert!(result.is_err());
+        assert!(
+            result.is_err(),
+            "count=1 must not retry at count-1=0, so the error should propagate"
+        );
     }
 
     #[tokio::test]
@@ -1213,6 +1222,9 @@ mod tests {
         })
         .await;
         assert_eq!(attempts, vec![100]);
-        assert!(result.is_err());
+        assert!(
+            result.is_err(),
+            "an unrelated error code (301600, not 301607) must not trigger a retry"
+        );
     }
 }

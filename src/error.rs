@@ -77,11 +77,26 @@ impl Error {
     pub fn longbridge(err: longbridge::Error) -> Self {
         Self::Longbridge(Box::new(err))
     }
+
+    /// The upstream OpenAPI business error code, when this wraps a
+    /// `longbridge::Error` that carries one. Lets callers (e.g.
+    /// `error_hint()`) classify an error by its structured code instead of
+    /// pattern-matching the sanitized display text, which is fragile (a
+    /// short numeric code can appear as a substring of an unrelated field).
+    pub fn openapi_error_code(&self) -> Option<i64> {
+        match self {
+            Self::Longbridge(err) => err.openapi_error_code(),
+            Self::Serialize(_) | Self::Http(_) | Self::Io(_) | Self::Other(_) => None,
+        }
+    }
 }
 
 impl From<Error> for McpError {
     fn from(err: Error) -> Self {
-        McpError::internal_error(err.to_string(), None)
+        let data = err
+            .openapi_error_code()
+            .map(|code| serde_json::json!({ "openapi_error_code": code }));
+        McpError::internal_error(err.to_string(), data)
     }
 }
 
@@ -159,6 +174,49 @@ mod tests {
         assert!(
             !mcp.message.contains("leaked"),
             "the client-facing McpError message must never contain the raw upstream body"
+        );
+    }
+
+    #[test]
+    fn openapi_error_code_surfaces_the_business_code() {
+        let err = Error::longbridge(longbridge::Error::HttpClient(
+            longbridge::httpclient::HttpClientError::OpenApi {
+                code: 301604,
+                message: "no quote access".to_string(),
+                trace_id: "trace-789".to_string(),
+            },
+        ));
+        assert_eq!(
+            err.openapi_error_code(),
+            Some(301604),
+            "the business error code must be extractable without parsing the display text"
+        );
+    }
+
+    #[test]
+    fn mcp_conversion_populates_the_structured_error_code() {
+        let err = Error::longbridge(longbridge::Error::HttpClient(
+            longbridge::httpclient::HttpClientError::OpenApi {
+                code: 301604,
+                message: "no quote access".to_string(),
+                trace_id: "trace-789".to_string(),
+            },
+        ));
+        let mcp: McpError = err.into();
+        assert_eq!(
+            mcp.data.as_ref().and_then(|d| d.get("openapi_error_code")),
+            Some(&serde_json::json!(301604)),
+            "McpError::data must carry the structured code for error_hint() to match on"
+        );
+    }
+
+    #[test]
+    fn non_longbridge_errors_have_no_structured_code() {
+        let err = Error::Other("something went wrong".to_string());
+        assert_eq!(
+            err.openapi_error_code(),
+            None,
+            "errors not wrapping a longbridge::Error have no business code to surface"
         );
     }
 }

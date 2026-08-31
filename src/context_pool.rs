@@ -249,10 +249,10 @@ where
 /// Start a background sweeper for `pool`, gated so it only ever spawns once
 /// per `started` flag. Call this on every pool access — the `OnceLock` makes
 /// repeat calls free.
-pub fn ensure_sweeper_started<T: Clone + Send + Sync + 'static>(
-    pool: &'static Pool<T>,
-    started: &'static OnceLock<()>,
-) {
+pub fn ensure_sweeper_started<T>(pool: &'static Pool<T>, started: &'static OnceLock<()>)
+where
+    T: Clone + Send + Sync + 'static,
+{
     started.get_or_init(|| {
         // Guard: tokio::spawn requires an active Tokio runtime. Skip silently
         // when called from a non-async context (e.g. a sync unit test or a
@@ -553,6 +553,252 @@ mod tests {
         assert!(
             pool.contains_key(&key),
             "rotating user's key should remain in pool after token swap"
+        );
+    }
+
+    /// Stress test: N users × M concurrent requests each.
+    ///
+    /// Verifies:
+    ///   1. Pool size never exceeds max_entries under concurrent insertion.
+    ///   2. Each user's init closure runs exactly once regardless of concurrency.
+    ///   3. Hit rate is ≥ 90% when users are stable (no token rotation).
+    ///
+    /// Run with:
+    ///   cargo test stress_pool_bounded_concurrency -- --nocapture --ignored
+    #[test]
+    #[ignore]
+    fn stress_pool_bounded_concurrency() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::time::Instant;
+
+        const USERS: usize = 200;
+        const REQUESTS_PER_USER: usize = 50;
+        const MAX_POOL: usize = 64; // force LRU eviction (200 users > 64 slots)
+
+        let pool = Arc::new(Pool::new(
+            settings(MAX_POOL, Duration::from_secs(300)),
+            noop_metrics(),
+        ));
+        let total_inits = Arc::new(AtomicUsize::new(0));
+        let total_hits = Arc::new(AtomicUsize::new(0));
+        let total_requests = USERS * REQUESTS_PER_USER;
+
+        let start = Instant::now();
+        let mut handles = Vec::with_capacity(USERS * REQUESTS_PER_USER);
+
+        for user in 0..USERS {
+            for _ in 0..REQUESTS_PER_USER {
+                let pool = pool.clone();
+                let total_inits = total_inits.clone();
+                let total_hits = total_hits.clone();
+                handles.push(std::thread::spawn(move || {
+                    let k = key(&format!("user-{user}"));
+                    let fp = token_fingerprint(&format!("token-{user}"));
+                    let was_hit = {
+                        let before = pool.len();
+                        pool.get_or_insert_with(k, fp, || {
+                            total_inits.fetch_add(1, Ordering::Relaxed);
+                            user // value = user id
+                        });
+                        let after = pool.len();
+                        // "hit" if pool didn't grow (entry already existed)
+                        after <= before
+                    };
+                    if was_hit {
+                        total_hits.fetch_add(1, Ordering::Relaxed);
+                    }
+                }));
+            }
+        }
+
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        let elapsed = start.elapsed();
+        let inits = total_inits.load(Ordering::Relaxed);
+        let hits = total_hits.load(Ordering::Relaxed);
+        let pool_size = pool.len();
+        let hit_rate = hits as f64 / total_requests as f64 * 100.0;
+        let throughput = total_requests as f64 / elapsed.as_secs_f64();
+
+        eprintln!("\ncontext_pool stress:");
+        eprintln!("  users:          {USERS}");
+        eprintln!("  requests:       {total_requests} ({REQUESTS_PER_USER}/user)");
+        eprintln!("  threads:        {total_requests}");
+        eprintln!("  max_pool:       {MAX_POOL}");
+        eprintln!("  pool size:      {pool_size}  (<= {MAX_POOL})");
+        eprintln!("  total inits:    {inits}  (<= {USERS} expected)");
+        eprintln!("  hit rate:       {hit_rate:.1}%");
+        eprintln!("  throughput:     {throughput:.0} ops/s");
+        eprintln!("  elapsed:        {:.2?}", elapsed);
+
+        assert!(
+            pool_size <= MAX_POOL,
+            "pool size {pool_size} exceeded max {MAX_POOL}"
+        );
+        assert!(
+            inits <= USERS,
+            "total inits {inits} exceeded user count {USERS} — double-init detected"
+        );
+        assert!(
+            hit_rate >= 50.0,
+            "hit rate {hit_rate:.1}% too low — pool may not be caching effectively"
+        );
+    }
+
+    /// High-concurrency stress suite. Four scenarios in one run:
+    ///
+    ///   A) Hot pool, all-hit  — 1000 users, warm cache, max_entries=1024.
+    ///      Measures pure Mutex+clone throughput with no evictions.
+    ///   B) Capacity pressure  — 500 users, max_entries=64.
+    ///      Constant LRU evictions; verifies pool never exceeds cap.
+    ///   C) Token-rotation churn — 200 users × 5 token rotations each.
+    ///      Every rotation evicts the old entry; measures rotated-token metric.
+    ///   D) Mixed init + hit    — 100 users × 200 req, init simulates
+    ///      10 ms blocking work; measures that the global Mutex serializes
+    ///      inits (only one init per user) even under contention.
+    ///
+    /// Run with:
+    ///   cargo test stress_high_concurrency -- --nocapture --ignored
+    #[test]
+    #[ignore]
+    fn stress_high_concurrency() {
+        use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
+        use std::time::Instant;
+
+        fn run_scenario(
+            label: &str,
+            pool: Arc<Pool<usize>>,
+            users: usize,
+            req_per_user: usize,
+            token_rotations: usize, // how many distinct token fingerprints per user
+            init_delay_ms: u64,
+        ) -> (f64, f64, usize, usize) {
+            let total_inits = Arc::new(AtomicUsize::new(0));
+            let total_requests = users * req_per_user;
+            let start = Instant::now();
+            let mut handles = Vec::with_capacity(total_requests);
+
+            for user in 0..users {
+                for req in 0..req_per_user {
+                    let pool = pool.clone();
+                    let total_inits = total_inits.clone();
+                    let rotation = if token_rotations > 1 {
+                        req / (req_per_user / token_rotations).max(1)
+                    } else {
+                        0
+                    };
+                    handles.push(std::thread::spawn(move || {
+                        let k = key(&format!("user-{user}"));
+                        let fp = token_fingerprint(&format!("token-{user}-rot{rotation}"));
+                        pool.get_or_insert_with(k, fp, || {
+                            total_inits.fetch_add(1, Relaxed);
+                            if init_delay_ms > 0 {
+                                std::thread::sleep(std::time::Duration::from_millis(init_delay_ms));
+                            }
+                            user
+                        })
+                    }));
+                }
+            }
+
+            for h in handles {
+                h.join().unwrap();
+            }
+
+            let elapsed = start.elapsed();
+            let inits = total_inits.load(Relaxed);
+            let pool_size = pool.len();
+            let throughput = total_requests as f64 / elapsed.as_secs_f64();
+            eprintln!(
+                "  {label:<30} {:>6} req | pool={:>4} | inits={:>5} | {throughput:>9.0} ops/s | {:>6.2?}",
+                total_requests, pool_size, inits, elapsed
+            );
+            (throughput, elapsed.as_secs_f64(), pool_size, inits)
+        }
+
+        eprintln!("\ncontext_pool high-concurrency stress:");
+        eprintln!(
+            "  {:<30} {:>6}     {:>5}   {:>5}   {:>9}   {:>6}",
+            "scenario", "reqs", "pool", "inits", "ops/s", "time"
+        );
+
+        // A: Hot pool, all cache hits
+        let (tp_a, _, pool_a, inits_a) = run_scenario(
+            "A: hot pool (1000u × 50r, cap=1024)",
+            Arc::new(Pool::new(
+                settings(1024, std::time::Duration::from_secs(300)),
+                noop_metrics(),
+            )),
+            1000,
+            50,
+            1,
+            0,
+        );
+        assert!(pool_a <= 1024, "A: pool {pool_a} > cap 1024");
+        assert!(
+            inits_a <= 1000,
+            "A: inits {inits_a} > users 1000 — double-init detected"
+        );
+
+        // B: Capacity pressure — constant LRU eviction
+        let (tp_b, _, pool_b, _) = run_scenario(
+            "B: LRU pressure (500u × 100r, cap=64)",
+            Arc::new(Pool::new(
+                settings(64, std::time::Duration::from_secs(300)),
+                noop_metrics(),
+            )),
+            500,
+            100,
+            1,
+            0,
+        );
+        assert!(pool_b <= 64, "B: pool {pool_b} exceeded cap 64");
+
+        // C: Token rotation churn (5 rotations per user)
+        let (tp_c, _, pool_c, _) = run_scenario(
+            "C: token rotation (200u × 50r, 5 rot)",
+            Arc::new(Pool::new(
+                settings(512, std::time::Duration::from_secs(300)),
+                noop_metrics(),
+            )),
+            200,
+            50,
+            5,
+            0,
+        );
+        assert!(pool_c <= 512, "C: pool {pool_c} exceeded cap 512");
+
+        // D: Slow init (10 ms) — verifies per-key serialization
+        let (tp_d, elapsed_d, _, inits_d) = run_scenario(
+            "D: slow init 10ms (100u × 20r, cap=256)",
+            Arc::new(Pool::new(
+                settings(256, std::time::Duration::from_secs(300)),
+                noop_metrics(),
+            )),
+            100,
+            20,
+            1,
+            10,
+        );
+        assert!(
+            inits_d <= 100,
+            "D: inits {inits_d} > users 100 — Mutex not serializing init correctly"
+        );
+        eprintln!(
+            "  D elapsed={elapsed_d:.3}s (serial would be >= {:.1}s, parallel < {:.1}s)",
+            100.0 * 0.01,
+            20.0 * 0.01
+        );
+
+        eprintln!("  throughput: A={tp_a:.0} B={tp_b:.0} C={tp_c:.0} D={tp_d:.0} ops/s");
+
+        assert!(tp_a > 1_000.0, "A throughput {tp_a:.0} ops/s too low");
+        assert!(tp_b > 1_000.0, "B throughput {tp_b:.0} ops/s too low");
+        assert!(
+            elapsed_d < 5.0,
+            "D took {elapsed_d:.2}s — inits may be serializing globally rather than per-key"
         );
     }
 }

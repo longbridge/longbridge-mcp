@@ -258,6 +258,7 @@ pub async fn stock_positions(mctx: &crate::tools::McpContext) -> Result<CallTool
                 }
             }
             Err(e) => {
+                mctx.evict_trade_context();
                 if let Some(obj) = value.as_object_mut() {
                     obj.insert(
                         "warnings".to_string(),
