@@ -442,15 +442,15 @@ fn validate_candlestick_count(count: usize) -> Result<(), McpError> {
 async fn with_candlestick_count_boundary_retry<T, Fut>(
     count: usize,
     mut call: impl FnMut(usize) -> Fut,
-) -> Result<T, longbridge::Error>
+) -> Result<T, Box<longbridge::Error>>
 where
     Fut: std::future::Future<Output = Result<T, longbridge::Error>>,
 {
     match call(count).await {
         Err(e) if count > 1 && e.openapi_error_code() == Some(CANDLESTICK_COUNT_OUT_OF_LIMIT) => {
-            call(count - 1).await
+            call(count - 1).await.map_err(Box::new)
         }
-        result => result,
+        result => result.map_err(Box::new),
     }
 }
 
@@ -473,7 +473,7 @@ pub async fn candlesticks(
     .await
     .map_err(|e| {
         mctx.evict_quote_context();
-        Error::longbridge(e)
+        Error::longbridge(*e)
     })?;
     tool_json(&result)
 }
@@ -505,7 +505,7 @@ pub async fn history_candlesticks_by_offset(
     .await
     .map_err(|e| {
         mctx.evict_quote_context();
-        Error::longbridge(e)
+        Error::longbridge(*e)
     })?;
     tool_json(&result)
 }
