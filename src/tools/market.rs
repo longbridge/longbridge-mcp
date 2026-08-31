@@ -74,7 +74,7 @@ pub async fn market_status(mctx: &crate::tools::McpContext) -> Result<CallToolRe
         .response::<String>()
         .send()
         .await
-        .map_err(|e| Error::Other(e.to_string()))?;
+        .map_err(|e| Error::longbridge(e.into()))?;
 
     let mut data: serde_json::Value =
         serde_json::from_str(&raw).map_err(|e| Error::Other(e.to_string()))?;
@@ -308,7 +308,7 @@ pub async fn industry_rank(
         .response::<String>()
         .send()
         .await
-        .map_err(|e| crate::error::Error::Other(e.to_string()))?;
+        .map_err(|e| Error::longbridge(e.into()))?;
     let data: serde_json::Value =
         serde_json::from_str(&raw).map_err(crate::error::Error::Serialize)?;
     let out = serde_json::to_string(&data).map_err(crate::error::Error::Serialize)?;

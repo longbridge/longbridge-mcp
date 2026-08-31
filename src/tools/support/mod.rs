@@ -7,6 +7,7 @@
 pub mod dry_run;
 pub mod http_client;
 pub mod parse;
+pub mod text;
 pub mod tolerant;
 pub mod us_market;
 pub mod us_normalize;

@@ -16,6 +16,7 @@ use rmcp::tool_router;
 use crate::auth::middleware::{AgentEndpoint, BearerToken, RestrictedEndpoint, RestrictedVersion};
 use crate::error::Error;
 use crate::serialize::to_tool_json;
+use crate::tools::support::text::{clip_chars, truncate_chars};
 
 /// Registered name of the reverse-auth tool, used as the filter key in both
 /// `tools_main_endpoint` (excluded) and `tools_agent_endpoint` (only this one).
@@ -37,6 +38,16 @@ tokio::task_local! {
     pub(crate) static CURRENT_TOOL: &'static str;
 }
 
+/// Cheap per-call correlation id for [`measured_tool_call`]'s log lines.
+/// Not a request id — `rmcp`'s `RequestContext::id` isn't in scope this deep
+/// without threading it through every one of the ~110 `#[tool]` call sites —
+/// just enough to pair up one call's classification and detail log lines
+/// when another concurrent call to the same tool interleaves in the stream.
+fn next_call_id() -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
 async fn measured_tool_call<F, Fut>(name: &'static str, f: F) -> Result<CallToolResult, McpError>
 where
     F: FnOnce() -> Fut,
@@ -48,6 +59,63 @@ where
             let result = f().await;
             let duration = start.elapsed().as_secs_f64();
             crate::metrics::record_tool_call(name, duration, result.is_err());
+            // Failures only — this is the choke point every `#[tool]` method
+            // routes through via `measured_tool_call(name, ...)`, so it's
+            // cheaper to log here once than at each of the 100+ call sites.
+            // Success volume (rate, latency) is already covered by the metric
+            // just above; a log line per successful call would just duplicate
+            // that at far higher, harder-to-query volume for a hosted,
+            // multi-tenant server.
+            if let Err(err) = &result {
+                let code = err.code.0;
+                let elapsed_ms = (duration * 1000.0) as u64;
+                // `tool` name alone isn't unique on a hosted, multi-tenant
+                // server — two concurrent calls to the same tool can each
+                // fail and interleave their log lines. `call_id` is the only
+                // field shared between this call's classification line and
+                // its detail line below, so a reader can still pair them up.
+                let call_id = next_call_id();
+                // A bad-argument call (typo'd symbol, malformed date — the
+                // kind rmcp's own arg deserialization doesn't catch, so it
+                // reaches this closure and comes back as INVALID_PARAMS) is a
+                // routine, expected event on a hosted multi-tenant server,
+                // not an incident. Logging it at the same severity as a real
+                // backend failure would drown WARN-based alerting in normal
+                // user typos; downgrade that class — and its detail line
+                // below, so enabling payload logging doesn't quietly bring
+                // WARN-level noise back — to INFO, and keep WARN for
+                // everything else (auth, upstream, internal).
+                let routine = err.code == rmcp::model::ErrorCode::INVALID_PARAMS;
+                // The message text is our own short, structured error string
+                // on almost every path; `src/error.rs` sanitizes the one
+                // `longbridge` SDK variant that would otherwise embed a raw
+                // upstream HTTP response body verbatim (both here and in
+                // `tool_error`'s client-facing text below). This target stays
+                // capped off by default (`logging.rs`'s `PAYLOAD_CAPS`) as a
+                // second line of defense for any error path that sanitizer
+                // doesn't cover. `truncate_chars(...)` is inlined into the
+                // macro call, not pre-bound to a local, so it's only
+                // evaluated when the target is actually enabled.
+                if routine {
+                    tracing::info!(tool = name, call_id, elapsed_ms, code, "tool call rejected");
+                    tracing::info!(
+                        target: "longbridge_mcp::tools::error_detail",
+                        tool = name,
+                        call_id,
+                        error = %truncate_chars(err.message.as_ref(), 300),
+                        "tool call error detail"
+                    );
+                } else {
+                    tracing::warn!(tool = name, call_id, elapsed_ms, code, "tool call failed");
+                    tracing::warn!(
+                        target: "longbridge_mcp::tools::error_detail",
+                        tool = name,
+                        call_id,
+                        error = %truncate_chars(err.message.as_ref(), 300),
+                        "tool call error detail"
+                    );
+                }
+            }
             // The request was routed and the tool ran, so a failure here is a
             // tool-level error, not a protocol one. MCP clients render protocol
             // errors opaquely ("tool result missing due to internal error"),
@@ -1090,10 +1158,9 @@ fn trim_description_to_char_limit(description: &str, max_chars: usize) -> String
         return result;
     }
 
-    let mut clipped: String = trimmed.chars().take(max_chars.saturating_sub(3)).collect();
-    clipped = clipped
-        .trim_end_matches(|c: char| c.is_whitespace() || c == ',' || c == ';' || c == ':')
-        .to_string();
+    let clipped = clip_chars(trimmed, max_chars.saturating_sub(3));
+    let clipped =
+        clipped.trim_end_matches(|c: char| c.is_whitespace() || c == ',' || c == ';' || c == ':');
     format!("{clipped}...")
 }
 
@@ -5674,8 +5741,20 @@ mod quote_cmd_tests {
 #[cfg(test)]
 mod tool_error_tests {
     use super::{error_hint, measured_tool_call, tool_error, tool_result};
+    use crate::test_support::SharedBuffer;
     use rmcp::ErrorData as McpError;
     use rmcp::model::CallToolResult;
+
+    /// `tracing`'s per-callsite interest cache is process-global: whichever
+    /// thread first reaches the `tool call rejected`/`failed`/`error detail`
+    /// sites in `measured_tool_call` decides — for the rest of the process —
+    /// whether they're enabled, before consulting any subscriber a *later*
+    /// thread installs. Every test in this module that calls
+    /// `measured_tool_call` shares this lock so they can't race each other
+    /// for that cache, the same problem `HTTP_URL_ENV_LOCK` above solves for
+    /// a mutable env var.
+    static LOG_CALLSITE_LOCK: std::sync::LazyLock<tokio::sync::Mutex<()>> =
+        std::sync::LazyLock::new(|| tokio::sync::Mutex::new(()));
 
     fn text_of(result: &CallToolResult) -> String {
         result
@@ -5741,6 +5820,7 @@ mod tool_error_tests {
 
     #[tokio::test]
     async fn measured_tool_call_reports_failures_as_tool_errors() {
+        let _lock = LOG_CALLSITE_LOCK.lock().await;
         let result = measured_tool_call("some_tool", || async {
             Err(McpError::internal_error("upstream 500", None))
         })
@@ -5753,6 +5833,7 @@ mod tool_error_tests {
 
     #[tokio::test]
     async fn measured_tool_call_passes_success_through_untouched() {
+        let _lock = LOG_CALLSITE_LOCK.lock().await;
         let result = measured_tool_call("some_tool", || async {
             Ok(tool_result(r#"{"ok":true}"#.to_string()))
         })
@@ -5764,5 +5845,101 @@ mod tool_error_tests {
             result.structured_content,
             Some(serde_json::json!({"ok": true}))
         );
+    }
+
+    #[tokio::test]
+    async fn measured_tool_call_logs_failures_only() {
+        let _lock = LOG_CALLSITE_LOCK.lock().await;
+        let buf = SharedBuffer::default();
+        let writer = buf.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(move || writer.clone())
+            .with_ansi(false)
+            .without_time()
+            .finish();
+        // Thread-local default; valid across the `.await`s below because
+        // `#[tokio::test]` defaults to a single-threaded runtime.
+        let _guard = tracing::subscriber::set_default(subscriber);
+        // `tracing`'s per-callsite interest cache is process-global: another
+        // test's thread can reach one of `measured_tool_call`'s log sites
+        // first with no subscriber installed and cache it as disabled
+        // forever, which silently swallows our events under `cargo test`'s
+        // default parallelism. Force a fresh interest computation against
+        // the subscriber we just installed. (Note: this test's own
+        // subscriber has no `payload_guard`, so the off-by-default
+        // `error_detail` target is NOT capped here — that cap is asserted
+        // separately in `logging.rs`'s tests, against the real filter stack.)
+        tracing::callsite::rebuild_interest_cache();
+
+        // Success logs nothing — volume for successful calls is covered by
+        // the metric recorded alongside, not by a per-call log line.
+        measured_tool_call("logged_ok_tool", || async {
+            Ok(tool_result(r#"{"ok":true}"#.to_string()))
+        })
+        .await
+        .expect("successful call");
+
+        measured_tool_call("logged_failing_tool", || async {
+            Err(McpError::internal_error("upstream 500", None))
+        })
+        .await
+        .expect("a failing tool must not surface as a protocol error");
+
+        measured_tool_call("logged_bad_params_tool", || async {
+            Err(McpError::invalid_params("bad symbol", None))
+        })
+        .await
+        .expect("a failing tool must not surface as a protocol error");
+
+        let logged = buf.contents();
+        let lines: Vec<&str> = logged.lines().collect();
+        let line_with = |needle: &str, other: &str| -> &str {
+            lines
+                .iter()
+                .find(|l| l.contains(needle) && l.contains(other))
+                .unwrap_or_else(|| panic!("no line containing {needle:?} and {other:?}: {logged}"))
+        };
+        fn call_id_of(line: &str) -> &str {
+            line.split("call_id=")
+                .nth(1)
+                .and_then(|rest| rest.split_whitespace().next())
+                .unwrap_or_else(|| panic!("no call_id field in line: {line}"))
+        }
+
+        assert!(
+            !logged.contains("logged_ok_tool"),
+            "successful call must not be logged: {logged}"
+        );
+
+        // Backend/upstream failures stay at WARN on both lines.
+        let failed = line_with("logged_failing_tool", "tool call failed");
+        assert!(failed.contains("WARN"), "expected WARN: {failed}");
+        // Message text lives on the separate, cappable `error_detail` target
+        // (see logging.rs's PAYLOAD_CAPS), not on the safe `tool call failed`
+        // event itself.
+        let failed_detail = line_with("logged_failing_tool", "tool call error detail");
+        assert!(
+            failed_detail.contains("WARN") && failed_detail.contains("upstream 500"),
+            "expected WARN detail line: {failed_detail}"
+        );
+        // Both of this call's lines carry the same call_id, so a reader can
+        // pair them up even if another call's lines interleave.
+        assert_eq!(call_id_of(failed), call_id_of(failed_detail));
+
+        // A caller mistake (INVALID_PARAMS) is routine, not an incident — both
+        // its classification and detail line are downgraded to INFO, not WARN,
+        // so enabling payload logging doesn't reintroduce WARN-level noise for
+        // routine typos.
+        let rejected = line_with("logged_bad_params_tool", "tool call rejected");
+        assert!(rejected.contains("INFO"), "expected INFO: {rejected}");
+        let rejected_detail = line_with("logged_bad_params_tool", "tool call error detail");
+        assert!(
+            rejected_detail.contains("INFO"),
+            "expected INFO detail line: {rejected_detail}"
+        );
+        assert_eq!(call_id_of(rejected), call_id_of(rejected_detail));
+
+        // Different calls get different ids.
+        assert_ne!(call_id_of(failed), call_id_of(rejected));
     }
 }

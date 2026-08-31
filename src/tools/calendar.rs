@@ -5,7 +5,7 @@ use rmcp::model::CallToolResult;
 use rmcp::schemars::JsonSchema;
 use rmcp::serde::Deserialize;
 
-use crate::error::Error;
+use crate::error::{Error, sanitize_longbridge_error};
 use crate::serialize::{convert_unix_paths, transform_json};
 use crate::tools::support::parse;
 
@@ -176,10 +176,11 @@ pub async fn finance_calendar(
         // report what was collected and say where the walk stopped.
         let resp: String = match resp {
             Ok(resp) => resp,
-            Err(e) if pages.is_empty() => return Err(Error::Other(e.to_string()).into()),
+            Err(e) if pages.is_empty() => return Err(Error::longbridge(e.into()).into()),
             Err(e) => {
+                let reason = sanitize_longbridge_error(&e.into());
                 partial_reason = Some(format!(
-                    "upstream request failed at {current_date}: {e}; events from {current_date} to {end} are not included"
+                    "upstream request failed at {current_date}: {reason}; events from {current_date} to {end} are not included"
                 ));
                 break;
             }

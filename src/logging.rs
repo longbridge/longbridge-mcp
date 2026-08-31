@@ -11,6 +11,13 @@
 //! - `rmcp` logs the decoded MCP request and the full tool result at DEBUG, and
 //!   raw JSON-RPC frames at TRACE.
 //!
+//! This crate's own code can too: `measured_tool_call` (`tools/mod.rs`) logs
+//! a tool failure's message text on `longbridge_mcp::tools::error_detail`.
+//! `src/error.rs` sanitizes the one known `longbridge` SDK error variant that
+//! embeds a raw upstream HTTP response body, but that target is capped here
+//! as well — a second line of defense for any error path the sanitizer
+//! doesn't cover, not a defense against dependencies alone.
+//!
 //! Those lines write customer account data and credentials to disk. Naming the
 //! quiet levels in a default `RUST_LOG` string is not enough, because setting
 //! `RUST_LOG` replaces that string wholesale: an operator exporting
@@ -57,6 +64,16 @@ const PAYLOAD_CAPS: &[(&str, LevelFilter)] = &[
     // Decoded MCP requests and tool results at DEBUG, raw frames at TRACE.
     // INFO stays allowed: it only names the tool being called.
     ("rmcp", LevelFilter::INFO),
+    // `measured_tool_call`'s failure log (src/tools/mod.rs) renders an
+    // `McpError`'s message text. For most errors that's our own short,
+    // structured text, but for an upstream response the SDK couldn't parse
+    // into its envelope, `longbridge::Error`'s Display embeds the raw HTTP
+    // response body verbatim — the same class of payload the caps above
+    // exist to keep out of logs. The tool/code/latency fields that make the
+    // event useful for triage are logged separately, uncapped, at the
+    // `longbridge_mcp::tools` target; only the free-text detail lives here,
+    // off by default.
+    ("longbridge_mcp::tools::error_detail", LevelFilter::OFF),
 ];
 
 /// Whether an event from `target` at `level` may be logged.
@@ -131,7 +148,12 @@ pub fn init(log_dir: Option<&Path>) {
                 .with(fmt::layer().with_writer(file_appender).with_ansi(false))
                 .init();
         }
-        None => registry.with(fmt::layer()).init(),
+        // Production runs in a container with stdout piped to a log collector,
+        // not an interactive terminal — the default ANSI color codes land in the
+        // collected log as literal `\x1b[2m`-style escapes instead of rendering,
+        // which is what made the exported CSV unreadable. Same fix as the
+        // file-writer branch above.
+        None => registry.with(fmt::layer().with_ansi(false)).init(),
     }
 
     warn_on_sdk_log_path();
@@ -151,37 +173,10 @@ pub fn init_stdio() {
 
 #[cfg(test)]
 mod tests {
-    use std::io::Write;
-    use std::sync::{Arc, Mutex};
-
     use tracing::Level;
 
     use super::*;
-
-    /// Collects formatted log output so a test can assert on it.
-    #[derive(Clone)]
-    struct SharedBuffer(Arc<Mutex<Vec<u8>>>);
-
-    impl SharedBuffer {
-        fn new() -> Self {
-            Self(Arc::new(Mutex::new(Vec::new())))
-        }
-
-        fn contents(&self) -> String {
-            String::from_utf8(self.0.lock().expect("buffer poisoned").clone())
-                .expect("log output is not utf-8")
-        }
-    }
-
-    impl Write for SharedBuffer {
-        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-            self.0.lock().expect("buffer poisoned").write(buf)
-        }
-
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
+    use crate::test_support::SharedBuffer;
 
     #[test]
     fn http_and_ws_payloads_are_capped_at_warn() {
@@ -225,11 +220,29 @@ mod tests {
         assert!(payload_allowed("", Level::TRACE));
     }
 
+    /// `measured_tool_call`'s failure message can, for some upstream error
+    /// paths, embed a raw HTTP response body rather than our own short text
+    /// (see the comment at that call site) — same class of payload as the
+    /// other caps in this table, so it stays off entirely by default.
+    #[test]
+    fn tool_call_error_detail_is_off_by_default() {
+        assert!(
+            !payload_allowed("longbridge_mcp::tools::error_detail", Level::ERROR),
+            "error_detail must stay capped even at ERROR, the least verbose level"
+        );
+        // The safe fields (tool name, code, latency) live on the plain
+        // `longbridge_mcp::tools` target, which stays uncapped.
+        assert!(
+            payload_allowed("longbridge_mcp::tools", Level::WARN),
+            "the classification event's own target must not be capped"
+        );
+    }
+
     /// The guard has to hold even when the operator asks for everything, which
     /// is the case that used to leak.
     #[test]
     fn rust_log_trace_still_cannot_write_payloads() {
-        let buffer = SharedBuffer::new();
+        let buffer = SharedBuffer::default();
         let writer = buffer.clone();
         let subscriber = tracing_subscriber::registry()
             .with(EnvFilter::new("trace"))
@@ -248,6 +261,9 @@ mod tests {
             tracing::info!(target: "longbridge_wscli::client", message = "AuthRequest { token: \"secret\" }", "ws request");
             tracing::info!(target: "longbridge::trade::core", event = "OrderChanged { quantity: 100 }", "push event");
             tracing::debug!(target: "rmcp::service", result = "{\"positions\":[]}", "response message");
+            // The one first-party payload-bearing target, alongside the
+            // vendor ones above — `measured_tool_call`'s error-detail line.
+            tracing::warn!(target: "longbridge_mcp::tools::error_detail", error = "unexpected HTTP response: status=502, body=<html>upstream gateway error</html>", "tool call error detail");
             tracing::info!(target: "longbridge_mcp::tools", count = 151, "tools registered");
         });
 
@@ -258,6 +274,10 @@ mod tests {
         assert!(!logged.contains("response message"), "leaked: {logged}");
         assert!(!logged.contains("total_cash"), "leaked: {logged}");
         assert!(!logged.contains("secret"), "leaked: {logged}");
+        assert!(
+            !logged.contains("upstream gateway error"),
+            "leaked: {logged}"
+        );
         // Our own events still get through.
         assert!(logged.contains("tools registered"), "missing: {logged}");
     }

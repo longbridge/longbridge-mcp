@@ -6,6 +6,7 @@ use rmcp::schemars::JsonSchema;
 use rmcp::serde::Deserialize;
 
 use crate::tools::support::http_client::http_get_tool;
+use crate::tools::support::text::truncate_chars;
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct NewsSearchParam {
@@ -76,7 +77,7 @@ fn transform_news_item(item: &serde_json::Value) -> serde_json::Value {
                     );
                 }
                 "description" => {
-                    let excerpt: String = strip_html(&val_str(v)).chars().take(80).collect();
+                    let excerpt = truncate_chars(&strip_html(&val_str(v)), 80);
                     obj.insert("excerpt".to_string(), serde_json::Value::String(excerpt));
                 }
                 _ => {}
@@ -112,7 +113,7 @@ fn transform_topic_item(item: &serde_json::Value) -> serde_json::Value {
                     );
                 }
                 "description" => {
-                    let excerpt: String = strip_html(&val_str(v)).chars().take(80).collect();
+                    let excerpt = truncate_chars(&strip_html(&val_str(v)), 80);
                     obj.insert("excerpt".to_string(), serde_json::Value::String(excerpt));
                 }
                 _ => {}
@@ -188,4 +189,37 @@ pub async fn topic_search(
         .map(|arr| arr.iter().map(transform_topic_item).collect())
         .unwrap_or_default();
     Ok(make_result(serde_json::Value::Array(items)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::transform_news_item;
+
+    /// Trimming and the `...` marker are intentional — `truncate_chars`
+    /// (shared with `measured_tool_call`'s error logging) applies both, a
+    /// deliberate change from the plain `.chars().take(80)` this call site
+    /// used before. Pinned here so it reads as a decision, not drift.
+    #[test]
+    fn excerpt_is_trimmed_and_marked_when_truncated() {
+        let item = serde_json::json!({
+            "id": "1",
+            "description": format!("  <p>{}</p>  ", "a".repeat(100)),
+        });
+        let excerpt = transform_news_item(&item)["excerpt"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert!(excerpt.ends_with("..."));
+        assert!(!excerpt.starts_with(' ') && !excerpt.trim_end_matches("...").ends_with(' '));
+    }
+
+    #[test]
+    fn short_excerpt_is_trimmed_but_unmarked() {
+        let item = serde_json::json!({
+            "id": "1",
+            "description": "  <p>short</p>  ",
+        });
+        let transformed = transform_news_item(&item);
+        assert_eq!(transformed["excerpt"].as_str().unwrap(), "short");
+    }
 }

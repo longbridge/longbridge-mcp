@@ -120,7 +120,7 @@ pub async fn news_detail(
                     None,
                 )
             }
-            _ => McpError::internal_error(e.to_string(), None),
+            _ => Error::longbridge(e.into()).into(),
         })?;
     // The tool declares an outputSchema, so it must return a structured
     // object — never a bare `null` if the payload is missing `item`.
