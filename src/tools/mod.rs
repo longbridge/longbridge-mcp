@@ -256,10 +256,15 @@ fn error_hint(err: &McpError) -> Option<&'static str> {
              the relevant market data package.",
         );
     }
-    if ["permission", "forbidden", "not authorized", "403", "scope"]
-        .iter()
-        .any(|needle| msg.contains(needle))
-    {
+    if matches_error_class(
+        code,
+        &msg,
+        |c| (403_000..404_000).contains(&c),
+        ErrorClassNeedles {
+            text: &["permission", "forbidden", "not authorized", "scope"],
+            numeric: &["403"],
+        },
+    ) {
         return Some(
             "Hint: this is a permission error. The most common cause is that the OAuth \
              authorization was granted with only part of the available scopes. Ask the user to \
@@ -267,10 +272,15 @@ fn error_hint(err: &McpError) -> Option<&'static str> {
              portfolio, and trading scopes) before retrying.",
         );
     }
-    if ["unauthorized", "401", "token", "expired"]
-        .iter()
-        .any(|needle| msg.contains(needle))
-    {
+    if matches_error_class(
+        code,
+        &msg,
+        |c| (401_000..402_000).contains(&c),
+        ErrorClassNeedles {
+            text: &["unauthorized", "token", "expired"],
+            numeric: &["401"],
+        },
+    ) {
         return Some(
             "Hint: the access token is missing, expired, or invalid. Ask the user to reconnect \
              this MCP server to re-authorize, granting the full set of permissions.",
@@ -6114,6 +6124,43 @@ mod tool_error_tests {
         );
         let hint = error_hint(&err).expect("429xxx codes must match via the range check");
         assert!(hint.contains("rate-limited"), "unexpected hint: {hint}");
+    }
+
+    #[test]
+    fn a_bare_401_substring_does_not_misfire_when_a_different_code_is_present() {
+        // Same false-positive class the rate-limit/no-quote-access branches
+        // were hardened against: a bare "401" can appear in an unrelated
+        // field (here, a trace id) — it must not win once a different,
+        // authoritative structured code is present.
+        let err = McpError::internal_error(
+            "openapi error: code=403308: scope not authorized (trace_id=401-abc)".to_string(),
+            Some(serde_json::json!({ "openapi_error_code": 403308 })),
+        );
+        let hint = error_hint(&err).expect("expected a permission hint");
+        assert!(
+            hint.contains("scopes") && !hint.contains("re-authorize"),
+            "structured code 403308 should win over the substring '401' in the trace id, got: {hint}"
+        );
+    }
+
+    #[test]
+    fn a_permission_code_outside_the_hardcoded_needles_still_matches_via_the_403_range() {
+        let err = McpError::internal_error(
+            "openapi error: code=403309: unexpected access rejection".to_string(),
+            Some(serde_json::json!({ "openapi_error_code": 403309 })),
+        );
+        let hint = error_hint(&err).expect("403xxx codes must match via the range check");
+        assert!(hint.contains("scopes"), "unexpected hint: {hint}");
+    }
+
+    #[test]
+    fn a_token_code_outside_the_hardcoded_needles_still_matches_via_the_401_range() {
+        let err = McpError::internal_error(
+            "openapi error: code=401104: session invalid".to_string(),
+            Some(serde_json::json!({ "openapi_error_code": 401104 })),
+        );
+        let hint = error_hint(&err).expect("401xxx codes must match via the range check");
+        assert!(hint.contains("re-authorize"), "unexpected hint: {hint}");
     }
 
     #[test]
