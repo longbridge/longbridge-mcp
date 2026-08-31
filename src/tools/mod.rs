@@ -149,7 +149,6 @@ fn tool_error(name: &str, err: &McpError) -> CallToolResult {
 /// business error. Preferred over string-matching the display text, which
 /// can misfire on an unrelated field (trace id, order id) that happens to
 /// contain the same digits.
-const RATE_LIMIT_CODES: &[i64] = &[429002, 429003];
 const NO_QUOTE_ACCESS_CODE: i64 = 301604;
 
 /// The structured `openapi_error_code` from `McpError::data`, when present.
@@ -157,25 +156,36 @@ fn openapi_error_code_of(err: &McpError) -> Option<i64> {
     err.data.as_ref()?.get("openapi_error_code")?.as_i64()
 }
 
+/// Needles for [`matches_error_class`]. A named struct (rather than two
+/// adjacent `&[&str]` parameters) so a future call site can't silently swap
+/// `text`/`numeric` — a transposed pair of same-typed positional args would
+/// still compile, quietly reintroducing the numeric-substring false-positive
+/// risk this whole mechanism exists to avoid.
+struct ErrorClassNeedles<'a> {
+    /// Descriptive phrases, safe to match unconditionally: these don't
+    /// plausibly appear as substrings of an unrelated field (trace id,
+    /// order id) the way a bare 3-6 digit numeric needle can.
+    text: &'a [&'a str],
+    /// Bare numeric substrings — only matched when no structured code is
+    /// present at all, since once we *have* a code, a coincidental digit
+    /// match elsewhere in the text is more likely to be a false positive
+    /// than a code we simply haven't enumerated.
+    numeric: &'a [&'a str],
+}
+
 /// True if `err` matches a known error class, either by a structured business
-/// code (authoritative — the code is right even if the account/product's
-/// exact wording changes) or by a purely descriptive `text_needle` in the
-/// display text (safe to check unconditionally, since these phrases don't
-/// plausibly appear as substrings of unrelated fields like a trace/order id
-/// the way a bare 3-6 digit `numeric_needle` can). `numeric_needle`s are only
-/// checked when no structured code is present at all, since once we *have* a
-/// code, a coincidental digit match elsewhere in the text is more likely to
-/// be a false positive than a code we simply haven't enumerated.
+/// code (authoritative — `known_code` decides, e.g. a numeric-range check
+/// for a whole code family, not just individually enumerated values) or by
+/// `needles` in the display text.
 fn matches_error_class(
     code: Option<i64>,
     msg: &str,
-    known_codes: &[i64],
-    text_needles: &[&str],
-    numeric_needles: &[&str],
+    known_code: impl Fn(i64) -> bool,
+    needles: ErrorClassNeedles<'_>,
 ) -> bool {
-    code.is_some_and(|c| known_codes.contains(&c))
-        || text_needles.iter().any(|needle| msg.contains(needle))
-        || (code.is_none() && numeric_needles.iter().any(|needle| msg.contains(needle)))
+    code.is_some_and(known_code)
+        || needles.text.iter().any(|needle| msg.contains(needle))
+        || (code.is_none() && needles.numeric.iter().any(|needle| msg.contains(needle)))
 }
 
 /// Actionable follow-up for the error classes users hit most, so the model can
@@ -190,18 +200,12 @@ fn error_hint(err: &McpError) -> Option<&'static str> {
     let code = openapi_error_code_of(err);
     let msg = err.message.to_lowercase();
 
-    if matches_error_class(
-        code,
-        &msg,
-        RATE_LIMIT_CODES,
-        &["rate limit", "区间调用上限", "最小间隔"],
-        &["429002", "429003"],
-    ) {
-        return Some(
-            "Hint: this call was rate-limited by the upstream API. Wait a moment and retry — \
-             if this recurs, space out repeated calls rather than firing them back-to-back.",
-        );
-    }
+    // Checked before the rate-limit class below: `openapi_error_code()` and
+    // `dc_region_restricted()` are mutually exclusive on any given
+    // `longbridge::Error`, so a DC-region-restricted error always has
+    // `code == None` — if this ran after the rate-limit check, its message
+    // text (a route path) would be exposed to that check's numeric-needle
+    // fallback before this authoritative structured signal gets a chance.
     let is_dc_region_restricted = err
         .data
         .as_ref()
@@ -220,9 +224,31 @@ fn error_hint(err: &McpError) -> Option<&'static str> {
     if matches_error_class(
         code,
         &msg,
-        &[NO_QUOTE_ACCESS_CODE],
-        &["no quote access"],
-        &["301604"],
+        // Observed rate-limit codes (429002, 429003) share the HTTP
+        // 429-Too-Many-Requests prefix also seen elsewhere in this
+        // codebase's other business-code families (401xxx/403xxx) — a
+        // range check covers sibling codes in the same family that
+        // haven't been individually enumerated, instead of requiring an
+        // exact-match list that's one upstream addition away from stale.
+        |c| (429_000..430_000).contains(&c),
+        ErrorClassNeedles {
+            text: &["rate limit", "区间调用上限", "最小间隔"],
+            numeric: &["429002", "429003"],
+        },
+    ) {
+        return Some(
+            "Hint: this call was rate-limited by the upstream API. Wait a moment and retry — \
+             if this recurs, space out repeated calls rather than firing them back-to-back.",
+        );
+    }
+    if matches_error_class(
+        code,
+        &msg,
+        |c| c == NO_QUOTE_ACCESS_CODE,
+        ErrorClassNeedles {
+            text: &["no quote access"],
+            numeric: &["301604"],
+        },
     ) {
         return Some(
             "Hint: the account lacks a market data subscription/permission for this \
@@ -6047,11 +6073,47 @@ mod tool_error_tests {
         let err = McpError::internal_error(
             "openapi error: unexpected rejection".to_string(),
             Some(serde_json::json!({
-                "dc_region_restricted": { "path": "/v1/us/foo", "required": "Us", "current": "Ap" }
+                "dc_region_restricted": { "path": "/v1/us/foo", "required": "us", "current": "ap" }
             })),
         );
         let hint = error_hint(&err).expect("expected a DC-region hint from the structured field");
         assert!(hint.contains("data center"), "unexpected hint: {hint}");
+    }
+
+    #[test]
+    fn dc_region_check_runs_before_rate_limit_so_it_cannot_be_shadowed() {
+        // A DC-region-restricted error always has code=None (mutually
+        // exclusive with openapi_error_code on any given longbridge::Error),
+        // so its message text is visible to the rate-limit check's
+        // numeric-needle fallback. If the DC-region check ran second, this
+        // message (which happens to contain "429002" in its path) would get
+        // the wrong hint.
+        let err = McpError::internal_error(
+            "this API (/v1/us/429002/foo) is only available in the US data center".to_string(),
+            Some(serde_json::json!({
+                "dc_region_restricted": { "path": "/v1/us/429002/foo", "required": "us", "current": "ap" }
+            })),
+        );
+        let hint = error_hint(&err).expect("expected a hint");
+        assert!(
+            hint.contains("data center") && !hint.contains("rate-limited"),
+            "DC-region's structured signal must win even though the path contains a \
+             rate-limit-looking numeric needle, got: {hint}"
+        );
+    }
+
+    #[test]
+    fn a_rate_limit_code_outside_the_hardcoded_list_still_matches_via_the_429_range() {
+        // No text needle matches here on purpose — this must be caught by
+        // the numeric-range check on the structured code, not by string
+        // matching, unlike descriptive_text_still_hints_under_an_unenumerated_error_code
+        // above which covers the text-needle path for an unenumerated code.
+        let err = McpError::internal_error(
+            "openapi error: code=429001: too many concurrent connections".to_string(),
+            Some(serde_json::json!({ "openapi_error_code": 429001 })),
+        );
+        let hint = error_hint(&err).expect("429xxx codes must match via the range check");
+        assert!(hint.contains("rate-limited"), "unexpected hint: {hint}");
     }
 
     #[test]

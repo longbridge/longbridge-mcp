@@ -97,15 +97,15 @@ impl Error {
     pub fn dc_region_restricted(
         &self,
     ) -> Option<(&str, longbridge::DcRegion, longbridge::DcRegion)> {
+        use longbridge::httpclient::HttpClientError;
+
         match self {
             Self::Longbridge(err) => match err.as_ref() {
-                longbridge::Error::HttpClient(
-                    longbridge::httpclient::HttpClientError::DcRegionRestricted {
-                        path,
-                        required,
-                        current,
-                    },
-                ) => Some((path.as_str(), *required, *current)),
+                longbridge::Error::HttpClient(HttpClientError::DcRegionRestricted {
+                    path,
+                    required,
+                    current,
+                }) => Some((path.as_str(), *required, *current)),
                 _ => None,
             },
             Self::Serialize(_) | Self::Http(_) | Self::Io(_) | Self::Other(_) => None,
@@ -124,8 +124,8 @@ impl From<Error> for McpError {
                 "dc_region_restricted".to_string(),
                 serde_json::json!({
                     "path": path,
-                    "required": format!("{required:?}"),
-                    "current": format!("{current:?}"),
+                    "required": required.as_str(),
+                    "current": current.as_str(),
                 }),
             );
         }
@@ -287,7 +287,7 @@ mod tests {
             .and_then(|d| d.get("dc_region_restricted"))
             .expect("McpError::data must carry the structured DC-region fields");
         assert_eq!(dc.get("path").and_then(|v| v.as_str()), Some("/v1/us/foo"));
-        assert_eq!(dc.get("required").and_then(|v| v.as_str()), Some("Us"));
-        assert_eq!(dc.get("current").and_then(|v| v.as_str()), Some("Ap"));
+        assert_eq!(dc.get("required").and_then(|v| v.as_str()), Some("us"));
+        assert_eq!(dc.get("current").and_then(|v| v.as_str()), Some("ap"));
     }
 }
