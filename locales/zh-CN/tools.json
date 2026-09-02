@@ -392,7 +392,7 @@
     },
     "capital_distribution": {
       "title": "资金分布",
-      "description": "获取资金分布（大/中/小单流入流出），返回 {timestamp, capital_in{large, medium, small}, capital_out{large, medium, small}}",
+      "description": "获取资金分布（大/中/小单流入流出），返回 {timestamp, capital_in{large, medium, small}, capital_out{large, medium, small}, data_available}。data_available 为 false 时表示该标的（如指数）没有资金流数据，此时其余字段仍会返回但都是无意义的零值",
       "properties": {
         "symbol": "证券代码，例如 `\"700.HK\"`"
       }

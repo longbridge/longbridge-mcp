@@ -392,7 +392,7 @@
     },
     "capital_distribution": {
       "title": "資金分佈",
-      "description": "獲取資金分佈（大/中/小單流入流出），返回 {timestamp, capital_in{large, medium, small}, capital_out{large, medium, small}}",
+      "description": "獲取資金分佈（大/中/小單流入流出），返回 {timestamp, capital_in{large, medium, small}, capital_out{large, medium, small}, data_available}。data_available 為 false 時表示該標的（如指數）沒有資金流數據，此時其餘欄位仍會返回但都是無意義的零值",
       "properties": {
         "symbol": "證券代碼，例如 `\"700.HK\"`"
       }

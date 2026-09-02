@@ -610,6 +610,11 @@ pub async fn capital_distribution(
         mctx.evict_quote_context();
         Error::longbridge(e)
     })?;
+    // Symbols with no capital-flow data (indices, some ETFs) don't error —
+    // upstream responds with a zero-filled record stamped at the Unix epoch.
+    // A real trading day is never actually reported at that instant, so it's
+    // a reliable "no data" signal distinct from a genuine all-zero day.
+    let data_available = result.timestamp.unix_timestamp() != 0;
     let timestamp = result
         .timestamp
         .format(&time::format_description::well_known::Rfc3339)
@@ -626,6 +631,7 @@ pub async fn capital_distribution(
             medium: result.capital_out.medium.to_string(),
             small: result.capital_out.small.to_string(),
         },
+        data_available,
     };
     tool_json(&resp)
 }
