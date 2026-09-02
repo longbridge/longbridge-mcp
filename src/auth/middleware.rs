@@ -124,6 +124,25 @@ pub async fn mcp_auth_layer(
             AuthMode::Required => {
                 // Main endpoint: no credentials -> 401, exactly as before. This
                 // is what drives standard MCP clients to start their OAuth flow.
+                //
+                // This 401 is otherwise invisible in our own logs: it's
+                // rejected here, before any `#[tool]` method (and its
+                // `measured_tool_call` logging) ever runs. A client-observed
+                // "error" with no matching server-side log line is the usual
+                // symptom of a request never getting this far — logging it
+                // here closes that gap. No token to log in this branch (that's
+                // exactly why the request was rejected).
+                let user_agent = req
+                    .headers()
+                    .get("user-agent")
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or("");
+                tracing::warn!(
+                    path = req.uri().path(),
+                    restricted = restricted.map(|v| format!("{v:?}")),
+                    user_agent,
+                    "rejected request: missing or invalid Authorization header"
+                );
                 return (
                     StatusCode::UNAUTHORIZED,
                     [("WWW-Authenticate", www_authenticate.as_str())],
@@ -149,4 +168,87 @@ pub async fn mcp_auth_layer(
     }
 
     next.run(req).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::SharedBuffer;
+    use axum::Router;
+    use axum::routing::get;
+    use tower::ServiceExt;
+
+    fn router() -> Router {
+        Router::new().route(
+            "/mcp",
+            get(|| async { "ok" }).layer(axum::middleware::from_fn(
+                move |req: Request, next: Next| async move {
+                    mcp_auth_layer(req, next, "https://example.com", AuthMode::Required, None).await
+                },
+            )),
+        )
+    }
+
+    #[tokio::test]
+    async fn missing_token_is_rejected_with_401() {
+        let response = router()
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/mcp")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert!(
+            response.headers().contains_key("www-authenticate"),
+            "401 must carry WWW-Authenticate per RFC 9728"
+        );
+    }
+
+    /// The 401 above is otherwise silent — logging the rejection is the whole
+    /// point of this change, so assert the log line actually fires rather
+    /// than just checking the response.
+    #[tokio::test]
+    async fn missing_token_rejection_is_logged() {
+        let buffer = SharedBuffer::default();
+        let writer = buffer.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(move || writer.clone())
+            .with_ansi(false)
+            .without_time()
+            .finish();
+        let _guard = tracing::subscriber::set_default(subscriber);
+        // Same rationale as `measured_tool_call`'s tests: force a fresh
+        // interest computation against the subscriber just installed, since
+        // `tracing`'s per-callsite interest cache is process-global and
+        // another test may have already cached this callsite as disabled.
+        tracing::callsite::rebuild_interest_cache();
+
+        router()
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/mcp")
+                    .header("user-agent", "test-client/1.0")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let logged = buffer.contents();
+        assert!(
+            logged.contains("rejected request: missing or invalid Authorization header"),
+            "expected the rejection to be logged: {logged}"
+        );
+        assert!(
+            logged.contains("/mcp"),
+            "expected the path in the log: {logged}"
+        );
+        assert!(
+            logged.contains("test-client/1.0"),
+            "expected the User-Agent in the log: {logged}"
+        );
+    }
 }
