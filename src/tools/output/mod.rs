@@ -204,6 +204,11 @@ pub struct CapitalDistributionResponse {
     pub capital_in: CapitalDistribution,
     /// Outflow capital broken down by order size.
     pub capital_out: CapitalDistribution,
+    /// False when upstream has no capital-flow data for this symbol (e.g.
+    /// indices) — it still responds with a zero-filled record and a Unix
+    /// epoch timestamp rather than an error, so this flag is the only way
+    /// to distinguish "no data" from a real all-zero trading day.
+    pub data_available: bool,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]

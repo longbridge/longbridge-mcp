@@ -48,7 +48,11 @@ fn next_call_id() -> u64 {
     NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
-async fn measured_tool_call<F, Fut>(name: &'static str, f: F) -> Result<CallToolResult, McpError>
+async fn measured_tool_call<F, Fut>(
+    name: &'static str,
+    params: String,
+    f: F,
+) -> Result<CallToolResult, McpError>
 where
     F: FnOnce() -> Fut,
     Fut: std::future::Future<Output = Result<CallToolResult, McpError>>,
@@ -90,18 +94,22 @@ where
                 // on almost every path; `src/error.rs` sanitizes the one
                 // `longbridge` SDK variant that would otherwise embed a raw
                 // upstream HTTP response body verbatim (both here and in
-                // `tool_error`'s client-facing text below). This target stays
-                // capped off by default (`logging.rs`'s `PAYLOAD_CAPS`) as a
-                // second line of defense for any error path that sanitizer
-                // doesn't cover. `truncate_chars(...)` is inlined into the
-                // macro call, not pre-bound to a local, so it's only
-                // evaluated when the target is actually enabled.
+                // `tool_error`'s client-facing text below). `params` is the
+                // caller's own input (a symbol, an order quantity, ...) —
+                // not upstream content, but still account-identifying enough
+                // to withhold by default. This target stays capped off by
+                // default (`logging.rs`'s `PAYLOAD_CAPS`) as a second line of
+                // defense for any error path that sanitizer doesn't cover.
+                // `truncate_chars(...)` is inlined into the macro call, not
+                // pre-bound to a local, so it's only evaluated when the
+                // target is actually enabled.
                 if routine {
                     tracing::info!(tool = name, call_id, elapsed_ms, code, "tool call rejected");
                     tracing::info!(
                         target: "longbridge_mcp::tools::error_detail",
                         tool = name,
                         call_id,
+                        params = %truncate_chars(&params, 500),
                         error = %truncate_chars(err.message.as_ref(), 300),
                         "tool call error detail"
                     );
@@ -111,6 +119,7 @@ where
                         target: "longbridge_mcp::tools::error_detail",
                         tool = name,
                         call_id,
+                        params = %truncate_chars(&params, 500),
                         error = %truncate_chars(err.message.as_ref(), 300),
                         "tool call error detail"
                     );
@@ -1391,7 +1400,7 @@ impl Longbridge {
         Parameters(p): Parameters<authenticate::AuthenticateParam>,
     ) -> Result<CallToolResult, McpError> {
         let already = is_authenticated(&ctx);
-        measured_tool_call(AUTHENTICATE_TOOL_NAME, || {
+        measured_tool_call(AUTHENTICATE_TOOL_NAME, format!("{p:?}"), || {
             authenticate::authenticate(already, p)
         })
         .await
@@ -1431,7 +1440,10 @@ impl Longbridge {
         Parameters(p): Parameters<SymbolsParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("static_info", || quote::static_info(&mctx, p)).await
+        measured_tool_call("static_info", format!("{p:?}"), || {
+            quote::static_info(&mctx, p)
+        })
+        .await
     }
 
     /// Get the latest price quotes.
@@ -1451,7 +1463,7 @@ impl Longbridge {
         Parameters(p): Parameters<SymbolsParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("quote", || quote::quote(&mctx, p)).await
+        measured_tool_call("quote", format!("{p:?}"), || quote::quote(&mctx, p)).await
     }
 
     /// Get option quotes.
@@ -1471,7 +1483,10 @@ impl Longbridge {
         Parameters(p): Parameters<quote::OptionSymbolsParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("option_quote", || quote::option_quote(&mctx, p)).await
+        measured_tool_call("option_quote", format!("{p:?}"), || {
+            quote::option_quote(&mctx, p)
+        })
+        .await
     }
 
     /// Get warrant quotes.
@@ -1491,7 +1506,10 @@ impl Longbridge {
         Parameters(p): Parameters<SymbolsParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("warrant_quote", || quote::warrant_quote(&mctx, p)).await
+        measured_tool_call("warrant_quote", format!("{p:?}"), || {
+            quote::warrant_quote(&mctx, p)
+        })
+        .await
     }
 
     /// Get the order book depth.
@@ -1507,7 +1525,7 @@ impl Longbridge {
         Parameters(p): Parameters<SymbolParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("depth", || quote::depth(&mctx, p)).await
+        measured_tool_call("depth", format!("{p:?}"), || quote::depth(&mctx, p)).await
     }
 
     /// Get broker queue data.
@@ -1523,7 +1541,7 @@ impl Longbridge {
         Parameters(p): Parameters<SymbolParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("brokers", || quote::brokers(&mctx, p)).await
+        measured_tool_call("brokers", format!("{p:?}"), || quote::brokers(&mctx, p)).await
     }
 
     /// Get market participant broker information.
@@ -1542,7 +1560,7 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("participants", || quote::participants(&mctx)).await
+        measured_tool_call("participants", String::new(), || quote::participants(&mctx)).await
     }
 
     /// Get recent trades.
@@ -1562,7 +1580,7 @@ impl Longbridge {
         Parameters(p): Parameters<SymbolCountParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("trades", || quote::trades(&mctx, p)).await
+        measured_tool_call("trades", format!("{p:?}"), || quote::trades(&mctx, p)).await
     }
 
     /// Get intraday line data.
@@ -1582,7 +1600,7 @@ impl Longbridge {
         Parameters(p): Parameters<quote::IntradayParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("intraday", || quote::intraday(&mctx, p)).await
+        measured_tool_call("intraday", format!("{p:?}"), || quote::intraday(&mctx, p)).await
     }
 
     /// Get candlestick (K-line) data.
@@ -1602,7 +1620,10 @@ impl Longbridge {
         Parameters(p): Parameters<CandlesticksParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("candlesticks", || quote::candlesticks(&mctx, p)).await
+        measured_tool_call("candlesticks", format!("{p:?}"), || {
+            quote::candlesticks(&mctx, p)
+        })
+        .await
     }
 
     /// Get historical candlesticks by offset.
@@ -1622,7 +1643,7 @@ impl Longbridge {
         Parameters(p): Parameters<HistoryCandlesticksByOffsetParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("history_candlesticks_by_offset", || {
+        measured_tool_call("history_candlesticks_by_offset", format!("{p:?}"), || {
             quote::history_candlesticks_by_offset(&mctx, p)
         })
         .await
@@ -1645,7 +1666,7 @@ impl Longbridge {
         Parameters(p): Parameters<HistoryCandlesticksByDateParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("history_candlesticks_by_date", || {
+        measured_tool_call("history_candlesticks_by_date", format!("{p:?}"), || {
             quote::history_candlesticks_by_date(&mctx, p)
         })
         .await
@@ -1664,7 +1685,10 @@ impl Longbridge {
         Parameters(p): Parameters<MarketDateRangeParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("trading_days", || quote::trading_days(&mctx, p)).await
+        measured_tool_call("trading_days", format!("{p:?}"), || {
+            quote::trading_days(&mctx, p)
+        })
+        .await
     }
 
     /// Get option chain expiry date list.
@@ -1684,7 +1708,7 @@ impl Longbridge {
         Parameters(p): Parameters<SymbolParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("option_chain_expiry_date_list", || {
+        measured_tool_call("option_chain_expiry_date_list", format!("{p:?}"), || {
             quote::option_chain_expiry_date_list(&mctx, p)
         })
         .await
@@ -1707,7 +1731,7 @@ impl Longbridge {
         Parameters(p): Parameters<SymbolDateParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("option_chain_info_by_date", || {
+        measured_tool_call("option_chain_info_by_date", format!("{p:?}"), || {
             quote::option_chain_info_by_date(&mctx, p)
         })
         .await
@@ -1730,7 +1754,10 @@ impl Longbridge {
         Parameters(p): Parameters<SymbolParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("capital_flow", || quote::capital_flow(&mctx, p)).await
+        measured_tool_call("capital_flow", format!("{p:?}"), || {
+            quote::capital_flow(&mctx, p)
+        })
+        .await
     }
 
     /// Get capital distribution.
@@ -1738,7 +1765,7 @@ impl Longbridge {
         title = "Capital Distribution",
         annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = true),
         output_schema = schema_for::<output::CapitalDistributionResponse>(),
-        description = "Get capital distribution for a symbol. Returns {timestamp, capital_in{large, medium, small}, capital_out{large, medium, small}} (decimal strings in settlement currency)."
+        description = "Get capital distribution for a symbol. Returns {timestamp, capital_in{large, medium, small}, capital_out{large, medium, small}, data_available} (decimal strings in settlement currency). data_available is false for symbols with no capital-flow data (e.g. indices) — the other fields are still present but meaningless zeros in that case."
     )]
     async fn capital_distribution(
         &self,
@@ -1746,7 +1773,7 @@ impl Longbridge {
         Parameters(p): Parameters<SymbolParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("capital_distribution", || {
+        measured_tool_call("capital_distribution", format!("{p:?}"), || {
             quote::capital_distribution(&mctx, p)
         })
         .await
@@ -1768,7 +1795,10 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("trading_session", || quote::trading_session(&mctx)).await
+        measured_tool_call("trading_session", String::new(), || {
+            quote::trading_session(&mctx)
+        })
+        .await
     }
 
     /// Get market temperature.
@@ -1784,7 +1814,10 @@ impl Longbridge {
         Parameters(p): Parameters<MarketParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("market_temperature", || quote::market_temperature(&mctx, p)).await
+        measured_tool_call("market_temperature", format!("{p:?}"), || {
+            quote::market_temperature(&mctx, p)
+        })
+        .await
     }
 
     /// Get historical market temperature.
@@ -1800,7 +1833,7 @@ impl Longbridge {
         Parameters(p): Parameters<MarketDateRangeParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("history_market_temperature", || {
+        measured_tool_call("history_market_temperature", format!("{p:?}"), || {
             quote::history_market_temperature(&mctx, p)
         })
         .await
@@ -1819,7 +1852,7 @@ impl Longbridge {
         Parameters(p): Parameters<macrodata::MacroeconomicIndicatorsParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("macrodata_indicators", || {
+        measured_tool_call("macrodata_indicators", format!("{p:?}"), || {
             macrodata::macrodata_indicators(&mctx, p)
         })
         .await
@@ -1838,7 +1871,10 @@ impl Longbridge {
         Parameters(p): Parameters<macrodata::MacroeconomicParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("macrodata", || macrodata::macrodata(&mctx, p)).await
+        measured_tool_call("macrodata", format!("{p:?}"), || {
+            macrodata::macrodata(&mctx, p)
+        })
+        .await
     }
 
     /// Get watchlist groups.
@@ -1854,7 +1890,7 @@ impl Longbridge {
     )]
     async fn watchlist(&self, ctx: RequestContext<RoleServer>) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("watchlist", || quote::watchlist(&mctx)).await
+        measured_tool_call("watchlist", String::new(), || quote::watchlist(&mctx)).await
     }
 
     /// Get filings for a symbol.
@@ -1874,7 +1910,7 @@ impl Longbridge {
         Parameters(p): Parameters<SymbolParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("filings", || quote::filings(&mctx, p)).await
+        measured_tool_call("filings", format!("{p:?}"), || quote::filings(&mctx, p)).await
     }
 
     /// Get warrant issuers.
@@ -1893,7 +1929,10 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("warrant_issuers", || quote::warrant_issuers(&mctx)).await
+        measured_tool_call("warrant_issuers", String::new(), || {
+            quote::warrant_issuers(&mctx)
+        })
+        .await
     }
 
     /// Get warrant list for a symbol.
@@ -1913,7 +1952,10 @@ impl Longbridge {
         Parameters(p): Parameters<WarrantListParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("warrant_list", || quote::warrant_list(&mctx, p)).await
+        measured_tool_call("warrant_list", format!("{p:?}"), || {
+            quote::warrant_list(&mctx, p)
+        })
+        .await
     }
 
     /// Calculate indexes for symbols.
@@ -1933,7 +1975,10 @@ impl Longbridge {
         Parameters(p): Parameters<CalcIndexesParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("calc_indexes", || quote::calc_indexes(&mctx, p)).await
+        measured_tool_call("calc_indexes", format!("{p:?}"), || {
+            quote::calc_indexes(&mctx, p)
+        })
+        .await
     }
 
     /// Create a watchlist group.
@@ -1954,7 +1999,7 @@ impl Longbridge {
         Parameters(p): Parameters<CreateWatchlistGroupParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("create_watchlist_group", || {
+        measured_tool_call("create_watchlist_group", format!("{p:?}"), || {
             quote::create_watchlist_group(&mctx, p)
         })
         .await
@@ -1978,7 +2023,7 @@ impl Longbridge {
         Parameters(p): Parameters<DeleteWatchlistGroupParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("delete_watchlist_group", || {
+        measured_tool_call("delete_watchlist_group", format!("{p:?}"), || {
             quote::delete_watchlist_group(&mctx, p)
         })
         .await
@@ -2002,7 +2047,7 @@ impl Longbridge {
         Parameters(p): Parameters<UpdateWatchlistGroupParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("update_watchlist_group", || {
+        measured_tool_call("update_watchlist_group", format!("{p:?}"), || {
             quote::update_watchlist_group(&mctx, p)
         })
         .await
@@ -2026,7 +2071,10 @@ impl Longbridge {
         Parameters(p): Parameters<SecurityListParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("security_list", || quote::security_list(&mctx, p)).await
+        measured_tool_call("security_list", format!("{p:?}"), || {
+            quote::security_list(&mctx, p)
+        })
+        .await
     }
 
     /// Get account balance.
@@ -2046,7 +2094,10 @@ impl Longbridge {
         Parameters(p): Parameters<trade::AccountBalanceParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("account_balance", || trade::account_balance(&mctx, p)).await
+        measured_tool_call("account_balance", format!("{p:?}"), || {
+            trade::account_balance(&mctx, p)
+        })
+        .await
     }
 
     /// Get stock positions.
@@ -2061,7 +2112,10 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("stock_positions", || trade::stock_positions(&mctx)).await
+        measured_tool_call("stock_positions", String::new(), || {
+            trade::stock_positions(&mctx)
+        })
+        .await
     }
 
     /// Get fund positions.
@@ -2076,7 +2130,10 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("fund_positions", || trade::fund_positions(&mctx)).await
+        measured_tool_call("fund_positions", String::new(), || {
+            trade::fund_positions(&mctx)
+        })
+        .await
     }
 
     /// Get margin ratio.
@@ -2092,7 +2149,10 @@ impl Longbridge {
         Parameters(p): Parameters<SymbolParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("margin_ratio", || trade::margin_ratio(&mctx, p)).await
+        measured_tool_call("margin_ratio", format!("{p:?}"), || {
+            trade::margin_ratio(&mctx, p)
+        })
+        .await
     }
 
     /// Get today's orders.
@@ -2112,7 +2172,10 @@ impl Longbridge {
         Parameters(p): Parameters<trade::TodayOrdersParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("today_orders", || trade::today_orders(&mctx, p)).await
+        measured_tool_call("today_orders", format!("{p:?}"), || {
+            trade::today_orders(&mctx, p)
+        })
+        .await
     }
 
     /// Get order detail.
@@ -2128,7 +2191,10 @@ impl Longbridge {
         Parameters(p): Parameters<OrderIdParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("order_detail", || trade::order_detail(&mctx, p)).await
+        measured_tool_call("order_detail", format!("{p:?}"), || {
+            trade::order_detail(&mctx, p)
+        })
+        .await
     }
 
     /// Cancel an order.
@@ -2148,7 +2214,10 @@ impl Longbridge {
         Parameters(p): Parameters<trade::CancelOrderParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("cancel_order", || trade::cancel_order(&mctx, p)).await
+        measured_tool_call("cancel_order", format!("{p:?}"), || {
+            trade::cancel_order(&mctx, p)
+        })
+        .await
     }
 
     /// Get today's trade executions.
@@ -2168,7 +2237,10 @@ impl Longbridge {
         Parameters(p): Parameters<trade::TodayExecutionsParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("today_executions", || trade::today_executions(&mctx, p)).await
+        measured_tool_call("today_executions", format!("{p:?}"), || {
+            trade::today_executions(&mctx, p)
+        })
+        .await
     }
 
     /// Get historical orders (not including today).
@@ -2188,7 +2260,10 @@ impl Longbridge {
         Parameters(p): Parameters<HistoryOrdersParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("history_orders", || trade::history_orders(&mctx, p)).await
+        measured_tool_call("history_orders", format!("{p:?}"), || {
+            trade::history_orders(&mctx, p)
+        })
+        .await
     }
 
     /// Get historical executions.
@@ -2208,7 +2283,10 @@ impl Longbridge {
         Parameters(p): Parameters<HistoryOrdersParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("history_executions", || trade::history_executions(&mctx, p)).await
+        measured_tool_call("history_executions", format!("{p:?}"), || {
+            trade::history_executions(&mctx, p)
+        })
+        .await
     }
 
     /// Get cash flow records.
@@ -2228,7 +2306,7 @@ impl Longbridge {
         Parameters(p): Parameters<CashFlowParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("cash_flow", || trade::cash_flow(&mctx, p)).await
+        measured_tool_call("cash_flow", format!("{p:?}"), || trade::cash_flow(&mctx, p)).await
     }
 
     /// Submit an order.
@@ -2249,7 +2327,10 @@ impl Longbridge {
         Parameters(p): Parameters<SubmitOrderParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("submit_order", || trade::submit_order(&mctx, p)).await
+        measured_tool_call("submit_order", format!("{p:?}"), || {
+            trade::submit_order(&mctx, p)
+        })
+        .await
     }
 
     /// Replace (modify) an order.
@@ -2269,7 +2350,10 @@ impl Longbridge {
         Parameters(p): Parameters<ReplaceOrderParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("replace_order", || trade::replace_order(&mctx, p)).await
+        measured_tool_call("replace_order", format!("{p:?}"), || {
+            trade::replace_order(&mctx, p)
+        })
+        .await
     }
 
     /// Estimate max purchase quantity.
@@ -2285,7 +2369,7 @@ impl Longbridge {
         Parameters(p): Parameters<EstimateMaxQtyParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("estimate_max_purchase_quantity", || {
+        measured_tool_call("estimate_max_purchase_quantity", format!("{p:?}"), || {
             trade::estimate_max_purchase_quantity(&mctx, p)
         })
         .await
@@ -2309,7 +2393,7 @@ impl Longbridge {
         Parameters(p): Parameters<fundamental::FinancialReportParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("financial_report", || {
+        measured_tool_call("financial_report", format!("{p:?}"), || {
             fundamental::financial_report(&mctx, p)
         })
         .await
@@ -2333,7 +2417,7 @@ impl Longbridge {
         Parameters(p): Parameters<fundamental::SymbolParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("institution_rating", || {
+        measured_tool_call("institution_rating", format!("{p:?}"), || {
             fundamental::institution_rating(&mctx, p)
         })
         .await
@@ -2357,7 +2441,7 @@ impl Longbridge {
         Parameters(p): Parameters<fundamental::SymbolParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("institution_rating_detail", || {
+        measured_tool_call("institution_rating_detail", format!("{p:?}"), || {
             fundamental::institution_rating_detail(&mctx, p)
         })
         .await
@@ -2381,7 +2465,10 @@ impl Longbridge {
         Parameters(p): Parameters<fundamental::SymbolParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("dividend", || fundamental::dividend(&mctx, p)).await
+        measured_tool_call("dividend", format!("{p:?}"), || {
+            fundamental::dividend(&mctx, p)
+        })
+        .await
     }
 
     /// Get dividend distribution details.
@@ -2402,7 +2489,10 @@ impl Longbridge {
         Parameters(p): Parameters<fundamental::SymbolParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("dividend_detail", || fundamental::dividend_detail(&mctx, p)).await
+        measured_tool_call("dividend_detail", format!("{p:?}"), || {
+            fundamental::dividend_detail(&mctx, p)
+        })
+        .await
     }
 
     /// Get EPS forecast data.
@@ -2423,7 +2513,10 @@ impl Longbridge {
         Parameters(p): Parameters<fundamental::SymbolParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("forecast_eps", || fundamental::forecast_eps(&mctx, p)).await
+        measured_tool_call("forecast_eps", format!("{p:?}"), || {
+            fundamental::forecast_eps(&mctx, p)
+        })
+        .await
     }
 
     /// Get financial consensus estimates.
@@ -2444,7 +2537,10 @@ impl Longbridge {
         Parameters(p): Parameters<fundamental::SymbolParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("consensus", || fundamental::consensus(&mctx, p)).await
+        measured_tool_call("consensus", format!("{p:?}"), || {
+            fundamental::consensus(&mctx, p)
+        })
+        .await
     }
 
     /// Get valuation overview (PE, PB, PS, dividend yield).
@@ -2465,7 +2561,10 @@ impl Longbridge {
         Parameters(p): Parameters<fundamental::SymbolParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("valuation", || fundamental::valuation(&mctx, p)).await
+        measured_tool_call("valuation", format!("{p:?}"), || {
+            fundamental::valuation(&mctx, p)
+        })
+        .await
     }
 
     /// Get detailed valuation history.
@@ -2486,7 +2585,7 @@ impl Longbridge {
         Parameters(p): Parameters<fundamental::SymbolParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("valuation_history", || {
+        measured_tool_call("valuation_history", format!("{p:?}"), || {
             fundamental::valuation_history(&mctx, p)
         })
         .await
@@ -2510,7 +2609,7 @@ impl Longbridge {
         Parameters(p): Parameters<fundamental::SymbolParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("industry_valuation", || {
+        measured_tool_call("industry_valuation", format!("{p:?}"), || {
             fundamental::industry_valuation(&mctx, p)
         })
         .await
@@ -2534,7 +2633,7 @@ impl Longbridge {
         Parameters(p): Parameters<fundamental::SymbolParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("industry_valuation_dist", || {
+        measured_tool_call("industry_valuation_dist", format!("{p:?}"), || {
             fundamental::industry_valuation_dist(&mctx, p)
         })
         .await
@@ -2558,7 +2657,10 @@ impl Longbridge {
         Parameters(p): Parameters<fundamental::SymbolParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("company", || fundamental::company(&mctx, p)).await
+        measured_tool_call("company", format!("{p:?}"), || {
+            fundamental::company(&mctx, p)
+        })
+        .await
     }
 
     /// Get company executives.
@@ -2579,7 +2681,10 @@ impl Longbridge {
         Parameters(p): Parameters<fundamental::SymbolParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("executive", || fundamental::executive(&mctx, p)).await
+        measured_tool_call("executive", format!("{p:?}"), || {
+            fundamental::executive(&mctx, p)
+        })
+        .await
     }
 
     /// Get shareholders.
@@ -2600,7 +2705,10 @@ impl Longbridge {
         Parameters(p): Parameters<fundamental::SymbolParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("shareholder", || fundamental::shareholder(&mctx, p)).await
+        measured_tool_call("shareholder", format!("{p:?}"), || {
+            fundamental::shareholder(&mctx, p)
+        })
+        .await
     }
 
     /// Get fund holders.
@@ -2621,7 +2729,10 @@ impl Longbridge {
         Parameters(p): Parameters<fundamental::SymbolParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("fund_holder", || fundamental::fund_holder(&mctx, p)).await
+        measured_tool_call("fund_holder", format!("{p:?}"), || {
+            fundamental::fund_holder(&mctx, p)
+        })
+        .await
     }
 
     /// Get corporate actions.
@@ -2642,7 +2753,10 @@ impl Longbridge {
         Parameters(p): Parameters<fundamental::SymbolParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("corp_action", || fundamental::corp_action(&mctx, p)).await
+        measured_tool_call("corp_action", format!("{p:?}"), || {
+            fundamental::corp_action(&mctx, p)
+        })
+        .await
     }
 
     /// Get investor relations events.
@@ -2663,7 +2777,10 @@ impl Longbridge {
         Parameters(p): Parameters<fundamental::SymbolParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("invest_relation", || fundamental::invest_relation(&mctx, p)).await
+        measured_tool_call("invest_relation", format!("{p:?}"), || {
+            fundamental::invest_relation(&mctx, p)
+        })
+        .await
     }
 
     /// Get operating metrics.
@@ -2684,7 +2801,10 @@ impl Longbridge {
         Parameters(p): Parameters<fundamental::SymbolParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("operating", || fundamental::operating(&mctx, p)).await
+        measured_tool_call("operating", format!("{p:?}"), || {
+            fundamental::operating(&mctx, p)
+        })
+        .await
     }
 
     /// Get market trading status.
@@ -2704,7 +2824,10 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("market_status", || market::market_status(&mctx)).await
+        measured_tool_call("market_status", String::new(), || {
+            market::market_status(&mctx)
+        })
+        .await
     }
 
     /// Get broker holding data.
@@ -2725,7 +2848,10 @@ impl Longbridge {
         Parameters(p): Parameters<market::BrokerHoldingParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("broker_holding", || market::broker_holding(&mctx, p)).await
+        measured_tool_call("broker_holding", format!("{p:?}"), || {
+            market::broker_holding(&mctx, p)
+        })
+        .await
     }
 
     /// Get broker holding detail.
@@ -2746,7 +2872,7 @@ impl Longbridge {
         Parameters(p): Parameters<market::SymbolParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("broker_holding_detail", || {
+        measured_tool_call("broker_holding_detail", format!("{p:?}"), || {
             market::broker_holding_detail(&mctx, p)
         })
         .await
@@ -2770,7 +2896,7 @@ impl Longbridge {
         Parameters(p): Parameters<market::BrokerHoldingDailyParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("broker_holding_daily", || {
+        measured_tool_call("broker_holding_daily", format!("{p:?}"), || {
             market::broker_holding_daily(&mctx, p)
         })
         .await
@@ -2793,7 +2919,10 @@ impl Longbridge {
         Parameters(p): Parameters<market::AhPremiumParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("ah_premium", || market::ah_premium(&mctx, p)).await
+        measured_tool_call("ah_premium", format!("{p:?}"), || {
+            market::ah_premium(&mctx, p)
+        })
+        .await
     }
 
     /// Get AH premium intraday data.
@@ -2813,7 +2942,7 @@ impl Longbridge {
         Parameters(p): Parameters<market::SymbolParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("ah_premium_intraday", || {
+        measured_tool_call("ah_premium_intraday", format!("{p:?}"), || {
             market::ah_premium_intraday(&mctx, p)
         })
         .await
@@ -2836,7 +2965,10 @@ impl Longbridge {
         Parameters(p): Parameters<market::SymbolParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("trade_stats", || market::trade_stats(&mctx, p)).await
+        measured_tool_call("trade_stats", format!("{p:?}"), || {
+            market::trade_stats(&mctx, p)
+        })
+        .await
     }
 
     /// Get market anomalies.
@@ -2857,7 +2989,7 @@ impl Longbridge {
         Parameters(p): Parameters<market::AnomalyParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("anomaly", || market::anomaly(&mctx, p)).await
+        measured_tool_call("anomaly", format!("{p:?}"), || market::anomaly(&mctx, p)).await
     }
 
     /// Get index constituents or ETF asset allocation.
@@ -2877,7 +3009,10 @@ impl Longbridge {
         Parameters(p): Parameters<market::IndexSymbolParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("constituent", || market::constituent(&mctx, p)).await
+        measured_tool_call("constituent", format!("{p:?}"), || {
+            market::constituent(&mctx, p)
+        })
+        .await
     }
 
     /// Get finance calendar events.
@@ -2898,7 +3033,10 @@ impl Longbridge {
         Parameters(p): Parameters<calendar::FinanceCalendarParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("finance_calendar", || calendar::finance_calendar(&mctx, p)).await
+        measured_tool_call("finance_calendar", format!("{p:?}"), || {
+            calendar::finance_calendar(&mctx, p)
+        })
+        .await
     }
 
     /// Get exchange rates.
@@ -2917,7 +3055,10 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("exchange_rate", || portfolio::exchange_rate(&mctx)).await
+        measured_tool_call("exchange_rate", String::new(), || {
+            portfolio::exchange_rate(&mctx)
+        })
+        .await
     }
 
     /// Get profit analysis summary.
@@ -2937,7 +3078,10 @@ impl Longbridge {
         Parameters(p): Parameters<portfolio::ProfitAnalysisParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("profit_analysis", || portfolio::profit_analysis(&mctx, p)).await
+        measured_tool_call("profit_analysis", format!("{p:?}"), || {
+            portfolio::profit_analysis(&mctx, p)
+        })
+        .await
     }
 
     /// Get profit analysis detail for a symbol.
@@ -2957,7 +3101,7 @@ impl Longbridge {
         Parameters(p): Parameters<portfolio::ProfitAnalysisDetailParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("profit_analysis_detail", || {
+        measured_tool_call("profit_analysis_detail", format!("{p:?}"), || {
             portfolio::profit_analysis_detail(&mctx, p)
         })
         .await
@@ -2981,7 +3125,7 @@ impl Longbridge {
         Parameters(p): Parameters<portfolio::ProfitAnalysisRealizedParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("profit_analysis_realized", || {
+        measured_tool_call("profit_analysis_realized", format!("{p:?}"), || {
             portfolio::profit_analysis_realized(&mctx, p)
         })
         .await
@@ -3004,7 +3148,7 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("alert_list", || alert::alert_list(&mctx)).await
+        measured_tool_call("alert_list", String::new(), || alert::alert_list(&mctx)).await
     }
 
     /// Add a price alert.
@@ -3024,7 +3168,7 @@ impl Longbridge {
         Parameters(p): Parameters<alert::AlertAddParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("alert_add", || alert::alert_add(&mctx, p)).await
+        measured_tool_call("alert_add", format!("{p:?}"), || alert::alert_add(&mctx, p)).await
     }
 
     /// Delete a price alert.
@@ -3044,7 +3188,10 @@ impl Longbridge {
         Parameters(p): Parameters<alert::AlertIdParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("alert_delete", || alert::alert_delete(&mctx, p)).await
+        measured_tool_call("alert_delete", format!("{p:?}"), || {
+            alert::alert_delete(&mctx, p)
+        })
+        .await
     }
 
     /// Enable a price alert.
@@ -3065,7 +3212,10 @@ impl Longbridge {
         Parameters(p): Parameters<alert::AlertIdParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("alert_enable", || alert::alert_enable(&mctx, p)).await
+        measured_tool_call("alert_enable", format!("{p:?}"), || {
+            alert::alert_enable(&mctx, p)
+        })
+        .await
     }
 
     /// Disable a price alert.
@@ -3086,7 +3236,10 @@ impl Longbridge {
         Parameters(p): Parameters<alert::AlertIdParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("alert_disable", || alert::alert_disable(&mctx, p)).await
+        measured_tool_call("alert_disable", format!("{p:?}"), || {
+            alert::alert_disable(&mctx, p)
+        })
+        .await
     }
 
     /// Query strategy signals.
@@ -3107,7 +3260,7 @@ impl Longbridge {
         Parameters(p): Parameters<signal::SignalsParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("signals", || signal::signals(&mctx, p)).await
+        measured_tool_call("signals", format!("{p:?}"), || signal::signals(&mctx, p)).await
     }
 
     /// Get one signal by ID.
@@ -3128,7 +3281,10 @@ impl Longbridge {
         Parameters(p): Parameters<signal::SignalIdParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("signal_detail", || signal::signal_detail(&mctx, p)).await
+        measured_tool_call("signal_detail", format!("{p:?}"), || {
+            signal::signal_detail(&mctx, p)
+        })
+        .await
     }
 
     /// Get the fact (catalyst) events for a symbol.
@@ -3149,7 +3305,10 @@ impl Longbridge {
         Parameters(p): Parameters<signal::SecurityFactsParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("security_facts", || signal::security_facts(&mctx, p)).await
+        measured_tool_call("security_facts", format!("{p:?}"), || {
+            signal::security_facts(&mctx, p)
+        })
+        .await
     }
 
     /// Get news for a symbol.
@@ -3169,7 +3328,7 @@ impl Longbridge {
         Parameters(p): Parameters<content::SymbolParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("news", || content::news(&mctx, p)).await
+        measured_tool_call("news", format!("{p:?}"), || content::news(&mctx, p)).await
     }
 
     /// Get one news article's full detail.
@@ -3190,7 +3349,10 @@ impl Longbridge {
         Parameters(p): Parameters<content::NewsIdParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("news_detail", || content::news_detail(&mctx, p)).await
+        measured_tool_call("news_detail", format!("{p:?}"), || {
+            content::news_detail(&mctx, p)
+        })
+        .await
     }
 
     /// Get discussion topics for a symbol.
@@ -3210,7 +3372,7 @@ impl Longbridge {
         Parameters(p): Parameters<content::SymbolParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("topic", || content::topic(&mctx, p)).await
+        measured_tool_call("topic", format!("{p:?}"), || content::topic(&mctx, p)).await
     }
 
     /// Get topic detail.
@@ -3231,7 +3393,10 @@ impl Longbridge {
         Parameters(p): Parameters<content::TopicIdParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("topic_detail", || content::topic_detail(&mctx, p)).await
+        measured_tool_call("topic_detail", format!("{p:?}"), || {
+            content::topic_detail(&mctx, p)
+        })
+        .await
     }
 
     /// Get topic replies.
@@ -3251,7 +3416,10 @@ impl Longbridge {
         Parameters(p): Parameters<content::TopicRepliesParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("topic_replies", || content::topic_replies(&mctx, p)).await
+        measured_tool_call("topic_replies", format!("{p:?}"), || {
+            content::topic_replies(&mctx, p)
+        })
+        .await
     }
 
     /// Create a discussion topic.
@@ -3272,7 +3440,10 @@ impl Longbridge {
         Parameters(p): Parameters<content::TopicCreateParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("topic_create", || content::topic_create(&mctx, p)).await
+        measured_tool_call("topic_create", format!("{p:?}"), || {
+            content::topic_create(&mctx, p)
+        })
+        .await
     }
 
     /// Reply to a discussion topic.
@@ -3293,7 +3464,7 @@ impl Longbridge {
         Parameters(p): Parameters<content::TopicCreateReplyParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("topic_create_reply", || {
+        measured_tool_call("topic_create_reply", format!("{p:?}"), || {
             content::topic_create_reply(&mctx, p)
         })
         .await
@@ -3317,7 +3488,10 @@ impl Longbridge {
         Parameters(p): Parameters<statement::StatementListParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("statement_list", || statement::statement_list(&mctx, p)).await
+        measured_tool_call("statement_list", format!("{p:?}"), || {
+            statement::statement_list(&mctx, p)
+        })
+        .await
     }
 
     /// Get the pre-signed download URL for a statement file.
@@ -3333,7 +3507,10 @@ impl Longbridge {
         Parameters(p): Parameters<statement::StatementExportParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("statement_export", || statement::statement_export(&mctx, p)).await
+        measured_tool_call("statement_export", format!("{p:?}"), || {
+            statement::statement_export(&mctx, p)
+        })
+        .await
     }
 
     /// Get short position (outstanding short) data for HK or US stocks.
@@ -3353,7 +3530,10 @@ impl Longbridge {
         Parameters(p): Parameters<ShortPositionsParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("short_positions", || quote::short_positions(&mctx, p)).await
+        measured_tool_call("short_positions", format!("{p:?}"), || {
+            quote::short_positions(&mctx, p)
+        })
+        .await
     }
 
     /// Get real-time option call/put volume stats.
@@ -3373,7 +3553,10 @@ impl Longbridge {
         Parameters(p): Parameters<OptionVolumeParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("option_volume", || quote::option_volume(&mctx, p)).await
+        measured_tool_call("option_volume", format!("{p:?}"), || {
+            quote::option_volume(&mctx, p)
+        })
+        .await
     }
 
     /// Get daily historical option volume stats.
@@ -3393,7 +3576,7 @@ impl Longbridge {
         Parameters(p): Parameters<OptionVolumeDailyParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("option_volume_daily", || {
+        measured_tool_call("option_volume_daily", format!("{p:?}"), || {
             quote::option_volume_daily(&mctx, p)
         })
         .await
@@ -3417,7 +3600,7 @@ impl Longbridge {
         Parameters(p): Parameters<dca::DcaListParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("dca_list", || dca::dca_list(&mctx, p)).await
+        measured_tool_call("dca_list", format!("{p:?}"), || dca::dca_list(&mctx, p)).await
     }
 
     /// Create a DCA (recurring investment) plan.
@@ -3437,7 +3620,7 @@ impl Longbridge {
         Parameters(p): Parameters<dca::DcaCreateParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("dca_create", || dca::dca_create(&mctx, p)).await
+        measured_tool_call("dca_create", format!("{p:?}"), || dca::dca_create(&mctx, p)).await
     }
 
     /// Update a DCA plan.
@@ -3457,7 +3640,7 @@ impl Longbridge {
         Parameters(p): Parameters<dca::DcaUpdateParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("dca_update", || dca::dca_update(&mctx, p)).await
+        measured_tool_call("dca_update", format!("{p:?}"), || dca::dca_update(&mctx, p)).await
     }
 
     /// Pause a DCA plan.
@@ -3477,7 +3660,7 @@ impl Longbridge {
         Parameters(p): Parameters<dca::DcaPlanIdParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("dca_pause", || dca::dca_pause(&mctx, p)).await
+        measured_tool_call("dca_pause", format!("{p:?}"), || dca::dca_pause(&mctx, p)).await
     }
 
     /// Resume a paused DCA plan.
@@ -3497,7 +3680,7 @@ impl Longbridge {
         Parameters(p): Parameters<dca::DcaPlanIdParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("dca_resume", || dca::dca_resume(&mctx, p)).await
+        measured_tool_call("dca_resume", format!("{p:?}"), || dca::dca_resume(&mctx, p)).await
     }
 
     /// Stop a DCA plan permanently.
@@ -3517,7 +3700,7 @@ impl Longbridge {
         Parameters(p): Parameters<dca::DcaPlanIdParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("dca_stop", || dca::dca_stop(&mctx, p)).await
+        measured_tool_call("dca_stop", format!("{p:?}"), || dca::dca_stop(&mctx, p)).await
     }
 
     /// Get DCA plan execution history.
@@ -3538,7 +3721,10 @@ impl Longbridge {
         Parameters(p): Parameters<dca::DcaHistoryParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("dca_history", || dca::dca_history(&mctx, p)).await
+        measured_tool_call("dca_history", format!("{p:?}"), || {
+            dca::dca_history(&mctx, p)
+        })
+        .await
     }
 
     /// Get DCA statistics.
@@ -3559,7 +3745,7 @@ impl Longbridge {
         Parameters(p): Parameters<dca::DcaStatsParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("dca_stats", || dca::dca_stats(&mctx, p)).await
+        measured_tool_call("dca_stats", format!("{p:?}"), || dca::dca_stats(&mctx, p)).await
     }
 
     /// Check if symbols support DCA.
@@ -3580,7 +3766,7 @@ impl Longbridge {
         Parameters(p): Parameters<dca::DcaCheckParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("dca_check", || dca::dca_check(&mctx, p)).await
+        measured_tool_call("dca_check", format!("{p:?}"), || dca::dca_check(&mctx, p)).await
     }
 
     /// Pre-trade grid setup info for a symbol (lot sizes, price steps, authorization).
@@ -3596,7 +3782,10 @@ impl Longbridge {
         Parameters(p): Parameters<grid::GridSymbolParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("grid_symbol_info", || grid::grid_symbol_info(&mctx, p)).await
+        measured_tool_call("grid_symbol_info", format!("{p:?}"), || {
+            grid::grid_symbol_info(&mctx, p)
+        })
+        .await
     }
 
     /// List grid trading orders.
@@ -3612,7 +3801,7 @@ impl Longbridge {
         Parameters(p): Parameters<grid::GridListParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("grid_list", || grid::grid_list(&mctx, p)).await
+        measured_tool_call("grid_list", format!("{p:?}"), || grid::grid_list(&mctx, p)).await
     }
 
     /// Fetch grid orders by IDs.
@@ -3628,7 +3817,10 @@ impl Longbridge {
         Parameters(p): Parameters<grid::GridIdsParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("grid_list_by_ids", || grid::grid_list_by_ids(&mctx, p)).await
+        measured_tool_call("grid_list_by_ids", format!("{p:?}"), || {
+            grid::grid_list_by_ids(&mctx, p)
+        })
+        .await
     }
 
     /// Grid order detail.
@@ -3644,7 +3836,10 @@ impl Longbridge {
         Parameters(p): Parameters<grid::GridDetailParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("grid_detail", || grid::grid_detail(&mctx, p)).await
+        measured_tool_call("grid_detail", format!("{p:?}"), || {
+            grid::grid_detail(&mctx, p)
+        })
+        .await
     }
 
     /// Grid order trigger history.
@@ -3660,7 +3855,7 @@ impl Longbridge {
         Parameters(p): Parameters<grid::GridTriggerHistoryParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("grid_trigger_history", || {
+        measured_tool_call("grid_trigger_history", format!("{p:?}"), || {
             grid::grid_trigger_history(&mctx, p)
         })
         .await
@@ -3684,7 +3879,10 @@ impl Longbridge {
         Parameters(p): Parameters<grid::GridSubmitParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("grid_submit", || grid::grid_submit(&mctx, p)).await
+        measured_tool_call("grid_submit", format!("{p:?}"), || {
+            grid::grid_submit(&mctx, p)
+        })
+        .await
     }
 
     /// Replace (modify) a grid trading order.
@@ -3704,7 +3902,10 @@ impl Longbridge {
         Parameters(p): Parameters<grid::GridReplaceParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("grid_replace", || grid::grid_replace(&mctx, p)).await
+        measured_tool_call("grid_replace", format!("{p:?}"), || {
+            grid::grid_replace(&mctx, p)
+        })
+        .await
     }
 
     /// Cancel a grid trading order.
@@ -3724,7 +3925,10 @@ impl Longbridge {
         Parameters(p): Parameters<grid::GridOrderIdParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("grid_cancel", || grid::grid_cancel(&mctx, p)).await
+        measured_tool_call("grid_cancel", format!("{p:?}"), || {
+            grid::grid_cancel(&mctx, p)
+        })
+        .await
     }
 
     /// Suspend a grid trading order.
@@ -3744,7 +3948,10 @@ impl Longbridge {
         Parameters(p): Parameters<grid::GridOrderIdParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("grid_suspend", || grid::grid_suspend(&mctx, p)).await
+        measured_tool_call("grid_suspend", format!("{p:?}"), || {
+            grid::grid_suspend(&mctx, p)
+        })
+        .await
     }
 
     /// Restart a suspended grid trading order.
@@ -3764,7 +3971,10 @@ impl Longbridge {
         Parameters(p): Parameters<grid::GridOrderIdParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("grid_restart", || grid::grid_restart(&mctx, p)).await
+        measured_tool_call("grid_restart", format!("{p:?}"), || {
+            grid::grid_restart(&mctx, p)
+        })
+        .await
     }
 
     /// Submit the grid strategy risk-disclosure questionnaire.
@@ -3784,7 +3994,10 @@ impl Longbridge {
         Parameters(p): Parameters<grid::GridQuestionnaireParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("grid_questionnaire", || grid::grid_questionnaire(&mctx, p)).await
+        measured_tool_call("grid_questionnaire", format!("{p:?}"), || {
+            grid::grid_questionnaire(&mctx, p)
+        })
+        .await
     }
 
     /// List community sharelists.
@@ -3805,7 +4018,10 @@ impl Longbridge {
         Parameters(p): Parameters<sharelist::SharelistCountParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("sharelist_list", || sharelist::sharelist_list(&mctx, p)).await
+        measured_tool_call("sharelist_list", format!("{p:?}"), || {
+            sharelist::sharelist_list(&mctx, p)
+        })
+        .await
     }
 
     /// Get sharelist detail.
@@ -3826,7 +4042,10 @@ impl Longbridge {
         Parameters(p): Parameters<sharelist::SharelistIdParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("sharelist_detail", || sharelist::sharelist_detail(&mctx, p)).await
+        measured_tool_call("sharelist_detail", format!("{p:?}"), || {
+            sharelist::sharelist_detail(&mctx, p)
+        })
+        .await
     }
 
     /// Create a community sharelist.
@@ -3847,7 +4066,10 @@ impl Longbridge {
         Parameters(p): Parameters<sharelist::SharelistCreateParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("sharelist_create", || sharelist::sharelist_create(&mctx, p)).await
+        measured_tool_call("sharelist_create", format!("{p:?}"), || {
+            sharelist::sharelist_create(&mctx, p)
+        })
+        .await
     }
 
     /// Delete a community sharelist.
@@ -3867,7 +4089,10 @@ impl Longbridge {
         Parameters(p): Parameters<sharelist::SharelistIdParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("sharelist_delete", || sharelist::sharelist_delete(&mctx, p)).await
+        measured_tool_call("sharelist_delete", format!("{p:?}"), || {
+            sharelist::sharelist_delete(&mctx, p)
+        })
+        .await
     }
 
     /// Add stocks to a sharelist.
@@ -3887,7 +4112,10 @@ impl Longbridge {
         Parameters(p): Parameters<sharelist::SharelistItemsParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("sharelist_add", || sharelist::sharelist_add(&mctx, p)).await
+        measured_tool_call("sharelist_add", format!("{p:?}"), || {
+            sharelist::sharelist_add(&mctx, p)
+        })
+        .await
     }
 
     /// Remove stocks from a sharelist.
@@ -3907,7 +4135,10 @@ impl Longbridge {
         Parameters(p): Parameters<sharelist::SharelistItemsParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("sharelist_remove", || sharelist::sharelist_remove(&mctx, p)).await
+        measured_tool_call("sharelist_remove", format!("{p:?}"), || {
+            sharelist::sharelist_remove(&mctx, p)
+        })
+        .await
     }
 
     /// Reorder stocks in a sharelist.
@@ -3927,7 +4158,10 @@ impl Longbridge {
         Parameters(p): Parameters<sharelist::SharelistItemsParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("sharelist_sort", || sharelist::sharelist_sort(&mctx, p)).await
+        measured_tool_call("sharelist_sort", format!("{p:?}"), || {
+            sharelist::sharelist_sort(&mctx, p)
+        })
+        .await
     }
 
     /// Get popular community sharelists.
@@ -3948,7 +4182,7 @@ impl Longbridge {
         Parameters(p): Parameters<sharelist::SharelistCountParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("sharelist_popular", || {
+        measured_tool_call("sharelist_popular", format!("{p:?}"), || {
             sharelist::sharelist_popular(&mctx, p)
         })
         .await
@@ -3971,7 +4205,10 @@ impl Longbridge {
         Parameters(p): Parameters<quant::RunScriptParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("quant_run", || quant::run_script(&mctx, p)).await
+        measured_tool_call("quant_run", format!("{p:?}"), || {
+            quant::run_script(&mctx, p)
+        })
+        .await
     }
 
     /// Search news by keyword.
@@ -3991,7 +4228,10 @@ impl Longbridge {
         Parameters(p): Parameters<search::NewsSearchParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("news_search", || search::news_search(&mctx, p)).await
+        measured_tool_call("news_search", format!("{p:?}"), || {
+            search::news_search(&mctx, p)
+        })
+        .await
     }
 
     /// Search community topics by keyword.
@@ -4011,7 +4251,10 @@ impl Longbridge {
         Parameters(p): Parameters<search::TopicSearchParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("topic_search", || search::topic_search(&mctx, p)).await
+        measured_tool_call("topic_search", format!("{p:?}"), || {
+            search::topic_search(&mctx, p)
+        })
+        .await
     }
 
     /// Get financial statements for a security.
@@ -4032,7 +4275,7 @@ impl Longbridge {
         Parameters(p): Parameters<fundamental::FinancialStatementParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("financial_statement", || {
+        measured_tool_call("financial_statement", format!("{p:?}"), || {
             fundamental::financial_statement(&mctx, p)
         })
         .await
@@ -4056,7 +4299,7 @@ impl Longbridge {
         Parameters(p): Parameters<fundamental::SymbolReportParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("financial_report_key_metrics", || {
+        measured_tool_call("financial_report_key_metrics", format!("{p:?}"), || {
             fundamental::financial_report_key_metrics(&mctx, p)
         })
         .await
@@ -4080,7 +4323,10 @@ impl Longbridge {
         Parameters(p): Parameters<fundamental::EtfDocsParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("etf_docs", || fundamental::etf_docs(&mctx, p)).await
+        measured_tool_call("etf_docs", format!("{p:?}"), || {
+            fundamental::etf_docs(&mctx, p)
+        })
+        .await
     }
 
     /// Get latest financial report summary for a security.
@@ -4101,7 +4347,7 @@ impl Longbridge {
         Parameters(p): Parameters<fundamental::SymbolParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("financial_report_latest", || {
+        measured_tool_call("financial_report_latest", format!("{p:?}"), || {
             fundamental::financial_report_latest(&mctx, p)
         })
         .await
@@ -4124,7 +4370,10 @@ impl Longbridge {
         Parameters(p): Parameters<fundamental::ValuationRankParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("valuation_rank", || fundamental::valuation_rank(&mctx, p)).await
+        measured_tool_call("valuation_rank", format!("{p:?}"), || {
+            fundamental::valuation_rank(&mctx, p)
+        })
+        .await
     }
 
     /// Get institution rating history for a security.
@@ -4145,7 +4394,7 @@ impl Longbridge {
         Parameters(p): Parameters<fundamental::SymbolParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("institution_rating_history", || {
+        measured_tool_call("institution_rating_history", format!("{p:?}"), || {
             fundamental::institution_rating_history(&mctx, p)
         })
         .await
@@ -4169,7 +4418,7 @@ impl Longbridge {
         Parameters(p): Parameters<fundamental::InstitutionRatingIndustryRankParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("institution_rating_industry_rank", || {
+        measured_tool_call("institution_rating_industry_rank", format!("{p:?}"), || {
             fundamental::institution_rating_industry_rank(&mctx, p)
         })
         .await
@@ -4191,7 +4440,7 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("short_margin", || trade::short_margin(&mctx)).await
+        measured_tool_call("short_margin", String::new(), || trade::short_margin(&mctx)).await
     }
 
     /// List linked withdrawal bank cards.
@@ -4210,7 +4459,7 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("bank_cards", || atm::bank_cards(&mctx)).await
+        measured_tool_call("bank_cards", String::new(), || atm::bank_cards(&mctx)).await
     }
 
     /// List withdrawal history.
@@ -4230,7 +4479,10 @@ impl Longbridge {
         Parameters(p): Parameters<atm::WithdrawalParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("withdrawals", || atm::withdrawals(&mctx, p)).await
+        measured_tool_call("withdrawals", format!("{p:?}"), || {
+            atm::withdrawals(&mctx, p)
+        })
+        .await
     }
 
     /// List deposit history.
@@ -4250,7 +4502,7 @@ impl Longbridge {
         Parameters(p): Parameters<atm::DepositParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("deposits", || atm::deposits(&mctx, p)).await
+        measured_tool_call("deposits", format!("{p:?}"), || atm::deposits(&mctx, p)).await
     }
 
     /// List IPO stocks currently in subscription stage (HK and US).
@@ -4270,7 +4522,10 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("ipo_subscriptions", || ipo::ipo_subscriptions(&mctx)).await
+        measured_tool_call("ipo_subscriptions", String::new(), || {
+            ipo::ipo_subscriptions(&mctx)
+        })
+        .await
     }
 
     /// Show the IPO calendar.
@@ -4290,7 +4545,7 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("ipo_calendar", || ipo::ipo_calendar(&mctx)).await
+        measured_tool_call("ipo_calendar", String::new(), || ipo::ipo_calendar(&mctx)).await
     }
 
     /// List recently listed IPO stocks.
@@ -4311,7 +4566,7 @@ impl Longbridge {
         Parameters(p): Parameters<ipo::IpoListedParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("ipo_listed", || ipo::ipo_listed(&mctx, p)).await
+        measured_tool_call("ipo_listed", format!("{p:?}"), || ipo::ipo_listed(&mctx, p)).await
     }
 
     /// Show IPO detail for a symbol.
@@ -4332,7 +4587,7 @@ impl Longbridge {
         Parameters(p): Parameters<ipo::IpoDetailParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("ipo_detail", || ipo::ipo_detail(&mctx, p)).await
+        measured_tool_call("ipo_detail", format!("{p:?}"), || ipo::ipo_detail(&mctx, p)).await
     }
 
     /// List IPO orders (active and history).
@@ -4353,7 +4608,7 @@ impl Longbridge {
         Parameters(p): Parameters<ipo::IpoOrdersParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("ipo_orders", || ipo::ipo_orders(&mctx, p)).await
+        measured_tool_call("ipo_orders", format!("{p:?}"), || ipo::ipo_orders(&mctx, p)).await
     }
 
     /// Show IPO order detail by order ID.
@@ -4374,7 +4629,10 @@ impl Longbridge {
         Parameters(p): Parameters<ipo::IpoOrderDetailParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("ipo_order_detail", || ipo::ipo_order_detail(&mctx, p)).await
+        measured_tool_call("ipo_order_detail", format!("{p:?}"), || {
+            ipo::ipo_order_detail(&mctx, p)
+        })
+        .await
     }
 
     /// Show IPO profit/loss summary and breakdown.
@@ -4395,7 +4653,10 @@ impl Longbridge {
         Parameters(p): Parameters<ipo::IpoProfitLossParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("ipo_profit_loss", || ipo::ipo_profit_loss(&mctx, p)).await
+        measured_tool_call("ipo_profit_loss", format!("{p:?}"), || {
+            ipo::ipo_profit_loss(&mctx, p)
+        })
+        .await
     }
 
     /// Get current-period business segment revenue breakdown.
@@ -4415,7 +4676,7 @@ impl Longbridge {
         Parameters(p): Parameters<fundamental::BusinessSegmentsParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("business_segments", || {
+        measured_tool_call("business_segments", format!("{p:?}"), || {
             fundamental::business_segments(&mctx, p)
         })
         .await
@@ -4439,7 +4700,7 @@ impl Longbridge {
         Parameters(p): Parameters<fundamental::BusinessSegmentsHistoryParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("business_segments_history", || {
+        measured_tool_call("business_segments_history", format!("{p:?}"), || {
             fundamental::business_segments_history(&mctx, p)
         })
         .await
@@ -4463,7 +4724,7 @@ impl Longbridge {
         Parameters(p): Parameters<fundamental::SymbolParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("institutional_views", || {
+        measured_tool_call("institutional_views", format!("{p:?}"), || {
             fundamental::institutional_views(&mctx, p)
         })
         .await
@@ -4486,7 +4747,10 @@ impl Longbridge {
         Parameters(p): Parameters<market::IndustryRankParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("industry_rank", || market::industry_rank(&mctx, p)).await
+        measured_tool_call("industry_rank", format!("{p:?}"), || {
+            market::industry_rank(&mctx, p)
+        })
+        .await
     }
 
     /// Get hierarchical industry peer group tree for an industry index symbol.
@@ -4507,7 +4771,10 @@ impl Longbridge {
         Parameters(p): Parameters<fundamental::IndustryPeersParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("industry_peers", || fundamental::industry_peers(&mctx, p)).await
+        measured_tool_call("industry_peers", format!("{p:?}"), || {
+            fundamental::industry_peers(&mctx, p)
+        })
+        .await
     }
 
     /// Get financial report snapshot with actual vs forecast comparison.
@@ -4528,7 +4795,7 @@ impl Longbridge {
         Parameters(p): Parameters<fundamental::FinancialReportSnapshotParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("financial_report_snapshot", || {
+        measured_tool_call("financial_report_snapshot", format!("{p:?}"), || {
             fundamental::financial_report_snapshot(&mctx, p)
         })
         .await
@@ -4552,7 +4819,10 @@ impl Longbridge {
         Parameters(p): Parameters<fundamental::ShareholderTopParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("shareholder_top", || fundamental::shareholder_top(&mctx, p)).await
+        measured_tool_call("shareholder_top", format!("{p:?}"), || {
+            fundamental::shareholder_top(&mctx, p)
+        })
+        .await
     }
 
     /// Get single shareholder's holding history and trade details by object_id.
@@ -4573,7 +4843,7 @@ impl Longbridge {
         Parameters(p): Parameters<fundamental::ShareholderDetailParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("shareholder_detail", || {
+        measured_tool_call("shareholder_detail", format!("{p:?}"), || {
             fundamental::shareholder_detail(&mctx, p)
         })
         .await
@@ -4597,7 +4867,7 @@ impl Longbridge {
         Parameters(p): Parameters<fundamental::ValuationComparisonParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("valuation_comparison", || {
+        measured_tool_call("valuation_comparison", format!("{p:?}"), || {
             fundamental::valuation_comparison(&mctx, p)
         })
         .await
@@ -4621,7 +4891,10 @@ impl Longbridge {
         Parameters(p): Parameters<market::ShortTradesParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("short_trades", || market::short_trades(&mctx, p)).await
+        measured_tool_call("short_trades", format!("{p:?}"), || {
+            market::short_trades(&mctx, p)
+        })
+        .await
     }
 
     /// Get top movers — stocks whose price exceeds the 20-day standard deviation.
@@ -4642,7 +4915,10 @@ impl Longbridge {
         Parameters(p): Parameters<market::StockEventsParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("top_movers", || market::top_movers(&mctx, p)).await
+        measured_tool_call("top_movers", format!("{p:?}"), || {
+            market::top_movers(&mctx, p)
+        })
+        .await
     }
 
     /// Get rank tab category configurations for the popularity leaderboard.
@@ -4662,7 +4938,10 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("rank_categories", || market::rank_categories(&mctx)).await
+        measured_tool_call("rank_categories", String::new(), || {
+            market::rank_categories(&mctx)
+        })
+        .await
     }
 
     /// Get ranked stock list by leaderboard tab key.
@@ -4683,7 +4962,10 @@ impl Longbridge {
         Parameters(p): Parameters<market::RankListParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("rank_list", || market::rank_list(&mctx, p)).await
+        measured_tool_call("rank_list", format!("{p:?}"), || {
+            market::rank_list(&mctx, p)
+        })
+        .await
     }
 
     /// List platform-preset stock screener strategies.
@@ -4704,7 +4986,7 @@ impl Longbridge {
         Parameters(p): Parameters<screener::ScreenerRecommendStrategiesParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("screener_recommend_strategies", || {
+        measured_tool_call("screener_recommend_strategies", format!("{p:?}"), || {
             screener::screener_recommend_strategies(&mctx, p)
         })
         .await
@@ -4728,7 +5010,7 @@ impl Longbridge {
         Parameters(p): Parameters<screener::ScreenerUserStrategiesParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("screener_user_strategies", || {
+        measured_tool_call("screener_user_strategies", format!("{p:?}"), || {
             screener::screener_user_strategies(&mctx, p)
         })
         .await
@@ -4752,7 +5034,7 @@ impl Longbridge {
         Parameters(p): Parameters<screener::ScreenerStrategyParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("screener_strategy", || {
+        measured_tool_call("screener_strategy", format!("{p:?}"), || {
             screener::screener_strategy(&mctx, p)
         })
         .await
@@ -4776,7 +5058,10 @@ impl Longbridge {
         Parameters(p): Parameters<screener::ScreenerSearchParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("screener_search", || screener::screener_search(&mctx, p)).await
+        measured_tool_call("screener_search", format!("{p:?}"), || {
+            screener::screener_search(&mctx, p)
+        })
+        .await
     }
 
     /// Get all available stock screener indicator metadata.
@@ -4797,7 +5082,7 @@ impl Longbridge {
         Parameters(p): Parameters<screener::ScreenerIndicatorsParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("screener_indicators", || {
+        measured_tool_call("screener_indicators", format!("{p:?}"), || {
             screener::screener_indicators(&mctx, p)
         })
         .await
@@ -6114,7 +6399,7 @@ mod tool_error_tests {
     #[tokio::test]
     async fn measured_tool_call_reports_failures_as_tool_errors() {
         let _lock = LOG_CALLSITE_LOCK.lock().await;
-        let result = measured_tool_call("some_tool", || async {
+        let result = measured_tool_call("some_tool", "test-params".to_string(), || async {
             Err(McpError::internal_error("upstream 500", None))
         })
         .await
@@ -6127,7 +6412,7 @@ mod tool_error_tests {
     #[tokio::test]
     async fn measured_tool_call_passes_success_through_untouched() {
         let _lock = LOG_CALLSITE_LOCK.lock().await;
-        let result = measured_tool_call("some_tool", || async {
+        let result = measured_tool_call("some_tool", "test-params".to_string(), || async {
             Ok(tool_result(r#"{"ok":true}"#.to_string()))
         })
         .await
@@ -6166,19 +6451,21 @@ mod tool_error_tests {
 
         // Success logs nothing — volume for successful calls is covered by
         // the metric recorded alongside, not by a per-call log line.
-        measured_tool_call("logged_ok_tool", || async {
+        measured_tool_call("logged_ok_tool", "test-params".to_string(), || async {
             Ok(tool_result(r#"{"ok":true}"#.to_string()))
         })
         .await
         .expect("successful call");
 
-        measured_tool_call("logged_failing_tool", || async {
-            Err(McpError::internal_error("upstream 500", None))
-        })
+        measured_tool_call(
+            "logged_failing_tool",
+            "sym=BADSTOCK".to_string(),
+            || async { Err(McpError::internal_error("upstream 500", None)) },
+        )
         .await
         .expect("a failing tool must not surface as a protocol error");
 
-        measured_tool_call("logged_bad_params_tool", || async {
+        measured_tool_call("logged_bad_params_tool", "sym=???".to_string(), || async {
             Err(McpError::invalid_params("bad symbol", None))
         })
         .await
@@ -6215,6 +6502,10 @@ mod tool_error_tests {
             failed_detail.contains("WARN") && failed_detail.contains("upstream 500"),
             "expected WARN detail line: {failed_detail}"
         );
+        assert!(
+            failed_detail.contains("sym=BADSTOCK"),
+            "expected the caller's input params on the detail line: {failed_detail}"
+        );
         // Both of this call's lines carry the same call_id, so a reader can
         // pair them up even if another call's lines interleave.
         assert_eq!(call_id_of(failed), call_id_of(failed_detail));
@@ -6229,6 +6520,10 @@ mod tool_error_tests {
         assert!(
             rejected_detail.contains("INFO"),
             "expected INFO detail line: {rejected_detail}"
+        );
+        assert!(
+            rejected_detail.contains("sym=???"),
+            "expected the caller's input params on the detail line: {rejected_detail}"
         );
         assert_eq!(call_id_of(rejected), call_id_of(rejected_detail));
 
