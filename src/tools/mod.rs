@@ -5307,7 +5307,7 @@ impl Longbridge {
 
 #[tool_handler(
     name = "longbridge-mcp",
-    instructions = "Longbridge OpenAPI MCP — market data, trading, and financial analysis. On failure, tools return a JSON envelope in the result content with an `error_code` and a `recoverable` field: `reauth` (re-authenticate, then retry), `backoff` (wait, then retry), `fix_params` (fix the arguments, then retry), or `none` (do not retry; tell the user). Order writes (submit_order, cancel_order, replace_order, grid_submit/replace/cancel/suspend/restart) are two-step: call once without execute to get a confirmation_code, show the preview, then re-call with execute set to that code after the user confirms."
+    instructions = "Longbridge OpenAPI MCP — market data, trading, analysis. Order writes (submit_order, cancel_order, replace_order, grid_*) are two-step: call once without execute to get a confirmation_code, show the preview, then re-call with execute=code after the user confirms. On failure, tools return a JSON envelope with an `error_code` and a `recoverable` field: `reauth` (re-authenticate then retry), `backoff` (wait then retry), `fix_params` (fix arguments then retry), or `none` (do not retry; tell the user)."
 )]
 impl ServerHandler for Longbridge {
     // `get_info` mirrors the `#[tool_handler]` default tool metadata, plus the
@@ -5329,7 +5329,7 @@ impl ServerHandler for Longbridge {
             env!("CARGO_PKG_VERSION"),
         ))
         .with_instructions(
-            "Longbridge OpenAPI MCP — market data, trading, and financial analysis. On failure, tools return a JSON envelope in the result content with an `error_code` and a `recoverable` field: `reauth` (re-authenticate, then retry), `backoff` (wait, then retry), `fix_params` (fix the arguments, then retry), or `none` (do not retry; tell the user). Order writes (submit_order, cancel_order, replace_order, grid_submit/replace/cancel/suspend/restart) are two-step: call once without execute to get a confirmation_code, show the preview, then re-call with execute set to that code after the user confirms.",
+            "Longbridge OpenAPI MCP — market data, trading, analysis. Order writes (submit_order, cancel_order, replace_order, grid_*) are two-step: call once without execute to get a confirmation_code, show the preview, then re-call with execute=code after the user confirms. On failure, tools return a JSON envelope with an `error_code` and a `recoverable` field: `reauth` (re-authenticate then retry), `backoff` (wait then retry), `fix_params` (fix arguments then retry), or `none` (do not retry; tell the user).",
         )
     }
 
