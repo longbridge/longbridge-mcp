@@ -5296,7 +5296,7 @@ impl Longbridge {
 
 #[tool_handler(
     name = "longbridge-mcp",
-    instructions = "Longbridge OpenAPI MCP Server - provides market data, trading, and financial analysis tools. Order execution requires two-step confirmation: submit_order, cancel_order, replace_order and every grid write (grid_submit, grid_replace, grid_cancel, grid_suspend, grid_restart) are dry runs that return a single-use confirmation_code. Always call them once without execute, show the returned preview to the user, and only re-call with execute set to that code after the user has explicitly confirmed it."
+    instructions = "Longbridge OpenAPI MCP Server - provides market data, trading, and financial analysis tools. Order execution requires two-step confirmation: submit_order, cancel_order, replace_order and every grid write (grid_submit, grid_replace, grid_cancel, grid_suspend, grid_restart) are dry runs that return a single-use confirmation_code. Always call them once without execute, show the returned preview to the user, and only re-call with execute set to that code after the user has explicitly confirmed it. On failure, tools return a JSON envelope in the result content with an `error_code` and a `recoverable` field (`reauth`|`backoff`|`fix_params`|`none`): `reauth` = re-authenticate, then retry once; `backoff` = wait, then retry; `fix_params` = fix the arguments, then retry; `none` = do not retry, surface it to the user."
 )]
 impl ServerHandler for Longbridge {
     // `get_info` mirrors the `#[tool_handler]` default tool metadata, plus the
@@ -5318,7 +5318,7 @@ impl ServerHandler for Longbridge {
             env!("CARGO_PKG_VERSION"),
         ))
         .with_instructions(
-            "Longbridge OpenAPI MCP Server - provides market data, trading, and financial analysis tools. Order execution requires two-step confirmation: submit_order, cancel_order, replace_order and every grid write (grid_submit, grid_replace, grid_cancel, grid_suspend, grid_restart) are dry runs that return a single-use confirmation_code. Always call them once without execute, show the returned preview to the user, and only re-call with execute set to that code after the user has explicitly confirmed it.",
+            "Longbridge OpenAPI MCP Server - provides market data, trading, and financial analysis tools. Order execution requires two-step confirmation: submit_order, cancel_order, replace_order and every grid write (grid_submit, grid_replace, grid_cancel, grid_suspend, grid_restart) are dry runs that return a single-use confirmation_code. Always call them once without execute, show the returned preview to the user, and only re-call with execute set to that code after the user has explicitly confirmed it. On failure, tools return a JSON envelope in the result content with an `error_code` and a `recoverable` field (`reauth`|`backoff`|`fix_params`|`none`): `reauth` = re-authenticate, then retry once; `backoff` = wait, then retry; `fix_params` = fix the arguments, then retry; `none` = do not retry, surface it to the user.",
         )
     }
 
