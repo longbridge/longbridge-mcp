@@ -298,6 +298,87 @@ fn error_hint(err: &McpError) -> Option<&'static str> {
     None
 }
 
+/// Classify a failed call by what the caller should do about it: one of
+/// `"reauth"`, `"backoff"`, `"fix_params"`, or `"none"`. Defaults to `"none"`
+/// so an unrecognized error is never optimistically retried. Matches on the
+/// structured business code first, then message-text needles (the codes behind
+/// most real traffic — 401103/403308/429003 — are undocumented, so text is a
+/// necessary fallback).
+fn recoverable_of(err: &McpError) -> &'static str {
+    if err.code == rmcp::model::ErrorCode::INVALID_PARAMS {
+        return "fix_params";
+    }
+    let code = openapi_error_code_of(err);
+    let msg = err.message.to_lowercase();
+
+    if matches_error_class(
+        code,
+        &msg,
+        |c| (401_000..402_000).contains(&c) || c == 403_308,
+        ErrorClassNeedles {
+            text: &[
+                "token is expired",
+                "token verification failed",
+                "not in authorized scopes",
+                "unauthorized",
+            ],
+            numeric: &["401103", "401102", "401003", "403308"],
+        },
+    ) {
+        return "reauth";
+    }
+    if matches_error_class(
+        code,
+        &msg,
+        |c| {
+            (429_000..430_000).contains(&c)
+                || matches!(c, 500 | 500_000 | 2_301_500 | 2_601_500 | 202_203 | 408)
+        },
+        ErrorClassNeedles {
+            text: &["rate limit", "too frequent", "区间调用上限", "最小间隔"],
+            numeric: &["429002", "429003"],
+        },
+    ) {
+        return "backoff";
+    }
+    if matches_error_class(
+        code,
+        &msg,
+        |c| matches!(c, 400 | 301_600 | 301_607 | 701_007),
+        ErrorClassNeedles {
+            text: &[
+                "too many symbols",
+                "invalid request",
+                "syntax error",
+                "exceed_name_length",
+            ],
+            numeric: &["301607", "301600", "701007"],
+        },
+    ) {
+        return "fix_params";
+    }
+    "none"
+}
+
+/// True only for the known *terminal* quote conditions that return
+/// `isError:false` with a schema-valid empty result: 301604 (no quote access)
+/// and 301603 (no quotes). Deliberately narrow — a bare "no access" needle is
+/// omitted so a 403 permission error can't be mistaken for a terminal quote
+/// condition.
+fn is_terminal_none(err: &McpError) -> bool {
+    let code = openapi_error_code_of(err);
+    let msg = err.message.to_lowercase();
+    matches_error_class(
+        code,
+        &msg,
+        |c| matches!(c, 301_604 | 301_603),
+        ErrorClassNeedles {
+            text: &["no quote access", "no quotes"],
+            numeric: &["301604", "301603"],
+        },
+    )
+}
+
 mod alert;
 mod atm;
 mod authenticate;
@@ -6529,5 +6610,59 @@ mod tool_error_tests {
 
         // Different calls get different ids.
         assert_ne!(call_id_of(failed), call_id_of(rejected));
+    }
+
+    #[test]
+    fn recoverable_of_classifies_each_action_class() {
+        use super::recoverable_of;
+        let cases = [
+            ("openapi error: code=401103: token is expired", "reauth"),
+            (
+                "openapi error: code=403308: Target API's scope is not in authorized scopes",
+                "reauth",
+            ),
+            (
+                "openapi error: code=429003: minimum interval between two calls",
+                "backoff",
+            ),
+            (
+                "response error: 7: detail:Some(WsResponseErrorDetail { code: 301607, msg: \"too many symbols in one page\" })",
+                "fix_params",
+            ),
+            (
+                "response error: 7: detail:Some(WsResponseErrorDetail { code: 301604, msg: \"no quote access\" })",
+                "none",
+            ),
+            (
+                "response error: 7: detail:Some(WsResponseErrorDetail { code: 301603, msg: \"no quotes\" })",
+                "none",
+            ),
+            ("something we have never seen code=999999", "none"),
+        ];
+        for (message, expected) in cases {
+            let err = McpError::internal_error(message.to_string(), None);
+            assert_eq!(recoverable_of(&err), expected, "message: {message:?}");
+        }
+        assert_eq!(
+            recoverable_of(&McpError::invalid_params("bad period", None)),
+            "fix_params",
+            "INVALID_PARAMS must be fix_params"
+        );
+    }
+
+    #[test]
+    fn is_terminal_none_only_for_no_access_and_no_quotes() {
+        use super::is_terminal_none;
+        for msg in ["no quote access", "no quotes"] {
+            let err = McpError::internal_error(
+                format!("WsResponseErrorDetail {{ code: 301604, msg: \"{msg}\" }}"),
+                None,
+            );
+            assert!(is_terminal_none(&err), "should be terminal: {msg}");
+        }
+        for msg in ["token is expired", "no access to trade", "rate limit reached"] {
+            let err = McpError::internal_error(msg.to_string(), None);
+            assert!(!is_terminal_none(&err), "should NOT be terminal: {msg}");
+        }
     }
 }
