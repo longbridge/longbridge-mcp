@@ -138,18 +138,44 @@ where
         .await
 }
 
-/// Render a failed tool call as a caller-visible `isError` result.
+/// Render a failed tool call as a caller-visible structured envelope.
 ///
-/// `structured_content` is deliberately left unset: a tool that declares an
-/// `outputSchema` must not return structured content that fails to match it,
-/// and an error payload never does.
+/// Non-terminal errors return an `isError` JSON envelope
+/// (`error_code`/`message`/`recoverable`/`hint`/`data`) so the consumer can act
+/// on `recoverable`. `structured_content` is left unset on this path: a tool that
+/// declares an `outputSchema` must not return structured content that fails to
+/// match it, and an error payload never does.
+///
+/// The two known *terminal* quote conditions (301604 no-access, 301603 no-quotes)
+/// instead return a schema-valid `isError:false` success so they are not counted
+/// as tool-result errors, with a `note` making clear the empty payload is a
+/// permission/no-data placeholder — not real quote data.
 fn tool_error(name: &str, err: &McpError) -> CallToolResult {
-    let mut text = format!("{name} failed: {}", err.message);
-    if let Some(hint) = error_hint(err) {
-        text.push_str("\n\n");
-        text.push_str(hint);
+    if is_terminal_none(err) {
+        let envelope = serde_json::json!({
+            "error_code": openapi_error_code_of(err),
+            "message": err.message.as_ref(),
+            "recoverable": "none",
+            "hint": error_hint(err),
+            "note": "Empty placeholder for a no-access / no-data condition — NOT real quote data.",
+        });
+        let mut result = CallToolResult::success(vec![Content::text(envelope.to_string())]);
+        if TERMINAL_OBJECT_ROOTED.contains(&name)
+            && let Some(schema) = output_schema_map().get(name)
+        {
+            result.structured_content = Some(minimal_valid_instance(schema));
+        }
+        return result;
     }
-    CallToolResult::error(vec![Content::text(text)])
+
+    let envelope = serde_json::json!({
+        "error_code": openapi_error_code_of(err),
+        "message": err.message.as_ref(),
+        "recoverable": recoverable_of(err),
+        "hint": error_hint(err),
+        "data": serde_json::Value::Null,
+    });
+    CallToolResult::error(vec![Content::text(envelope.to_string())])
 }
 
 /// Business error codes matched structurally in `error_hint()` — see
@@ -437,7 +463,9 @@ fn minimal_valid_instance(schema: &rmcp::model::JsonObject) -> serde_json::Value
         .and_then(serde_json::Value::as_array)
         .map(|a| a.iter().filter_map(serde_json::Value::as_str).collect())
         .unwrap_or_default();
-    let props = schema.get("properties").and_then(serde_json::Value::as_object);
+    let props = schema
+        .get("properties")
+        .and_then(serde_json::Value::as_object);
     let mut obj = serde_json::Map::new();
     for key in required {
         let prop = props
@@ -481,8 +509,8 @@ fn zero_for(schema: Option<&rmcp::model::JsonObject>) -> serde_json::Value {
 /// `tool name -> full output schema`, built once from the uncompacted tool list
 /// so nested `properties`/`required` survive. Backs the terminal `isError:false`
 /// path (see `tool_error`).
-fn output_schema_map(
-) -> &'static std::collections::HashMap<String, std::sync::Arc<rmcp::model::JsonObject>> {
+fn output_schema_map()
+-> &'static std::collections::HashMap<String, std::sync::Arc<rmcp::model::JsonObject>> {
     static MAP: std::sync::OnceLock<
         std::collections::HashMap<String, std::sync::Arc<rmcp::model::JsonObject>>,
     > = std::sync::OnceLock::new();
@@ -6341,16 +6369,115 @@ mod tool_error_tests {
     }
 
     #[test]
-    fn tool_error_marks_the_result_and_names_the_tool() {
+    fn tool_error_emits_a_structured_envelope() {
         let err = McpError::internal_error("upstream exploded", None);
         let result = tool_error("finance_calendar", &err);
         assert_eq!(result.is_error, Some(true));
         assert!(result.structured_content.is_none());
-        let text = text_of(&result);
-        assert!(
-            text.contains("finance_calendar") && text.contains("upstream exploded"),
-            "unexpected error text: {text}"
+        let v: serde_json::Value =
+            serde_json::from_str(&text_of(&result)).expect("content must be JSON");
+        assert_eq!(v["message"], "upstream exploded");
+        assert_eq!(v["recoverable"], "none");
+        assert!(v["error_code"].is_null());
+        assert!(v["data"].is_null());
+    }
+
+    #[test]
+    fn tool_error_reauth_envelope_carries_code_and_hint() {
+        let err = McpError::internal_error(
+            "openapi error: code=401103: token is expired".to_string(),
+            None,
         );
+        let result = tool_error("quote", &err);
+        assert_eq!(result.is_error, Some(true));
+        let v: serde_json::Value = serde_json::from_str(&text_of(&result)).unwrap();
+        assert_eq!(v["recoverable"], "reauth");
+        assert!(
+            v["hint"]
+                .as_str()
+                .is_some_and(|h| h.contains("re-auth") || h.contains("reconnect"))
+        );
+    }
+
+    #[test]
+    fn terminal_object_rooted_returns_success_with_schema_valid_content() {
+        let err = McpError::internal_error(
+            "WsResponseErrorDetail { code: 301604, msg: \"no quote access\" }".to_string(),
+            None,
+        );
+        let result = tool_error("depth", &err);
+        assert_eq!(
+            result.is_error,
+            Some(false),
+            "terminal condition must be isError:false"
+        );
+        let v: serde_json::Value = serde_json::from_str(&text_of(&result)).unwrap();
+        assert_eq!(v["recoverable"], "none");
+        assert!(
+            v["note"].as_str().is_some(),
+            "must carry an explanatory note"
+        );
+        let sc = result
+            .structured_content
+            .expect("object-rooted tool must set structuredContent");
+        assert!(sc.is_object());
+        let schema = super::output_schema_map()
+            .get("depth")
+            .expect("depth schema");
+        for req in schema
+            .get("required")
+            .and_then(|r| r.as_array())
+            .into_iter()
+            .flatten()
+        {
+            let key = req.as_str().unwrap();
+            assert!(sc.get(key).is_some(), "missing required field {key}");
+        }
+    }
+
+    #[test]
+    fn terminal_array_rooted_returns_success_without_structured_content() {
+        let err = McpError::internal_error(
+            "WsResponseErrorDetail { code: 301603, msg: \"no quotes\" }".to_string(),
+            Some(serde_json::json!({ "openapi_error_code": 301603 })),
+        );
+        let result = tool_error("option_quote", &err);
+        assert_eq!(result.is_error, Some(false));
+        assert!(
+            result.structured_content.is_none(),
+            "array-rooted terminal must leave structuredContent unset"
+        );
+        let v: serde_json::Value = serde_json::from_str(&text_of(&result)).unwrap();
+        assert_eq!(v["error_code"], 301603);
+    }
+
+    #[test]
+    fn every_schema_backed_terminal_instance_matches_its_schema() {
+        let err = McpError::internal_error(
+            "WsResponseErrorDetail { code: 301604, msg: \"no quote access\" }".to_string(),
+            None,
+        );
+        for name in super::TERMINAL_OBJECT_ROOTED {
+            let result = tool_error(name, &err);
+            let sc = result
+                .structured_content
+                .unwrap_or_else(|| panic!("{name} must set structuredContent"));
+            let schema = super::output_schema_map()
+                .get(*name)
+                .unwrap_or_else(|| panic!("{name} must have a schema"));
+            for req in schema
+                .get("required")
+                .and_then(|r| r.as_array())
+                .into_iter()
+                .flatten()
+            {
+                let key = req.as_str().unwrap();
+                assert!(
+                    sc.get(key).is_some(),
+                    "{name}: missing required field {key}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -6542,8 +6669,9 @@ mod tool_error_tests {
         );
         let hint = error_hint(&err).expect("expected a permission hint");
         assert!(
-            hint.contains("scopes") && !hint.contains("re-authorize"),
-            "structured code 403308 should win over the substring '401' in the trace id, got: {hint}"
+            hint.contains("scopes") && !hint.contains("access token"),
+            "structured code 403308 should win over the substring '401' in the trace id (403 \
+             scope hint, not the 401 token hint), got: {hint}"
         );
     }
 
@@ -6756,7 +6884,11 @@ mod tool_error_tests {
             );
             assert!(is_terminal_none(&err), "should be terminal: {msg}");
         }
-        for msg in ["token is expired", "no access to trade", "rate limit reached"] {
+        for msg in [
+            "token is expired",
+            "no access to trade",
+            "rate limit reached",
+        ] {
             let err = McpError::internal_error(msg.to_string(), None);
             assert!(!is_terminal_none(&err), "should NOT be terminal: {msg}");
         }
