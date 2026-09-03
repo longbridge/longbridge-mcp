@@ -426,6 +426,88 @@ where
         .expect("output schema must be a valid JSON Schema with root type \"object\"")
 }
 
+/// A JSON value that satisfies `schema` by filling every `required` property
+/// with a type-appropriate zero (`string`→`""`, `integer`/`number`→`0`,
+/// `boolean`→`false`, `array`→`[]`, `object`→recurse). If a property declares an
+/// `enum`, its first member is used. Used to return a schema-conforming empty
+/// result for the terminal `isError:false` path (see `tool_error`).
+fn minimal_valid_instance(schema: &rmcp::model::JsonObject) -> serde_json::Value {
+    let required: Vec<&str> = schema
+        .get("required")
+        .and_then(serde_json::Value::as_array)
+        .map(|a| a.iter().filter_map(serde_json::Value::as_str).collect())
+        .unwrap_or_default();
+    let props = schema.get("properties").and_then(serde_json::Value::as_object);
+    let mut obj = serde_json::Map::new();
+    for key in required {
+        let prop = props
+            .and_then(|p| p.get(key))
+            .and_then(serde_json::Value::as_object);
+        obj.insert(key.to_string(), zero_for(prop));
+    }
+    serde_json::Value::Object(obj)
+}
+
+/// Zero value for a single property schema. See [`minimal_valid_instance`].
+fn zero_for(schema: Option<&rmcp::model::JsonObject>) -> serde_json::Value {
+    let Some(s) = schema else {
+        return serde_json::Value::Null;
+    };
+    if let Some(first) = s
+        .get("enum")
+        .and_then(serde_json::Value::as_array)
+        .and_then(|a| a.first())
+    {
+        return first.clone();
+    }
+    let ty = s.get("type").and_then(|t| match t {
+        serde_json::Value::String(s) => Some(s.as_str()),
+        serde_json::Value::Array(a) => a
+            .iter()
+            .filter_map(serde_json::Value::as_str)
+            .find(|s| *s != "null"),
+        _ => None,
+    });
+    match ty {
+        Some("string") => serde_json::Value::String(String::new()),
+        Some("integer") | Some("number") => serde_json::Value::Number(0.into()),
+        Some("boolean") => serde_json::Value::Bool(false),
+        Some("array") => serde_json::Value::Array(Vec::new()),
+        Some("object") => minimal_valid_instance(s),
+        _ => serde_json::Value::Null,
+    }
+}
+
+/// `tool name -> full output schema`, built once from the uncompacted tool list
+/// so nested `properties`/`required` survive. Backs the terminal `isError:false`
+/// path (see `tool_error`).
+fn output_schema_map(
+) -> &'static std::collections::HashMap<String, std::sync::Arc<rmcp::model::JsonObject>> {
+    static MAP: std::sync::OnceLock<
+        std::collections::HashMap<String, std::sync::Arc<rmcp::model::JsonObject>>,
+    > = std::sync::OnceLock::new();
+    MAP.get_or_init(|| {
+        all_tools_full_cached()
+            .iter()
+            .filter_map(|t| {
+                t.output_schema
+                    .as_ref()
+                    .map(|s| (t.name.to_string(), s.clone()))
+            })
+            .collect()
+    })
+}
+
+/// The object-rooted market-data tools whose terminal (301604/301603) result
+/// must carry schema-valid `structuredContent`: they return an object AND
+/// declare an `output_schema`. Array-rooted quote tools are excluded — their
+/// normal success leaves `structuredContent` unset (MCP requires it to be an
+/// object), so their terminal result matches by also leaving it unset. Other
+/// object-rooted quote tools (static_info/intraday/capital_flow/calc_indexes)
+/// declare no `output_schema`, so they have no structured-content contract and
+/// likewise leave it unset.
+const TERMINAL_OBJECT_ROOTED: &[&str] = &["depth", "capital_distribution"];
+
 /// Longbridge MCP tool server (stateless).
 #[derive(Debug, Clone)]
 pub struct Longbridge;
@@ -6706,5 +6788,63 @@ mod tool_error_tests {
             hint.contains("fewer") || hint.contains("reduce"),
             "got: {hint}"
         );
+    }
+
+    #[test]
+    fn minimal_valid_instance_fills_required_fields_with_typed_zeros() {
+        use serde_json::json;
+        let schema: rmcp::model::JsonObject = serde_json::from_value(json!({
+            "type": "object",
+            "required": ["name", "count", "flag", "items", "nested"],
+            "properties": {
+                "name": {"type": "string"},
+                "count": {"type": "integer"},
+                "flag": {"type": "boolean"},
+                "items": {"type": "array"},
+                "nested": {
+                    "type": "object",
+                    "required": ["inner"],
+                    "properties": {"inner": {"type": "number"}}
+                },
+                "optional_ignored": {"type": "string"}
+            }
+        }))
+        .unwrap();
+        let out = super::minimal_valid_instance(&schema);
+        assert_eq!(
+            out,
+            json!({
+                "name": "", "count": 0, "flag": false, "items": [],
+                "nested": {"inner": 0}
+            })
+        );
+    }
+
+    #[test]
+    fn minimal_valid_instance_prefers_first_enum_value() {
+        use serde_json::json;
+        let schema: rmcp::model::JsonObject = serde_json::from_value(json!({
+            "type": "object",
+            "required": ["status"],
+            "properties": {"status": {"type": "string", "enum": ["open", "closed"]}}
+        }))
+        .unwrap();
+        assert_eq!(
+            super::minimal_valid_instance(&schema),
+            json!({"status": "open"})
+        );
+    }
+
+    #[test]
+    fn output_schema_map_covers_the_schema_backed_terminal_tools() {
+        // Only the object-rooted terminal tools that actually declare an
+        // `output_schema` need schema-valid structured content; those are the
+        // members of `TERMINAL_OBJECT_ROOTED`. (Object-rooted-but-schemaless
+        // tools like static_info/intraday/capital_flow/calc_indexes carry no
+        // schema contract and leave structuredContent unset.)
+        let map = super::output_schema_map();
+        for name in super::TERMINAL_OBJECT_ROOTED {
+            assert!(map.contains_key(*name), "schema map missing {name}");
+        }
     }
 }
