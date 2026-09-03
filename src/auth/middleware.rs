@@ -191,6 +191,11 @@ mod tests {
 
     #[tokio::test]
     async fn missing_token_is_rejected_with_401() {
+        // Hits the same rejection-warn callsite as
+        // `missing_token_rejection_is_logged`. Without the shared lock it could
+        // register that callsite's interest (against no subscriber → disabled)
+        // while the capturing test is mid-flight, swallowing the asserted line.
+        let _lock = crate::test_support::LOG_CAPTURE_LOCK.lock().await;
         let response = router()
             .oneshot(
                 axum::http::Request::builder()
@@ -212,6 +217,10 @@ mod tests {
     /// than just checking the response.
     #[tokio::test]
     async fn missing_token_rejection_is_logged() {
+        // Serialize with the other log-capturing tests (in `tools`) so their
+        // `rebuild_interest_cache()` calls can't race this one and drop the
+        // asserted line — see `LOG_CAPTURE_LOCK`'s docs.
+        let _lock = crate::test_support::LOG_CAPTURE_LOCK.lock().await;
         let buffer = SharedBuffer::default();
         let writer = buffer.clone();
         let subscriber = tracing_subscriber::fmt()

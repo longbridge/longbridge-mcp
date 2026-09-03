@@ -138,18 +138,48 @@ where
         .await
 }
 
-/// Render a failed tool call as a caller-visible `isError` result.
+/// Render a failed tool call as a caller-visible structured envelope.
 ///
-/// `structured_content` is deliberately left unset: a tool that declares an
-/// `outputSchema` must not return structured content that fails to match it,
-/// and an error payload never does.
+/// Non-terminal errors return an `isError` JSON envelope
+/// (`error_code`/`message`/`recoverable`/`hint`/`data`) so the consumer can act
+/// on `recoverable`. `structured_content` is left unset on this path: a tool that
+/// declares an `outputSchema` must not return structured content that fails to
+/// match it, and an error payload never does.
+///
+/// The two known *terminal* quote conditions (301604 no-access, 301603 no-quotes)
+/// instead return a schema-valid `isError:false` success so they are not counted
+/// as tool-result errors, with a `note` making clear the empty payload is a
+/// permission/no-data placeholder — not real quote data.
 fn tool_error(name: &str, err: &McpError) -> CallToolResult {
-    let mut text = format!("{name} failed: {}", err.message);
-    if let Some(hint) = error_hint(err) {
-        text.push_str("\n\n");
-        text.push_str(hint);
+    let message = upstream_message_of(err).unwrap_or_else(|| err.message.as_ref());
+    if is_terminal_none(err) {
+        let envelope = serde_json::json!({
+            "error_code": openapi_error_code_of(err),
+            "message": message,
+            "recoverable": "none",
+            "hint": error_hint(err),
+            "note": "These fields are EMPTY because access was denied or no data exists — NOT \
+                     because the values are zero. This is a permission/no-data placeholder, not a \
+                     real quote. Tell the user they lack the required market-data access (or that \
+                     no data exists); do not present the empty values as real.",
+        });
+        let mut result = CallToolResult::success(vec![Content::text(envelope.to_string())]);
+        if TERMINAL_OBJECT_ROOTED.contains(&name)
+            && let Some(schema) = output_schema_map().get(name)
+        {
+            result.structured_content = Some(minimal_valid_instance(schema));
+        }
+        return result;
     }
-    CallToolResult::error(vec![Content::text(text)])
+
+    let envelope = serde_json::json!({
+        "error_code": openapi_error_code_of(err),
+        "message": message,
+        "recoverable": recoverable_of(err),
+        "hint": error_hint(err),
+        "data": serde_json::Value::Null,
+    });
+    CallToolResult::error(vec![Content::text(envelope.to_string())])
 }
 
 /// Business error codes matched structurally in `error_hint()` — see
@@ -163,6 +193,13 @@ const NO_QUOTE_ACCESS_CODE: i64 = 301604;
 /// The structured `openapi_error_code` from `McpError::data`, when present.
 fn openapi_error_code_of(err: &McpError) -> Option<i64> {
     err.data.as_ref()?.get("openapi_error_code")?.as_i64()
+}
+
+/// The bare upstream message stashed by `Error::clean_message` (see
+/// `src/error.rs`), used for the client-facing envelope `message` in place of
+/// the SDK's `Debug`-wrapped display text. `None` falls back to `err.message`.
+fn upstream_message_of(err: &McpError) -> Option<&str> {
+    err.data.as_ref()?.get("upstream_message")?.as_str()
 }
 
 /// Needles for [`matches_error_class`]. A named struct (rather than two
@@ -268,6 +305,20 @@ fn error_hint(err: &McpError) -> Option<&'static str> {
     if matches_error_class(
         code,
         &msg,
+        |c| matches!(c, 301_607 | 701_007),
+        ErrorClassNeedles {
+            text: &["too many symbols", "exceed_name_length"],
+            numeric: &["301607", "701007"],
+        },
+    ) {
+        return Some(
+            "Hint: the request exceeded a size limit (too many symbols in one call, or a name \
+             that is too long). Retry with fewer symbols per call, or a shorter name.",
+        );
+    }
+    if matches_error_class(
+        code,
+        &msg,
         |c| (403_000..404_000).contains(&c),
         ErrorClassNeedles {
             text: &["permission", "forbidden", "not authorized", "scope"],
@@ -275,10 +326,10 @@ fn error_hint(err: &McpError) -> Option<&'static str> {
         },
     ) {
         return Some(
-            "Hint: this is a permission error. The most common cause is that the OAuth \
-             authorization was granted with only part of the available scopes. Ask the user to \
-             reconnect this MCP server and approve the full set of permissions (watchlist, \
-             portfolio, and trading scopes) before retrying.",
+            "Hint: this is a permission/scope error. The OAuth authorization does not include the \
+             scope this API needs. A plain token refresh returns the same scopes and will not \
+             help — ask the user to reconnect this MCP server and re-authorize, approving the \
+             full set of permissions (watchlist, portfolio, and trading scopes).",
         );
     }
     if matches_error_class(
@@ -296,6 +347,87 @@ fn error_hint(err: &McpError) -> Option<&'static str> {
         );
     }
     None
+}
+
+/// Classify a failed call by what the caller should do about it: one of
+/// `"reauth"`, `"backoff"`, `"fix_params"`, or `"none"`. Defaults to `"none"`
+/// so an unrecognized error is never optimistically retried. Matches on the
+/// structured business code first, then message-text needles (the codes behind
+/// most real traffic — 401103/403308/429003 — are undocumented, so text is a
+/// necessary fallback).
+fn recoverable_of(err: &McpError) -> &'static str {
+    if err.code == rmcp::model::ErrorCode::INVALID_PARAMS {
+        return "fix_params";
+    }
+    let code = openapi_error_code_of(err);
+    let msg = err.message.to_lowercase();
+
+    if matches_error_class(
+        code,
+        &msg,
+        |c| (401_000..402_000).contains(&c) || c == 403_308,
+        ErrorClassNeedles {
+            text: &[
+                "token is expired",
+                "token verification failed",
+                "not in authorized scopes",
+                "unauthorized",
+            ],
+            numeric: &["401103", "401102", "401003", "403308"],
+        },
+    ) {
+        return "reauth";
+    }
+    if matches_error_class(
+        code,
+        &msg,
+        |c| {
+            (429_000..430_000).contains(&c)
+                || matches!(c, 500 | 500_000 | 2_301_500 | 2_601_500 | 202_203 | 408)
+        },
+        ErrorClassNeedles {
+            text: &["rate limit", "too frequent", "区间调用上限", "最小间隔"],
+            numeric: &["429002", "429003"],
+        },
+    ) {
+        return "backoff";
+    }
+    if matches_error_class(
+        code,
+        &msg,
+        |c| matches!(c, 400 | 301_600 | 301_607 | 701_007),
+        ErrorClassNeedles {
+            text: &[
+                "too many symbols",
+                "invalid request",
+                "syntax error",
+                "exceed_name_length",
+            ],
+            numeric: &["301607", "301600", "701007"],
+        },
+    ) {
+        return "fix_params";
+    }
+    "none"
+}
+
+/// True only for the known *terminal* quote conditions that return
+/// `isError:false` with a schema-valid empty result: 301604 (no quote access)
+/// and 301603 (no quotes). Deliberately narrow — a bare "no access" needle is
+/// omitted so a 403 permission error can't be mistaken for a terminal quote
+/// condition.
+fn is_terminal_none(err: &McpError) -> bool {
+    let code = openapi_error_code_of(err);
+    let msg = err.message.to_lowercase();
+    matches_error_class(
+        code,
+        &msg,
+        |c| matches!(c, 301_604 | 301_603),
+        ErrorClassNeedles {
+            text: &["no quote access", "no quotes"],
+            numeric: &["301604", "301603"],
+        },
+    )
 }
 
 mod alert;
@@ -330,6 +462,90 @@ where
     rmcp::handler::server::common::schema_for_output::<T>()
         .expect("output schema must be a valid JSON Schema with root type \"object\"")
 }
+
+/// A JSON value that satisfies `schema` by filling every `required` property
+/// with a type-appropriate zero (`string`→`""`, `integer`/`number`→`0`,
+/// `boolean`→`false`, `array`→`[]`, `object`→recurse). If a property declares an
+/// `enum`, its first member is used. Used to return a schema-conforming empty
+/// result for the terminal `isError:false` path (see `tool_error`).
+fn minimal_valid_instance(schema: &rmcp::model::JsonObject) -> serde_json::Value {
+    let required: Vec<&str> = schema
+        .get("required")
+        .and_then(serde_json::Value::as_array)
+        .map(|a| a.iter().filter_map(serde_json::Value::as_str).collect())
+        .unwrap_or_default();
+    let props = schema
+        .get("properties")
+        .and_then(serde_json::Value::as_object);
+    let mut obj = serde_json::Map::new();
+    for key in required {
+        let prop = props
+            .and_then(|p| p.get(key))
+            .and_then(serde_json::Value::as_object);
+        obj.insert(key.to_string(), zero_for(prop));
+    }
+    serde_json::Value::Object(obj)
+}
+
+/// Zero value for a single property schema. See [`minimal_valid_instance`].
+fn zero_for(schema: Option<&rmcp::model::JsonObject>) -> serde_json::Value {
+    let Some(s) = schema else {
+        return serde_json::Value::Null;
+    };
+    if let Some(first) = s
+        .get("enum")
+        .and_then(serde_json::Value::as_array)
+        .and_then(|a| a.first())
+    {
+        return first.clone();
+    }
+    let ty = s.get("type").and_then(|t| match t {
+        serde_json::Value::String(s) => Some(s.as_str()),
+        serde_json::Value::Array(a) => a
+            .iter()
+            .filter_map(serde_json::Value::as_str)
+            .find(|s| *s != "null"),
+        _ => None,
+    });
+    match ty {
+        Some("string") => serde_json::Value::String(String::new()),
+        Some("integer") | Some("number") => serde_json::Value::Number(0.into()),
+        Some("boolean") => serde_json::Value::Bool(false),
+        Some("array") => serde_json::Value::Array(Vec::new()),
+        Some("object") => minimal_valid_instance(s),
+        _ => serde_json::Value::Null,
+    }
+}
+
+/// `tool name -> full output schema`, built once from the uncompacted tool list
+/// so nested `properties`/`required` survive. Backs the terminal `isError:false`
+/// path (see `tool_error`).
+fn output_schema_map()
+-> &'static std::collections::HashMap<String, std::sync::Arc<rmcp::model::JsonObject>> {
+    static MAP: std::sync::OnceLock<
+        std::collections::HashMap<String, std::sync::Arc<rmcp::model::JsonObject>>,
+    > = std::sync::OnceLock::new();
+    MAP.get_or_init(|| {
+        all_tools_full_cached()
+            .iter()
+            .filter_map(|t| {
+                t.output_schema
+                    .as_ref()
+                    .map(|s| (t.name.to_string(), s.clone()))
+            })
+            .collect()
+    })
+}
+
+/// The object-rooted market-data tools whose terminal (301604/301603) result
+/// must carry schema-valid `structuredContent`: they return an object AND
+/// declare an `output_schema`. Array-rooted quote tools are excluded — their
+/// normal success leaves `structuredContent` unset (MCP requires it to be an
+/// object), so their terminal result matches by also leaving it unset. Other
+/// object-rooted quote tools (static_info/intraday/capital_flow/calc_indexes)
+/// declare no `output_schema`, so they have no structured-content contract and
+/// likewise leave it unset.
+const TERMINAL_OBJECT_ROOTED: &[&str] = &["depth", "capital_distribution"];
 
 /// Longbridge MCP tool server (stateless).
 #[derive(Debug, Clone)]
@@ -5091,7 +5307,7 @@ impl Longbridge {
 
 #[tool_handler(
     name = "longbridge-mcp",
-    instructions = "Longbridge OpenAPI MCP Server - provides market data, trading, and financial analysis tools. Order execution requires two-step confirmation: submit_order, cancel_order, replace_order and every grid write (grid_submit, grid_replace, grid_cancel, grid_suspend, grid_restart) are dry runs that return a single-use confirmation_code. Always call them once without execute, show the returned preview to the user, and only re-call with execute set to that code after the user has explicitly confirmed it."
+    instructions = "Longbridge OpenAPI MCP — market data, trading, analysis. Order writes (submit_order, cancel_order, replace_order, grid_*) are two-step: call once without execute to get a confirmation_code, show the preview, then re-call with execute=code after the user confirms. On failure, tools return a JSON envelope with an `error_code` and a `recoverable` field: `reauth` (re-authenticate then retry), `backoff` (wait then retry), `fix_params` (fix arguments then retry), or `none` (do not retry; tell the user)."
 )]
 impl ServerHandler for Longbridge {
     // `get_info` mirrors the `#[tool_handler]` default tool metadata, plus the
@@ -5113,7 +5329,7 @@ impl ServerHandler for Longbridge {
             env!("CARGO_PKG_VERSION"),
         ))
         .with_instructions(
-            "Longbridge OpenAPI MCP Server - provides market data, trading, and financial analysis tools. Order execution requires two-step confirmation: submit_order, cancel_order, replace_order and every grid write (grid_submit, grid_replace, grid_cancel, grid_suspend, grid_restart) are dry runs that return a single-use confirmation_code. Always call them once without execute, show the returned preview to the user, and only re-call with execute set to that code after the user has explicitly confirmed it.",
+            "Longbridge OpenAPI MCP — market data, trading, analysis. Order writes (submit_order, cancel_order, replace_order, grid_*) are two-step: call once without execute to get a confirmation_code, show the preview, then re-call with execute=code after the user confirms. On failure, tools return a JSON envelope with an `error_code` and a `recoverable` field: `reauth` (re-authenticate then retry), `backoff` (wait then retry), `fix_params` (fix arguments then retry), or `none` (do not retry; tell the user).",
         )
     }
 
@@ -6143,16 +6359,11 @@ mod tool_error_tests {
     use rmcp::ErrorData as McpError;
     use rmcp::model::CallToolResult;
 
-    /// `tracing`'s per-callsite interest cache is process-global: whichever
-    /// thread first reaches the `tool call rejected`/`failed`/`error detail`
-    /// sites in `measured_tool_call` decides — for the rest of the process —
-    /// whether they're enabled, before consulting any subscriber a *later*
-    /// thread installs. Every test in this module that calls
-    /// `measured_tool_call` shares this lock so they can't race each other
-    /// for that cache, the same problem `HTTP_URL_ENV_LOCK` above solves for
-    /// a mutable env var.
-    static LOG_CALLSITE_LOCK: std::sync::LazyLock<tokio::sync::Mutex<()>> =
-        std::sync::LazyLock::new(|| tokio::sync::Mutex::new(()));
+    // Tests that capture logs from `measured_tool_call` serialize on the
+    // process-global `crate::test_support::LOG_CAPTURE_LOCK` (see its docs for
+    // why the callsite interest cache forces this). Shared across modules so
+    // these can't race `auth::middleware`'s log-capturing test either.
+    use crate::test_support::LOG_CAPTURE_LOCK;
 
     fn text_of(result: &CallToolResult) -> String {
         result
@@ -6164,16 +6375,151 @@ mod tool_error_tests {
     }
 
     #[test]
-    fn tool_error_marks_the_result_and_names_the_tool() {
+    fn tool_error_emits_a_structured_envelope() {
         let err = McpError::internal_error("upstream exploded", None);
         let result = tool_error("finance_calendar", &err);
         assert_eq!(result.is_error, Some(true));
         assert!(result.structured_content.is_none());
-        let text = text_of(&result);
-        assert!(
-            text.contains("finance_calendar") && text.contains("upstream exploded"),
-            "unexpected error text: {text}"
+        let v: serde_json::Value =
+            serde_json::from_str(&text_of(&result)).expect("content must be JSON");
+        assert_eq!(v["message"], "upstream exploded");
+        assert_eq!(v["recoverable"], "none");
+        assert!(v["error_code"].is_null());
+        assert!(v["data"].is_null());
+    }
+
+    #[test]
+    fn tool_error_reauth_envelope_carries_code_and_hint() {
+        let err = McpError::internal_error(
+            "openapi error: code=401103: token is expired".to_string(),
+            None,
         );
+        let result = tool_error("quote", &err);
+        assert_eq!(result.is_error, Some(true));
+        let v: serde_json::Value = serde_json::from_str(&text_of(&result)).unwrap();
+        assert_eq!(v["recoverable"], "reauth");
+        assert!(
+            v["hint"]
+                .as_str()
+                .is_some_and(|h| h.contains("re-auth") || h.contains("reconnect"))
+        );
+    }
+
+    #[test]
+    fn terminal_object_rooted_returns_success_with_schema_valid_content() {
+        let err = McpError::internal_error(
+            "WsResponseErrorDetail { code: 301604, msg: \"no quote access\" }".to_string(),
+            None,
+        );
+        let result = tool_error("depth", &err);
+        assert_eq!(
+            result.is_error,
+            Some(false),
+            "terminal condition must be isError:false"
+        );
+        let v: serde_json::Value = serde_json::from_str(&text_of(&result)).unwrap();
+        assert_eq!(v["recoverable"], "none");
+        assert!(
+            v["note"].as_str().is_some(),
+            "must carry an explanatory note"
+        );
+        let sc = result
+            .structured_content
+            .expect("object-rooted tool must set structuredContent");
+        assert!(sc.is_object());
+        let schema = super::output_schema_map()
+            .get("depth")
+            .expect("depth schema");
+        for req in schema
+            .get("required")
+            .and_then(|r| r.as_array())
+            .into_iter()
+            .flatten()
+        {
+            let key = req.as_str().unwrap();
+            assert!(sc.get(key).is_some(), "missing required field {key}");
+        }
+    }
+
+    #[test]
+    fn terminal_array_rooted_returns_success_without_structured_content() {
+        let err = McpError::internal_error(
+            "WsResponseErrorDetail { code: 301603, msg: \"no quotes\" }".to_string(),
+            Some(serde_json::json!({ "openapi_error_code": 301603 })),
+        );
+        let result = tool_error("option_quote", &err);
+        assert_eq!(result.is_error, Some(false));
+        assert!(
+            result.structured_content.is_none(),
+            "array-rooted terminal must leave structuredContent unset"
+        );
+        let v: serde_json::Value = serde_json::from_str(&text_of(&result)).unwrap();
+        assert_eq!(v["error_code"], 301603);
+    }
+
+    #[test]
+    fn every_schema_backed_terminal_instance_matches_its_schema() {
+        let err = McpError::internal_error(
+            "WsResponseErrorDetail { code: 301604, msg: \"no quote access\" }".to_string(),
+            None,
+        );
+        for name in super::TERMINAL_OBJECT_ROOTED {
+            let result = tool_error(name, &err);
+            let sc = result
+                .structured_content
+                .unwrap_or_else(|| panic!("{name} must set structuredContent"));
+            let schema = super::output_schema_map()
+                .get(*name)
+                .unwrap_or_else(|| panic!("{name} must have a schema"));
+            for req in schema
+                .get("required")
+                .and_then(|r| r.as_array())
+                .into_iter()
+                .flatten()
+            {
+                let key = req.as_str().unwrap();
+                assert!(
+                    sc.get(key).is_some(),
+                    "{name}: missing required field {key}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn envelope_message_uses_clean_upstream_message_when_present() {
+        // Real errors stash a clean `upstream_message` in data (see
+        // `Error::clean_message`); the envelope must surface that, not the
+        // SDK's Debug-wrapped display text.
+        let err = McpError::internal_error(
+            "longbridge: response error: 7: detail:Some(WsResponseErrorDetail { code: 301604, \
+             msg: \"no quote access\" })"
+                .to_string(),
+            Some(serde_json::json!({
+                "openapi_error_code": 301604,
+                "upstream_message": "no quote access"
+            })),
+        );
+        let result = tool_error("option_quote", &err);
+        let v: serde_json::Value = serde_json::from_str(&text_of(&result)).unwrap();
+        assert_eq!(
+            v["message"], "no quote access",
+            "envelope should use the clean upstream message, not the raw debug string"
+        );
+        assert!(
+            v["note"]
+                .as_str()
+                .is_some_and(|n| n.contains("EMPTY") && n.contains("access")),
+            "terminal note should stress the empty values are an access/no-data placeholder"
+        );
+    }
+
+    #[test]
+    fn envelope_message_falls_back_to_display_when_no_clean_message() {
+        let err = McpError::internal_error("some raw failure".to_string(), None);
+        let result = tool_error("quote", &err);
+        let v: serde_json::Value = serde_json::from_str(&text_of(&result)).unwrap();
+        assert_eq!(v["message"], "some raw failure");
     }
 
     #[test]
@@ -6365,8 +6711,9 @@ mod tool_error_tests {
         );
         let hint = error_hint(&err).expect("expected a permission hint");
         assert!(
-            hint.contains("scopes") && !hint.contains("re-authorize"),
-            "structured code 403308 should win over the substring '401' in the trace id, got: {hint}"
+            hint.contains("scopes") && !hint.contains("access token"),
+            "structured code 403308 should win over the substring '401' in the trace id (403 \
+             scope hint, not the 401 token hint), got: {hint}"
         );
     }
 
@@ -6398,7 +6745,7 @@ mod tool_error_tests {
 
     #[tokio::test]
     async fn measured_tool_call_reports_failures_as_tool_errors() {
-        let _lock = LOG_CALLSITE_LOCK.lock().await;
+        let _lock = LOG_CAPTURE_LOCK.lock().await;
         let result = measured_tool_call("some_tool", "test-params".to_string(), || async {
             Err(McpError::internal_error("upstream 500", None))
         })
@@ -6411,7 +6758,7 @@ mod tool_error_tests {
 
     #[tokio::test]
     async fn measured_tool_call_passes_success_through_untouched() {
-        let _lock = LOG_CALLSITE_LOCK.lock().await;
+        let _lock = LOG_CAPTURE_LOCK.lock().await;
         let result = measured_tool_call("some_tool", "test-params".to_string(), || async {
             Ok(tool_result(r#"{"ok":true}"#.to_string()))
         })
@@ -6427,7 +6774,7 @@ mod tool_error_tests {
 
     #[tokio::test]
     async fn measured_tool_call_logs_failures_only() {
-        let _lock = LOG_CALLSITE_LOCK.lock().await;
+        let _lock = LOG_CAPTURE_LOCK.lock().await;
         let buf = SharedBuffer::default();
         let writer = buf.clone();
         let subscriber = tracing_subscriber::fmt()
@@ -6529,5 +6876,149 @@ mod tool_error_tests {
 
         // Different calls get different ids.
         assert_ne!(call_id_of(failed), call_id_of(rejected));
+    }
+
+    #[test]
+    fn recoverable_of_classifies_each_action_class() {
+        use super::recoverable_of;
+        let cases = [
+            ("openapi error: code=401103: token is expired", "reauth"),
+            (
+                "openapi error: code=403308: Target API's scope is not in authorized scopes",
+                "reauth",
+            ),
+            (
+                "openapi error: code=429003: minimum interval between two calls",
+                "backoff",
+            ),
+            (
+                "response error: 7: detail:Some(WsResponseErrorDetail { code: 301607, msg: \"too many symbols in one page\" })",
+                "fix_params",
+            ),
+            (
+                "response error: 7: detail:Some(WsResponseErrorDetail { code: 301604, msg: \"no quote access\" })",
+                "none",
+            ),
+            (
+                "response error: 7: detail:Some(WsResponseErrorDetail { code: 301603, msg: \"no quotes\" })",
+                "none",
+            ),
+            ("something we have never seen code=999999", "none"),
+        ];
+        for (message, expected) in cases {
+            let err = McpError::internal_error(message.to_string(), None);
+            assert_eq!(recoverable_of(&err), expected, "message: {message:?}");
+        }
+        assert_eq!(
+            recoverable_of(&McpError::invalid_params("bad period", None)),
+            "fix_params",
+            "INVALID_PARAMS must be fix_params"
+        );
+    }
+
+    #[test]
+    fn is_terminal_none_only_for_no_access_and_no_quotes() {
+        use super::is_terminal_none;
+        for msg in ["no quote access", "no quotes"] {
+            let err = McpError::internal_error(
+                format!("WsResponseErrorDetail {{ code: 301604, msg: \"{msg}\" }}"),
+                None,
+            );
+            assert!(is_terminal_none(&err), "should be terminal: {msg}");
+        }
+        for msg in [
+            "token is expired",
+            "no access to trade",
+            "rate limit reached",
+        ] {
+            let err = McpError::internal_error(msg.to_string(), None);
+            assert!(!is_terminal_none(&err), "should NOT be terminal: {msg}");
+        }
+    }
+
+    #[test]
+    fn scope_error_hint_warns_a_plain_refresh_wont_help() {
+        let err = McpError::internal_error(
+            "openapi error: code=403308: Target API's scope is not in authorized scopes"
+                .to_string(),
+            None,
+        );
+        let hint = error_hint(&err).expect("expected a scope hint");
+        assert!(
+            hint.contains("re-authorize") && hint.contains("scope"),
+            "scope hint should tell the user to re-authorize granting the scope, got: {hint}"
+        );
+    }
+
+    #[test]
+    fn too_many_symbols_hint_tells_caller_to_reduce_symbols() {
+        let err = McpError::internal_error(
+            "WsResponseErrorDetail { code: 301607, msg: \"too many symbols in one page\" }"
+                .to_string(),
+            None,
+        );
+        let hint = error_hint(&err).expect("expected a 301607 hint");
+        assert!(
+            hint.contains("fewer") || hint.contains("reduce"),
+            "got: {hint}"
+        );
+    }
+
+    #[test]
+    fn minimal_valid_instance_fills_required_fields_with_typed_zeros() {
+        use serde_json::json;
+        let schema: rmcp::model::JsonObject = serde_json::from_value(json!({
+            "type": "object",
+            "required": ["name", "count", "flag", "items", "nested"],
+            "properties": {
+                "name": {"type": "string"},
+                "count": {"type": "integer"},
+                "flag": {"type": "boolean"},
+                "items": {"type": "array"},
+                "nested": {
+                    "type": "object",
+                    "required": ["inner"],
+                    "properties": {"inner": {"type": "number"}}
+                },
+                "optional_ignored": {"type": "string"}
+            }
+        }))
+        .unwrap();
+        let out = super::minimal_valid_instance(&schema);
+        assert_eq!(
+            out,
+            json!({
+                "name": "", "count": 0, "flag": false, "items": [],
+                "nested": {"inner": 0}
+            })
+        );
+    }
+
+    #[test]
+    fn minimal_valid_instance_prefers_first_enum_value() {
+        use serde_json::json;
+        let schema: rmcp::model::JsonObject = serde_json::from_value(json!({
+            "type": "object",
+            "required": ["status"],
+            "properties": {"status": {"type": "string", "enum": ["open", "closed"]}}
+        }))
+        .unwrap();
+        assert_eq!(
+            super::minimal_valid_instance(&schema),
+            json!({"status": "open"})
+        );
+    }
+
+    #[test]
+    fn output_schema_map_covers_the_schema_backed_terminal_tools() {
+        // Only the object-rooted terminal tools that actually declare an
+        // `output_schema` need schema-valid structured content; those are the
+        // members of `TERMINAL_OBJECT_ROOTED`. (Object-rooted-but-schemaless
+        // tools like static_info/intraday/capital_flow/calc_indexes carry no
+        // schema contract and leave structuredContent unset.)
+        let map = super::output_schema_map();
+        for name in super::TERMINAL_OBJECT_ROOTED {
+            assert!(map.contains_key(*name), "schema map missing {name}");
+        }
     }
 }

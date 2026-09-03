@@ -90,6 +90,32 @@ impl Error {
         }
     }
 
+    /// The bare upstream error message, without the SDK's structured/`Debug`
+    /// wrapper — e.g. `"no quote access"` rather than
+    /// `"response error: 7: detail:Some(WsResponseErrorDetail { code: 301604, msg: \"no quote access\" })"`.
+    /// Used for the client-facing envelope `message`; the full wrapped form is
+    /// still kept in the ops log (via the `Display` used for `McpError::message`).
+    /// `None` when no cleaner form exists — the caller falls back to the display
+    /// text.
+    pub fn clean_message(&self) -> Option<String> {
+        use longbridge::httpclient::HttpClientError;
+        use longbridge::wsclient::WsClientError;
+
+        match self {
+            Self::Longbridge(err) => match err.as_ref() {
+                longbridge::Error::WsClient(WsClientError::ResponseError {
+                    detail: Some(detail),
+                    ..
+                }) => Some(detail.msg.clone()),
+                longbridge::Error::HttpClient(HttpClientError::OpenApi { message, .. }) => {
+                    Some(message.clone())
+                }
+                _ => None,
+            },
+            Self::Serialize(_) | Self::Http(_) | Self::Io(_) | Self::Other(_) => None,
+        }
+    }
+
     /// The restricted path and required/current data centers, when this
     /// wraps a `longbridge::httpclient::HttpClientError::DcRegionRestricted`.
     /// Same rationale as [`Self::openapi_error_code`]: lets `error_hint()`
@@ -118,6 +144,9 @@ impl From<Error> for McpError {
         let mut data = serde_json::Map::new();
         if let Some(code) = err.openapi_error_code() {
             data.insert("openapi_error_code".to_string(), serde_json::json!(code));
+        }
+        if let Some(message) = err.clean_message() {
+            data.insert("upstream_message".to_string(), serde_json::json!(message));
         }
         if let Some((path, required, current)) = err.dc_region_restricted() {
             data.insert(
