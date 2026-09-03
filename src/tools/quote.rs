@@ -382,11 +382,11 @@ pub async fn option_quote(
                     .get("symbol")
                     .and_then(|s| s.as_str())
                     .map(String::from);
-                if let (Some(sym), Some(obj)) = (sym, item.as_object_mut()) {
-                    if let Some(g) = by_symbol.get(&sym).and_then(|v| v.as_object()) {
-                        for (k, v) in g {
-                            obj.insert(k.clone(), v.clone());
-                        }
+                if let (Some(sym), Some(obj)) = (sym, item.as_object_mut())
+                    && let Some(g) = by_symbol.get(&sym).and_then(|v| v.as_object())
+                {
+                    for (k, v) in g {
+                        obj.insert(k.clone(), v.clone());
                     }
                 }
             }
