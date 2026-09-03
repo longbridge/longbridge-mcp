@@ -151,13 +151,17 @@ where
 /// as tool-result errors, with a `note` making clear the empty payload is a
 /// permission/no-data placeholder — not real quote data.
 fn tool_error(name: &str, err: &McpError) -> CallToolResult {
+    let message = upstream_message_of(err).unwrap_or_else(|| err.message.as_ref());
     if is_terminal_none(err) {
         let envelope = serde_json::json!({
             "error_code": openapi_error_code_of(err),
-            "message": err.message.as_ref(),
+            "message": message,
             "recoverable": "none",
             "hint": error_hint(err),
-            "note": "Empty placeholder for a no-access / no-data condition — NOT real quote data.",
+            "note": "These fields are EMPTY because access was denied or no data exists — NOT \
+                     because the values are zero. This is a permission/no-data placeholder, not a \
+                     real quote. Tell the user they lack the required market-data access (or that \
+                     no data exists); do not present the empty values as real.",
         });
         let mut result = CallToolResult::success(vec![Content::text(envelope.to_string())]);
         if TERMINAL_OBJECT_ROOTED.contains(&name)
@@ -170,7 +174,7 @@ fn tool_error(name: &str, err: &McpError) -> CallToolResult {
 
     let envelope = serde_json::json!({
         "error_code": openapi_error_code_of(err),
-        "message": err.message.as_ref(),
+        "message": message,
         "recoverable": recoverable_of(err),
         "hint": error_hint(err),
         "data": serde_json::Value::Null,
@@ -189,6 +193,13 @@ const NO_QUOTE_ACCESS_CODE: i64 = 301604;
 /// The structured `openapi_error_code` from `McpError::data`, when present.
 fn openapi_error_code_of(err: &McpError) -> Option<i64> {
     err.data.as_ref()?.get("openapi_error_code")?.as_i64()
+}
+
+/// The bare upstream message stashed by `Error::clean_message` (see
+/// `src/error.rs`), used for the client-facing envelope `message` in place of
+/// the SDK's `Debug`-wrapped display text. `None` falls back to `err.message`.
+fn upstream_message_of(err: &McpError) -> Option<&str> {
+    err.data.as_ref()?.get("upstream_message")?.as_str()
 }
 
 /// Needles for [`matches_error_class`]. A named struct (rather than two
@@ -5296,7 +5307,7 @@ impl Longbridge {
 
 #[tool_handler(
     name = "longbridge-mcp",
-    instructions = "Longbridge OpenAPI MCP Server - provides market data, trading, and financial analysis tools. Order execution requires two-step confirmation: submit_order, cancel_order, replace_order and every grid write (grid_submit, grid_replace, grid_cancel, grid_suspend, grid_restart) are dry runs that return a single-use confirmation_code. Always call them once without execute, show the returned preview to the user, and only re-call with execute set to that code after the user has explicitly confirmed it. On failure, tools return a JSON envelope in the result content with an `error_code` and a `recoverable` field (`reauth`|`backoff`|`fix_params`|`none`): `reauth` = re-authenticate, then retry once; `backoff` = wait, then retry; `fix_params` = fix the arguments, then retry; `none` = do not retry, surface it to the user."
+    instructions = "Longbridge OpenAPI MCP — market data, trading, and financial analysis. On failure, tools return a JSON envelope in the result content with an `error_code` and a `recoverable` field: `reauth` (re-authenticate, then retry), `backoff` (wait, then retry), `fix_params` (fix the arguments, then retry), or `none` (do not retry; tell the user). Order writes (submit_order, cancel_order, replace_order, grid_submit/replace/cancel/suspend/restart) are two-step: call once without execute to get a confirmation_code, show the preview, then re-call with execute set to that code after the user confirms."
 )]
 impl ServerHandler for Longbridge {
     // `get_info` mirrors the `#[tool_handler]` default tool metadata, plus the
@@ -5318,7 +5329,7 @@ impl ServerHandler for Longbridge {
             env!("CARGO_PKG_VERSION"),
         ))
         .with_instructions(
-            "Longbridge OpenAPI MCP Server - provides market data, trading, and financial analysis tools. Order execution requires two-step confirmation: submit_order, cancel_order, replace_order and every grid write (grid_submit, grid_replace, grid_cancel, grid_suspend, grid_restart) are dry runs that return a single-use confirmation_code. Always call them once without execute, show the returned preview to the user, and only re-call with execute set to that code after the user has explicitly confirmed it. On failure, tools return a JSON envelope in the result content with an `error_code` and a `recoverable` field (`reauth`|`backoff`|`fix_params`|`none`): `reauth` = re-authenticate, then retry once; `backoff` = wait, then retry; `fix_params` = fix the arguments, then retry; `none` = do not retry, surface it to the user.",
+            "Longbridge OpenAPI MCP — market data, trading, and financial analysis. On failure, tools return a JSON envelope in the result content with an `error_code` and a `recoverable` field: `reauth` (re-authenticate, then retry), `backoff` (wait, then retry), `fix_params` (fix the arguments, then retry), or `none` (do not retry; tell the user). Order writes (submit_order, cancel_order, replace_order, grid_submit/replace/cancel/suspend/restart) are two-step: call once without execute to get a confirmation_code, show the preview, then re-call with execute set to that code after the user confirms.",
         )
     }
 
@@ -6478,6 +6489,42 @@ mod tool_error_tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn envelope_message_uses_clean_upstream_message_when_present() {
+        // Real errors stash a clean `upstream_message` in data (see
+        // `Error::clean_message`); the envelope must surface that, not the
+        // SDK's Debug-wrapped display text.
+        let err = McpError::internal_error(
+            "longbridge: response error: 7: detail:Some(WsResponseErrorDetail { code: 301604, \
+             msg: \"no quote access\" })"
+                .to_string(),
+            Some(serde_json::json!({
+                "openapi_error_code": 301604,
+                "upstream_message": "no quote access"
+            })),
+        );
+        let result = tool_error("option_quote", &err);
+        let v: serde_json::Value = serde_json::from_str(&text_of(&result)).unwrap();
+        assert_eq!(
+            v["message"], "no quote access",
+            "envelope should use the clean upstream message, not the raw debug string"
+        );
+        assert!(
+            v["note"]
+                .as_str()
+                .is_some_and(|n| n.contains("EMPTY") && n.contains("access")),
+            "terminal note should stress the empty values are an access/no-data placeholder"
+        );
+    }
+
+    #[test]
+    fn envelope_message_falls_back_to_display_when_no_clean_message() {
+        let err = McpError::internal_error("some raw failure".to_string(), None);
+        let result = tool_error("quote", &err);
+        let v: serde_json::Value = serde_json::from_str(&text_of(&result)).unwrap();
+        assert_eq!(v["message"], "some raw failure");
     }
 
     #[test]
