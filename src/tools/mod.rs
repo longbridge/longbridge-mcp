@@ -6359,16 +6359,11 @@ mod tool_error_tests {
     use rmcp::ErrorData as McpError;
     use rmcp::model::CallToolResult;
 
-    /// `tracing`'s per-callsite interest cache is process-global: whichever
-    /// thread first reaches the `tool call rejected`/`failed`/`error detail`
-    /// sites in `measured_tool_call` decides — for the rest of the process —
-    /// whether they're enabled, before consulting any subscriber a *later*
-    /// thread installs. Every test in this module that calls
-    /// `measured_tool_call` shares this lock so they can't race each other
-    /// for that cache, the same problem `HTTP_URL_ENV_LOCK` above solves for
-    /// a mutable env var.
-    static LOG_CALLSITE_LOCK: std::sync::LazyLock<tokio::sync::Mutex<()>> =
-        std::sync::LazyLock::new(|| tokio::sync::Mutex::new(()));
+    // Tests that capture logs from `measured_tool_call` serialize on the
+    // process-global `crate::test_support::LOG_CAPTURE_LOCK` (see its docs for
+    // why the callsite interest cache forces this). Shared across modules so
+    // these can't race `auth::middleware`'s log-capturing test either.
+    use crate::test_support::LOG_CAPTURE_LOCK;
 
     fn text_of(result: &CallToolResult) -> String {
         result
@@ -6750,7 +6745,7 @@ mod tool_error_tests {
 
     #[tokio::test]
     async fn measured_tool_call_reports_failures_as_tool_errors() {
-        let _lock = LOG_CALLSITE_LOCK.lock().await;
+        let _lock = LOG_CAPTURE_LOCK.lock().await;
         let result = measured_tool_call("some_tool", "test-params".to_string(), || async {
             Err(McpError::internal_error("upstream 500", None))
         })
@@ -6763,7 +6758,7 @@ mod tool_error_tests {
 
     #[tokio::test]
     async fn measured_tool_call_passes_success_through_untouched() {
-        let _lock = LOG_CALLSITE_LOCK.lock().await;
+        let _lock = LOG_CAPTURE_LOCK.lock().await;
         let result = measured_tool_call("some_tool", "test-params".to_string(), || async {
             Ok(tool_result(r#"{"ok":true}"#.to_string()))
         })
@@ -6779,7 +6774,7 @@ mod tool_error_tests {
 
     #[tokio::test]
     async fn measured_tool_call_logs_failures_only() {
-        let _lock = LOG_CALLSITE_LOCK.lock().await;
+        let _lock = LOG_CAPTURE_LOCK.lock().await;
         let buf = SharedBuffer::default();
         let writer = buf.clone();
         let subscriber = tracing_subscriber::fmt()
