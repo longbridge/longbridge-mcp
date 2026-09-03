@@ -268,6 +268,20 @@ fn error_hint(err: &McpError) -> Option<&'static str> {
     if matches_error_class(
         code,
         &msg,
+        |c| matches!(c, 301_607 | 701_007),
+        ErrorClassNeedles {
+            text: &["too many symbols", "exceed_name_length"],
+            numeric: &["301607", "701007"],
+        },
+    ) {
+        return Some(
+            "Hint: the request exceeded a size limit (too many symbols in one call, or a name \
+             that is too long). Retry with fewer symbols per call, or a shorter name.",
+        );
+    }
+    if matches_error_class(
+        code,
+        &msg,
         |c| (403_000..404_000).contains(&c),
         ErrorClassNeedles {
             text: &["permission", "forbidden", "not authorized", "scope"],
@@ -275,10 +289,10 @@ fn error_hint(err: &McpError) -> Option<&'static str> {
         },
     ) {
         return Some(
-            "Hint: this is a permission error. The most common cause is that the OAuth \
-             authorization was granted with only part of the available scopes. Ask the user to \
-             reconnect this MCP server and approve the full set of permissions (watchlist, \
-             portfolio, and trading scopes) before retrying.",
+            "Hint: this is a permission/scope error. The OAuth authorization does not include the \
+             scope this API needs. A plain token refresh returns the same scopes and will not \
+             help — ask the user to reconnect this MCP server and re-authorize, approving the \
+             full set of permissions (watchlist, portfolio, and trading scopes).",
         );
     }
     if matches_error_class(
@@ -6664,5 +6678,33 @@ mod tool_error_tests {
             let err = McpError::internal_error(msg.to_string(), None);
             assert!(!is_terminal_none(&err), "should NOT be terminal: {msg}");
         }
+    }
+
+    #[test]
+    fn scope_error_hint_warns_a_plain_refresh_wont_help() {
+        let err = McpError::internal_error(
+            "openapi error: code=403308: Target API's scope is not in authorized scopes"
+                .to_string(),
+            None,
+        );
+        let hint = error_hint(&err).expect("expected a scope hint");
+        assert!(
+            hint.contains("re-authorize") && hint.contains("scope"),
+            "scope hint should tell the user to re-authorize granting the scope, got: {hint}"
+        );
+    }
+
+    #[test]
+    fn too_many_symbols_hint_tells_caller_to_reduce_symbols() {
+        let err = McpError::internal_error(
+            "WsResponseErrorDetail { code: 301607, msg: \"too many symbols in one page\" }"
+                .to_string(),
+            None,
+        );
+        let hint = error_hint(&err).expect("expected a 301607 hint");
+        assert!(
+            hint.contains("fewer") || hint.contains("reduce"),
+            "got: {hint}"
+        );
     }
 }
