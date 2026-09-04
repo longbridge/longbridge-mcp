@@ -1475,7 +1475,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get option quotes (max 500 symbols). Symbols must be option contract symbols (e.g. \"AAPL230317P160000.US\"), NOT plain stock symbols — obtain valid ones from option_chain_info_by_date's call.symbol/put.symbol fields. Returns last_done, prev_close, open, high, low, volume, turnover, implied_volatility, delta, gamma, theta, vega, rho, open_interest per symbol."
+        description = "Get option quotes (max 500 symbols). Symbols must be option contract symbols (e.g. \"AAPL230317P160000.US\"), NOT plain stock symbols — obtain valid ones from option_chain_info_by_date's call.symbol/put.symbol fields. Returns last_done, prev_close, open, high, low, volume, turnover, implied_volatility, delta, gamma, theta, vega, rho, open_interest per symbol. Greeks are normalized: theta is the per-day value (one day's time decay), vega is the price change per 1% change in implied volatility, and rho is the price change per 1% change in the risk-free interest rate."
     )]
     async fn option_quote(
         &self,
