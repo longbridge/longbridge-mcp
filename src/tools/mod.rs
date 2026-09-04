@@ -1967,7 +1967,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Calculate financial indexes for symbols. Pass symbols, and optionally indexes (e.g. [\"PeTtmRatio\",\"PbRatio\",\"LastDone\",\"TurnoverRate\"]). When indexes is omitted or empty, defaults to [\"LastDone\",\"ChangeValue\",\"ChangeRate\",\"Volume\",\"PeTtmRatio\",\"PbRatio\",\"DividendRatioTtm\",\"TurnoverRate\",\"TotalMarketValue\"]. Returns per-symbol index values."
+        description = "Calculate financial indexes for symbols. Pass symbols, and optionally indexes (e.g. [\"PeTtmRatio\",\"PbRatio\",\"LastDone\",\"TurnoverRate\"]). When indexes is omitted or empty, defaults to [\"LastDone\",\"ChangeValue\",\"ChangeRate\",\"Volume\",\"PeTtmRatio\",\"PbRatio\",\"DividendRatioTtm\",\"TurnoverRate\",\"TotalMarketValue\"]. Returns per-symbol index values. When Greek indexes (Delta, Gamma, Theta, Vega, Rho) are requested, they are normalized: theta is the per-day value (one day's time decay), vega is the price change per 1% change in implied volatility, and rho is the price change per 1% change in the risk-free interest rate."
     )]
     async fn calc_indexes(
         &self,

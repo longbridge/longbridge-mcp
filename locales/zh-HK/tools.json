@@ -373,7 +373,7 @@
     },
     "calc_indexes": {
       "title": "指標計算",
-      "description": "批量計算證券的行情/財務指標（PE、PB、股息率、最新價、換手率等），傳入 symbols 和 indexes 列表，返回各標的的指標值",
+      "description": "批量計算證券的行情/財務指標（PE、PB、股息率、最新價、換手率等），傳入 symbols 和 indexes 列表，返回各標的的指標值。當請求希臘字母指標（Delta、Gamma、Theta、Vega、Rho）時，返回值已歸一化：theta 為每日值（一天的時間損耗），vega 為隱含波動率每變動 1% 的價格變化，rho 為無風險利率每變動 1% 的價格變化。",
       "properties": {
         "symbols": "證券代碼，例如 `[\"700.HK\", \"AAPL.US\"]`",
         "indexes": "待計算指標：`LastDone`、`ChangeValue`、`ChangeRate`、`Volume`、`Turnover`、`YtdChangeRate`、`TurnoverRate`、`TotalMarketValue`、`CapitalFlow`、`Amplitude`、`VolumeRatio`、`PeTtmRatio`、`PbRatio`、`DividendRatioTtm`、`FiveDayChangeRate`、`TenDayChangeRate`、`HalfYearChangeRate`、`FiveMinutesChangeRate`、`ExpiryDate`、`StrikePrice`、`UpperStrikePrice`、`LowerStrikePrice`、`OutstandingQty`、`OutstandingRatio`、`Premium`、`ItmOtm`、`ImpliedVolatility`、`WarrantDelta`、`CallPrice`、`ToCallPrice`、`EffectiveLeverage`、`LeverageRatio`、`ConversionRatio`、`BalancePoint`、`OpenInterest`、`Delta`、`Gamma`、`Theta`、`Vega`、`Rho`"
