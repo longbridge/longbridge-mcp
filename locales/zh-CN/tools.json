@@ -373,7 +373,7 @@
     },
     "calc_indexes": {
       "title": "指标计算",
-      "description": "批量计算证券的行情/财务指标（PE、PB、股息率、最新价、换手率等），传入 symbols 和 indexes 列表，返回各标的的指标值",
+      "description": "批量计算证券的行情/财务指标（PE、PB、股息率、最新价、换手率等），传入 symbols 和 indexes 列表，返回各标的的指标值。当请求希腊字母指标（Delta、Gamma、Theta、Vega、Rho）时，返回值已归一化：theta 为每日值（一天的时间损耗），vega 为隐含波动率每变动 1% 的价格变化，rho 为无风险利率每变动 1% 的价格变化。",
       "properties": {
         "symbols": "证券代码，例如 `[\"700.HK\", \"AAPL.US\"]`",
         "indexes": "待计算指标：`LastDone`、`ChangeValue`、`ChangeRate`、`Volume`、`Turnover`、`YtdChangeRate`、`TurnoverRate`、`TotalMarketValue`、`CapitalFlow`、`Amplitude`、`VolumeRatio`、`PeTtmRatio`、`PbRatio`、`DividendRatioTtm`、`FiveDayChangeRate`、`TenDayChangeRate`、`HalfYearChangeRate`、`FiveMinutesChangeRate`、`ExpiryDate`、`StrikePrice`、`UpperStrikePrice`、`LowerStrikePrice`、`OutstandingQty`、`OutstandingRatio`、`Premium`、`ItmOtm`、`ImpliedVolatility`、`WarrantDelta`、`CallPrice`、`ToCallPrice`、`EffectiveLeverage`、`LeverageRatio`、`ConversionRatio`、`BalancePoint`、`OpenInterest`、`Delta`、`Gamma`、`Theta`、`Vega`、`Rho`"
@@ -811,7 +811,7 @@
     },
     "option_quote": {
       "title": "期权报价",
-      "description": "获取期权行情（最多 500 个）。symbols 必须是期权合约代码（例如 \"AAPL230317P160000.US\"），不能用普通股票代码——请先用 option_chain_info_by_date 返回的 call.symbol/put.symbol 字段获取有效的期权代码。返回各标的：last_done（最新价）, prev_close, open, high, low, volume（成交量）, turnover（成交额）, implied_volatility（隐含波动率）, delta/gamma/theta/vega/rho（Greeks）, open_interest（未平仓量）",
+      "description": "获取期权行情（最多 500 个）。symbols 必须是期权合约代码（例如 \"AAPL230317P160000.US\"），不能用普通股票代码——请先用 option_chain_info_by_date 返回的 call.symbol/put.symbol 字段获取有效的期权代码。返回各标的：last_done（最新价）, prev_close, open, high, low, volume（成交量）, turnover（成交额）, implied_volatility（隐含波动率）, delta/gamma/theta/vega/rho（Greeks）, open_interest（未平仓量）。Greeks 已归一化：theta 为每日值（一天的时间损耗），vega 为隐含波动率每变动 1% 的价格变化，rho 为无风险利率每变动 1% 的价格变化。",
       "properties": {
         "symbols": "期权合约代码，例如 `[\"AAPL230317P160000.US\"]`。不是普通股票代码——请先用 option_chain_expiry_date_list 列出到期日，再用 option_chain_info_by_date 按行权价获取的 call.symbol/put.symbol 字段拿到有效代码"
       }

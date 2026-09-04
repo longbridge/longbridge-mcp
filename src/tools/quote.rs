@@ -1,5 +1,5 @@
 use longbridge::quote::{
-    RequestCreateWatchlistGroup, RequestUpdateWatchlistGroup, SecuritiesUpdateMode,
+    CalcIndex, RequestCreateWatchlistGroup, RequestUpdateWatchlistGroup, SecuritiesUpdateMode,
 };
 use rmcp::ErrorData as McpError;
 use rmcp::model::CallToolResult;
@@ -343,11 +343,57 @@ pub async fn option_quote(
     p: OptionSymbolsParam,
 ) -> Result<CallToolResult, McpError> {
     let ctx = mctx.get_quote_context().await;
-    let result = ctx.option_quote(p.symbols).await.map_err(|e| {
+    let result = ctx.option_quote(p.symbols.clone()).await.map_err(|e| {
         mctx.evict_quote_context();
         Error::longbridge(e)
     })?;
-    tool_json(&result)
+    let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;
+
+    // The `option_quote` interface does not carry the option Greeks — they come
+    // from the Calc Index interface. Fetch them for the same symbols and merge
+    // delta/gamma/theta/vega/rho into each quote (best-effort: a Greek lookup
+    // failure leaves the quotes unchanged).
+    let greek_indexes = vec![
+        CalcIndex::Delta,
+        CalcIndex::Gamma,
+        CalcIndex::Theta,
+        CalcIndex::Vega,
+        CalcIndex::Rho,
+    ];
+    if let Ok(mut greeks) = ctx.calc_indexes(p.symbols, greek_indexes).await {
+        let mut by_symbol: std::collections::HashMap<String, serde_json::Value> =
+            std::collections::HashMap::new();
+        for g in &mut greeks {
+            normalize_greeks(g);
+            by_symbol.insert(
+                g.symbol.clone(),
+                serde_json::json!({
+                    "delta": g.delta,
+                    "gamma": g.gamma,
+                    "theta": g.theta,
+                    "vega": g.vega,
+                    "rho": g.rho,
+                }),
+            );
+        }
+        if let Some(arr) = value.as_array_mut() {
+            for item in arr {
+                let sym = item
+                    .get("symbol")
+                    .and_then(|s| s.as_str())
+                    .map(String::from);
+                if let (Some(sym), Some(obj)) = (sym, item.as_object_mut())
+                    && let Some(g) = by_symbol.get(&sym).and_then(|v| v.as_object())
+                {
+                    for (k, v) in g {
+                        obj.insert(k.clone(), v.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    tool_json(&value)
 }
 
 pub async fn warrant_quote(
@@ -804,23 +850,29 @@ pub async fn calc_indexes(
         Error::longbridge(e)
     })?;
 
-    // Normalize Greeks to match Longbridge app display values:
-    // - theta: API returns annualized value (×252), divide by 252 for per-trading-day
-    // - vega:  API returns per-1%-IV-change value scaled by 100, divide by 100
-    // - rho:   API returns per-1%-rate-change value scaled by 100, divide by 100
     for r in &mut result {
-        if let Some(v) = r.theta.as_mut() {
-            *v /= rust_decimal::Decimal::from(252u32);
-        }
-        if let Some(v) = r.vega.as_mut() {
-            *v /= rust_decimal::Decimal::ONE_HUNDRED;
-        }
-        if let Some(v) = r.rho.as_mut() {
-            *v /= rust_decimal::Decimal::ONE_HUNDRED;
-        }
+        normalize_greeks(r);
     }
 
     tool_json(&result)
+}
+
+/// Normalize the option Greeks on a calc-index row to the values the Longbridge
+/// app displays.
+///
+/// - `theta`: the API already returns a per-day value (the raw annualized value
+///   has been divided by 365 on the server), so it is used as-is.
+/// - `vega`:  the API returns the value scaled by 100 (per 1% IV change);
+///   divide by 100 for the per-unit value.
+/// - `rho`:   the API returns the value scaled by 100 (per 1% rate change);
+///   divide by 100 for the per-unit value.
+fn normalize_greeks(r: &mut longbridge::quote::SecurityCalcIndex) {
+    if let Some(v) = r.vega.as_mut() {
+        *v /= rust_decimal::Decimal::ONE_HUNDRED;
+    }
+    if let Some(v) = r.rho.as_mut() {
+        *v /= rust_decimal::Decimal::ONE_HUNDRED;
+    }
 }
 
 pub async fn create_watchlist_group(
