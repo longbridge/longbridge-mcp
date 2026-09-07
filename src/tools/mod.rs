@@ -1593,7 +1593,7 @@ use crate::tools::quote::{
     WarrantListParam,
 };
 use crate::tools::trade::{
-    CashFlowParam, EstimateMaxQtyParam, HistoryOrdersParam, OrderIdParam, ReplaceOrderParam,
+    CashFlowParam, EstimateMaxQtyParam, HistoryOrdersParam, OrderDetailParam, ReplaceOrderParam,
     SubmitOrderParam,
 };
 
@@ -2380,7 +2380,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get orders placed today. Returns orders[]{order_id, symbol, side, order_type, status, quantity, price, submitted_at, executed_quantity, executed_price}. Pass symbol to filter. US accounts only: us_action (Buy/Sell), us_page, us_limit filter/paginate via a separate US order endpoint."
+        description = "Get orders placed today. Returns orders[]{order_id, symbol, side, order_type, status, quantity, price, submitted_at, executed_quantity, executed_price, attached_orders[]}, where attached_orders[] holds the order's take-profit/stop-loss legs. Pass symbol to filter by security, or order_id for one order. To fetch an attached leg by its own ID, pass that ID as order_id together with is_attached=true — the leg itself comes back as the order entry. is_attached does nothing without order_id, and neither has any effect for US accounts, which are served by the US order endpoint. US accounts only: us_action (Buy/Sell), us_page, us_limit filter/paginate via a separate US order endpoint."
     )]
     async fn today_orders(
         &self,
@@ -2399,12 +2399,12 @@ impl Longbridge {
         title = "Order Detail",
         annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = true),
         output_schema = schema_for::<output::OrderDetailResponse>(),
-        description = "Get detailed information about a specific order. Returns {order_id, symbol, status, side, order_type, quantity, price, executed_quantity, executed_price, submitted_at, time_in_force, msg}."
+        description = "Get detailed information about a specific order. Returns {order_id, symbol, status, side, order_type, quantity, price, executed_quantity, executed_price, submitted_at, time_in_force, msg, attached_orders[]}, where attached_orders[] holds the order's take-profit/stop-loss legs with their own order IDs. To look up such a leg by its own ID instead, pass it as order_id with is_attached=true: the response is then that leg, with charge_detail null. is_attached has no effect for US accounts, which are served by the US order endpoint and return their attached legs nested under order."
     )]
     async fn order_detail(
         &self,
         ctx: RequestContext<RoleServer>,
-        Parameters(p): Parameters<OrderIdParam>,
+        Parameters(p): Parameters<OrderDetailParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
         measured_tool_call("order_detail", format!("{p:?}"), || {
@@ -2422,7 +2422,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Cancel an open order by order_id. Returns plain text \"order cancelled\" on success; errors if the order is already filled or cancelled. TWO-STEP CONFIRMATION IS MANDATORY: this tool is a DRY RUN unless you pass the confirmation_code its own dry run returned. Call it first without execute, show the returned preview to the user, and only call it again with execute=\"<confirmation_code>\" after the user has explicitly confirmed that exact order. The code is derived from the order itself, so it applies only to that exact order. Never quote it back on your own initiative, and never in the same turn the user first asks. The dry run also echoes the order being targeted so the user can verify it is the right one."
+        description = "Cancel an open order by order_id. Returns plain text \"order cancelled\" on success; errors if the order is already filled or cancelled. TWO-STEP CONFIRMATION IS MANDATORY: this tool is a DRY RUN unless you pass the confirmation_code its own dry run returned. Call it first without execute, show the returned preview to the user, and only call it again with execute=\"<confirmation_code>\" after the user has explicitly confirmed that exact order. The code is derived from the order itself, so it applies only to that exact order. Never quote it back on your own initiative, and never in the same turn the user first asks. The dry run also echoes the order being targeted so the user can verify it is the right one. Set is_attached=true to cancel a single take-profit/stop-loss leg by its own order_id; cancelling a parent order cancels its legs along with it."
     )]
     async fn cancel_order(
         &self,
@@ -2535,7 +2535,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::SubmitOrderResult>(),
-        description = "Submit a buy/sell order. DRY RUN unless execute is the confirmation_code from its own dry run: call once without execute, show the preview to the user, then re-call quoting the code only after they explicitly confirm. order_type: LO (Limit) / ELO (Enhanced Limit, HK) / MO (Market) / AO (At-auction, HK) / ALO (At-auction Limit, HK) / ODD (Odd Lots, HK) / LIT (Limit If Touched) / MIT (Market If Touched) / TSLPAMT (Trailing Limit by Amount) / TSLPPCT (Trailing Limit by Percent) / SLO (Special Limit, HK). side: Buy/Sell. time_in_force: Day/GTC/GTD"
+        description = "Submit a buy/sell order. DRY RUN unless execute is the confirmation_code from its own dry run: call once without execute, show the preview to the user, then re-call quoting the code only after they explicitly confirm. order_type: LO (Limit) / ELO (Enhanced Limit, HK) / MO (Market) / AO (At-auction, HK) / ALO (At-auction Limit, HK) / ODD (Odd Lots, HK) / LIT (Limit If Touched) / MIT (Market If Touched) / TSLPAMT (Trailing Limit by Amount) / TSLPPCT (Trailing Limit by Percent) / SLO (Special Limit, HK). side: Buy/Sell. time_in_force: Day/GTC/GTD. To attach a take-profit/stop-loss leg, set attached_order_type (PROFIT_TAKER / STOP_LOSS / BRACKET) with attached_profit_taker_price and/or attached_stop_loss_price; the legs are echoed in the dry-run preview and are part of what the confirmation_code covers"
     )]
     async fn submit_order(
         &self,
@@ -2558,7 +2558,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Modify an open order's quantity, price, trigger_price, or trailing params. Returns \"order replaced\" on success. Only open/pending orders can be modified. TWO-STEP CONFIRMATION IS MANDATORY: this tool is a DRY RUN unless you pass the confirmation_code its own dry run returned. Call it first without execute, show the returned preview to the user, and only call it again with execute=\"<confirmation_code>\" after the user has explicitly confirmed that exact order. The code is derived from the order itself, so it applies only to that exact order. Never quote it back on your own initiative, and never in the same turn the user first asks. The dry run echoes the current order alongside the requested change."
+        description = "Modify an open order's quantity, price, trigger_price, or trailing params. Returns \"order replaced\" on success. Only open/pending orders can be modified. TWO-STEP CONFIRMATION IS MANDATORY: this tool is a DRY RUN unless you pass the confirmation_code its own dry run returned. Call it first without execute, show the returned preview to the user, and only call it again with execute=\"<confirmation_code>\" after the user has explicitly confirmed that exact order. The code is derived from the order itself, so it applies only to that exact order. Never quote it back on your own initiative, and never in the same turn the user first asks. The dry run echoes the current order alongside the requested change. Attached take-profit/stop-loss legs are changed here too: attached_order_type with the new attached_profit_taker_price / attached_stop_loss_price adds or reprices a leg, attached_profit_taker_id / attached_stop_loss_id target an existing leg, and attached_cancel_all=true removes every leg while leaving the order in place."
     )]
     async fn replace_order(
         &self,
