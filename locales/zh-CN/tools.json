@@ -171,9 +171,10 @@
     },
     "order_detail": {
       "title": "委托详情",
-      "description": "查询单个委托详情，返回 {order_id, symbol, status, side, order_type, quantity, price, executed_quantity, executed_price, submitted_at, time_in_force, msg}。美股账户查询会得到美股专属变体：委托嵌套在 `order` 字段下而非根级。区域由账户自动识别",
+      "description": "查询单个委托详情，返回 {order_id, symbol, status, side, order_type, quantity, price, executed_quantity, executed_price, submitted_at, time_in_force, msg, attached_orders[]}，其中 attached_orders[] 为该委托的止盈/止损附加单及其各自单号。要按附加单自身的单号查询，设置 is_attached=true，此时返回该附加单本身，charge_detail 为 null。美股账户由独立的美股委托详情接口提供，其委托及附加单直接嵌套在 `order` 中返回。区域由账户自动识别",
       "properties": {
-        "order_id": "委托单号"
+        "order_id": "委托单号：母单单号，或（配合 is_attached=true）止盈/止损附加单单号",
+        "is_attached": "设为 true 表示 order_id 是止盈/止损附加单单号，返回该附加单本身（charge_detail 为 null）；查询母单时省略或传 false。美股账户下无效"
       }
     },
     "today_executions": {
@@ -186,9 +187,11 @@
     },
     "today_orders": {
       "title": "当日委托",
-      "description": "查询当日委托，返回 orders[]{order_id, symbol, side, order_type, status, quantity, price, submitted_at, executed_quantity, executed_price}。仅限美股账户：us_action（Buy/Sell）、us_page、us_limit 通过独立的美股委托接口筛选/分页",
+      "description": "查询当日委托，返回 orders[]{order_id, symbol, side, order_type, status, quantity, price, submitted_at, executed_quantity, executed_price, attached_orders[]}，其中 attached_orders[] 为该委托的止盈/止损附加单。可用 symbol 按证券筛选，或用 order_id 查询单笔委托；要按附加单自身的单号查询，把该单号作为 order_id 并同时设置 is_attached=true，返回结果即为该附加单本身。is_attached 单独使用无效；美股账户由独立的美股委托接口提供，两者在美股账户下均无效。仅限美股账户：us_action（Buy/Sell）、us_page、us_limit 通过独立的美股委托接口筛选/分页",
       "properties": {
         "symbol": "按证券筛选，例如 `\"700.HK\"`，省略则返回当日全部委托",
+        "order_id": "按委托单号筛选：母单单号，或（配合 is_attached=true）止盈/止损附加单单号。美股账户下无效",
+        "is_attached": "仅在同时传入 order_id 时有效：表示该 order_id 是止盈/止损附加单单号，返回结果即为该附加单本身。单独使用无效，美股账户下同样无效",
         "us_action": "仅限美股账户：按方向筛选，`\"Buy\"` 或 `\"Sell\"`，留空表示全部。港股/沪深/新加坡账户忽略（区域由账户自动识别，无需传入）",
         "us_page": "仅限美股账户：页码（默认 1）。港股/沪深/新加坡账户忽略（区域由账户自动识别，无需传入）",
         "us_limit": "仅限美股账户：每页数量（默认 20）。港股/沪深/新加坡账户忽略（区域由账户自动识别，无需传入）"
@@ -196,9 +199,10 @@
     },
     "cancel_order": {
       "title": "撤销委托",
-      "description": "按 order_id 撤销未成交的委托，成功返回 \"order cancelled\"；已成交或已撤销则报错。【必须两步确认】未传本次试运行返回的 confirmation_code 时，本工具为 DRY RUN（试运行）：只校验并回显委托内容，不会发往交易所。请先不带 execute 调用一次，把返回的预览完整展示给用户，只有在用户明确确认这笔委托之后，才可再次调用并把该确认码传入 execute。确认码由订单本身（代码、方向、数量、价格）推导而来，只对这一笔完全相同的请求生效。绝不可自行决定回填确认码，也不可在用户首次提出请求的同一轮就回填。试运行还会回显本次要撤销的委托，便于用户核对是否为目标订单",
+      "description": "按 order_id 撤销未成交的委托，成功返回 \"order cancelled\"；已成交或已撤销则报错。【必须两步确认】未传本次试运行返回的 confirmation_code 时，本工具为 DRY RUN（试运行）：只校验并回显委托内容，不会发往交易所。请先不带 execute 调用一次，把返回的预览完整展示给用户，只有在用户明确确认这笔委托之后，才可再次调用并把该确认码传入 execute。确认码由订单本身（代码、方向、数量、价格）推导而来，只对这一笔完全相同的请求生效。绝不可自行决定回填确认码，也不可在用户首次提出请求的同一轮就回填。试运行还会回显本次要撤销的委托，便于用户核对是否为目标订单。设为 is_attached=true 可按附加单自身的 order_id 单独撤销某个止盈/止损附加单；撤销母单则会连同其附加单一并撤销",
       "properties": {
         "order_id": "委托单号",
+        "is_attached": "设为 true 表示按止盈/止损附加单自身的 order_id 撤销该附加单，母单保持不变；省略或传 false 表示撤销母单（其附加单会一并撤销）",
         "execute": "本次试运行返回的 confirmation_code。省略（默认）表示 DRY RUN：只校验并回显请求，同时返回一个三位确认码，不会发往交易所。必须先不带该参数调用一次，把预览展示给用户，待用户明确确认后才可再次调用并回填该码。确认码由订单本身（代码、方向、数量、价格）推导而来，只对这一笔完全相同的请求生效——改动任何字段即失效。不可自行决定回填。"
       }
     },
@@ -249,7 +253,7 @@
     },
     "replace_order": {
       "title": "修改委托",
-      "description": "修改未成交委托的数量、价格、触发价或追踪止损参数，成功返回 \"order replaced\"。【必须两步确认】未传本次试运行返回的 confirmation_code 时，本工具为 DRY RUN（试运行）：只校验并回显委托内容，不会发往交易所。请先不带 execute 调用一次，把返回的预览完整展示给用户，只有在用户明确确认这笔委托之后，才可再次调用并把该确认码传入 execute。确认码由订单本身（代码、方向、数量、价格）推导而来，只对这一笔完全相同的请求生效。绝不可自行决定回填确认码，也不可在用户首次提出请求的同一轮就回填。试运行会同时回显当前委托与本次拟修改的内容",
+      "description": "修改未成交委托的数量、价格、触发价或追踪止损参数，成功返回 \"order replaced\"。【必须两步确认】未传本次试运行返回的 confirmation_code 时，本工具为 DRY RUN（试运行）：只校验并回显委托内容，不会发往交易所。请先不带 execute 调用一次，把返回的预览完整展示给用户，只有在用户明确确认这笔委托之后，才可再次调用并把该确认码传入 execute。确认码由订单本身（代码、方向、数量、价格）推导而来，只对这一笔完全相同的请求生效。绝不可自行决定回填确认码，也不可在用户首次提出请求的同一轮就回填。试运行会同时回显当前委托与本次拟修改的内容。止盈/止损附加单也在此修改：attached_order_type 配合新的 attached_profit_taker_price / attached_stop_loss_price 可新增或改价，attached_profit_taker_id / attached_stop_loss_id 用于指定要修改的现有附加单，attached_cancel_all=true 则撤销全部附加单而保留母单",
       "properties": {
         "order_id": "委托单号",
         "quantity": "新的委托数量",
@@ -258,12 +262,27 @@
         "limit_offset": "新的限价偏移量",
         "trailing_amount": "新的跟踪止损金额",
         "trailing_percent": "新的跟踪止损百分比",
+        "attached_cancel_all": "设为 true 撤销该委托的全部止盈/止损附加单，母单本身保持不变",
+        "attached_order_type": "要新增或修改的附加单类型：`PROFIT_TAKER` / `STOP_LOSS` / `BRACKET`。除仅做 attached_cancel_all 外必填",
+        "attached_profit_taker_id": "要修改的现有止盈单单号（取自 order_detail 的 attached_orders[]）；新增附加单时省略",
+        "attached_stop_loss_id": "要修改的现有止损单单号（取自 order_detail 的 attached_orders[]）；新增附加单时省略",
+        "attached_profit_taker_price": "新的止盈触发价",
+        "attached_stop_loss_price": "新的止损触发价",
+        "attached_profit_taker_submit_price": "新的止盈单委托限价",
+        "attached_stop_loss_submit_price": "新的止损单委托限价",
+        "attached_time_in_force": "新的附加单有效期：`Day` / `GTC` / `GTD`",
+        "attached_expire_time": "新的附加单到期时间，Unix 时间戳（秒）；`attached_time_in_force=GTD` 时必填",
+        "attached_activate_order_type": "新的触发后委托类型，例如 `LO` 或 `MO`",
+        "attached_outside_rth": "新的触发后盘前盘后设置：`RTH_ONLY` / `ANY_TIME` / `OVERNIGHT`",
+        "attached_main_id": "附加单所属母单的单号；仅在不经母单、单独修改某个附加单时需要",
+        "attached_quantity": "新的附加单数量",
+        "attached_market_price": "附加单的参考市价",
         "execute": "本次试运行返回的 confirmation_code。省略（默认）表示 DRY RUN：只校验并回显请求，同时返回一个三位确认码，不会发往交易所。必须先不带该参数调用一次，把预览展示给用户，待用户明确确认后才可再次调用并回填该码。确认码由订单本身（代码、方向、数量、价格）推导而来，只对这一笔完全相同的请求生效——改动任何字段即失效。不可自行决定回填。"
       }
     },
     "submit_order": {
       "title": "提交委托",
-      "description": "提交买卖委托。order_type：LO（限价）/ ELO（港股增强限价）/ MO（市价）/ AO（港股竞价）/ ALO（港股竞价限价）/ ODD（港股碎股）/ LIT（触价限价）/ MIT（触价市价）/ TSLPAMT（按金额追踪止损）/ TSLPPCT（按百分比追踪止损）/ SLO（港股特别限价）；side：Buy/Sell；time_in_force：Day/GTC/GTD。【必须两步确认】未传本次试运行返回的 confirmation_code 时，本工具为 DRY RUN（试运行）：只校验并回显委托内容，不会发往交易所。请先不带 execute 调用一次，把返回的预览完整展示给用户，只有在用户明确确认这笔委托之后，才可再次调用并把该确认码传入 execute。确认码由订单本身（代码、方向、数量、价格）推导而来，只对这一笔完全相同的请求生效。绝不可自行决定回填确认码，也不可在用户首次提出请求的同一轮就回填。该委托会动用真实资金——试运行是用户发现代码、方向、数量或价格错误的唯一机会",
+      "description": "提交买卖委托。order_type：LO（限价）/ ELO（港股增强限价）/ MO（市价）/ AO（港股竞价）/ ALO（港股竞价限价）/ ODD（港股碎股）/ LIT（触价限价）/ MIT（触价市价）/ TSLPAMT（按金额追踪止损）/ TSLPPCT（按百分比追踪止损）/ SLO（港股特别限价）；side：Buy/Sell；time_in_force：Day/GTC/GTD。【必须两步确认】未传本次试运行返回的 confirmation_code 时，本工具为 DRY RUN（试运行）：只校验并回显委托内容，不会发往交易所。请先不带 execute 调用一次，把返回的预览完整展示给用户，只有在用户明确确认这笔委托之后，才可再次调用并把该确认码传入 execute。确认码由订单本身（代码、方向、数量、价格）推导而来，只对这一笔完全相同的请求生效。绝不可自行决定回填确认码，也不可在用户首次提出请求的同一轮就回填。该委托会动用真实资金——试运行是用户发现代码、方向、数量或价格错误的唯一机会。如需附加止盈/止损单：设置 attached_order_type（PROFIT_TAKER / STOP_LOSS / BRACKET）并填写 attached_profit_taker_price 和/或 attached_stop_loss_price；附加单会在试运行预览中回显，并计入确认码",
       "properties": {
         "symbol": "证券代码",
         "order_type": "委托类型（港股全部支持；美股仅支持 `LO` / `MO` / `LIT` / `MIT` / `TSLPAMT` / `TSLPPCT`）：<br>- `LO`（限价单）：需 `submitted_price`<br>- `ELO`（增强限价单，港股）：需 `submitted_price`<br>- `MO`（市价单）：无需价格<br>- `AO`（竞价单，港股）：以竞价价成交，无需价格<br>- `ALO`（竞价限价单，港股）：需 `submitted_price`<br>- `ODD`（碎股单，港股）：需 `submitted_price`，用于非标准手数<br>- `LIT`（触价限价）：需 `submitted_price` 与 `trigger_price`，行情触及触发价时激活<br>- `MIT`（触价市价）：仅需 `trigger_price`，触及后按市价成交<br>- `TSLPAMT`（按金额跟踪止损限价）：需 `trailing_amount` 与 `limit_offset`<br>- `TSLPPCT`（按百分比跟踪止损限价）：需 `trailing_percent`（0-1）与 `limit_offset`<br>- `SLO`（特别限价单，港股）：需 `submitted_price`，提交后不可改单",
@@ -278,6 +297,15 @@
         "expire_date": "到期日期（`yyyy-mm-dd`），`time_in_force=GTD` 时必填",
         "outside_rth": "盘前盘后设置：`RTH_ONLY`（仅常规交易时段）、`ANY_TIME`（含盘前盘后任意时段）、`OVERNIGHT`（夜盘，仅美股）",
         "remark": "委托备注（最多 255 字符）",
+        "attached_order_type": "附加止盈/止损单类型：`PROFIT_TAKER`（仅止盈）、`STOP_LOSS`（仅止损）、`BRACKET`（止盈止损同时挂）。普通委托请省略；不传该参数时其余 attached_* 参数均被忽略",
+        "attached_profit_taker_price": "止盈触发价。`PROFIT_TAKER` 与 `BRACKET` 必填",
+        "attached_stop_loss_price": "止损触发价。`STOP_LOSS` 与 `BRACKET` 必填",
+        "attached_profit_taker_submit_price": "止盈单触发后的委托限价，配合 `attached_activate_order_type=LO` 使用",
+        "attached_stop_loss_submit_price": "止损单触发后的委托限价，配合 `attached_activate_order_type=LO` 使用",
+        "attached_time_in_force": "附加单有效期：`Day` / `GTC` / `GTD`；省略则沿用母单设置",
+        "attached_expire_time": "附加单到期时间，Unix 时间戳（秒），例如 `\"1767139200\"`；`attached_time_in_force=GTD` 时必填",
+        "attached_activate_order_type": "附加单触发后提交的委托类型，例如 `LO`（需同时给出对应的 `attached_*_submit_price`）或 `MO`",
+        "attached_outside_rth": "附加单触发后的盘前盘后设置：`RTH_ONLY` / `ANY_TIME` / `OVERNIGHT`",
         "execute": "本次试运行返回的 confirmation_code。省略（默认）表示 DRY RUN：只校验并回显请求，同时返回一个三位确认码，不会发往交易所。必须先不带该参数调用一次，把预览展示给用户，待用户明确确认后才可再次调用并回填该码。确认码由订单本身（代码、方向、数量、价格）推导而来，只对这一笔完全相同的请求生效——改动任何字段即失效。不可自行决定回填。"
       }
     },

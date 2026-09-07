@@ -260,6 +260,63 @@ pub struct BrokerLevel {
     pub broker_ids: Vec<i32>,
 }
 
+/// One take-profit or stop-loss leg attached to an order, as returned inside
+/// `OrderDetailResponse.attached_orders`.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct AttachedOrderDetailResponse {
+    /// The leg's own order ID. Pass it to `order_detail` / `cancel_order` with
+    /// `is_attached=true` to act on the leg alone.
+    pub order_id: String,
+    /// Leg type: `PROFIT_TAKER`, `STOP_LOSS` or `BRACKET`.
+    pub attached_type_display: String,
+    /// Security symbol, e.g. "700.HK" — the API's `counter_id`, which this
+    /// server renames and converts like every other counter ID.
+    pub symbol: String,
+    /// Order status.
+    pub status: String,
+    /// Trigger price (null when unset).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trigger_price: Option<String>,
+    /// Limit price submitted once triggered (null for market-style legs).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub submit_price: Option<String>,
+    /// Submitted quantity.
+    pub quantity: String,
+    /// Quantity already executed.
+    pub executed_qty: String,
+    /// Volume-weighted average executed price (null when unfilled).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub executed_price: Option<String>,
+    /// Total executed amount.
+    pub executed_amount: String,
+    /// Order type the leg is submitted as once triggered, e.g. `LO`, `MO`.
+    pub activate_order_type: String,
+    /// Time-in-force: `Day` / `GTC` / `GTD`.
+    pub time_in_force: String,
+    /// GTD expiry date (yyyy-mm-dd, null when not GTD).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gtd: Option<String>,
+    /// Trigger status, e.g. `Deactive` / `Active` / `Released`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trigger_status: Option<String>,
+    /// Leg submission time (RFC3339).
+    pub submitted_at: String,
+    /// Last update time (RFC3339).
+    pub updated_at: String,
+    /// Whether the leg has been withdrawn.
+    pub withdrawn: bool,
+    /// Whether the leg has been reviewed.
+    pub reviewed: bool,
+    /// Outside-RTH setting of the triggered leg.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub activate_rth: Option<String>,
+    /// Outside-RTH enforcement on the leg itself.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub force_only_rth: Option<String>,
+    /// Order tag (e.g. `Normal`, `LongTerm`).
+    pub tag: String,
+}
+
 /// Returned by `order_detail`. Single order with full lifecycle metadata.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct OrderDetailResponse {
@@ -338,6 +395,11 @@ pub struct OrderDetailResponse {
     /// Outside-RTH setting: `RTH_ONLY` / `ANY_TIME` / `OVERNIGHT`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub outside_rth: Option<String>,
+    /// Attached take-profit / stop-loss legs of this order. Absent when it has
+    /// none, and absent in the US-region shape, which nests its own attached
+    /// legs under `order` instead.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub attached_orders: Vec<AttachedOrderDetailResponse>,
     /// US-region shape only: the order, nested instead of at the response
     /// root (confirmed via a live US staging `order_detail` call).
     #[serde(skip_serializing_if = "Option::is_none")]
