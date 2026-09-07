@@ -2601,7 +2601,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::us_market::FinancialReportResponse>(),
-        description = "Get financial reports (income statement, balance sheet, cash flow). kind: IS/BS/CF/ALL. report_type: af (annual), saf (semi-annual), q1/q2/q3, qf (quarterly full). US accounts querying a .US symbol without kind are routed to a US-specific overview endpoint; passing kind explicitly always uses the generic path."
+        description = "Get financial reports (income statement, balance sheet, cash flow). kind: IS/BS/CF/ALL. report_type: af (annual), saf (semi-annual), q1/q2/q3, qf (quarterly full). US-data-center accounts querying a .US symbol without kind are routed to a US-specific overview endpoint; passing kind explicitly always uses the generic path."
     )]
     async fn financial_report(
         &self,
@@ -2673,7 +2673,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::fundamental::DividendResponse>(),
-        description = "Get dividend history for the symbol. US accounts querying a .US symbol get a differently-shaped response not matching output_schema (dividend_yield_ttm etc. are percent values, e.g. 0.34 means 0.34%); other combinations match output_schema."
+        description = "Get dividend history for the symbol. US-data-center accounts querying a .US symbol get a US-specific variant (e.g. dividend_yield_ttm is a percent value: 0.34 means 0.34%). The region is detected from the account automatically."
     )]
     async fn dividend(
         &self,
@@ -2745,7 +2745,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::fundamental::ConsensusResponse>(),
-        description = "Get financial consensus estimates for upcoming periods. US accounts querying a .US symbol get a differently-shaped response not matching output_schema (ai_summary plus a details[] list per period); other combinations match output_schema."
+        description = "Get financial consensus estimates for upcoming periods. US-data-center accounts querying a .US symbol get a US-specific variant (ai_summary plus a details[] list per period, instead of items[]). The region is detected from the account automatically."
     )]
     async fn consensus(
         &self,
@@ -2769,7 +2769,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::fundamental::ValuationResponse>(),
-        description = "Get valuation overview with peer comparison. US accounts querying a .US symbol get a differently-shaped response not matching output_schema (ai_summary plus a metrics.pe object with different sub-fields); other combos match output_schema."
+        description = "Get valuation overview with peer comparison. US-data-center accounts querying a .US symbol get a US-specific variant (ai_summary plus a metrics.pe object with different sub-fields). The region is detected from the account automatically."
     )]
     async fn valuation(
         &self,
@@ -2865,7 +2865,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::fundamental::CompanyResponse>(),
-        description = "Get company overview. US accounts querying a .US symbol get a differently-shaped response not matching output_schema (intro, market_cap, top_rank_tags, sharelist, detail_url); other combinations match output_schema."
+        description = "Get company overview. US-data-center accounts querying a .US symbol get a US-specific variant (intro, market_cap, top_rank_tags, sharelist, detail_url). The region is detected from the account automatically."
     )]
     async fn company(
         &self,
@@ -4483,7 +4483,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::us_market::FinancialStatementResponse>(),
-        description = "Get financial statements (income statement, balance sheet, or cash flow) for a security. kind: IS/BS/CF/ALL. report: af (annual, default), saf (semi-annual), qf (quarterly full), q1/q2/q3. US accounts querying a .US symbol are routed to a US-specific statement endpoint (same report vocabulary as the generic path); kind=ALL/default fans out to IS+BS+CF and returns {income_statement, balance_sheet, cash_flow} since the backend doesn't support a combined request; all other symbol/account combinations use the generic path."
+        description = "Get financial statements (income statement, balance sheet, or cash flow) for a security. kind: IS/BS/CF/ALL. report: af (annual, default), saf (semi-annual), qf (quarterly full), q1/q2/q3. US-data-center accounts querying a .US symbol are routed to a US-specific statement endpoint (same report vocabulary as the generic path); kind=ALL/default fans out to IS+BS+CF and returns {income_statement, balance_sheet, cash_flow} since the backend doesn't support a combined request; all other symbol/account combinations use the generic path."
     )]
     async fn financial_statement(
         &self,
@@ -5924,6 +5924,32 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+
+    #[test]
+    fn region_branching_fundamental_output_schemas_have_no_required_fields() {
+        // dividend/consensus/valuation/company branch by DC region and return a
+        // US-specific field set (ai_summary, details[], intro, …). Their output
+        // schema must impose no required fields — every field optional and no
+        // `deny_unknown_fields` — so BOTH the generic and the US variant conform.
+        // Otherwise the US structuredContent would violate the declared schema.
+        let tools = crate::tools::list_tools();
+        for name in ["dividend", "consensus", "valuation", "company"] {
+            let tool = tools
+                .iter()
+                .find(|t| t.name == name)
+                .unwrap_or_else(|| panic!("tool `{name}` not found"));
+            let schema = tool
+                .output_schema
+                .as_ref()
+                .unwrap_or_else(|| panic!("tool `{name}` must declare an output_schema"));
+            let required = schema.get("required").and_then(|r| r.as_array());
+            assert!(
+                required.is_none_or(|a| a.is_empty()),
+                "tool `{name}`: output_schema must have no required fields so both the generic \
+                 and US-data-center variants conform, got required={required:?}"
+            );
         }
     }
 }
