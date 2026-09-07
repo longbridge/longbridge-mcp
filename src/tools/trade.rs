@@ -1,4 +1,7 @@
-use longbridge::trade::{GetTodayExecutionsOptions, GetTodayOrdersOptions, TradeContext};
+use longbridge::trade::{
+    CancelOrderOptions, GetOrderDetailOptions, GetTodayExecutionsOptions, GetTodayOrdersOptions,
+    TradeContext,
+};
 use rmcp::ErrorData as McpError;
 use rmcp::model::CallToolResult;
 use rmcp::schemars::JsonSchema;
@@ -13,9 +16,15 @@ use crate::tools::{tool_json, tool_result};
 pub use crate::tools::quote::SymbolParam;
 
 #[derive(Debug, Deserialize, JsonSchema)]
-pub struct OrderIdParam {
-    /// Order ID (from today's orders or order history)
+pub struct OrderDetailParam {
+    /// Order ID to look up. A parent order ID, or (with is_attached=true) the
+    /// ID of an attached take-profit / stop-loss leg.
     pub order_id: String,
+    /// Set to true when order_id is the ID of an attached take-profit /
+    /// stop-loss leg rather than a parent order. The response is then that leg
+    /// itself, with charge_detail null. Omit (or false) for parent orders. Has
+    /// no effect for US accounts, which are served by the US order endpoint.
+    pub is_attached: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -28,6 +37,15 @@ pub struct AccountBalanceParam {
 pub struct TodayOrdersParam {
     /// Filter by symbol, e.g. "700.HK". Omit to return all today's orders.
     pub symbol: Option<String>,
+    /// Filter by order ID: a parent order ID, or (with is_attached=true) the ID
+    /// of an attached take-profit / stop-loss leg. Has no effect for US
+    /// accounts, which are served by the US order endpoint.
+    pub order_id: Option<String>,
+    /// Only meaningful together with order_id: it says that order_id is the ID
+    /// of an attached take-profit / stop-loss leg, and the response then
+    /// carries that leg itself as an order entry. On its own it does nothing,
+    /// and it has no effect for US accounts either.
+    pub is_attached: Option<bool>,
     /// US accounts only: filter by side, "Buy" or "Sell". Omit for all.
     pub us_action: Option<String>,
     /// US accounts only: page number (default 1).
@@ -83,6 +101,31 @@ pub struct SubmitOrderParam {
     pub outside_rth: Option<String>,
     /// Order remark (max 255 characters)
     pub remark: Option<String>,
+    /// Attach a take-profit / stop-loss leg to this order: "PROFIT_TAKER"
+    /// (take-profit only), "STOP_LOSS" (stop-loss only) or "BRACKET" (both).
+    /// Omit for a plain order; every other attached_* field is ignored without
+    /// it.
+    pub attached_order_type: Option<String>,
+    /// Take-profit trigger price. Required for PROFIT_TAKER and BRACKET.
+    pub attached_profit_taker_price: Option<String>,
+    /// Stop-loss trigger price. Required for STOP_LOSS and BRACKET.
+    pub attached_stop_loss_price: Option<String>,
+    /// Limit price of the take-profit leg, for an LO attached_activate_order_type.
+    pub attached_profit_taker_submit_price: Option<String>,
+    /// Limit price of the stop-loss leg, for an LO attached_activate_order_type.
+    pub attached_stop_loss_submit_price: Option<String>,
+    /// Time-in-force of the attached leg: "Day" / "GTC" / "GTD". Defaults to
+    /// the parent order's setting when omitted.
+    pub attached_time_in_force: Option<String>,
+    /// Expiry of the attached leg as a unix timestamp in seconds (e.g.
+    /// "1767139200"). Required when attached_time_in_force is GTD.
+    pub attached_expire_time: Option<String>,
+    /// Order type the attached leg is submitted as once triggered, e.g. "LO"
+    /// (then set the matching attached_*_submit_price) or "MO".
+    pub attached_activate_order_type: Option<String>,
+    /// Outside-RTH setting of the triggered leg: "RTH_ONLY" / "ANY_TIME" /
+    /// "OVERNIGHT".
+    pub attached_outside_rth: Option<String>,
     /// The `confirmation_code` from this order's dry run. WITHOUT IT NOTHING IS
     /// SENT.
     ///
@@ -115,6 +158,43 @@ pub struct ReplaceOrderParam {
     pub trailing_amount: Option<String>,
     /// New trailing percent as decimal e.g. 0.05 = 5% (for TSLPPCT)
     pub trailing_percent: Option<String>,
+    /// Set to true to cancel every attached take-profit / stop-loss leg of this
+    /// order, leaving the order itself in place.
+    pub attached_cancel_all: Option<bool>,
+    /// Attached leg to add or update: "PROFIT_TAKER", "STOP_LOSS" or "BRACKET".
+    /// Required unless the only attached change is attached_cancel_all.
+    pub attached_order_type: Option<String>,
+    /// ID of the existing take-profit leg to update (from
+    /// order_detail's attached_orders[]). Omit to add a new leg.
+    pub attached_profit_taker_id: Option<String>,
+    /// ID of the existing stop-loss leg to update (from order_detail's
+    /// attached_orders[]). Omit to add a new leg.
+    pub attached_stop_loss_id: Option<String>,
+    /// New take-profit trigger price.
+    pub attached_profit_taker_price: Option<String>,
+    /// New stop-loss trigger price.
+    pub attached_stop_loss_price: Option<String>,
+    /// New limit price for the take-profit leg.
+    pub attached_profit_taker_submit_price: Option<String>,
+    /// New limit price for the stop-loss leg.
+    pub attached_stop_loss_submit_price: Option<String>,
+    /// New time-in-force for the attached leg: "Day" / "GTC" / "GTD".
+    pub attached_time_in_force: Option<String>,
+    /// New expiry for the attached leg as a unix timestamp in seconds.
+    /// Required when attached_time_in_force is GTD.
+    pub attached_expire_time: Option<String>,
+    /// New order type for the triggered leg, e.g. "LO" or "MO".
+    pub attached_activate_order_type: Option<String>,
+    /// New outside-RTH setting for the triggered leg: "RTH_ONLY" / "ANY_TIME"
+    /// / "OVERNIGHT".
+    pub attached_outside_rth: Option<String>,
+    /// ID of the parent order that owns the attached leg, when the leg is
+    /// modified on its own rather than through its parent.
+    pub attached_main_id: Option<String>,
+    /// New quantity for the attached leg.
+    pub attached_quantity: Option<String>,
+    /// Reference market price for the attached leg.
+    pub attached_market_price: Option<String>,
     /// The `confirmation_code` from this order's dry run. WITHOUT IT NOTHING IS
     /// SENT.
     ///
@@ -131,10 +211,40 @@ pub struct ReplaceOrderParam {
     pub execute: Option<String>,
 }
 
+impl ReplaceOrderParam {
+    /// Whether this replace touches the order's attached legs at all.
+    ///
+    /// Every attached field is optional and `attached_cancel_all` on its own is
+    /// a complete request, so the presence of any one of them is what decides —
+    /// sending attached params on a plain replace would change legs the caller
+    /// never mentioned.
+    fn has_attached_change(&self) -> bool {
+        self.attached_cancel_all.is_some()
+            || self.attached_order_type.is_some()
+            || self.attached_profit_taker_id.is_some()
+            || self.attached_stop_loss_id.is_some()
+            || self.attached_profit_taker_price.is_some()
+            || self.attached_stop_loss_price.is_some()
+            || self.attached_profit_taker_submit_price.is_some()
+            || self.attached_stop_loss_submit_price.is_some()
+            || self.attached_time_in_force.is_some()
+            || self.attached_expire_time.is_some()
+            || self.attached_activate_order_type.is_some()
+            || self.attached_outside_rth.is_some()
+            || self.attached_main_id.is_some()
+            || self.attached_quantity.is_some()
+            || self.attached_market_price.is_some()
+    }
+}
+
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct CancelOrderParam {
     /// Order ID to cancel (from today's orders or order history)
     pub order_id: String,
+    /// Set to true to cancel an attached take-profit / stop-loss leg by its own
+    /// order_id, leaving the parent order in place. Omit (or false) to cancel a
+    /// parent order, which cancels its attached legs with it.
+    pub is_attached: Option<bool>,
     /// The `confirmation_code` from this order's dry run. WITHOUT IT NOTHING IS
     /// SENT.
     ///
@@ -198,10 +308,15 @@ fn default_order_type() -> String {
 /// Best-effort snapshot of the order a cancel/replace preview is about to touch,
 /// so the user can confirm it is the order they meant. A lookup failure must not
 /// break the dry run, so every error collapses to `null`.
+///
+/// `is_attached` says `order_id` names an attached take-profit / stop-loss leg,
+/// which lives in its own ID space: looking it up as a parent order would
+/// preview the wrong order, or none at all.
 async fn preview_existing_order(
     mctx: &crate::tools::McpContext,
     ctx: &TradeContext,
     order_id: &str,
+    is_attached: bool,
 ) -> serde_json::Value {
     if mctx.dc_region().await == longbridge::DcRegion::Us {
         let Ok(result) = ctx.us_order_detail(order_id.to_string()).await else {
@@ -215,7 +330,11 @@ async fn preview_existing_order(
         }
         return value;
     }
-    match ctx.order_detail(order_id.to_string()).await {
+    let mut opts = GetOrderDetailOptions::new(order_id);
+    if is_attached {
+        opts = opts.is_attached();
+    }
+    match ctx.order_detail(opts).await {
         Ok(result) => serde_json::to_value(&result).unwrap_or(serde_json::Value::Null),
         Err(_) => serde_json::Value::Null,
     }
@@ -328,13 +447,19 @@ pub async fn today_orders(
     if let Some(symbol) = p.symbol {
         opts = opts.symbol(symbol);
     }
+    if let Some(order_id) = p.order_id {
+        opts = opts.order_id(order_id);
+    }
+    if p.is_attached == Some(true) {
+        opts = opts.is_attached();
+    }
     let result = ctx.today_orders(opts).await.map_err(Error::longbridge)?;
     tool_json(&result)
 }
 
 pub async fn order_detail(
     mctx: &crate::tools::McpContext,
-    p: OrderIdParam,
+    p: OrderDetailParam,
 ) -> Result<CallToolResult, McpError> {
     let (ctx, _) = TradeContext::new(mctx.create_config());
     if mctx.dc_region().await == longbridge::DcRegion::Us {
@@ -351,10 +476,11 @@ pub async fn order_detail(
         }
         return tool_json(&value);
     }
-    let result = ctx
-        .order_detail(p.order_id)
-        .await
-        .map_err(Error::longbridge)?;
+    let mut opts = GetOrderDetailOptions::new(p.order_id);
+    if p.is_attached == Some(true) {
+        opts = opts.is_attached();
+    }
+    let result = ctx.order_detail(opts).await.map_err(Error::longbridge)?;
     tool_json(&result)
 }
 
@@ -363,23 +489,37 @@ pub async fn cancel_order(
     p: CancelOrderParam,
 ) -> Result<CallToolResult, McpError> {
     let (ctx, _) = TradeContext::new(mctx.create_config());
-    let scope = dry_run::Scope::on_order("cancel", &p.order_id);
+    let is_attached = p.is_attached == Some(true);
+    // Attached leg IDs live in their own ID space, so the same digits can name
+    // both a leg and an unrelated parent order: the two cancels must not share
+    // a confirmation code.
+    let scope = dry_run::Scope::on_order(
+        if is_attached {
+            "cancel attached"
+        } else {
+            "cancel"
+        },
+        &p.order_id,
+    );
     // Two-step by design: without a confirmation code this cancels nothing.
     let Some(code) = p.execute.clone() else {
-        let existing = preview_existing_order(mctx, &ctx, &p.order_id).await;
+        let existing = preview_existing_order(mctx, &ctx, &p.order_id, is_attached).await;
         return dry_run::result(
             &scope,
             serde_json::json!({
                 "action": "cancel_order",
                 "order_id": p.order_id,
+                "is_attached": is_attached,
                 "order": existing,
             }),
         );
     };
     scope.verify(&code)?;
-    ctx.cancel_order(p.order_id)
-        .await
-        .map_err(Error::longbridge)?;
+    let mut opts = CancelOrderOptions::new(p.order_id);
+    if is_attached {
+        opts = opts.is_attached();
+    }
+    ctx.cancel_order(opts).await.map_err(Error::longbridge)?;
     Ok(tool_result("order cancelled".to_string()))
 }
 
@@ -524,6 +664,198 @@ pub async fn cash_flow(
     tool_json(&result)
 }
 
+/// Parse a decimal-valued attached-order field, naming the field in the error
+/// instead of leaving the caller with a bare parse failure.
+fn attached_decimal(field: &str, value: &str) -> Result<longbridge::Decimal, McpError> {
+    use longbridge::Decimal;
+    use std::str::FromStr;
+
+    Decimal::from_str(value)
+        .map_err(|e| McpError::invalid_params(format!("invalid {field}: {e}"), None))
+}
+
+/// Parse an ID- or timestamp-valued attached-order field.
+fn attached_i64(field: &str, value: &str) -> Result<i64, McpError> {
+    value
+        .parse::<i64>()
+        .map_err(|e| McpError::invalid_params(format!("invalid {field}: {e}"), None))
+}
+
+/// Parse an enum-valued attached-order field (time-in-force, order type,
+/// outside-RTH).
+fn attached_enum<T>(field: &str, value: &str) -> Result<T, McpError>
+where
+    T: std::str::FromStr,
+    T::Err: std::fmt::Display,
+{
+    value
+        .parse::<T>()
+        .map_err(|e| McpError::invalid_params(format!("invalid {field}: {e}"), None))
+}
+
+/// The attached take-profit / stop-loss leg of a new order.
+///
+/// `attached_order_type` is what turns the feature on, so it arrives
+/// separately: every other field is optional.
+fn attached_submit_params(
+    p: &SubmitOrderParam,
+    attached_order_type: &str,
+) -> Result<longbridge::trade::SubmitAttachedParams, McpError> {
+    use longbridge::trade::{
+        AttachedOrderType, OrderType, OutsideRTH, SubmitAttachedParams, TimeInForceType,
+    };
+
+    let mut ap = SubmitAttachedParams::new(attached_enum::<AttachedOrderType>(
+        "attached_order_type",
+        attached_order_type,
+    )?);
+    if let Some(ref v) = p.attached_profit_taker_price {
+        ap = ap.profit_taker_price(attached_decimal("attached_profit_taker_price", v)?);
+    }
+    if let Some(ref v) = p.attached_stop_loss_price {
+        ap = ap.stop_loss_price(attached_decimal("attached_stop_loss_price", v)?);
+    }
+    if let Some(ref v) = p.attached_profit_taker_submit_price {
+        ap = ap
+            .profit_taker_submit_price(attached_decimal("attached_profit_taker_submit_price", v)?);
+    }
+    if let Some(ref v) = p.attached_stop_loss_submit_price {
+        ap = ap.stop_loss_submit_price(attached_decimal("attached_stop_loss_submit_price", v)?);
+    }
+    if let Some(ref v) = p.attached_time_in_force {
+        ap = ap.time_in_force(attached_enum::<TimeInForceType>(
+            "attached_time_in_force",
+            v,
+        )?);
+    }
+    if let Some(ref v) = p.attached_expire_time {
+        ap = ap.expire_time(attached_i64("attached_expire_time", v)?);
+    }
+    if let Some(ref v) = p.attached_activate_order_type {
+        ap = ap.activate_order_type(attached_enum::<OrderType>(
+            "attached_activate_order_type",
+            v,
+        )?);
+    }
+    if let Some(ref v) = p.attached_outside_rth {
+        ap = ap.activate_rth(attached_enum::<OutsideRTH>("attached_outside_rth", v)?);
+    }
+    Ok(ap)
+}
+
+/// The attached-leg changes of a replace.
+///
+/// A bare `attached_cancel_all` carries no type, and the API takes the type as
+/// a required field, so `Unknown` stands for "no particular leg type" there.
+fn attached_replace_params(
+    p: &ReplaceOrderParam,
+) -> Result<longbridge::trade::ReplaceAttachedParams, McpError> {
+    use longbridge::trade::{
+        AttachedOrderType, OrderType, OutsideRTH, ReplaceAttachedParams, TimeInForceType,
+    };
+
+    let attached_order_type = match p.attached_order_type.as_deref() {
+        Some(v) => attached_enum::<AttachedOrderType>("attached_order_type", v)?,
+        None => AttachedOrderType::Unknown,
+    };
+    let mut ap = ReplaceAttachedParams::new(attached_order_type);
+    if p.attached_cancel_all == Some(true) {
+        ap = ap.cancel_all_attached();
+    }
+    if let Some(ref v) = p.attached_profit_taker_id {
+        ap = ap.profit_taker_id(attached_i64("attached_profit_taker_id", v)?);
+    }
+    if let Some(ref v) = p.attached_stop_loss_id {
+        ap = ap.stop_loss_id(attached_i64("attached_stop_loss_id", v)?);
+    }
+    if let Some(ref v) = p.attached_profit_taker_price {
+        ap = ap.profit_taker_price(attached_decimal("attached_profit_taker_price", v)?);
+    }
+    if let Some(ref v) = p.attached_stop_loss_price {
+        ap = ap.stop_loss_price(attached_decimal("attached_stop_loss_price", v)?);
+    }
+    if let Some(ref v) = p.attached_profit_taker_submit_price {
+        ap = ap
+            .profit_taker_submit_price(attached_decimal("attached_profit_taker_submit_price", v)?);
+    }
+    if let Some(ref v) = p.attached_stop_loss_submit_price {
+        ap = ap.stop_loss_submit_price(attached_decimal("attached_stop_loss_submit_price", v)?);
+    }
+    if let Some(ref v) = p.attached_time_in_force {
+        ap = ap.time_in_force(attached_enum::<TimeInForceType>(
+            "attached_time_in_force",
+            v,
+        )?);
+    }
+    if let Some(ref v) = p.attached_expire_time {
+        ap = ap.expire_time(attached_i64("attached_expire_time", v)?);
+    }
+    if let Some(ref v) = p.attached_activate_order_type {
+        ap = ap.activate_order_type(attached_enum::<OrderType>(
+            "attached_activate_order_type",
+            v,
+        )?);
+    }
+    if let Some(ref v) = p.attached_outside_rth {
+        ap = ap.activate_rth(attached_enum::<OutsideRTH>("attached_outside_rth", v)?);
+    }
+    if let Some(ref v) = p.attached_main_id {
+        ap = ap.main_id(attached_i64("attached_main_id", v)?);
+    }
+    if let Some(ref v) = p.attached_quantity {
+        ap = ap.quantity(attached_decimal("attached_quantity", v)?);
+    }
+    if let Some(ref v) = p.attached_market_price {
+        ap = ap.market_price(attached_decimal("attached_market_price", v)?);
+    }
+    Ok(ap)
+}
+
+/// The attached-order clause of a `submit_order` preview, or `null` for a plain
+/// order: a preview is what the user confirms, so it has to show the protective
+/// legs about to be placed alongside the order.
+fn attached_submit_preview(p: &SubmitOrderParam) -> serde_json::Value {
+    let Some(ref attached_order_type) = p.attached_order_type else {
+        return serde_json::Value::Null;
+    };
+    serde_json::json!({
+        "attached_order_type": attached_order_type,
+        "profit_taker_price": p.attached_profit_taker_price,
+        "stop_loss_price": p.attached_stop_loss_price,
+        "profit_taker_submit_price": p.attached_profit_taker_submit_price,
+        "stop_loss_submit_price": p.attached_stop_loss_submit_price,
+        "time_in_force": p.attached_time_in_force,
+        "expire_time": p.attached_expire_time,
+        "activate_order_type": p.attached_activate_order_type,
+        "outside_rth": p.attached_outside_rth,
+    })
+}
+
+/// The attached-order clause of a `replace_order` preview, or `null` when the
+/// replace leaves the attached legs alone.
+fn attached_replace_preview(p: &ReplaceOrderParam) -> serde_json::Value {
+    if !p.has_attached_change() {
+        return serde_json::Value::Null;
+    }
+    serde_json::json!({
+        "cancel_all": p.attached_cancel_all,
+        "attached_order_type": p.attached_order_type,
+        "profit_taker_id": p.attached_profit_taker_id,
+        "stop_loss_id": p.attached_stop_loss_id,
+        "profit_taker_price": p.attached_profit_taker_price,
+        "stop_loss_price": p.attached_stop_loss_price,
+        "profit_taker_submit_price": p.attached_profit_taker_submit_price,
+        "stop_loss_submit_price": p.attached_stop_loss_submit_price,
+        "time_in_force": p.attached_time_in_force,
+        "expire_time": p.attached_expire_time,
+        "activate_order_type": p.attached_activate_order_type,
+        "outside_rth": p.attached_outside_rth,
+        "main_id": p.attached_main_id,
+        "quantity": p.attached_quantity,
+        "market_price": p.attached_market_price,
+    })
+}
+
 pub async fn submit_order(
     mctx: &crate::tools::McpContext,
     p: SubmitOrderParam,
@@ -590,13 +922,27 @@ pub async fn submit_order(
     if let Some(ref v) = p.remark {
         opts = opts.remark(v.clone());
     }
+    if let Some(ref v) = p.attached_order_type {
+        opts = opts.attached_params(attached_submit_params(&p, v)?);
+    }
 
-    let scope = dry_run::Scope::order(
+    let mut scope = dry_run::Scope::order(
         &p.side,
         &p.symbol,
         &p.submitted_quantity,
         p.submitted_price.as_deref().unwrap_or(""),
     );
+    // The protective legs are part of the order the user approves: a code
+    // confirmed for one take-profit/stop-loss pair must not place another.
+    if let Some(ref v) = p.attached_order_type {
+        scope = scope.and("attached", v);
+        if let Some(ref v) = p.attached_profit_taker_price {
+            scope = scope.and("tp", v);
+        }
+        if let Some(ref v) = p.attached_stop_loss_price {
+            scope = scope.and("sl", v);
+        }
+    }
     // Two-step by design: without a confirmation code this places nothing.
     let Some(code) = p.execute.clone() else {
         return dry_run::result(
@@ -616,6 +962,7 @@ pub async fn submit_order(
                 "expire_date": p.expire_date,
                 "outside_rth": p.outside_rth,
                 "remark": p.remark,
+                "attached": attached_submit_preview(&p),
             }),
         );
     };
@@ -670,11 +1017,30 @@ pub async fn replace_order(
             McpError::invalid_params(format!("invalid trailing_percent: {e}"), None)
         })?);
     }
+    if p.has_attached_change() {
+        opts = opts.attached_params(attached_replace_params(&p)?);
+    }
     let (ctx, _) = TradeContext::new(mctx.create_config());
-    let scope = dry_run::Scope::replace(&p.order_id, &p.quantity, p.price.as_deref().unwrap_or(""));
+    let mut scope =
+        dry_run::Scope::replace(&p.order_id, &p.quantity, p.price.as_deref().unwrap_or(""));
+    // Cancelling or repricing the protective legs changes what the user is
+    // agreeing to, so a code confirmed for one set of legs must not apply to
+    // another.
+    if p.attached_cancel_all == Some(true) {
+        scope = scope.and("cancel_attached", "true");
+    }
+    if let Some(ref v) = p.attached_order_type {
+        scope = scope.and("attached", v);
+    }
+    if let Some(ref v) = p.attached_profit_taker_price {
+        scope = scope.and("tp", v);
+    }
+    if let Some(ref v) = p.attached_stop_loss_price {
+        scope = scope.and("sl", v);
+    }
     // Two-step by design: without a confirmation code this changes nothing.
     let Some(code) = p.execute.clone() else {
-        let existing = preview_existing_order(mctx, &ctx, &p.order_id).await;
+        let existing = preview_existing_order(mctx, &ctx, &p.order_id, false).await;
         return dry_run::result(
             &scope,
             serde_json::json!({
@@ -687,6 +1053,7 @@ pub async fn replace_order(
                 "new_limit_offset": p.limit_offset,
                 "new_trailing_amount": p.trailing_amount,
                 "new_trailing_percent": p.trailing_percent,
+                "attached": attached_replace_preview(&p),
             }),
         );
     };
@@ -879,6 +1246,160 @@ mod execute_gate_tests {
                 );
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod attached_order_tests {
+    //! Attached take-profit / stop-loss legs.
+    //!
+    //! These legs are the user's downside protection, so what the tool sends
+    //! must be exactly what the preview showed: a leg silently dropped, or a
+    //! trigger price that arrives changed, is a loss the caller cannot see
+    //! coming.
+
+    use super::{
+        CancelOrderParam, OrderDetailParam, ReplaceOrderParam, SubmitOrderParam, TodayOrdersParam,
+        attached_replace_params, attached_replace_preview, attached_submit_params,
+        attached_submit_preview,
+    };
+
+    fn bracket_order() -> SubmitOrderParam {
+        serde_json::from_value(serde_json::json!({
+            "symbol": "700.HK",
+            "order_type": "LO",
+            "side": "Buy",
+            "submitted_quantity": "100",
+            "time_in_force": "Day",
+            "submitted_price": "400",
+            "attached_order_type": "BRACKET",
+            "attached_profit_taker_price": "450",
+            "attached_stop_loss_price": "380",
+            "attached_activate_order_type": "MO",
+        }))
+        .expect("a bracket order must deserialize")
+    }
+
+    /// The leg type is whatever the SDK's own `FromStr` accepts — the wire
+    /// spellings — and it reaches the API unchanged. Anything else is the
+    /// SDK's parse error, named after the parameter it came from.
+    #[test]
+    fn the_leg_type_is_the_sdk_spelling() {
+        let mut p = bracket_order();
+        for spelling in ["PROFIT_TAKER", "STOP_LOSS", "BRACKET"] {
+            p.attached_order_type = Some(spelling.to_string());
+            let params = attached_submit_params(&p, spelling)
+                .unwrap_or_else(|e| panic!("'{spelling}' must parse: {e}"));
+            let sent = serde_json::to_value(&params).expect("attached params must serialize");
+            assert_eq!(
+                sent["attached_order_type"],
+                serde_json::json!(spelling),
+                "'{spelling}' must be sent unchanged"
+            );
+        }
+        let err = attached_submit_params(&p, "ProfitTaker")
+            .expect_err("a spelling the SDK does not know must be an error");
+        assert!(
+            err.message.contains("attached_order_type"),
+            "the error must name the parameter: {}",
+            err.message
+        );
+    }
+
+    /// The prices the caller sent are the prices the request carries.
+    #[test]
+    fn submit_sends_the_legs_it_was_given() {
+        let p = bracket_order();
+        let params = attached_submit_params(&p, "BRACKET").expect("a full bracket must build");
+        let sent = serde_json::to_value(&params).expect("attached params must serialize");
+        assert_eq!(sent["attached_order_type"], serde_json::json!("BRACKET"));
+        assert_eq!(sent["profit_taker_price"], serde_json::json!("450"));
+        assert_eq!(sent["stop_loss_price"], serde_json::json!("380"));
+        assert_eq!(sent["activate_order_type"], serde_json::json!("MO"));
+    }
+
+    /// The preview is what the user confirms, so the legs have to be in it —
+    /// and absent for the plain order that has none.
+    #[test]
+    fn the_preview_shows_the_legs() {
+        let preview = attached_submit_preview(&bracket_order());
+        assert_eq!(preview["attached_order_type"], serde_json::json!("BRACKET"));
+        assert_eq!(preview["profit_taker_price"], serde_json::json!("450"));
+        assert_eq!(preview["stop_loss_price"], serde_json::json!("380"));
+
+        let mut plain = bracket_order();
+        plain.attached_order_type = None;
+        assert!(
+            attached_submit_preview(&plain).is_null(),
+            "a plain order's preview must not grow an attached section"
+        );
+    }
+
+    /// A replace that says nothing about the legs must not touch them.
+    #[test]
+    fn a_plain_replace_leaves_the_legs_alone() {
+        let plain: ReplaceOrderParam =
+            serde_json::from_value(serde_json::json!({ "order_id": "1", "quantity": "100" }))
+                .expect("a plain replace must deserialize");
+        assert!(!plain.has_attached_change());
+        assert!(attached_replace_preview(&plain).is_null());
+    }
+
+    /// Cancelling every leg is a complete request on its own: it carries no
+    /// leg type, and must still reach the API as a cancel-all.
+    #[test]
+    fn replace_can_cancel_every_leg_without_naming_a_type() {
+        let cancel_all: ReplaceOrderParam = serde_json::from_value(serde_json::json!({
+            "order_id": "1",
+            "quantity": "100",
+            "attached_cancel_all": true,
+        }))
+        .expect("a cancel-all replace must deserialize");
+        assert!(cancel_all.has_attached_change());
+        let params = attached_replace_params(&cancel_all).expect("a cancel-all must build");
+        let sent = serde_json::to_value(&params).expect("attached params must serialize");
+        assert_eq!(sent["cancel_all_attached"], serde_json::json!(true));
+        assert_eq!(
+            attached_replace_preview(&cancel_all)["cancel_all"],
+            serde_json::json!(true)
+        );
+    }
+
+    /// Repricing one existing leg targets it by its own ID.
+    #[test]
+    fn replace_can_reprice_one_existing_leg() {
+        let reprice: ReplaceOrderParam = serde_json::from_value(serde_json::json!({
+            "order_id": "1",
+            "quantity": "100",
+            "attached_order_type": "STOP_LOSS",
+            "attached_stop_loss_id": "9876543210",
+            "attached_stop_loss_price": "375.5",
+        }))
+        .expect("a leg reprice must deserialize");
+        let params = attached_replace_params(&reprice).expect("a leg reprice must build");
+        let sent = serde_json::to_value(&params).expect("attached params must serialize");
+        assert_eq!(sent["attached_order_type"], serde_json::json!("STOP_LOSS"));
+        assert_eq!(sent["stop_loss_id"], serde_json::json!(9_876_543_210_i64));
+        assert_eq!(sent["stop_loss_price"], serde_json::json!("375.5"));
+    }
+
+    /// `is_attached` stays optional everywhere it appears, so the common case
+    /// (a parent order) needs no extra argument.
+    #[test]
+    fn is_attached_is_optional_on_every_tool_that_takes_it() {
+        let detail: OrderDetailParam =
+            serde_json::from_value(serde_json::json!({ "order_id": "1" }))
+                .expect("order_detail params must deserialize without is_attached");
+        assert!(detail.is_attached.is_none());
+
+        let today: TodayOrdersParam = serde_json::from_value(serde_json::json!({}))
+            .expect("today_orders params must deserialize without is_attached");
+        assert!(today.order_id.is_none() && today.is_attached.is_none());
+
+        let cancel: CancelOrderParam =
+            serde_json::from_value(serde_json::json!({ "order_id": "1" }))
+                .expect("cancel_order params must deserialize without is_attached");
+        assert!(cancel.is_attached.is_none());
     }
 }
 
