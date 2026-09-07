@@ -165,8 +165,8 @@
         "symbol": "按证券筛选（可选）",
         "start_at": "起始时间（RFC3339 格式）",
         "end_at": "结束时间（RFC3339 格式）",
-        "us_page": "仅限美股账户：页码（默认 1）",
-        "us_limit": "仅限美股账户：每页数量（默认 20）"
+        "us_page": "仅限美股账户：页码（默认 1）。港股/沪深/新加坡账户忽略（区域由账户自动识别，无需传入）",
+        "us_limit": "仅限美股账户：每页数量（默认 20）。港股/沪深/新加坡账户忽略（区域由账户自动识别，无需传入）"
       }
     },
     "order_detail": {
@@ -189,9 +189,9 @@
       "description": "查询当日委托，返回 orders[]{order_id, symbol, side, order_type, status, quantity, price, submitted_at, executed_quantity, executed_price}。仅限美股账户：us_action（Buy/Sell）、us_page、us_limit 通过独立的美股委托接口筛选/分页",
       "properties": {
         "symbol": "按证券筛选，例如 `\"700.HK\"`，省略则返回当日全部委托",
-        "us_action": "仅限美股账户：按方向筛选，`\"Buy\"` 或 `\"Sell\"`，留空表示全部",
-        "us_page": "仅限美股账户：页码（默认 1）",
-        "us_limit": "仅限美股账户：每页数量（默认 20）"
+        "us_action": "仅限美股账户：按方向筛选，`\"Buy\"` 或 `\"Sell\"`，留空表示全部。港股/沪深/新加坡账户忽略（区域由账户自动识别，无需传入）",
+        "us_page": "仅限美股账户：页码（默认 1）。港股/沪深/新加坡账户忽略（区域由账户自动识别，无需传入）",
+        "us_limit": "仅限美股账户：每页数量（默认 20）。港股/沪深/新加坡账户忽略（区域由账户自动识别，无需传入）"
       }
     },
     "cancel_order": {

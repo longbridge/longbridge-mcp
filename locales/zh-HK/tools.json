@@ -165,8 +165,8 @@
         "symbol": "按證券篩選（可選）",
         "start_at": "起始時間（RFC3339 時間格式）",
         "end_at": "結束時間（RFC3339 時間格式）",
-        "us_page": "僅限美股賬戶：頁碼（預設 1）",
-        "us_limit": "僅限美股賬戶：每頁數量（預設 20）"
+        "us_page": "僅限美股賬戶：頁碼（預設 1）。港股/滬深/新加坡賬戶忽略（區域由賬戶自動識別，無需傳入）",
+        "us_limit": "僅限美股賬戶：每頁數量（預設 20）。港股/滬深/新加坡賬戶忽略（區域由賬戶自動識別，無需傳入）"
       }
     },
     "order_detail": {
@@ -189,9 +189,9 @@
       "description": "查詢當日委託，返回 orders[]{order_id, symbol, side, order_type, status, quantity, price, submitted_at, executed_quantity, executed_price}。僅限美股賬戶：us_action（Buy/Sell）、us_page、us_limit 通過獨立的美股委託接口篩選/分頁",
       "properties": {
         "symbol": "按證券篩選，例如 `\"700.HK\"`，省略則返回當日全部委託",
-        "us_action": "僅限美股賬戶：按方向篩選，`\"Buy\"` 或 `\"Sell\"`，留空表示全部",
-        "us_page": "僅限美股賬戶：頁碼（默認 1）",
-        "us_limit": "僅限美股賬戶：每頁數量（默認 20）"
+        "us_action": "僅限美股賬戶：按方向篩選，`\"Buy\"` 或 `\"Sell\"`，留空表示全部。港股/滬深/新加坡賬戶忽略（區域由賬戶自動識別，無需傳入）",
+        "us_page": "僅限美股賬戶：頁碼（默認 1）。港股/滬深/新加坡賬戶忽略（區域由賬戶自動識別，無需傳入）",
+        "us_limit": "僅限美股賬戶：每頁數量（默認 20）。港股/滬深/新加坡賬戶忽略（區域由賬戶自動識別，無需傳入）"
       }
     },
     "cancel_order": {
