@@ -171,7 +171,7 @@
     },
     "order_detail": {
       "title": "委託詳情",
-      "description": "查詢單個委託詳情，返回 {order_id, symbol, status, side, order_type, quantity, price, executed_quantity, executed_price, submitted_at, time_in_force, msg}",
+      "description": "查詢單個委託詳情，返回 {order_id, symbol, status, side, order_type, quantity, price, executed_quantity, executed_price, submitted_at, time_in_force, msg}。美股賬戶查詢會得到美股專屬變體：委託嵌套在 `order` 欄位下而非根級。區域由賬戶自動識別",
       "properties": {
         "order_id": "委託單號"
       }

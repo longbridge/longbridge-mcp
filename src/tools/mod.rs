@@ -2399,7 +2399,7 @@ impl Longbridge {
         title = "Order Detail",
         annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = true),
         output_schema = schema_for::<output::OrderDetailResponse>(),
-        description = "Get detailed information about a specific order. Returns {order_id, symbol, status, side, order_type, quantity, price, executed_quantity, executed_price, submitted_at, time_in_force, msg}."
+        description = "Get detailed information about a specific order. Returns {order_id, symbol, status, side, order_type, quantity, price, executed_quantity, executed_price, submitted_at, time_in_force, msg}. US-data-center accounts get a US-specific variant with the order nested under `order` instead of at the root. The region is detected from the account automatically."
     )]
     async fn order_detail(
         &self,
@@ -3333,7 +3333,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::us_market::PortfolioRealizedPlResponse>(),
-        description = "Get realized P&L for a US account, broken down by category (stock/option/crypto) and period. US accounts only; errors with DcRegionRestricted for HK/CN/SG accounts."
+        description = "Get realized P&L for a US account, broken down by category (stock/option/crypto) and period. US-data-center accounts only; errors with DcRegionRestricted for HK/CN/SG accounts."
     )]
     async fn profit_analysis_realized(
         &self,
@@ -4507,7 +4507,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::us_market::FinancialReportKeyMetricsResponse>(),
-        description = "Get key financial metrics (fin-keyfactor) for a US symbol. report: af (annual, default), saf, qf, q1/q2/q3. US accounts only; errors with DcRegionRestricted for HK/CN/SG accounts."
+        description = "Get key financial metrics (fin-keyfactor) for a US symbol. report: af (annual, default), saf, qf, q1/q2/q3. US-data-center accounts only; errors with DcRegionRestricted for HK/CN/SG accounts."
     )]
     async fn financial_report_key_metrics(
         &self,
@@ -4531,7 +4531,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::us_market::EtfDocsResponse>(),
-        description = "Get regulatory/prospectus documents (etf-files) for a US ETF. US accounts only; errors with DcRegionRestricted for HK/CN/SG accounts."
+        description = "Get regulatory/prospectus documents (etf-files) for a US ETF. US-data-center accounts only; errors with DcRegionRestricted for HK/CN/SG accounts."
     )]
     async fn etf_docs(
         &self,

@@ -171,7 +171,7 @@
     },
     "order_detail": {
       "title": "委托详情",
-      "description": "查询单个委托详情，返回 {order_id, symbol, status, side, order_type, quantity, price, executed_quantity, executed_price, submitted_at, time_in_force, msg}",
+      "description": "查询单个委托详情，返回 {order_id, symbol, status, side, order_type, quantity, price, executed_quantity, executed_price, submitted_at, time_in_force, msg}。美股账户查询会得到美股专属变体：委托嵌套在 `order` 字段下而非根级。区域由账户自动识别",
       "properties": {
         "order_id": "委托单号"
       }
