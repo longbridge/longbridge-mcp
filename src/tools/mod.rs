@@ -1648,7 +1648,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get static info for securities. Returns per symbol: symbol, name_cn, name_en, exchange (e.g. NASDAQ), type (e.g. US_Stock), lot_size, listed_date, delisted (bool). US accounts only: .BKKT crypto symbols (e.g. BTCUSD.BKKT) are routed to a separate US crypto overview endpoint; .HAS/.OSL crypto symbols are unaffected."
+        description = "Get static info for securities. Returns per symbol: symbol, name_cn, name_en, exchange (e.g. NASDAQ), type (e.g. US_Stock), lot_size, listed_date, delisted (bool). US-data-center accounts only: .BKKT crypto symbols (e.g. BTCUSD.BKKT) are routed to a separate US crypto overview endpoint; .HAS/.OSL crypto symbols are unaffected."
     )]
     async fn static_info(
         &self,
@@ -2321,7 +2321,7 @@ impl Longbridge {
         title = "Stock Positions",
         annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = true),
         output_schema = schema_for::<output::StockPositionsResponse>(),
-        description = "Get current stock positions across all channels. Returns list[].stock_info[]{symbol, symbol_name, quantity, available_quantity, currency, cost_price, market}. US accounts only: an additional us_asset_overview field {cash_list, stock_list, option_list, crypto_list, cash_buy_power, overnight_buy_power} is included alongside the existing data."
+        description = "Get current stock positions across all channels. Returns list[].stock_info[]{symbol, symbol_name, quantity, available_quantity, currency, cost_price, market}. US-data-center accounts only: an additional us_asset_overview field {cash_list, stock_list, option_list, crypto_list, cash_buy_power, overnight_buy_power} is included alongside the existing data."
     )]
     async fn stock_positions(
         &self,
@@ -2380,7 +2380,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get orders placed today. Returns orders[]{order_id, symbol, side, order_type, status, quantity, price, submitted_at, executed_quantity, executed_price}. Pass symbol to filter. US accounts only: us_action (Buy/Sell), us_page, us_limit filter/paginate via a separate US order endpoint."
+        description = "Get orders placed today. Returns orders[]{order_id, symbol, side, order_type, status, quantity, price, submitted_at, executed_quantity, executed_price}. Pass symbol to filter. US-data-center accounts only: us_action (Buy/Sell), us_page, us_limit filter/paginate via a separate US order endpoint."
     )]
     async fn today_orders(
         &self,
@@ -2468,7 +2468,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get historical orders between dates (excludes today). Returns orders[]{order_id, symbol, side, status, quantity, price, submitted_at}. start_at/end_at in RFC3339. US accounts only: us_page, us_limit paginate via a separate US order endpoint (default page size 20 — pass us_page to see more than the first page)."
+        description = "Get historical orders between dates (excludes today). Returns orders[]{order_id, symbol, side, status, quantity, price, submitted_at}. start_at/end_at in RFC3339. US-data-center accounts only: us_page, us_limit paginate via a separate US order endpoint (default page size 20 — pass us_page to see more than the first page)."
     )]
     async fn history_orders(
         &self,
@@ -5891,6 +5891,40 @@ mod tests {
                 .all(|n| !super::AP_ONLY_TOOLS.contains(n)),
             "US_ONLY_TOOLS and AP_ONLY_TOOLS must be disjoint"
         );
+    }
+
+    #[test]
+    fn region_scoped_us_params_are_optional() {
+        // A `us_*` input is region-scoped (meaningful only for US-data-center
+        // accounts). It must never be `required` — an HK/CN/SG session cannot
+        // satisfy it, and the region is inferred from the account rather than
+        // passed by the caller. Guards against a future region-scoped param
+        // being added as required.
+        for tool in crate::tools::list_tools() {
+            let required: std::collections::HashSet<&str> = tool
+                .input_schema
+                .get("required")
+                .and_then(|r| r.as_array())
+                .map(|a| a.iter().filter_map(|v| v.as_str()).collect())
+                .unwrap_or_default();
+            let Some(props) = tool
+                .input_schema
+                .get("properties")
+                .and_then(|p| p.as_object())
+            else {
+                continue;
+            };
+            for name in props.keys() {
+                if name.starts_with("us_") {
+                    assert!(
+                        !required.contains(name.as_str()),
+                        "tool `{}`: region-scoped param `{}` must be optional, not required",
+                        tool.name,
+                        name
+                    );
+                }
+            }
+        }
     }
 }
 

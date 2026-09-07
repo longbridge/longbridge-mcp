@@ -28,11 +28,15 @@ pub struct AccountBalanceParam {
 pub struct TodayOrdersParam {
     /// Filter by symbol, e.g. "700.HK". Omit to return all today's orders.
     pub symbol: Option<String>,
-    /// US accounts only: filter by side, "Buy" or "Sell". Omit for all.
+    /// US-data-center accounts only: filter by side, "Buy" or "Sell". Omit for
+    /// all. Ignored for HK/CN/SG accounts (the region is inferred from the
+    /// account — do not pass it).
     pub us_action: Option<String>,
-    /// US accounts only: page number (default 1).
+    /// US-data-center accounts only: page number (default 1). Ignored for
+    /// HK/CN/SG accounts.
     pub us_page: Option<i32>,
-    /// US accounts only: page size (default 20).
+    /// US-data-center accounts only: page size (default 20). Ignored for
+    /// HK/CN/SG accounts.
     pub us_limit: Option<i32>,
 }
 
@@ -159,9 +163,11 @@ pub struct HistoryOrdersParam {
     pub start_at: String,
     /// End time (RFC3339)
     pub end_at: String,
-    /// US accounts only, history_orders tool only: page number (default 1).
+    /// US-data-center accounts only: page number (default 1). Ignored for
+    /// HK/CN/SG accounts (the region is inferred from the account — do not pass it).
     pub us_page: Option<i32>,
-    /// US accounts only, history_orders tool only: page size (default 20).
+    /// US-data-center accounts only: page size (default 20). Ignored for
+    /// HK/CN/SG accounts.
     pub us_limit: Option<i32>,
 }
 
