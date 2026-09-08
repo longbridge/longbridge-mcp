@@ -7,7 +7,7 @@ edition = "2024"
 # TODO: switch back to crates.io after the next openapi release. The branch
 # carries the symbol-based (counter-id-free) request contract; move back to
 # `main` once it lands there.
-longbridge = { git = "https://github.com/longbridge/openapi.git", branch = "feat/remove-counter-id-conversion" }
+longbridge = { git = "https://github.com/longbridge/openapi.git", rev = "f31ce227" }
 rust_decimal = "1"
 rmcp = { version = "1.4", features = [
     "server",
