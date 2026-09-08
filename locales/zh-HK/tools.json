@@ -87,7 +87,7 @@
     },
     "profit_analysis_realized": {
       "title": "已實現盈虧分析（美股）",
-      "description": "獲取美股賬戶的已實現盈虧，按類別（股票/期權/加密貨幣）和週期拆分。僅限美股賬戶；港股/滬深/新加坡賬戶調用會返回 DcRegionRestricted 錯誤",
+      "description": "獲取美股賬戶的已實現盈虧，按類別（股票/期權/加密貨幣）和週期拆分。僅限美股賬戶；亞太賬戶調用會返回 DcRegionRestricted 錯誤",
       "properties": {
         "currency": "報告貨幣，例如 `\"USD\"`（默認 `\"USD\"`）。僅限美股賬戶",
         "category": "按類別篩選：`\"STOCK\"`、`\"OPTION\"`、`\"CRYPTO\"`，留空表示全部"
@@ -165,8 +165,8 @@
         "symbol": "按證券篩選（可選）",
         "start_at": "起始時間（RFC3339 時間格式）",
         "end_at": "結束時間（RFC3339 時間格式）",
-        "us_page": "僅限美股賬戶：頁碼（預設 1）。港股/滬深/新加坡賬戶忽略（區域由賬戶自動識別，無需傳入）",
-        "us_limit": "僅限美股賬戶：每頁數量（預設 20）。港股/滬深/新加坡賬戶忽略（區域由賬戶自動識別，無需傳入）"
+        "us_page": "僅限美股賬戶：頁碼（預設 1）。亞太賬戶忽略（區域由賬戶自動識別，無需傳入）",
+        "us_limit": "僅限美股賬戶：每頁數量（預設 20）。亞太賬戶忽略（區域由賬戶自動識別，無需傳入）"
       }
     },
     "order_detail": {
@@ -192,9 +192,9 @@
         "symbol": "按證券篩選，例如 `\"700.HK\"`，省略則返回當日全部委託",
         "order_id": "按委託單號篩選：母單單號，或（配合 is_attached=true）止盈/止損附加單單號。美股賬戶下無效",
         "is_attached": "僅在同時傳入 order_id 時有效：表示該 order_id 是止盈/止損附加單單號，返回結果即為該附加單本身。單獨使用無效，美股賬戶下同樣無效",
-        "us_action": "僅限美股賬戶：按方向篩選，`\"Buy\"` 或 `\"Sell\"`，留空表示全部。港股/滬深/新加坡賬戶忽略（區域由賬戶自動識別，無需傳入）",
-        "us_page": "僅限美股賬戶：頁碼（默認 1）。港股/滬深/新加坡賬戶忽略（區域由賬戶自動識別，無需傳入）",
-        "us_limit": "僅限美股賬戶：每頁數量（默認 20）。港股/滬深/新加坡賬戶忽略（區域由賬戶自動識別，無需傳入）"
+        "us_action": "僅限美股賬戶：按方向篩選，`\"Buy\"` 或 `\"Sell\"`，留空表示全部。亞太賬戶忽略（區域由賬戶自動識別，無需傳入）",
+        "us_page": "僅限美股賬戶：頁碼（默認 1）。亞太賬戶忽略（區域由賬戶自動識別，無需傳入）",
+        "us_limit": "僅限美股賬戶：每頁數量（默認 20）。亞太賬戶忽略（區域由賬戶自動識別，無需傳入）"
       }
     },
     "cancel_order": {
@@ -490,7 +490,7 @@
     },
     "etf_docs": {
       "title": "ETF文件（美股）",
-      "description": "獲取美股ETF的監管/招募說明書文件（etf-files）。僅限美股賬戶；港股/滬深/新加坡賬戶調用會返回 DcRegionRestricted 錯誤",
+      "description": "獲取美股ETF的監管/招募說明書文件（etf-files）。僅限美股賬戶；亞太賬戶調用會返回 DcRegionRestricted 錯誤",
       "properties": {
         "symbol": "ETF代碼，例如 `\"SPY.US\"`",
         "limit": "最多返回的文件數量，留空返回全部"
@@ -535,7 +535,7 @@
     },
     "financial_report_key_metrics": {
       "title": "關鍵財務指標（美股）",
-      "description": "獲取美股標的的關鍵財務指標（fin-keyfactor）。report: af（年度，默認）、saf、qf、q1/q2/q3。僅限美股賬戶；港股/滬深/新加坡賬戶調用會返回 DcRegionRestricted 錯誤",
+      "description": "獲取美股標的的關鍵財務指標（fin-keyfactor）。report: af（年度，默認）、saf、qf、q1/q2/q3。僅限美股賬戶；亞太賬戶調用會返回 DcRegionRestricted 錯誤",
       "properties": {
         "symbol": "證券代碼，例如 `\"AAPL.US\"`",
         "report": "報告期：`\"annual\"`（默認）或 `\"quarterly\"`"
