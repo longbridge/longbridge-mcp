@@ -7,12 +7,27 @@
 use rmcp::schemars::JsonSchema;
 use rmcp::serde::Serialize;
 
-/// Returned by `grid_submit`.
+/// Returned by `grid_submit`, which is a dry run unless `execute=true`.
+///
+/// One struct covers both outcomes because the MCP spec requires every response
+/// from a tool declaring an `outputSchema` to validate against it, and the dry
+/// run has no order ID to report.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct GridSubmitResponse {
+    /// True when nothing was sent to the exchange. The caller must show
+    /// `preview` to the user and only re-call with `execute=true` once the user
+    /// has explicitly confirmed it.
+    pub dry_run: bool,
     /// The newly-created grid order ID. Pass to grid_detail / grid_cancel /
-    /// grid_suspend / grid_restart / grid_replace.
-    pub order_id: String,
+    /// grid_suspend / grid_restart / grid_replace. Absent on a dry run.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub order_id: Option<String>,
+    /// The grid order that would have been submitted. Present only on a dry run.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preview: Option<serde_json::Value>,
+    /// What the caller must do next. Present only on a dry run.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_step: Option<String>,
 }
 
 /// A grid order summary (list rows). Documented subset of the SDK `GridOrder`.

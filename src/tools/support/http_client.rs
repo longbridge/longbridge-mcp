@@ -54,7 +54,7 @@ pub async fn http_get_tool(
         .response::<String>()
         .send()
         .await
-        .map_err(|e| Error::Other(e.to_string()))?;
+        .map_err(|e| Error::longbridge(e.into()))?;
     result_from_raw_json(&resp)
 }
 
@@ -76,7 +76,7 @@ pub async fn http_get_tool_unix(
         .response::<String>()
         .send()
         .await
-        .map_err(|e| Error::Other(e.to_string()))?;
+        .map_err(|e| Error::longbridge(e.into()))?;
     result_from_raw_json_with_unix_paths(&resp, unix_paths)
 }
 
@@ -91,7 +91,7 @@ pub async fn http_post_tool(
         .response::<String>()
         .send()
         .await
-        .map_err(|e| Error::Other(e.to_string()))?;
+        .map_err(|e| Error::longbridge(e.into()))?;
     result_from_raw_json(&resp)
 }
 
@@ -107,7 +107,7 @@ pub async fn http_post_tool_unix(
         .response::<String>()
         .send()
         .await
-        .map_err(|e| Error::Other(e.to_string()))?;
+        .map_err(|e| Error::longbridge(e.into()))?;
     result_from_raw_json_with_unix_paths(&resp, unix_paths)
 }
 
@@ -122,6 +122,6 @@ pub async fn http_delete_tool(
         .response::<String>()
         .send()
         .await
-        .map_err(|e| Error::Other(e.to_string()))?;
+        .map_err(|e| Error::longbridge(e.into()))?;
     result_from_raw_json(&resp)
 }

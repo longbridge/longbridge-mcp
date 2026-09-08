@@ -11,23 +11,40 @@
 
 pub mod account;
 pub mod discovery;
+pub mod fact;
 pub mod fundamental;
 pub mod grid;
 pub mod macrodata;
 pub mod market;
 pub mod quote;
+pub mod signal;
 pub mod social;
 pub mod us_market;
 
 use rmcp::schemars::JsonSchema;
 use rmcp::serde::Serialize;
 
-/// Returned by `submit_order`.
+/// Returned by `submit_order`, which is a dry run unless `execute=true`.
+///
+/// One struct covers both outcomes because the MCP spec requires every response
+/// from a tool declaring an `outputSchema` to validate against it, and the dry
+/// run has no order ID to report.
 #[derive(Debug, Serialize, JsonSchema)]
-pub struct OrderIdResponse {
+pub struct SubmitOrderResult {
+    /// True when nothing was sent to the exchange. The caller must show
+    /// `preview` to the user and only re-call with `execute=true` once the user
+    /// has explicitly confirmed that order.
+    pub dry_run: bool,
     /// The newly-created order ID. Pass this to `cancel_order` /
-    /// `replace_order` / `order_detail`.
-    pub order_id: String,
+    /// `replace_order` / `order_detail`. Absent on a dry run.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub order_id: Option<String>,
+    /// The order that would have been placed. Present only on a dry run.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preview: Option<serde_json::Value>,
+    /// What the caller must do next. Present only on a dry run.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_step: Option<String>,
 }
 
 /// Returned by `statement_export`.
@@ -73,6 +90,10 @@ pub struct StockPositionsResponse {
     /// US-specific endpoint.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub us_asset_overview: Option<us_market::UsAssetOverview>,
+    /// Present when the US overview call failed: positions are still returned,
+    /// and this names what is missing and why.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub warnings: Option<Vec<String>>,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -183,6 +204,11 @@ pub struct CapitalDistributionResponse {
     pub capital_in: CapitalDistribution,
     /// Outflow capital broken down by order size.
     pub capital_out: CapitalDistribution,
+    /// False when upstream has no capital-flow data for this symbol (e.g.
+    /// indices) — it still responds with a zero-filled record and a Unix
+    /// epoch timestamp rather than an error, so this flag is the only way
+    /// to distinguish "no data" from a real all-zero trading day.
+    pub data_available: bool,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -232,6 +258,71 @@ pub struct BrokerLevel {
     pub position: i32,
     /// Broker IDs queueing at this level. Map them to names via `participants`.
     pub broker_ids: Vec<i32>,
+}
+
+/// One take-profit or stop-loss leg attached to an order, as returned inside
+/// `OrderDetailResponse.attached_orders`.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct AttachedOrderDetailResponse {
+    /// The leg's own order ID. Pass it to `order_detail` / `cancel_order` with
+    /// `is_attached=true` to act on the leg alone.
+    pub order_id: String,
+    /// Leg type: `PROFIT_TAKER`, `STOP_LOSS` or `BRACKET`.
+    pub attached_type_display: String,
+    /// Security symbol, e.g. "700.HK" — the API's `counter_id`, which this
+    /// server renames and converts like every other counter ID.
+    pub symbol: String,
+    /// Order status.
+    pub status: String,
+    /// Trigger price (null when unset).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trigger_price: Option<String>,
+    /// Limit price submitted once triggered (null for market-style legs).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub submit_price: Option<String>,
+    /// Submitted quantity.
+    pub quantity: String,
+    /// Quantity already executed.
+    pub executed_qty: String,
+    /// Volume-weighted average executed price (null when unfilled).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub executed_price: Option<String>,
+    /// Total executed amount.
+    pub executed_amount: String,
+    /// Order type the leg is submitted as once triggered, e.g. `LO`, `MO`.
+    pub activate_order_type: String,
+    /// Time-in-force: `Day` / `GTC` / `GTD`.
+    pub time_in_force: String,
+    /// GTD expiry date (yyyy-mm-dd, null when not GTD).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gtd: Option<String>,
+    /// Trigger status, e.g. `Deactive` / `Active` / `Released`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trigger_status: Option<String>,
+    /// Leg submission time (RFC3339).
+    pub submitted_at: String,
+    /// Last update time (RFC3339).
+    pub updated_at: String,
+    /// Whether the leg has been withdrawn.
+    pub withdrawn: bool,
+    /// Whether the leg has been reviewed.
+    pub reviewed: bool,
+    /// Outside-RTH setting of the triggered leg.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub activate_rth: Option<String>,
+    /// Outside-RTH enforcement on the leg itself.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub force_only_rth: Option<String>,
+    /// Order tag (e.g. `Normal`, `LongTerm`).
+    pub tag: String,
+}
+
+/// Returned by `submit_order` / `submit_multileg_order`.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct OrderIdResponse {
+    /// The newly-created order ID. Pass this to `cancel_order` /
+    /// `replace_order` / `order_detail`.
+    pub order_id: String,
 }
 
 /// Returned by `order_detail`. Single order with full lifecycle metadata.
@@ -312,6 +403,11 @@ pub struct OrderDetailResponse {
     /// Outside-RTH setting: `RTH_ONLY` / `ANY_TIME` / `OVERNIGHT`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub outside_rth: Option<String>,
+    /// Attached take-profit / stop-loss legs of this order. Absent when it has
+    /// none, and absent in the US-region shape, which nests its own attached
+    /// legs under `order` instead.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub attached_orders: Vec<AttachedOrderDetailResponse>,
     /// US-region shape only: the order, nested instead of at the response
     /// root (confirmed via a live US staging `order_detail` call).
     #[serde(skip_serializing_if = "Option::is_none")]

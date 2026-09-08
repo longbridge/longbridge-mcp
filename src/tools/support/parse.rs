@@ -13,7 +13,7 @@ const PRIMITIVE_DATETIME_FORMAT: &[time::format_description::BorrowedFormatItem<
     time::macros::format_description!("[year]-[month]-[day]T[hour]:[minute]:[second]");
 
 pub fn parse_period(s: &str) -> Result<Period, McpError> {
-    match s {
+    match s.trim().to_lowercase().as_str() {
         "1m" => Ok(Period::OneMinute),
         "2m" => Ok(Period::TwoMinute),
         "3m" => Ok(Period::ThreeMinute),
@@ -33,18 +33,21 @@ pub fn parse_period(s: &str) -> Result<Period, McpError> {
         "quarter" => Ok(Period::Quarter),
         "year" => Ok(Period::Year),
         _ => Err(McpError::invalid_params(
-            format!("invalid period: {s}"),
+            format!(
+                "invalid period: '{s}', expected one of: 1m, 2m, 3m, 5m, 10m, 15m, 20m, 30m, \
+                 45m, 60m, 120m, 180m, 240m, day, week, month, quarter, year"
+            ),
             None,
         )),
     }
 }
 
 pub fn parse_trade_sessions(s: &str) -> Result<TradeSessions, McpError> {
-    match s {
+    match s.trim().to_lowercase().as_str() {
         "intraday" => Ok(TradeSessions::Intraday),
         "all" => Ok(TradeSessions::All),
         _ => Err(McpError::invalid_params(
-            format!("invalid trade_sessions: {s}, expected 'intraday' or 'all'"),
+            format!("invalid trade_sessions: '{s}', expected 'intraday' or 'all'"),
             None,
         )),
     }
@@ -223,5 +226,47 @@ pub fn parse_warrant_status(s: &str) -> Result<WarrantStatus, McpError> {
             format!("invalid status: {s}, expected Suspend/PrepareList/Normal"),
             None,
         )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn period_is_case_insensitive_and_trims() {
+        assert!(matches!(parse_period("Day").unwrap(), Period::Day));
+        assert!(matches!(
+            parse_period(" 15M ").unwrap(),
+            Period::FifteenMinute
+        ));
+        assert!(matches!(parse_period("YEAR").unwrap(), Period::Year));
+    }
+
+    #[test]
+    fn period_error_lists_the_accepted_values() {
+        let err = parse_period("daily").unwrap_err();
+        assert!(
+            err.message.contains("day") && err.message.contains("week"),
+            "error should list accepted periods, got: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn trade_sessions_is_case_insensitive_and_trims() {
+        assert!(matches!(
+            parse_trade_sessions("All").unwrap(),
+            TradeSessions::All
+        ));
+        assert!(matches!(
+            parse_trade_sessions(" INTRADAY ").unwrap(),
+            TradeSessions::Intraday
+        ));
+    }
+
+    #[test]
+    fn trade_sessions_rejects_anything_else() {
+        assert!(parse_trade_sessions("premarket").is_err());
     }
 }

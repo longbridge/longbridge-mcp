@@ -252,7 +252,7 @@ pub async fn screener_search(
             .response::<String>()
             .send()
             .await
-            .map_err(|e| Error::Other(e.to_string()))?;
+            .map_err(|e| Error::longbridge(e.into()))?;
 
         let strategy: serde_json::Value = serde_json::from_str(&raw).map_err(Error::Serialize)?;
 
@@ -423,7 +423,7 @@ pub async fn screener_search(
         .response::<String>()
         .send()
         .await
-        .map_err(|e| Error::Other(e.to_string()))?;
+        .map_err(|e| Error::longbridge(e.into()))?;
 
     let json = crate::serialize::transform_json(resp.as_bytes()).map_err(Error::Serialize)?;
     // Strip filter_ prefix from indicators[].key so keys are consistent with

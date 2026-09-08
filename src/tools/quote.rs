@@ -24,6 +24,16 @@ pub struct SymbolsParam {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct OptionSymbolsParam {
+    /// Option contract symbols, e.g. ["AAPL230317P160000.US"]. These are NOT
+    /// plain stock symbols — get valid ones from `option_chain_info_by_date`'s
+    /// per-strike `call.symbol`/`put.symbol` fields (after listing expiry
+    /// dates with `option_chain_expiry_date_list`).
+    #[serde(deserialize_with = "tolerant_vec_string")]
+    pub symbols: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct SymbolParam {
     /// Security symbol, e.g. "700.HK"
     pub symbol: String,
@@ -83,20 +93,25 @@ fn default_trade_sessions() -> String {
 pub struct HistoryCandlesticksByOffsetParam {
     /// Security symbol, e.g. "700.HK"
     pub symbol: String,
-    /// Period: 1m, 5m, 15m, 30m, 60m, day, week, month, year
+    /// Period: 1m, 5m, 15m, 30m, 60m, day, week, month, year (default: day)
+    #[serde(default = "default_candlestick_period")]
     pub period: String,
-    /// Whether to forward-adjust for splits/dividends
-    #[serde(deserialize_with = "tolerant_bool")]
+    /// Whether to forward-adjust for splits/dividends (default: false / no adjust)
+    #[serde(default, deserialize_with = "tolerant_bool")]
     pub forward_adjust: bool,
-    /// Whether to query forward in time (true) or backward (false)
-    #[serde(deserialize_with = "tolerant_bool")]
+    /// Whether to query forward in time (true) or backward (false; default)
+    #[serde(default, deserialize_with = "tolerant_bool")]
     pub forward: bool,
     /// Reference datetime (yyyy-mm-ddTHH:MM:SS), omit to start from latest
     pub time: Option<String>,
-    /// Number of candlesticks (max 1000)
-    #[serde(deserialize_with = "tolerant_usize")]
+    /// Number of candlesticks (optional, max 1000; default 100)
+    #[serde(
+        default = "default_candlestick_count",
+        deserialize_with = "tolerant_usize"
+    )]
     pub count: usize,
-    /// Trade sessions: "intraday" (regular hours only) or "all" (include pre-market and post-market)
+    /// Trade sessions: "intraday" (regular hours only) or "all" (include pre-market and post-market; default "all")
+    #[serde(default = "default_trade_sessions")]
     pub trade_sessions: String,
 }
 
@@ -104,16 +119,18 @@ pub struct HistoryCandlesticksByOffsetParam {
 pub struct HistoryCandlesticksByDateParam {
     /// Security symbol, e.g. "700.HK"
     pub symbol: String,
-    /// Period: 1m, 5m, 15m, 30m, 60m, day, week, month, year
+    /// Period: 1m, 5m, 15m, 30m, 60m, day, week, month, year (default: day)
+    #[serde(default = "default_candlestick_period")]
     pub period: String,
-    /// Whether to forward-adjust for splits/dividends
-    #[serde(deserialize_with = "tolerant_bool")]
+    /// Whether to forward-adjust for splits/dividends (default: false / no adjust)
+    #[serde(default, deserialize_with = "tolerant_bool")]
     pub forward_adjust: bool,
     /// Start date (yyyy-mm-dd), optional
     pub start: Option<String>,
     /// End date (yyyy-mm-dd), optional
     pub end: Option<String>,
-    /// Trade sessions: "intraday" (regular hours only) or "all" (include pre-market and post-market)
+    /// Trade sessions: "intraday" (regular hours only) or "all" (include pre-market and post-market; default "all")
+    #[serde(default = "default_trade_sessions")]
     pub trade_sessions: String,
 }
 
@@ -322,7 +339,7 @@ pub async fn quote(
 
 pub async fn option_quote(
     mctx: &crate::tools::McpContext,
-    p: SymbolsParam,
+    p: OptionSymbolsParam,
 ) -> Result<CallToolResult, McpError> {
     let ctx = mctx.get_quote_context().await;
     let result = ctx.option_quote(p.symbols).await.map_err(|e| {
@@ -405,10 +422,42 @@ pub async fn intraday(
     tool_json(&result)
 }
 
+/// Upstream's own "symbol count out of limit" business code — seen firing
+/// even when the requested count exactly equals the reported limit (e.g.
+/// `requested:100/limit:100`), which means the true ceiling for some account
+/// tiers is exclusive. [`with_candlestick_count_boundary_retry`] retries once
+/// just under that boundary rather than surfacing the raw upstream error.
+const CANDLESTICK_COUNT_OUT_OF_LIMIT: i64 = 301607;
+
+fn validate_candlestick_count(count: usize) -> Result<(), McpError> {
+    if count == 0 {
+        return Err(McpError::invalid_params("count must be at least 1", None));
+    }
+    Ok(())
+}
+
+/// Retry once with `count - 1` when upstream rejects the exact requested
+/// count at an account's own quota boundary.
+async fn with_candlestick_count_boundary_retry<T, Fut>(
+    count: usize,
+    mut call: impl FnMut(usize) -> Fut,
+) -> Result<T, Box<longbridge::Error>>
+where
+    Fut: std::future::Future<Output = Result<T, longbridge::Error>>,
+{
+    match call(count).await {
+        Err(e) if count > 1 && e.openapi_error_code() == Some(CANDLESTICK_COUNT_OUT_OF_LIMIT) => {
+            call(count - 1).await.map_err(Box::new)
+        }
+        result => result.map_err(Box::new),
+    }
+}
+
 pub async fn candlesticks(
     mctx: &crate::tools::McpContext,
     p: CandlesticksParam,
 ) -> Result<CallToolResult, McpError> {
+    validate_candlestick_count(p.count)?;
     let period = parse::parse_period(&p.period)?;
     let sessions = parse::parse_trade_sessions(&p.trade_sessions)?;
     let adjust = if p.forward_adjust {
@@ -417,13 +466,14 @@ pub async fn candlesticks(
         longbridge::quote::AdjustType::NoAdjust
     };
     let ctx = mctx.get_quote_context().await;
-    let result = ctx
-        .candlesticks(p.symbol, period, p.count, adjust, sessions)
-        .await
-        .map_err(|e| {
-            mctx.evict_quote_context();
-            Error::longbridge(e)
-        })?;
+    let result = with_candlestick_count_boundary_retry(p.count, |count| {
+        ctx.candlesticks(p.symbol.clone(), period, count, adjust, sessions)
+    })
+    .await
+    .map_err(|e| {
+        mctx.evict_quote_context();
+        Error::longbridge(*e)
+    })?;
     tool_json(&result)
 }
 
@@ -431,6 +481,7 @@ pub async fn history_candlesticks_by_offset(
     mctx: &crate::tools::McpContext,
     p: HistoryCandlesticksByOffsetParam,
 ) -> Result<CallToolResult, McpError> {
+    validate_candlestick_count(p.count)?;
     let period = parse::parse_period(&p.period)?;
     let adjust = parse::parse_adjust_type(p.forward_adjust);
     let sessions = parse::parse_trade_sessions(&p.trade_sessions)?;
@@ -439,15 +490,22 @@ pub async fn history_candlesticks_by_offset(
         None => None,
     };
     let ctx = mctx.get_quote_context().await;
-    let result = ctx
-        .history_candlesticks_by_offset(
-            p.symbol, period, adjust, p.forward, time, p.count, sessions,
+    let result = with_candlestick_count_boundary_retry(p.count, |count| {
+        ctx.history_candlesticks_by_offset(
+            p.symbol.clone(),
+            period,
+            adjust,
+            p.forward,
+            time,
+            count,
+            sessions,
         )
-        .await
-        .map_err(|e| {
-            mctx.evict_quote_context();
-            Error::longbridge(e)
-        })?;
+    })
+    .await
+    .map_err(|e| {
+        mctx.evict_quote_context();
+        Error::longbridge(*e)
+    })?;
     tool_json(&result)
 }
 
@@ -551,6 +609,11 @@ pub async fn capital_distribution(
         mctx.evict_quote_context();
         Error::longbridge(e)
     })?;
+    // Symbols with no capital-flow data (indices, some ETFs) don't error —
+    // upstream responds with a zero-filled record stamped at the Unix epoch.
+    // A real trading day is never actually reported at that instant, so it's
+    // a reliable "no data" signal distinct from a genuine all-zero day.
+    let data_available = result.timestamp.unix_timestamp() != 0;
     let timestamp = result
         .timestamp
         .format(&time::format_description::well_known::Rfc3339)
@@ -567,6 +630,7 @@ pub async fn capital_distribution(
             medium: result.capital_out.medium.to_string(),
             small: result.capital_out.small.to_string(),
         },
+        data_available,
     };
     tool_json(&resp)
 }
@@ -1043,5 +1107,126 @@ mod tests {
         assert!(obj["post_market"].is_object());
         assert!(obj["overnight"].is_null());
         assert!(obj["pre_market"].is_null());
+    }
+
+    #[test]
+    fn history_candlesticks_by_date_fills_defaults_from_symbol_alone() {
+        let p: super::HistoryCandlesticksByDateParam =
+            serde_json::from_value(json!({"symbol": "700.HK"}))
+                .expect("symbol alone should be a valid call");
+        assert_eq!(p.period, "day");
+        assert_eq!(p.trade_sessions, "all");
+        assert!(!p.forward_adjust);
+        assert!(p.start.is_none() && p.end.is_none());
+    }
+
+    #[test]
+    fn history_candlesticks_by_offset_fills_defaults_from_symbol_alone() {
+        let p: super::HistoryCandlesticksByOffsetParam =
+            serde_json::from_value(json!({"symbol": "AAPL.US"}))
+                .expect("symbol alone should be a valid call");
+        assert_eq!(p.period, "day");
+        assert_eq!(p.trade_sessions, "all");
+        assert_eq!(p.count, 100);
+        assert!(!p.forward_adjust);
+        assert!(!p.forward);
+        assert!(p.time.is_none());
+    }
+
+    #[test]
+    fn history_candlesticks_params_still_honour_explicit_values() {
+        let p: super::HistoryCandlesticksByDateParam = serde_json::from_value(json!({
+            "symbol": "700.HK",
+            "period": "week",
+            "forward_adjust": "true",
+            "trade_sessions": "intraday",
+            "start": "2026-01-01",
+        }))
+        .expect("explicit values should deserialize");
+        assert_eq!(p.period, "week");
+        assert_eq!(p.trade_sessions, "intraday");
+        assert!(p.forward_adjust);
+        assert_eq!(p.start.as_deref(), Some("2026-01-01"));
+    }
+
+    fn count_out_of_limit_error() -> longbridge::Error {
+        longbridge::Error::WsClient(longbridge::wsclient::WsClientError::ResponseError {
+            status: 7,
+            detail: Some(longbridge::wsclient::WsResponseErrorDetail {
+                code: 301607,
+                msg: "history candlestick symbol count out of limit, requested:100/limit:100"
+                    .to_string(),
+            }),
+        })
+    }
+
+    #[test]
+    fn validate_candlestick_count_rejects_zero() {
+        assert!(
+            super::validate_candlestick_count(0).is_err(),
+            "count=0 must be rejected"
+        );
+        assert!(
+            super::validate_candlestick_count(1).is_ok(),
+            "count=1 is the minimum valid value"
+        );
+    }
+
+    #[tokio::test]
+    async fn boundary_retry_retries_once_at_the_reported_limit() {
+        let mut attempts = Vec::new();
+        let result = super::with_candlestick_count_boundary_retry(100, |count| {
+            attempts.push(count);
+            async move {
+                if count == 100 {
+                    Err(count_out_of_limit_error())
+                } else {
+                    Ok(count)
+                }
+            }
+        })
+        .await;
+        assert_eq!(attempts, vec![100, 99]);
+        assert_eq!(result.unwrap(), 99);
+    }
+
+    #[tokio::test]
+    async fn boundary_retry_does_not_retry_below_count_one() {
+        let mut attempts = Vec::new();
+        let result = super::with_candlestick_count_boundary_retry(1, |count| {
+            attempts.push(count);
+            async move { Err::<usize, _>(count_out_of_limit_error()) }
+        })
+        .await;
+        assert_eq!(attempts, vec![1]);
+        assert!(
+            result.is_err(),
+            "count=1 must not retry at count-1=0, so the error should propagate"
+        );
+    }
+
+    #[tokio::test]
+    async fn boundary_retry_does_not_retry_unrelated_errors() {
+        let mut attempts = Vec::new();
+        let result = super::with_candlestick_count_boundary_retry(100, |count| {
+            attempts.push(count);
+            async move {
+                Err::<usize, _>(longbridge::Error::WsClient(
+                    longbridge::wsclient::WsClientError::ResponseError {
+                        status: 7,
+                        detail: Some(longbridge::wsclient::WsResponseErrorDetail {
+                            code: 301600,
+                            msg: "invalid symbol".to_string(),
+                        }),
+                    },
+                ))
+            }
+        })
+        .await;
+        assert_eq!(attempts, vec![100]);
+        assert!(
+            result.is_err(),
+            "an unrelated error code (301600, not 301607) must not trigger a retry"
+        );
     }
 }

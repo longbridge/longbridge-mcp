@@ -16,6 +16,7 @@ use rmcp::tool_router;
 use crate::auth::middleware::{AgentEndpoint, BearerToken, RestrictedEndpoint, RestrictedVersion};
 use crate::error::Error;
 use crate::serialize::to_tool_json;
+use crate::tools::support::text::{clip_chars, truncate_chars};
 
 /// Registered name of the reverse-auth tool, used as the filter key in both
 /// `tools_main_endpoint` (excluded) and `tools_agent_endpoint` (only this one).
@@ -37,7 +38,21 @@ tokio::task_local! {
     pub(crate) static CURRENT_TOOL: &'static str;
 }
 
-async fn measured_tool_call<F, Fut>(name: &'static str, f: F) -> Result<CallToolResult, McpError>
+/// Cheap per-call correlation id for [`measured_tool_call`]'s log lines.
+/// Not a request id — `rmcp`'s `RequestContext::id` isn't in scope this deep
+/// without threading it through every one of the ~110 `#[tool]` call sites —
+/// just enough to pair up one call's classification and detail log lines
+/// when another concurrent call to the same tool interleaves in the stream.
+fn next_call_id() -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
+async fn measured_tool_call<F, Fut>(
+    name: &'static str,
+    params: String,
+    f: F,
+) -> Result<CallToolResult, McpError>
 where
     F: FnOnce() -> Fut,
     Fut: std::future::Future<Output = Result<CallToolResult, McpError>>,
@@ -48,9 +63,371 @@ where
             let result = f().await;
             let duration = start.elapsed().as_secs_f64();
             crate::metrics::record_tool_call(name, duration, result.is_err());
-            result
+            // Failures only — this is the choke point every `#[tool]` method
+            // routes through via `measured_tool_call(name, ...)`, so it's
+            // cheaper to log here once than at each of the 100+ call sites.
+            // Success volume (rate, latency) is already covered by the metric
+            // just above; a log line per successful call would just duplicate
+            // that at far higher, harder-to-query volume for a hosted,
+            // multi-tenant server.
+            if let Err(err) = &result {
+                let code = err.code.0;
+                let elapsed_ms = (duration * 1000.0) as u64;
+                // `tool` name alone isn't unique on a hosted, multi-tenant
+                // server — two concurrent calls to the same tool can each
+                // fail and interleave their log lines. `call_id` is the only
+                // field shared between this call's classification line and
+                // its detail line below, so a reader can still pair them up.
+                let call_id = next_call_id();
+                // A bad-argument call (typo'd symbol, malformed date — the
+                // kind rmcp's own arg deserialization doesn't catch, so it
+                // reaches this closure and comes back as INVALID_PARAMS) is a
+                // routine, expected event on a hosted multi-tenant server,
+                // not an incident. Logging it at the same severity as a real
+                // backend failure would drown WARN-based alerting in normal
+                // user typos; downgrade that class — and its detail line
+                // below, so enabling payload logging doesn't quietly bring
+                // WARN-level noise back — to INFO, and keep WARN for
+                // everything else (auth, upstream, internal).
+                let routine = err.code == rmcp::model::ErrorCode::INVALID_PARAMS;
+                // The message text is our own short, structured error string
+                // on almost every path; `src/error.rs` sanitizes the one
+                // `longbridge` SDK variant that would otherwise embed a raw
+                // upstream HTTP response body verbatim (both here and in
+                // `tool_error`'s client-facing text below). `params` is the
+                // caller's own input (a symbol, an order quantity, ...) —
+                // not upstream content, but still account-identifying enough
+                // to withhold by default. This target stays capped off by
+                // default (`logging.rs`'s `PAYLOAD_CAPS`) as a second line of
+                // defense for any error path that sanitizer doesn't cover.
+                // `truncate_chars(...)` is inlined into the macro call, not
+                // pre-bound to a local, so it's only evaluated when the
+                // target is actually enabled.
+                if routine {
+                    tracing::info!(tool = name, call_id, elapsed_ms, code, "tool call rejected");
+                    tracing::info!(
+                        target: "longbridge_mcp::tools::error_detail",
+                        tool = name,
+                        call_id,
+                        params = %truncate_chars(&params, 500),
+                        error = %truncate_chars(err.message.as_ref(), 300),
+                        "tool call error detail"
+                    );
+                } else {
+                    tracing::warn!(tool = name, call_id, elapsed_ms, code, "tool call failed");
+                    tracing::warn!(
+                        target: "longbridge_mcp::tools::error_detail",
+                        tool = name,
+                        call_id,
+                        params = %truncate_chars(&params, 500),
+                        error = %truncate_chars(err.message.as_ref(), 300),
+                        "tool call error detail"
+                    );
+                }
+            }
+            // The request was routed and the tool ran, so a failure here is a
+            // tool-level error, not a protocol one. MCP clients render protocol
+            // errors opaquely ("tool result missing due to internal error"),
+            // which hides the reason from the model and denies it any chance to
+            // correct the call. Returning `isError` puts the message in front of
+            // the model instead. Protocol errors stay with the framework, which
+            // rejects unroutable calls (unknown tool, unparseable arguments)
+            // before this wrapper is ever reached.
+            Ok(result.unwrap_or_else(|err| tool_error(name, &err)))
         })
         .await
+}
+
+/// Render a failed tool call as a caller-visible structured envelope.
+///
+/// Non-terminal errors return an `isError` JSON envelope
+/// (`error_code`/`message`/`recoverable`/`hint`/`data`) so the consumer can act
+/// on `recoverable`. `structured_content` is left unset on this path: a tool that
+/// declares an `outputSchema` must not return structured content that fails to
+/// match it, and an error payload never does.
+///
+/// The two known *terminal* quote conditions (301604 no-access, 301603 no-quotes)
+/// instead return a schema-valid `isError:false` success so they are not counted
+/// as tool-result errors, with a `note` making clear the empty payload is a
+/// permission/no-data placeholder — not real quote data.
+fn tool_error(name: &str, err: &McpError) -> CallToolResult {
+    let message = upstream_message_of(err).unwrap_or_else(|| err.message.as_ref());
+    if is_terminal_none(err) {
+        let envelope = serde_json::json!({
+            "error_code": openapi_error_code_of(err),
+            "message": message,
+            "recoverable": "none",
+            "hint": error_hint(err),
+            "note": "These fields are EMPTY because access was denied or no data exists — NOT \
+                     because the values are zero. This is a permission/no-data placeholder, not a \
+                     real quote. Tell the user they lack the required market-data access (or that \
+                     no data exists); do not present the empty values as real.",
+        });
+        let mut result = CallToolResult::success(vec![Content::text(envelope.to_string())]);
+        if TERMINAL_OBJECT_ROOTED.contains(&name)
+            && let Some(schema) = output_schema_map().get(name)
+        {
+            result.structured_content = Some(minimal_valid_instance(schema));
+        }
+        return result;
+    }
+
+    let envelope = serde_json::json!({
+        "error_code": openapi_error_code_of(err),
+        "message": message,
+        "recoverable": recoverable_of(err),
+        "hint": error_hint(err),
+        "data": serde_json::Value::Null,
+    });
+    CallToolResult::error(vec![Content::text(envelope.to_string())])
+}
+
+/// Business error codes matched structurally in `error_hint()` — see
+/// `Error::openapi_error_code()`, which populates `McpError::data` with
+/// `{"openapi_error_code": ...}` for any error that wraps a `longbridge`
+/// business error. Preferred over string-matching the display text, which
+/// can misfire on an unrelated field (trace id, order id) that happens to
+/// contain the same digits.
+const NO_QUOTE_ACCESS_CODE: i64 = 301604;
+
+/// The structured `openapi_error_code` from `McpError::data`, when present.
+fn openapi_error_code_of(err: &McpError) -> Option<i64> {
+    err.data.as_ref()?.get("openapi_error_code")?.as_i64()
+}
+
+/// The bare upstream message stashed by `Error::clean_message` (see
+/// `src/error.rs`), used for the client-facing envelope `message` in place of
+/// the SDK's `Debug`-wrapped display text. `None` falls back to `err.message`.
+fn upstream_message_of(err: &McpError) -> Option<&str> {
+    err.data.as_ref()?.get("upstream_message")?.as_str()
+}
+
+/// Needles for [`matches_error_class`]. A named struct (rather than two
+/// adjacent `&[&str]` parameters) so a future call site can't silently swap
+/// `text`/`numeric` — a transposed pair of same-typed positional args would
+/// still compile, quietly reintroducing the numeric-substring false-positive
+/// risk this whole mechanism exists to avoid.
+struct ErrorClassNeedles<'a> {
+    /// Descriptive phrases, safe to match unconditionally: these don't
+    /// plausibly appear as substrings of an unrelated field (trace id,
+    /// order id) the way a bare 3-6 digit numeric needle can.
+    text: &'a [&'a str],
+    /// Bare numeric substrings — only matched when no structured code is
+    /// present at all, since once we *have* a code, a coincidental digit
+    /// match elsewhere in the text is more likely to be a false positive
+    /// than a code we simply haven't enumerated.
+    numeric: &'a [&'a str],
+}
+
+/// True if `err` matches a known error class, either by a structured business
+/// code (authoritative — `known_code` decides, e.g. a numeric-range check
+/// for a whole code family, not just individually enumerated values) or by
+/// `needles` in the display text.
+fn matches_error_class(
+    code: Option<i64>,
+    msg: &str,
+    known_code: impl Fn(i64) -> bool,
+    needles: ErrorClassNeedles<'_>,
+) -> bool {
+    code.is_some_and(known_code)
+        || needles.text.iter().any(|needle| msg.contains(needle))
+        || (code.is_none() && needles.numeric.iter().any(|needle| msg.contains(needle)))
+}
+
+/// Actionable follow-up for the error classes users hit most, so the model can
+/// either fix the call itself or tell the user what to do.
+fn error_hint(err: &McpError) -> Option<&'static str> {
+    if err.code == rmcp::model::ErrorCode::INVALID_PARAMS {
+        return Some(
+            "Hint: check the argument values against this tool's input schema, then retry.",
+        );
+    }
+
+    let code = openapi_error_code_of(err);
+    let msg = err.message.to_lowercase();
+
+    // Checked before the rate-limit class below: `openapi_error_code()` and
+    // `dc_region_restricted()` are mutually exclusive on any given
+    // `longbridge::Error`, so a DC-region-restricted error always has
+    // `code == None` — if this ran after the rate-limit check, its message
+    // text (a route path) would be exposed to that check's numeric-needle
+    // fallback before this authoritative structured signal gets a chance.
+    let is_dc_region_restricted = err
+        .data
+        .as_ref()
+        .is_some_and(|d| d.get("dc_region_restricted").is_some())
+        || ["data center", "dcregionrestricted"]
+            .iter()
+            .any(|needle| msg.contains(needle));
+    if is_dc_region_restricted {
+        return Some(
+            "Hint: this tool is restricted to accounts in a specific Longbridge data center \
+             (US vs. AP/HK). It cannot succeed for this account regardless of retries or \
+             arguments — use the equivalent tool for the account's own region instead, or tell \
+             the user this data isn't available for their account.",
+        );
+    }
+    if matches_error_class(
+        code,
+        &msg,
+        // Observed rate-limit codes (429002, 429003) share the HTTP
+        // 429-Too-Many-Requests prefix also seen elsewhere in this
+        // codebase's other business-code families (401xxx/403xxx) — a
+        // range check covers sibling codes in the same family that
+        // haven't been individually enumerated, instead of requiring an
+        // exact-match list that's one upstream addition away from stale.
+        |c| (429_000..430_000).contains(&c),
+        ErrorClassNeedles {
+            text: &["rate limit", "区间调用上限", "最小间隔"],
+            numeric: &["429002", "429003"],
+        },
+    ) {
+        return Some(
+            "Hint: this call was rate-limited by the upstream API. Wait a moment and retry — \
+             if this recurs, space out repeated calls rather than firing them back-to-back.",
+        );
+    }
+    if matches_error_class(
+        code,
+        &msg,
+        |c| c == NO_QUOTE_ACCESS_CODE,
+        ErrorClassNeedles {
+            text: &["no quote access"],
+            numeric: &["301604"],
+        },
+    ) {
+        return Some(
+            "Hint: the account lacks a market data subscription/permission for this \
+             symbol's market. Retrying won't help — tell the user they need to subscribe to \
+             the relevant market data package.",
+        );
+    }
+    if matches_error_class(
+        code,
+        &msg,
+        |c| matches!(c, 301_607 | 701_007),
+        ErrorClassNeedles {
+            text: &["too many symbols", "exceed_name_length"],
+            numeric: &["301607", "701007"],
+        },
+    ) {
+        return Some(
+            "Hint: the request exceeded a size limit (too many symbols in one call, or a name \
+             that is too long). Retry with fewer symbols per call, or a shorter name.",
+        );
+    }
+    if matches_error_class(
+        code,
+        &msg,
+        |c| (403_000..404_000).contains(&c),
+        ErrorClassNeedles {
+            text: &["permission", "forbidden", "not authorized", "scope"],
+            numeric: &["403"],
+        },
+    ) {
+        return Some(
+            "Hint: this is a permission/scope error. The OAuth authorization does not include the \
+             scope this API needs. A plain token refresh returns the same scopes and will not \
+             help — ask the user to reconnect this MCP server and re-authorize, approving the \
+             full set of permissions (watchlist, portfolio, and trading scopes).",
+        );
+    }
+    if matches_error_class(
+        code,
+        &msg,
+        |c| (401_000..402_000).contains(&c),
+        ErrorClassNeedles {
+            text: &["unauthorized", "token", "expired"],
+            numeric: &["401"],
+        },
+    ) {
+        return Some(
+            "Hint: the access token is missing, expired, or invalid. Ask the user to reconnect \
+             this MCP server to re-authorize, granting the full set of permissions.",
+        );
+    }
+    None
+}
+
+/// Classify a failed call by what the caller should do about it: one of
+/// `"reauth"`, `"backoff"`, `"fix_params"`, or `"none"`. Defaults to `"none"`
+/// so an unrecognized error is never optimistically retried. Matches on the
+/// structured business code first, then message-text needles (the codes behind
+/// most real traffic — 401103/403308/429003 — are undocumented, so text is a
+/// necessary fallback).
+fn recoverable_of(err: &McpError) -> &'static str {
+    if err.code == rmcp::model::ErrorCode::INVALID_PARAMS {
+        return "fix_params";
+    }
+    let code = openapi_error_code_of(err);
+    let msg = err.message.to_lowercase();
+
+    if matches_error_class(
+        code,
+        &msg,
+        |c| (401_000..402_000).contains(&c) || c == 403_308,
+        ErrorClassNeedles {
+            text: &[
+                "token is expired",
+                "token verification failed",
+                "not in authorized scopes",
+                "unauthorized",
+            ],
+            numeric: &["401103", "401102", "401003", "403308"],
+        },
+    ) {
+        return "reauth";
+    }
+    if matches_error_class(
+        code,
+        &msg,
+        |c| {
+            (429_000..430_000).contains(&c)
+                || matches!(c, 500 | 500_000 | 2_301_500 | 2_601_500 | 202_203 | 408)
+        },
+        ErrorClassNeedles {
+            text: &["rate limit", "too frequent", "区间调用上限", "最小间隔"],
+            numeric: &["429002", "429003"],
+        },
+    ) {
+        return "backoff";
+    }
+    if matches_error_class(
+        code,
+        &msg,
+        |c| matches!(c, 400 | 301_600 | 301_607 | 701_007),
+        ErrorClassNeedles {
+            text: &[
+                "too many symbols",
+                "invalid request",
+                "syntax error",
+                "exceed_name_length",
+            ],
+            numeric: &["301607", "301600", "701007"],
+        },
+    ) {
+        return "fix_params";
+    }
+    "none"
+}
+
+/// True only for the known *terminal* quote conditions that return
+/// `isError:false` with a schema-valid empty result: 301604 (no quote access)
+/// and 301603 (no quotes). Deliberately narrow — a bare "no access" needle is
+/// omitted so a 403 permission error can't be mistaken for a terminal quote
+/// condition.
+fn is_terminal_none(err: &McpError) -> bool {
+    let code = openapi_error_code_of(err);
+    let msg = err.message.to_lowercase();
+    matches_error_class(
+        code,
+        &msg,
+        |c| matches!(c, 301_604 | 301_603),
+        ErrorClassNeedles {
+            text: &["no quote access", "no quotes"],
+            numeric: &["301604", "301603"],
+        },
+    )
 }
 
 mod alert;
@@ -71,6 +448,7 @@ mod quote;
 mod screener;
 mod search;
 mod sharelist;
+mod signal;
 mod statement;
 mod support;
 mod trade;
@@ -84,6 +462,90 @@ where
     rmcp::handler::server::common::schema_for_output::<T>()
         .expect("output schema must be a valid JSON Schema with root type \"object\"")
 }
+
+/// A JSON value that satisfies `schema` by filling every `required` property
+/// with a type-appropriate zero (`string`→`""`, `integer`/`number`→`0`,
+/// `boolean`→`false`, `array`→`[]`, `object`→recurse). If a property declares an
+/// `enum`, its first member is used. Used to return a schema-conforming empty
+/// result for the terminal `isError:false` path (see `tool_error`).
+fn minimal_valid_instance(schema: &rmcp::model::JsonObject) -> serde_json::Value {
+    let required: Vec<&str> = schema
+        .get("required")
+        .and_then(serde_json::Value::as_array)
+        .map(|a| a.iter().filter_map(serde_json::Value::as_str).collect())
+        .unwrap_or_default();
+    let props = schema
+        .get("properties")
+        .and_then(serde_json::Value::as_object);
+    let mut obj = serde_json::Map::new();
+    for key in required {
+        let prop = props
+            .and_then(|p| p.get(key))
+            .and_then(serde_json::Value::as_object);
+        obj.insert(key.to_string(), zero_for(prop));
+    }
+    serde_json::Value::Object(obj)
+}
+
+/// Zero value for a single property schema. See [`minimal_valid_instance`].
+fn zero_for(schema: Option<&rmcp::model::JsonObject>) -> serde_json::Value {
+    let Some(s) = schema else {
+        return serde_json::Value::Null;
+    };
+    if let Some(first) = s
+        .get("enum")
+        .and_then(serde_json::Value::as_array)
+        .and_then(|a| a.first())
+    {
+        return first.clone();
+    }
+    let ty = s.get("type").and_then(|t| match t {
+        serde_json::Value::String(s) => Some(s.as_str()),
+        serde_json::Value::Array(a) => a
+            .iter()
+            .filter_map(serde_json::Value::as_str)
+            .find(|s| *s != "null"),
+        _ => None,
+    });
+    match ty {
+        Some("string") => serde_json::Value::String(String::new()),
+        Some("integer") | Some("number") => serde_json::Value::Number(0.into()),
+        Some("boolean") => serde_json::Value::Bool(false),
+        Some("array") => serde_json::Value::Array(Vec::new()),
+        Some("object") => minimal_valid_instance(s),
+        _ => serde_json::Value::Null,
+    }
+}
+
+/// `tool name -> full output schema`, built once from the uncompacted tool list
+/// so nested `properties`/`required` survive. Backs the terminal `isError:false`
+/// path (see `tool_error`).
+fn output_schema_map()
+-> &'static std::collections::HashMap<String, std::sync::Arc<rmcp::model::JsonObject>> {
+    static MAP: std::sync::OnceLock<
+        std::collections::HashMap<String, std::sync::Arc<rmcp::model::JsonObject>>,
+    > = std::sync::OnceLock::new();
+    MAP.get_or_init(|| {
+        all_tools_full_cached()
+            .iter()
+            .filter_map(|t| {
+                t.output_schema
+                    .as_ref()
+                    .map(|s| (t.name.to_string(), s.clone()))
+            })
+            .collect()
+    })
+}
+
+/// The object-rooted market-data tools whose terminal (301604/301603) result
+/// must carry schema-valid `structuredContent`: they return an object AND
+/// declare an `output_schema`. Array-rooted quote tools are excluded — their
+/// normal success leaves `structuredContent` unset (MCP requires it to be an
+/// object), so their terminal result matches by also leaving it unset. Other
+/// object-rooted quote tools (static_info/intraday/capital_flow/calc_indexes)
+/// declare no `output_schema`, so they have no structured-content contract and
+/// likewise leave it unset.
+const TERMINAL_OBJECT_ROOTED: &[&str] = &["depth", "capital_distribution"];
 
 /// Longbridge MCP tool server (stateless).
 #[derive(Debug, Clone)]
@@ -757,6 +1219,7 @@ const TOOL_ENDPOINTS: &[(&str, u8)] = &[
     ("screener_recommend_strategies", V2),
     ("screener_strategy", V2),
     ("screener_user_strategies", V2),
+    ("security_facts", V2),
     ("security_list", V2),
     ("shareholder", V2),
     ("shareholder_detail", V2),
@@ -770,6 +1233,8 @@ const TOOL_ENDPOINTS: &[(&str, u8)] = &[
     ("sharelist_sort", V2),
     ("short_margin", V2),
     ("short_trades", V2),
+    ("signal_detail", V2),
+    ("signals", V2),
     ("statement_export", V2),
     ("statement_list", V2),
     ("static_info", V2),
@@ -1032,10 +1497,9 @@ fn trim_description_to_char_limit(description: &str, max_chars: usize) -> String
         return result;
     }
 
-    let mut clipped: String = trimmed.chars().take(max_chars.saturating_sub(3)).collect();
-    clipped = clipped
-        .trim_end_matches(|c: char| c.is_whitespace() || c == ',' || c == ';' || c == ':')
-        .to_string();
+    let clipped = clip_chars(trimmed, max_chars.saturating_sub(3));
+    let clipped =
+        clipped.trim_end_matches(|c: char| c.is_whitespace() || c == ',' || c == ';' || c == ':');
     format!("{clipped}...")
 }
 
@@ -1130,7 +1594,7 @@ use crate::tools::quote::{
     WarrantListParam,
 };
 use crate::tools::trade::{
-    CashFlowParam, EstimateMaxQtyParam, HistoryOrdersParam, OrderIdParam, ReplaceOrderParam,
+    CashFlowParam, EstimateMaxQtyParam, HistoryOrdersParam, OrderDetailParam, ReplaceOrderParam,
     SubmitMultiLegOrderParam, SubmitOrderParam,
 };
 
@@ -1153,7 +1617,7 @@ impl Longbridge {
         Parameters(p): Parameters<authenticate::AuthenticateParam>,
     ) -> Result<CallToolResult, McpError> {
         let already = is_authenticated(&ctx);
-        measured_tool_call(AUTHENTICATE_TOOL_NAME, || {
+        measured_tool_call(AUTHENTICATE_TOOL_NAME, format!("{p:?}"), || {
             authenticate::authenticate(already, p)
         })
         .await
@@ -1193,7 +1657,10 @@ impl Longbridge {
         Parameters(p): Parameters<SymbolsParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("static_info", || quote::static_info(&mctx, p)).await
+        measured_tool_call("static_info", format!("{p:?}"), || {
+            quote::static_info(&mctx, p)
+        })
+        .await
     }
 
     /// Get the latest price quotes.
@@ -1213,7 +1680,7 @@ impl Longbridge {
         Parameters(p): Parameters<SymbolsParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("quote", || quote::quote(&mctx, p)).await
+        measured_tool_call("quote", format!("{p:?}"), || quote::quote(&mctx, p)).await
     }
 
     /// Get option quotes.
@@ -1225,15 +1692,18 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get option quotes (max 500 symbols). Returns last_done, prev_close, open, high, low, volume, turnover, implied_volatility, delta, gamma, theta, vega, rho, open_interest per symbol."
+        description = "Get option quotes (max 500 symbols). Symbols must be option contract symbols (e.g. \"AAPL230317P160000.US\"), NOT plain stock symbols — obtain valid ones from option_chain_info_by_date's call.symbol/put.symbol fields. Returns last_done, prev_close, open, high, low, volume, turnover, implied_volatility, delta, gamma, theta, vega, rho, open_interest per symbol."
     )]
     async fn option_quote(
         &self,
         ctx: RequestContext<RoleServer>,
-        Parameters(p): Parameters<SymbolsParam>,
+        Parameters(p): Parameters<quote::OptionSymbolsParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("option_quote", || quote::option_quote(&mctx, p)).await
+        measured_tool_call("option_quote", format!("{p:?}"), || {
+            quote::option_quote(&mctx, p)
+        })
+        .await
     }
 
     /// Get warrant quotes.
@@ -1253,7 +1723,10 @@ impl Longbridge {
         Parameters(p): Parameters<SymbolsParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("warrant_quote", || quote::warrant_quote(&mctx, p)).await
+        measured_tool_call("warrant_quote", format!("{p:?}"), || {
+            quote::warrant_quote(&mctx, p)
+        })
+        .await
     }
 
     /// Get the order book depth.
@@ -1269,7 +1742,7 @@ impl Longbridge {
         Parameters(p): Parameters<SymbolParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("depth", || quote::depth(&mctx, p)).await
+        measured_tool_call("depth", format!("{p:?}"), || quote::depth(&mctx, p)).await
     }
 
     /// Get broker queue data.
@@ -1285,7 +1758,7 @@ impl Longbridge {
         Parameters(p): Parameters<SymbolParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("brokers", || quote::brokers(&mctx, p)).await
+        measured_tool_call("brokers", format!("{p:?}"), || quote::brokers(&mctx, p)).await
     }
 
     /// Get market participant broker information.
@@ -1304,7 +1777,7 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("participants", || quote::participants(&mctx)).await
+        measured_tool_call("participants", String::new(), || quote::participants(&mctx)).await
     }
 
     /// Get recent trades.
@@ -1324,7 +1797,7 @@ impl Longbridge {
         Parameters(p): Parameters<SymbolCountParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("trades", || quote::trades(&mctx, p)).await
+        measured_tool_call("trades", format!("{p:?}"), || quote::trades(&mctx, p)).await
     }
 
     /// Get intraday line data.
@@ -1344,7 +1817,7 @@ impl Longbridge {
         Parameters(p): Parameters<quote::IntradayParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("intraday", || quote::intraday(&mctx, p)).await
+        measured_tool_call("intraday", format!("{p:?}"), || quote::intraday(&mctx, p)).await
     }
 
     /// Get candlestick (K-line) data.
@@ -1356,7 +1829,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get candlestick data (OHLCV). Only symbol is required; period defaults to day, count to 100 (max 1000), forward_adjust to false, trade_sessions to all. period: 1m/5m/15m/30m/60m/day/week/month/year. trade_sessions: intraday/all"
+        description = "Get candlestick data (OHLCV). Only symbol is required; period defaults to day, count to 100 (max 1000), forward_adjust to false, trade_sessions to all. period: 1m/5m/15m/30m/60m/day/week/month/year. trade_sessions: intraday/all. If the account's entitlement caps out below the requested count, this returns as many candles as allowed instead of erroring — check the returned array length against count if an exact number matters."
     )]
     async fn candlesticks(
         &self,
@@ -1364,7 +1837,10 @@ impl Longbridge {
         Parameters(p): Parameters<CandlesticksParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("candlesticks", || quote::candlesticks(&mctx, p)).await
+        measured_tool_call("candlesticks", format!("{p:?}"), || {
+            quote::candlesticks(&mctx, p)
+        })
+        .await
     }
 
     /// Get historical candlesticks by offset.
@@ -1376,7 +1852,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get historical candlestick data by offset from a reference time. period: 1m/5m/15m/30m/60m/day/week/month/year"
+        description = "Get historical candlestick data by offset from a reference time. Only symbol is required; period defaults to day (1m/5m/15m/30m/60m/day/week/month/year), count to 100, forward_adjust/forward to false, trade_sessions to all. If the account's entitlement caps out below the requested count, this returns as many candles as allowed instead of erroring — check the returned array length against count if an exact number matters."
     )]
     async fn history_candlesticks_by_offset(
         &self,
@@ -1384,7 +1860,7 @@ impl Longbridge {
         Parameters(p): Parameters<HistoryCandlesticksByOffsetParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("history_candlesticks_by_offset", || {
+        measured_tool_call("history_candlesticks_by_offset", format!("{p:?}"), || {
             quote::history_candlesticks_by_offset(&mctx, p)
         })
         .await
@@ -1399,7 +1875,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get historical candlestick data by date range. period: 1m/5m/15m/30m/60m/day/week/month/year"
+        description = "Get historical candlestick data by date range. Only symbol is required; period defaults to day (1m/5m/15m/30m/60m/day/week/month/year), forward_adjust to false, trade_sessions to all."
     )]
     async fn history_candlesticks_by_date(
         &self,
@@ -1407,7 +1883,7 @@ impl Longbridge {
         Parameters(p): Parameters<HistoryCandlesticksByDateParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("history_candlesticks_by_date", || {
+        measured_tool_call("history_candlesticks_by_date", format!("{p:?}"), || {
             quote::history_candlesticks_by_date(&mctx, p)
         })
         .await
@@ -1426,7 +1902,10 @@ impl Longbridge {
         Parameters(p): Parameters<MarketDateRangeParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("trading_days", || quote::trading_days(&mctx, p)).await
+        measured_tool_call("trading_days", format!("{p:?}"), || {
+            quote::trading_days(&mctx, p)
+        })
+        .await
     }
 
     /// Get option chain expiry date list.
@@ -1446,7 +1925,7 @@ impl Longbridge {
         Parameters(p): Parameters<SymbolParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("option_chain_expiry_date_list", || {
+        measured_tool_call("option_chain_expiry_date_list", format!("{p:?}"), || {
             quote::option_chain_expiry_date_list(&mctx, p)
         })
         .await
@@ -1469,7 +1948,7 @@ impl Longbridge {
         Parameters(p): Parameters<SymbolDateParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("option_chain_info_by_date", || {
+        measured_tool_call("option_chain_info_by_date", format!("{p:?}"), || {
             quote::option_chain_info_by_date(&mctx, p)
         })
         .await
@@ -1492,7 +1971,10 @@ impl Longbridge {
         Parameters(p): Parameters<SymbolParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("capital_flow", || quote::capital_flow(&mctx, p)).await
+        measured_tool_call("capital_flow", format!("{p:?}"), || {
+            quote::capital_flow(&mctx, p)
+        })
+        .await
     }
 
     /// Get capital distribution.
@@ -1500,7 +1982,7 @@ impl Longbridge {
         title = "Capital Distribution",
         annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = true),
         output_schema = schema_for::<output::CapitalDistributionResponse>(),
-        description = "Get capital distribution for a symbol. Returns {timestamp, capital_in{large, medium, small}, capital_out{large, medium, small}} (decimal strings in settlement currency)."
+        description = "Get capital distribution for a symbol. Returns {timestamp, capital_in{large, medium, small}, capital_out{large, medium, small}, data_available} (decimal strings in settlement currency). data_available is false for symbols with no capital-flow data (e.g. indices) — the other fields are still present but meaningless zeros in that case."
     )]
     async fn capital_distribution(
         &self,
@@ -1508,7 +1990,7 @@ impl Longbridge {
         Parameters(p): Parameters<SymbolParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("capital_distribution", || {
+        measured_tool_call("capital_distribution", format!("{p:?}"), || {
             quote::capital_distribution(&mctx, p)
         })
         .await
@@ -1530,7 +2012,10 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("trading_session", || quote::trading_session(&mctx)).await
+        measured_tool_call("trading_session", String::new(), || {
+            quote::trading_session(&mctx)
+        })
+        .await
     }
 
     /// Get market temperature.
@@ -1546,7 +2031,10 @@ impl Longbridge {
         Parameters(p): Parameters<MarketParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("market_temperature", || quote::market_temperature(&mctx, p)).await
+        measured_tool_call("market_temperature", format!("{p:?}"), || {
+            quote::market_temperature(&mctx, p)
+        })
+        .await
     }
 
     /// Get historical market temperature.
@@ -1562,7 +2050,7 @@ impl Longbridge {
         Parameters(p): Parameters<MarketDateRangeParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("history_market_temperature", || {
+        measured_tool_call("history_market_temperature", format!("{p:?}"), || {
             quote::history_market_temperature(&mctx, p)
         })
         .await
@@ -1581,7 +2069,7 @@ impl Longbridge {
         Parameters(p): Parameters<macrodata::MacroeconomicIndicatorsParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("macrodata_indicators", || {
+        measured_tool_call("macrodata_indicators", format!("{p:?}"), || {
             macrodata::macrodata_indicators(&mctx, p)
         })
         .await
@@ -1600,7 +2088,10 @@ impl Longbridge {
         Parameters(p): Parameters<macrodata::MacroeconomicParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("macrodata", || macrodata::macrodata(&mctx, p)).await
+        measured_tool_call("macrodata", format!("{p:?}"), || {
+            macrodata::macrodata(&mctx, p)
+        })
+        .await
     }
 
     /// Get watchlist groups.
@@ -1616,7 +2107,7 @@ impl Longbridge {
     )]
     async fn watchlist(&self, ctx: RequestContext<RoleServer>) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("watchlist", || quote::watchlist(&mctx)).await
+        measured_tool_call("watchlist", String::new(), || quote::watchlist(&mctx)).await
     }
 
     /// Get filings for a symbol.
@@ -1636,7 +2127,7 @@ impl Longbridge {
         Parameters(p): Parameters<SymbolParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("filings", || quote::filings(&mctx, p)).await
+        measured_tool_call("filings", format!("{p:?}"), || quote::filings(&mctx, p)).await
     }
 
     /// Get warrant issuers.
@@ -1655,7 +2146,10 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("warrant_issuers", || quote::warrant_issuers(&mctx)).await
+        measured_tool_call("warrant_issuers", String::new(), || {
+            quote::warrant_issuers(&mctx)
+        })
+        .await
     }
 
     /// Get warrant list for a symbol.
@@ -1675,7 +2169,10 @@ impl Longbridge {
         Parameters(p): Parameters<WarrantListParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("warrant_list", || quote::warrant_list(&mctx, p)).await
+        measured_tool_call("warrant_list", format!("{p:?}"), || {
+            quote::warrant_list(&mctx, p)
+        })
+        .await
     }
 
     /// Calculate indexes for symbols.
@@ -1695,7 +2192,10 @@ impl Longbridge {
         Parameters(p): Parameters<CalcIndexesParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("calc_indexes", || quote::calc_indexes(&mctx, p)).await
+        measured_tool_call("calc_indexes", format!("{p:?}"), || {
+            quote::calc_indexes(&mctx, p)
+        })
+        .await
     }
 
     /// Create a watchlist group.
@@ -1716,7 +2216,7 @@ impl Longbridge {
         Parameters(p): Parameters<CreateWatchlistGroupParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("create_watchlist_group", || {
+        measured_tool_call("create_watchlist_group", format!("{p:?}"), || {
             quote::create_watchlist_group(&mctx, p)
         })
         .await
@@ -1740,7 +2240,7 @@ impl Longbridge {
         Parameters(p): Parameters<DeleteWatchlistGroupParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("delete_watchlist_group", || {
+        measured_tool_call("delete_watchlist_group", format!("{p:?}"), || {
             quote::delete_watchlist_group(&mctx, p)
         })
         .await
@@ -1764,7 +2264,7 @@ impl Longbridge {
         Parameters(p): Parameters<UpdateWatchlistGroupParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("update_watchlist_group", || {
+        measured_tool_call("update_watchlist_group", format!("{p:?}"), || {
             quote::update_watchlist_group(&mctx, p)
         })
         .await
@@ -1788,7 +2288,10 @@ impl Longbridge {
         Parameters(p): Parameters<SecurityListParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("security_list", || quote::security_list(&mctx, p)).await
+        measured_tool_call("security_list", format!("{p:?}"), || {
+            quote::security_list(&mctx, p)
+        })
+        .await
     }
 
     /// Get account balance.
@@ -1808,7 +2311,10 @@ impl Longbridge {
         Parameters(p): Parameters<trade::AccountBalanceParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("account_balance", || trade::account_balance(&mctx, p)).await
+        measured_tool_call("account_balance", format!("{p:?}"), || {
+            trade::account_balance(&mctx, p)
+        })
+        .await
     }
 
     /// Get stock positions.
@@ -1823,7 +2329,10 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("stock_positions", || trade::stock_positions(&mctx)).await
+        measured_tool_call("stock_positions", String::new(), || {
+            trade::stock_positions(&mctx)
+        })
+        .await
     }
 
     /// Get fund positions.
@@ -1838,7 +2347,10 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("fund_positions", || trade::fund_positions(&mctx)).await
+        measured_tool_call("fund_positions", String::new(), || {
+            trade::fund_positions(&mctx)
+        })
+        .await
     }
 
     /// Get margin ratio.
@@ -1854,7 +2366,10 @@ impl Longbridge {
         Parameters(p): Parameters<SymbolParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("margin_ratio", || trade::margin_ratio(&mctx, p)).await
+        measured_tool_call("margin_ratio", format!("{p:?}"), || {
+            trade::margin_ratio(&mctx, p)
+        })
+        .await
     }
 
     /// Get today's orders.
@@ -1866,7 +2381,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get orders placed today. Returns orders[]{order_id, symbol, side, order_type, status, quantity, price, submitted_at, executed_quantity, executed_price}. Pass symbol to filter. US accounts only: us_action (Buy/Sell), us_page, us_limit filter/paginate via a separate US order endpoint."
+        description = "Get orders placed today. Returns orders[]{order_id, symbol, side, order_type, status, quantity, price, submitted_at, executed_quantity, executed_price, attached_orders[]}, where attached_orders[] holds the order's take-profit/stop-loss legs. Pass symbol to filter by security, or order_id for one order. To fetch an attached leg by its own ID, pass that ID as order_id together with is_attached=true — the leg itself comes back as the order entry. is_attached does nothing without order_id, and neither has any effect for US accounts, which are served by the US order endpoint. US accounts only: us_action (Buy/Sell), us_page, us_limit filter/paginate via a separate US order endpoint."
     )]
     async fn today_orders(
         &self,
@@ -1874,7 +2389,10 @@ impl Longbridge {
         Parameters(p): Parameters<trade::TodayOrdersParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("today_orders", || trade::today_orders(&mctx, p)).await
+        measured_tool_call("today_orders", format!("{p:?}"), || {
+            trade::today_orders(&mctx, p)
+        })
+        .await
     }
 
     /// Get order detail.
@@ -1882,15 +2400,18 @@ impl Longbridge {
         title = "Order Detail",
         annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = true),
         output_schema = schema_for::<output::OrderDetailResponse>(),
-        description = "Get detailed information about a specific order. Returns {order_id, symbol, status, side, order_type, quantity, price, executed_quantity, executed_price, submitted_at, time_in_force, msg}."
+        description = "Get detailed information about a specific order. Returns {order_id, symbol, status, side, order_type, quantity, price, executed_quantity, executed_price, submitted_at, time_in_force, msg, attached_orders[]}, where attached_orders[] holds the order's take-profit/stop-loss legs with their own order IDs. To look up such a leg by its own ID instead, pass it as order_id with is_attached=true: the response is then that leg, with charge_detail null. US accounts get a US-specific variant served by the US order endpoint, with the order (and its attached legs) nested under `order`. The region is detected from the account automatically."
     )]
     async fn order_detail(
         &self,
         ctx: RequestContext<RoleServer>,
-        Parameters(p): Parameters<OrderIdParam>,
+        Parameters(p): Parameters<OrderDetailParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("order_detail", || trade::order_detail(&mctx, p)).await
+        measured_tool_call("order_detail", format!("{p:?}"), || {
+            trade::order_detail(&mctx, p)
+        })
+        .await
     }
 
     /// Cancel an order.
@@ -1902,15 +2423,18 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Cancel an open order by order_id. Returns plain text \"order cancelled\" on success; errors if the order is already filled or cancelled."
+        description = "Cancel an open order by order_id. Returns plain text \"order cancelled\" on success; errors if the order is already filled or cancelled. TWO-STEP CONFIRMATION IS MANDATORY: this tool is a DRY RUN unless you pass the confirmation_code its own dry run returned. Call it first without execute, show the returned preview to the user, and only call it again with execute=\"<confirmation_code>\" after the user has explicitly confirmed that exact order. The code is derived from the order itself, so it applies only to that exact order. Never quote it back on your own initiative, and never in the same turn the user first asks. The dry run also echoes the order being targeted so the user can verify it is the right one. Set is_attached=true to cancel a single take-profit/stop-loss leg by its own order_id; cancelling a parent order cancels its legs along with it."
     )]
     async fn cancel_order(
         &self,
         ctx: RequestContext<RoleServer>,
-        Parameters(p): Parameters<OrderIdParam>,
+        Parameters(p): Parameters<trade::CancelOrderParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("cancel_order", || trade::cancel_order(&mctx, p)).await
+        measured_tool_call("cancel_order", format!("{p:?}"), || {
+            trade::cancel_order(&mctx, p)
+        })
+        .await
     }
 
     /// Get today's trade executions.
@@ -1930,7 +2454,10 @@ impl Longbridge {
         Parameters(p): Parameters<trade::TodayExecutionsParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("today_executions", || trade::today_executions(&mctx, p)).await
+        measured_tool_call("today_executions", format!("{p:?}"), || {
+            trade::today_executions(&mctx, p)
+        })
+        .await
     }
 
     /// Get historical orders (not including today).
@@ -1950,7 +2477,10 @@ impl Longbridge {
         Parameters(p): Parameters<HistoryOrdersParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("history_orders", || trade::history_orders(&mctx, p)).await
+        measured_tool_call("history_orders", format!("{p:?}"), || {
+            trade::history_orders(&mctx, p)
+        })
+        .await
     }
 
     /// Get historical executions.
@@ -1970,7 +2500,10 @@ impl Longbridge {
         Parameters(p): Parameters<HistoryOrdersParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("history_executions", || trade::history_executions(&mctx, p)).await
+        measured_tool_call("history_executions", format!("{p:?}"), || {
+            trade::history_executions(&mctx, p)
+        })
+        .await
     }
 
     /// Get cash flow records.
@@ -1990,7 +2523,7 @@ impl Longbridge {
         Parameters(p): Parameters<CashFlowParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("cash_flow", || trade::cash_flow(&mctx, p)).await
+        measured_tool_call("cash_flow", format!("{p:?}"), || trade::cash_flow(&mctx, p)).await
     }
 
     /// Submit an order.
@@ -2002,8 +2535,8 @@ impl Longbridge {
             idempotent_hint = false,
             open_world_hint = true
         ),
-        output_schema = schema_for::<output::OrderIdResponse>(),
-        description = "Submit a buy/sell order. order_type: LO (Limit) / ELO (Enhanced Limit, HK) / MO (Market) / AO (At-auction, HK) / ALO (At-auction Limit, HK) / ODD (Odd Lots, HK) / LIT (Limit If Touched) / MIT (Market If Touched) / TSLPAMT (Trailing Limit by Amount) / TSLPPCT (Trailing Limit by Percent) / SLO (Special Limit, HK). side: Buy/Sell. time_in_force: Day/GTC/GTD"
+        output_schema = schema_for::<output::SubmitOrderResult>(),
+        description = "Submit a buy/sell order. DRY RUN unless execute is the confirmation_code from its own dry run: call once without execute, show the preview to the user, then re-call quoting the code only after they explicitly confirm. order_type: LO (Limit) / ELO (Enhanced Limit, HK) / MO (Market) / AO (At-auction, HK) / ALO (At-auction Limit, HK) / ODD (Odd Lots, HK) / LIT (Limit If Touched) / MIT (Market If Touched) / TSLPAMT (Trailing Limit by Amount) / TSLPPCT (Trailing Limit by Percent) / SLO (Special Limit, HK). side: Buy/Sell. time_in_force: Day/GTC/GTD. To attach a take-profit/stop-loss leg, set attached_order_type (PROFIT_TAKER / STOP_LOSS / BRACKET) with attached_profit_taker_price and/or attached_stop_loss_price; the legs are echoed in the dry-run preview and are part of what the confirmation_code covers"
     )]
     async fn submit_order(
         &self,
@@ -2011,7 +2544,10 @@ impl Longbridge {
         Parameters(p): Parameters<SubmitOrderParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("submit_order", || trade::submit_order(&mctx, p)).await
+        measured_tool_call("submit_order", format!("{p:?}"), || {
+            trade::submit_order(&mctx, p)
+        })
+        .await
     }
 
     /// Submit a multi-leg option combination order.
@@ -2032,7 +2568,7 @@ impl Longbridge {
         Parameters(p): Parameters<SubmitMultiLegOrderParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("submit_multileg_order", || {
+        measured_tool_call("submit_multileg_order", format!("{p:?}"), || {
             trade::submit_multileg_order(&mctx, p)
         })
         .await
@@ -2047,7 +2583,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Modify an open order's quantity, price, trigger_price, or trailing params. Returns \"order replaced\" on success. Only open/pending orders can be modified."
+        description = "Modify an open order's quantity, price, trigger_price, or trailing params. Returns \"order replaced\" on success. Only open/pending orders can be modified. TWO-STEP CONFIRMATION IS MANDATORY: this tool is a DRY RUN unless you pass the confirmation_code its own dry run returned. Call it first without execute, show the returned preview to the user, and only call it again with execute=\"<confirmation_code>\" after the user has explicitly confirmed that exact order. The code is derived from the order itself, so it applies only to that exact order. Never quote it back on your own initiative, and never in the same turn the user first asks. The dry run echoes the current order alongside the requested change. Attached take-profit/stop-loss legs are changed here too: attached_order_type with the new attached_profit_taker_price / attached_stop_loss_price adds or reprices a leg, attached_profit_taker_id / attached_stop_loss_id target an existing leg, and attached_cancel_all=true removes every leg while leaving the order in place."
     )]
     async fn replace_order(
         &self,
@@ -2055,7 +2591,10 @@ impl Longbridge {
         Parameters(p): Parameters<ReplaceOrderParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("replace_order", || trade::replace_order(&mctx, p)).await
+        measured_tool_call("replace_order", format!("{p:?}"), || {
+            trade::replace_order(&mctx, p)
+        })
+        .await
     }
 
     /// Estimate max purchase quantity.
@@ -2071,7 +2610,7 @@ impl Longbridge {
         Parameters(p): Parameters<EstimateMaxQtyParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("estimate_max_purchase_quantity", || {
+        measured_tool_call("estimate_max_purchase_quantity", format!("{p:?}"), || {
             trade::estimate_max_purchase_quantity(&mctx, p)
         })
         .await
@@ -2095,7 +2634,7 @@ impl Longbridge {
         Parameters(p): Parameters<fundamental::FinancialReportParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("financial_report", || {
+        measured_tool_call("financial_report", format!("{p:?}"), || {
             fundamental::financial_report(&mctx, p)
         })
         .await
@@ -2119,7 +2658,7 @@ impl Longbridge {
         Parameters(p): Parameters<fundamental::SymbolParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("institution_rating", || {
+        measured_tool_call("institution_rating", format!("{p:?}"), || {
             fundamental::institution_rating(&mctx, p)
         })
         .await
@@ -2143,7 +2682,7 @@ impl Longbridge {
         Parameters(p): Parameters<fundamental::SymbolParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("institution_rating_detail", || {
+        measured_tool_call("institution_rating_detail", format!("{p:?}"), || {
             fundamental::institution_rating_detail(&mctx, p)
         })
         .await
@@ -2159,7 +2698,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::fundamental::DividendResponse>(),
-        description = "Get dividend history for the symbol. US accounts querying a .US symbol get a differently-shaped response not matching output_schema (dividend_yield_ttm etc. are percent values, e.g. 0.34 means 0.34%); other combinations match output_schema."
+        description = "Get dividend history for the symbol. US accounts querying a .US symbol get a US-specific variant (e.g. dividend_yield_ttm is a percent value: 0.34 means 0.34%). The region is detected from the account automatically."
     )]
     async fn dividend(
         &self,
@@ -2167,7 +2706,10 @@ impl Longbridge {
         Parameters(p): Parameters<fundamental::SymbolParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("dividend", || fundamental::dividend(&mctx, p)).await
+        measured_tool_call("dividend", format!("{p:?}"), || {
+            fundamental::dividend(&mctx, p)
+        })
+        .await
     }
 
     /// Get dividend distribution details.
@@ -2188,7 +2730,10 @@ impl Longbridge {
         Parameters(p): Parameters<fundamental::SymbolParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("dividend_detail", || fundamental::dividend_detail(&mctx, p)).await
+        measured_tool_call("dividend_detail", format!("{p:?}"), || {
+            fundamental::dividend_detail(&mctx, p)
+        })
+        .await
     }
 
     /// Get EPS forecast data.
@@ -2209,7 +2754,10 @@ impl Longbridge {
         Parameters(p): Parameters<fundamental::SymbolParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("forecast_eps", || fundamental::forecast_eps(&mctx, p)).await
+        measured_tool_call("forecast_eps", format!("{p:?}"), || {
+            fundamental::forecast_eps(&mctx, p)
+        })
+        .await
     }
 
     /// Get financial consensus estimates.
@@ -2222,7 +2770,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::fundamental::ConsensusResponse>(),
-        description = "Get financial consensus estimates for upcoming periods. US accounts querying a .US symbol get a differently-shaped response not matching output_schema (ai_summary plus a details[] list per period); other combinations match output_schema."
+        description = "Get financial consensus estimates for upcoming periods. US accounts querying a .US symbol get a US-specific variant (ai_summary plus a details[] list per period, instead of items[]). The region is detected from the account automatically."
     )]
     async fn consensus(
         &self,
@@ -2230,7 +2778,10 @@ impl Longbridge {
         Parameters(p): Parameters<fundamental::SymbolParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("consensus", || fundamental::consensus(&mctx, p)).await
+        measured_tool_call("consensus", format!("{p:?}"), || {
+            fundamental::consensus(&mctx, p)
+        })
+        .await
     }
 
     /// Get valuation overview (PE, PB, PS, dividend yield).
@@ -2243,7 +2794,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::fundamental::ValuationResponse>(),
-        description = "Get valuation overview with peer comparison. US accounts querying a .US symbol get a differently-shaped response not matching output_schema (ai_summary plus a metrics.pe object with different sub-fields); other combos match output_schema."
+        description = "Get valuation overview with peer comparison. US accounts querying a .US symbol get a US-specific variant (ai_summary plus a metrics.pe object with different sub-fields). The region is detected from the account automatically."
     )]
     async fn valuation(
         &self,
@@ -2251,7 +2802,10 @@ impl Longbridge {
         Parameters(p): Parameters<fundamental::SymbolParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("valuation", || fundamental::valuation(&mctx, p)).await
+        measured_tool_call("valuation", format!("{p:?}"), || {
+            fundamental::valuation(&mctx, p)
+        })
+        .await
     }
 
     /// Get detailed valuation history.
@@ -2272,7 +2826,7 @@ impl Longbridge {
         Parameters(p): Parameters<fundamental::SymbolParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("valuation_history", || {
+        measured_tool_call("valuation_history", format!("{p:?}"), || {
             fundamental::valuation_history(&mctx, p)
         })
         .await
@@ -2296,7 +2850,7 @@ impl Longbridge {
         Parameters(p): Parameters<fundamental::SymbolParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("industry_valuation", || {
+        measured_tool_call("industry_valuation", format!("{p:?}"), || {
             fundamental::industry_valuation(&mctx, p)
         })
         .await
@@ -2320,7 +2874,7 @@ impl Longbridge {
         Parameters(p): Parameters<fundamental::SymbolParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("industry_valuation_dist", || {
+        measured_tool_call("industry_valuation_dist", format!("{p:?}"), || {
             fundamental::industry_valuation_dist(&mctx, p)
         })
         .await
@@ -2336,7 +2890,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::fundamental::CompanyResponse>(),
-        description = "Get company overview. US accounts querying a .US symbol get a differently-shaped response not matching output_schema (intro, market_cap, top_rank_tags, sharelist, detail_url); other combinations match output_schema."
+        description = "Get company overview. US accounts querying a .US symbol get a US-specific variant (intro, market_cap, top_rank_tags, sharelist, detail_url). The region is detected from the account automatically."
     )]
     async fn company(
         &self,
@@ -2344,7 +2898,10 @@ impl Longbridge {
         Parameters(p): Parameters<fundamental::SymbolParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("company", || fundamental::company(&mctx, p)).await
+        measured_tool_call("company", format!("{p:?}"), || {
+            fundamental::company(&mctx, p)
+        })
+        .await
     }
 
     /// Get company executives.
@@ -2365,7 +2922,10 @@ impl Longbridge {
         Parameters(p): Parameters<fundamental::SymbolParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("executive", || fundamental::executive(&mctx, p)).await
+        measured_tool_call("executive", format!("{p:?}"), || {
+            fundamental::executive(&mctx, p)
+        })
+        .await
     }
 
     /// Get shareholders.
@@ -2386,7 +2946,10 @@ impl Longbridge {
         Parameters(p): Parameters<fundamental::SymbolParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("shareholder", || fundamental::shareholder(&mctx, p)).await
+        measured_tool_call("shareholder", format!("{p:?}"), || {
+            fundamental::shareholder(&mctx, p)
+        })
+        .await
     }
 
     /// Get fund holders.
@@ -2407,7 +2970,10 @@ impl Longbridge {
         Parameters(p): Parameters<fundamental::SymbolParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("fund_holder", || fundamental::fund_holder(&mctx, p)).await
+        measured_tool_call("fund_holder", format!("{p:?}"), || {
+            fundamental::fund_holder(&mctx, p)
+        })
+        .await
     }
 
     /// Get corporate actions.
@@ -2428,7 +2994,10 @@ impl Longbridge {
         Parameters(p): Parameters<fundamental::SymbolParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("corp_action", || fundamental::corp_action(&mctx, p)).await
+        measured_tool_call("corp_action", format!("{p:?}"), || {
+            fundamental::corp_action(&mctx, p)
+        })
+        .await
     }
 
     /// Get investor relations events.
@@ -2449,7 +3018,10 @@ impl Longbridge {
         Parameters(p): Parameters<fundamental::SymbolParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("invest_relation", || fundamental::invest_relation(&mctx, p)).await
+        measured_tool_call("invest_relation", format!("{p:?}"), || {
+            fundamental::invest_relation(&mctx, p)
+        })
+        .await
     }
 
     /// Get operating metrics.
@@ -2470,7 +3042,10 @@ impl Longbridge {
         Parameters(p): Parameters<fundamental::SymbolParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("operating", || fundamental::operating(&mctx, p)).await
+        measured_tool_call("operating", format!("{p:?}"), || {
+            fundamental::operating(&mctx, p)
+        })
+        .await
     }
 
     /// Get market trading status.
@@ -2490,7 +3065,10 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("market_status", || market::market_status(&mctx)).await
+        measured_tool_call("market_status", String::new(), || {
+            market::market_status(&mctx)
+        })
+        .await
     }
 
     /// Get broker holding data.
@@ -2511,7 +3089,10 @@ impl Longbridge {
         Parameters(p): Parameters<market::BrokerHoldingParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("broker_holding", || market::broker_holding(&mctx, p)).await
+        measured_tool_call("broker_holding", format!("{p:?}"), || {
+            market::broker_holding(&mctx, p)
+        })
+        .await
     }
 
     /// Get broker holding detail.
@@ -2532,7 +3113,7 @@ impl Longbridge {
         Parameters(p): Parameters<market::SymbolParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("broker_holding_detail", || {
+        measured_tool_call("broker_holding_detail", format!("{p:?}"), || {
             market::broker_holding_detail(&mctx, p)
         })
         .await
@@ -2556,7 +3137,7 @@ impl Longbridge {
         Parameters(p): Parameters<market::BrokerHoldingDailyParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("broker_holding_daily", || {
+        measured_tool_call("broker_holding_daily", format!("{p:?}"), || {
             market::broker_holding_daily(&mctx, p)
         })
         .await
@@ -2579,7 +3160,10 @@ impl Longbridge {
         Parameters(p): Parameters<market::AhPremiumParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("ah_premium", || market::ah_premium(&mctx, p)).await
+        measured_tool_call("ah_premium", format!("{p:?}"), || {
+            market::ah_premium(&mctx, p)
+        })
+        .await
     }
 
     /// Get AH premium intraday data.
@@ -2599,7 +3183,7 @@ impl Longbridge {
         Parameters(p): Parameters<market::SymbolParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("ah_premium_intraday", || {
+        measured_tool_call("ah_premium_intraday", format!("{p:?}"), || {
             market::ah_premium_intraday(&mctx, p)
         })
         .await
@@ -2622,7 +3206,10 @@ impl Longbridge {
         Parameters(p): Parameters<market::SymbolParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("trade_stats", || market::trade_stats(&mctx, p)).await
+        measured_tool_call("trade_stats", format!("{p:?}"), || {
+            market::trade_stats(&mctx, p)
+        })
+        .await
     }
 
     /// Get market anomalies.
@@ -2643,7 +3230,7 @@ impl Longbridge {
         Parameters(p): Parameters<market::AnomalyParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("anomaly", || market::anomaly(&mctx, p)).await
+        measured_tool_call("anomaly", format!("{p:?}"), || market::anomaly(&mctx, p)).await
     }
 
     /// Get index constituents or ETF asset allocation.
@@ -2663,7 +3250,10 @@ impl Longbridge {
         Parameters(p): Parameters<market::IndexSymbolParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("constituent", || market::constituent(&mctx, p)).await
+        measured_tool_call("constituent", format!("{p:?}"), || {
+            market::constituent(&mctx, p)
+        })
+        .await
     }
 
     /// Get finance calendar events.
@@ -2676,7 +3266,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::market::FinanceCalendarResponse>(),
-        description = "Get finance calendar events by category and date range. category: report (earnings + financials) / dividend / split (splits & reverse splits) / ipo / macrodata (CPI, NFP, rate decisions) / closed (market holidays). market: HK/US/CN/SG/JP/UK/DE/AU (optional). Keep the date range to 2 weeks or less; for longer periods split into multiple calls to avoid truncation."
+        description = "Finance calendar by category: report (earnings) / dividend / split / ipo / macrodata (CPI, NFP, rates) / closed (holidays). start and end (YYYY-MM-DD) are optional, default today plus 7 days; keep ranges under 2 weeks or results truncate."
     )]
     async fn finance_calendar(
         &self,
@@ -2684,7 +3274,10 @@ impl Longbridge {
         Parameters(p): Parameters<calendar::FinanceCalendarParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("finance_calendar", || calendar::finance_calendar(&mctx, p)).await
+        measured_tool_call("finance_calendar", format!("{p:?}"), || {
+            calendar::finance_calendar(&mctx, p)
+        })
+        .await
     }
 
     /// Get exchange rates.
@@ -2703,7 +3296,10 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("exchange_rate", || portfolio::exchange_rate(&mctx)).await
+        measured_tool_call("exchange_rate", String::new(), || {
+            portfolio::exchange_rate(&mctx)
+        })
+        .await
     }
 
     /// Get profit analysis summary.
@@ -2723,7 +3319,10 @@ impl Longbridge {
         Parameters(p): Parameters<portfolio::ProfitAnalysisParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("profit_analysis", || portfolio::profit_analysis(&mctx, p)).await
+        measured_tool_call("profit_analysis", format!("{p:?}"), || {
+            portfolio::profit_analysis(&mctx, p)
+        })
+        .await
     }
 
     /// Get profit analysis detail for a symbol.
@@ -2743,7 +3342,7 @@ impl Longbridge {
         Parameters(p): Parameters<portfolio::ProfitAnalysisDetailParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("profit_analysis_detail", || {
+        measured_tool_call("profit_analysis_detail", format!("{p:?}"), || {
             portfolio::profit_analysis_detail(&mctx, p)
         })
         .await
@@ -2759,7 +3358,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::us_market::PortfolioRealizedPlResponse>(),
-        description = "Get realized P&L for a US account, broken down by category (stock/option/crypto) and period. US accounts only; errors with DcRegionRestricted for HK/CN/SG accounts."
+        description = "Get realized P&L for a US account, broken down by category (stock/option/crypto) and period. US accounts only; errors with DcRegionRestricted for AP accounts."
     )]
     async fn profit_analysis_realized(
         &self,
@@ -2767,7 +3366,7 @@ impl Longbridge {
         Parameters(p): Parameters<portfolio::ProfitAnalysisRealizedParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("profit_analysis_realized", || {
+        measured_tool_call("profit_analysis_realized", format!("{p:?}"), || {
             portfolio::profit_analysis_realized(&mctx, p)
         })
         .await
@@ -2790,7 +3389,7 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("alert_list", || alert::alert_list(&mctx)).await
+        measured_tool_call("alert_list", String::new(), || alert::alert_list(&mctx)).await
     }
 
     /// Add a price alert.
@@ -2810,7 +3409,7 @@ impl Longbridge {
         Parameters(p): Parameters<alert::AlertAddParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("alert_add", || alert::alert_add(&mctx, p)).await
+        measured_tool_call("alert_add", format!("{p:?}"), || alert::alert_add(&mctx, p)).await
     }
 
     /// Delete a price alert.
@@ -2830,7 +3429,10 @@ impl Longbridge {
         Parameters(p): Parameters<alert::AlertIdParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("alert_delete", || alert::alert_delete(&mctx, p)).await
+        measured_tool_call("alert_delete", format!("{p:?}"), || {
+            alert::alert_delete(&mctx, p)
+        })
+        .await
     }
 
     /// Enable a price alert.
@@ -2851,7 +3453,10 @@ impl Longbridge {
         Parameters(p): Parameters<alert::AlertIdParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("alert_enable", || alert::alert_enable(&mctx, p)).await
+        measured_tool_call("alert_enable", format!("{p:?}"), || {
+            alert::alert_enable(&mctx, p)
+        })
+        .await
     }
 
     /// Disable a price alert.
@@ -2872,7 +3477,79 @@ impl Longbridge {
         Parameters(p): Parameters<alert::AlertIdParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("alert_disable", || alert::alert_disable(&mctx, p)).await
+        measured_tool_call("alert_disable", format!("{p:?}"), || {
+            alert::alert_disable(&mctx, p)
+        })
+        .await
+    }
+
+    /// Query strategy signals.
+    #[tool(
+        title = "Signals",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = true
+        ),
+        output_schema = schema_for::<output::signal::SignalsResponse>(),
+        description = "Query strategy signals — a strategy's take on a security, triggered by a catalyst. Filter by symbol, strategy, catalyst and time range; page with limit/offset. Returns each signal's title, summary, outlook and conservative/benchmark/optimistic target prices, plus the total for paging. The full strategy analysis is omitted here — fetch it with signal_detail."
+    )]
+    async fn signals(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<signal::SignalsParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("signals", format!("{p:?}"), || signal::signals(&mctx, p)).await
+    }
+
+    /// Get one signal by ID.
+    #[tool(
+        title = "Signal Detail",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = true
+        ),
+        output_schema = schema_for::<output::signal::SignalItem>(),
+        description = "Get one signal by ID (from `signals`). Same fields as the list, plus `analysis` — the full strategy analysis: fit scores, valuation scenarios, evidence sources and related fact IDs."
+    )]
+    async fn signal_detail(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<signal::SignalIdParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("signal_detail", format!("{p:?}"), || {
+            signal::signal_detail(&mctx, p)
+        })
+        .await
+    }
+
+    /// Get the fact (catalyst) events for a symbol.
+    #[tool(
+        title = "Security Facts",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = true
+        ),
+        output_schema = schema_for::<output::fact::SecurityFactsResponse>(),
+        description = "List a security's fact (catalyst) events — anomaly detections, factor readings, data sources and natural-language summaries — filtered by time range and count. Facts are what strategies react to: a signal names its trigger in key_fact_id."
+    )]
+    async fn security_facts(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<signal::SecurityFactsParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("security_facts", format!("{p:?}"), || {
+            signal::security_facts(&mctx, p)
+        })
+        .await
     }
 
     /// Get news for a symbol.
@@ -2892,7 +3569,7 @@ impl Longbridge {
         Parameters(p): Parameters<content::SymbolParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("news", || content::news(&mctx, p)).await
+        measured_tool_call("news", format!("{p:?}"), || content::news(&mctx, p)).await
     }
 
     /// Get one news article's full detail.
@@ -2913,7 +3590,10 @@ impl Longbridge {
         Parameters(p): Parameters<content::NewsIdParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("news_detail", || content::news_detail(&mctx, p)).await
+        measured_tool_call("news_detail", format!("{p:?}"), || {
+            content::news_detail(&mctx, p)
+        })
+        .await
     }
 
     /// Get discussion topics for a symbol.
@@ -2933,7 +3613,7 @@ impl Longbridge {
         Parameters(p): Parameters<content::SymbolParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("topic", || content::topic(&mctx, p)).await
+        measured_tool_call("topic", format!("{p:?}"), || content::topic(&mctx, p)).await
     }
 
     /// Get topic detail.
@@ -2954,7 +3634,10 @@ impl Longbridge {
         Parameters(p): Parameters<content::TopicIdParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("topic_detail", || content::topic_detail(&mctx, p)).await
+        measured_tool_call("topic_detail", format!("{p:?}"), || {
+            content::topic_detail(&mctx, p)
+        })
+        .await
     }
 
     /// Get topic replies.
@@ -2974,7 +3657,10 @@ impl Longbridge {
         Parameters(p): Parameters<content::TopicRepliesParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("topic_replies", || content::topic_replies(&mctx, p)).await
+        measured_tool_call("topic_replies", format!("{p:?}"), || {
+            content::topic_replies(&mctx, p)
+        })
+        .await
     }
 
     /// Create a discussion topic.
@@ -2995,7 +3681,10 @@ impl Longbridge {
         Parameters(p): Parameters<content::TopicCreateParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("topic_create", || content::topic_create(&mctx, p)).await
+        measured_tool_call("topic_create", format!("{p:?}"), || {
+            content::topic_create(&mctx, p)
+        })
+        .await
     }
 
     /// Reply to a discussion topic.
@@ -3016,7 +3705,7 @@ impl Longbridge {
         Parameters(p): Parameters<content::TopicCreateReplyParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("topic_create_reply", || {
+        measured_tool_call("topic_create_reply", format!("{p:?}"), || {
             content::topic_create_reply(&mctx, p)
         })
         .await
@@ -3040,7 +3729,10 @@ impl Longbridge {
         Parameters(p): Parameters<statement::StatementListParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("statement_list", || statement::statement_list(&mctx, p)).await
+        measured_tool_call("statement_list", format!("{p:?}"), || {
+            statement::statement_list(&mctx, p)
+        })
+        .await
     }
 
     /// Get the pre-signed download URL for a statement file.
@@ -3056,7 +3748,10 @@ impl Longbridge {
         Parameters(p): Parameters<statement::StatementExportParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("statement_export", || statement::statement_export(&mctx, p)).await
+        measured_tool_call("statement_export", format!("{p:?}"), || {
+            statement::statement_export(&mctx, p)
+        })
+        .await
     }
 
     /// Get short position (outstanding short) data for HK or US stocks.
@@ -3076,7 +3771,10 @@ impl Longbridge {
         Parameters(p): Parameters<ShortPositionsParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("short_positions", || quote::short_positions(&mctx, p)).await
+        measured_tool_call("short_positions", format!("{p:?}"), || {
+            quote::short_positions(&mctx, p)
+        })
+        .await
     }
 
     /// Get real-time option call/put volume stats.
@@ -3096,7 +3794,10 @@ impl Longbridge {
         Parameters(p): Parameters<OptionVolumeParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("option_volume", || quote::option_volume(&mctx, p)).await
+        measured_tool_call("option_volume", format!("{p:?}"), || {
+            quote::option_volume(&mctx, p)
+        })
+        .await
     }
 
     /// Get daily historical option volume stats.
@@ -3116,7 +3817,7 @@ impl Longbridge {
         Parameters(p): Parameters<OptionVolumeDailyParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("option_volume_daily", || {
+        measured_tool_call("option_volume_daily", format!("{p:?}"), || {
             quote::option_volume_daily(&mctx, p)
         })
         .await
@@ -3140,7 +3841,7 @@ impl Longbridge {
         Parameters(p): Parameters<dca::DcaListParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("dca_list", || dca::dca_list(&mctx, p)).await
+        measured_tool_call("dca_list", format!("{p:?}"), || dca::dca_list(&mctx, p)).await
     }
 
     /// Create a DCA (recurring investment) plan.
@@ -3160,7 +3861,7 @@ impl Longbridge {
         Parameters(p): Parameters<dca::DcaCreateParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("dca_create", || dca::dca_create(&mctx, p)).await
+        measured_tool_call("dca_create", format!("{p:?}"), || dca::dca_create(&mctx, p)).await
     }
 
     /// Update a DCA plan.
@@ -3180,7 +3881,7 @@ impl Longbridge {
         Parameters(p): Parameters<dca::DcaUpdateParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("dca_update", || dca::dca_update(&mctx, p)).await
+        measured_tool_call("dca_update", format!("{p:?}"), || dca::dca_update(&mctx, p)).await
     }
 
     /// Pause a DCA plan.
@@ -3200,7 +3901,7 @@ impl Longbridge {
         Parameters(p): Parameters<dca::DcaPlanIdParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("dca_pause", || dca::dca_pause(&mctx, p)).await
+        measured_tool_call("dca_pause", format!("{p:?}"), || dca::dca_pause(&mctx, p)).await
     }
 
     /// Resume a paused DCA plan.
@@ -3220,7 +3921,7 @@ impl Longbridge {
         Parameters(p): Parameters<dca::DcaPlanIdParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("dca_resume", || dca::dca_resume(&mctx, p)).await
+        measured_tool_call("dca_resume", format!("{p:?}"), || dca::dca_resume(&mctx, p)).await
     }
 
     /// Stop a DCA plan permanently.
@@ -3240,7 +3941,7 @@ impl Longbridge {
         Parameters(p): Parameters<dca::DcaPlanIdParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("dca_stop", || dca::dca_stop(&mctx, p)).await
+        measured_tool_call("dca_stop", format!("{p:?}"), || dca::dca_stop(&mctx, p)).await
     }
 
     /// Get DCA plan execution history.
@@ -3261,7 +3962,10 @@ impl Longbridge {
         Parameters(p): Parameters<dca::DcaHistoryParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("dca_history", || dca::dca_history(&mctx, p)).await
+        measured_tool_call("dca_history", format!("{p:?}"), || {
+            dca::dca_history(&mctx, p)
+        })
+        .await
     }
 
     /// Get DCA statistics.
@@ -3282,7 +3986,7 @@ impl Longbridge {
         Parameters(p): Parameters<dca::DcaStatsParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("dca_stats", || dca::dca_stats(&mctx, p)).await
+        measured_tool_call("dca_stats", format!("{p:?}"), || dca::dca_stats(&mctx, p)).await
     }
 
     /// Check if symbols support DCA.
@@ -3303,7 +4007,7 @@ impl Longbridge {
         Parameters(p): Parameters<dca::DcaCheckParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("dca_check", || dca::dca_check(&mctx, p)).await
+        measured_tool_call("dca_check", format!("{p:?}"), || dca::dca_check(&mctx, p)).await
     }
 
     /// Pre-trade grid setup info for a symbol (lot sizes, price steps, authorization).
@@ -3319,7 +4023,10 @@ impl Longbridge {
         Parameters(p): Parameters<grid::GridSymbolParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("grid_symbol_info", || grid::grid_symbol_info(&mctx, p)).await
+        measured_tool_call("grid_symbol_info", format!("{p:?}"), || {
+            grid::grid_symbol_info(&mctx, p)
+        })
+        .await
     }
 
     /// List grid trading orders.
@@ -3335,7 +4042,7 @@ impl Longbridge {
         Parameters(p): Parameters<grid::GridListParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("grid_list", || grid::grid_list(&mctx, p)).await
+        measured_tool_call("grid_list", format!("{p:?}"), || grid::grid_list(&mctx, p)).await
     }
 
     /// Fetch grid orders by IDs.
@@ -3351,7 +4058,10 @@ impl Longbridge {
         Parameters(p): Parameters<grid::GridIdsParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("grid_list_by_ids", || grid::grid_list_by_ids(&mctx, p)).await
+        measured_tool_call("grid_list_by_ids", format!("{p:?}"), || {
+            grid::grid_list_by_ids(&mctx, p)
+        })
+        .await
     }
 
     /// Grid order detail.
@@ -3367,7 +4077,10 @@ impl Longbridge {
         Parameters(p): Parameters<grid::GridDetailParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("grid_detail", || grid::grid_detail(&mctx, p)).await
+        measured_tool_call("grid_detail", format!("{p:?}"), || {
+            grid::grid_detail(&mctx, p)
+        })
+        .await
     }
 
     /// Grid order trigger history.
@@ -3383,7 +4096,7 @@ impl Longbridge {
         Parameters(p): Parameters<grid::GridTriggerHistoryParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("grid_trigger_history", || {
+        measured_tool_call("grid_trigger_history", format!("{p:?}"), || {
             grid::grid_trigger_history(&mctx, p)
         })
         .await
@@ -3399,7 +4112,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::grid::GridSubmitResponse>(),
-        description = "Submit a grid trading order. Requires symbol, settlement_currency, and the grid rule: base/upper/lower price, trigger_price_type (1=spread, 2=percent) with the matching spread/percent up/down, trigger_quantity, upper/lower_limit_quantity, time_in_force (0=Day, 1=GTC, 6=GTD), grid_order_type_up/down (GMO/GLO/GTG), and boundary events (1=ignore, 2=close-at-last). Prices/quantities are decimal strings. Requires the one-time grid_questionnaire consent."
+        description = "Submit a grid trading order. DRY RUN unless execute is the confirmation_code from its own dry run: call once without execute, show the preview, then re-call quoting the code only after the user confirms. A live grid keeps trading on its own. Requires symbol, settlement_currency, and the grid rule: base/upper/lower price, trigger_price_type (1=spread, 2=percent) with the matching spread/percent up/down, trigger_quantity, upper/lower_limit_quantity, time_in_force (0=Day, 1=GTC, 6=GTD), grid_order_type_up/down (GMO/GLO/GTG), and boundary events (1=ignore, 2=close-at-last). Prices/quantities are decimal strings. Requires the one-time grid_questionnaire consent."
     )]
     async fn grid_submit(
         &self,
@@ -3407,7 +4120,10 @@ impl Longbridge {
         Parameters(p): Parameters<grid::GridSubmitParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("grid_submit", || grid::grid_submit(&mctx, p)).await
+        measured_tool_call("grid_submit", format!("{p:?}"), || {
+            grid::grid_submit(&mctx, p)
+        })
+        .await
     }
 
     /// Replace (modify) a grid trading order.
@@ -3419,7 +4135,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Replace an existing grid order's rule by order_id. Accepts the same grid rule fields as grid_submit. Overwrites the order's entire rule."
+        description = "Replace an existing grid order's rule by order_id. Accepts the same grid rule fields as grid_submit. Overwrites the order's entire rule. TWO-STEP CONFIRMATION IS MANDATORY: this tool is a DRY RUN unless you pass the confirmation_code its own dry run returned. Call it first without execute, show the returned preview to the user, and only call it again with execute=\"<confirmation_code>\" after the user has explicitly confirmed it. The code is derived from the order itself, so it applies only to that exact request. Never quote it back on your own initiative. The dry run echoes the rule that would replace the current one."
     )]
     async fn grid_replace(
         &self,
@@ -3427,7 +4143,10 @@ impl Longbridge {
         Parameters(p): Parameters<grid::GridReplaceParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("grid_replace", || grid::grid_replace(&mctx, p)).await
+        measured_tool_call("grid_replace", format!("{p:?}"), || {
+            grid::grid_replace(&mctx, p)
+        })
+        .await
     }
 
     /// Cancel a grid trading order.
@@ -3439,7 +4158,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Cancel (terminate) a grid order by order_id."
+        description = "Cancel (terminate) a grid order by order_id. TWO-STEP CONFIRMATION IS MANDATORY: this tool is a DRY RUN unless you pass the confirmation_code its own dry run returned. Call it first without execute, show the returned preview to the user, and only call it again with execute=\"<confirmation_code>\" after the user has explicitly confirmed it. The code is derived from the order itself, so it applies only to that exact request. Never quote it back on your own initiative."
     )]
     async fn grid_cancel(
         &self,
@@ -3447,7 +4166,10 @@ impl Longbridge {
         Parameters(p): Parameters<grid::GridOrderIdParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("grid_cancel", || grid::grid_cancel(&mctx, p)).await
+        measured_tool_call("grid_cancel", format!("{p:?}"), || {
+            grid::grid_cancel(&mctx, p)
+        })
+        .await
     }
 
     /// Suspend a grid trading order.
@@ -3459,7 +4181,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Suspend (pause) a running grid order by order_id. Resume with grid_restart."
+        description = "Suspend (pause) a running grid order by order_id. Resume with grid_restart. TWO-STEP CONFIRMATION IS MANDATORY: this tool is a DRY RUN unless you pass the confirmation_code its own dry run returned. Call it first without execute, show the returned preview to the user, and only call it again with execute=\"<confirmation_code>\" after the user has explicitly confirmed it. The code is derived from the order itself, so it applies only to that exact request. Never quote it back on your own initiative."
     )]
     async fn grid_suspend(
         &self,
@@ -3467,7 +4189,10 @@ impl Longbridge {
         Parameters(p): Parameters<grid::GridOrderIdParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("grid_suspend", || grid::grid_suspend(&mctx, p)).await
+        measured_tool_call("grid_suspend", format!("{p:?}"), || {
+            grid::grid_suspend(&mctx, p)
+        })
+        .await
     }
 
     /// Restart a suspended grid trading order.
@@ -3479,7 +4204,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Restart (resume) a suspended grid order by order_id."
+        description = "Restart (resume) a suspended grid order by order_id. TWO-STEP CONFIRMATION IS MANDATORY: this tool is a DRY RUN unless you pass the confirmation_code its own dry run returned. Call it first without execute, show the returned preview to the user, and only call it again with execute=\"<confirmation_code>\" after the user has explicitly confirmed it. The code is derived from the order itself, so it applies only to that exact request. Never quote it back on your own initiative. A restarted grid resumes placing orders on its own."
     )]
     async fn grid_restart(
         &self,
@@ -3487,7 +4212,10 @@ impl Longbridge {
         Parameters(p): Parameters<grid::GridOrderIdParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("grid_restart", || grid::grid_restart(&mctx, p)).await
+        measured_tool_call("grid_restart", format!("{p:?}"), || {
+            grid::grid_restart(&mctx, p)
+        })
+        .await
     }
 
     /// Submit the grid strategy risk-disclosure questionnaire.
@@ -3507,7 +4235,10 @@ impl Longbridge {
         Parameters(p): Parameters<grid::GridQuestionnaireParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("grid_questionnaire", || grid::grid_questionnaire(&mctx, p)).await
+        measured_tool_call("grid_questionnaire", format!("{p:?}"), || {
+            grid::grid_questionnaire(&mctx, p)
+        })
+        .await
     }
 
     /// List community sharelists.
@@ -3528,7 +4259,10 @@ impl Longbridge {
         Parameters(p): Parameters<sharelist::SharelistCountParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("sharelist_list", || sharelist::sharelist_list(&mctx, p)).await
+        measured_tool_call("sharelist_list", format!("{p:?}"), || {
+            sharelist::sharelist_list(&mctx, p)
+        })
+        .await
     }
 
     /// Get sharelist detail.
@@ -3549,7 +4283,10 @@ impl Longbridge {
         Parameters(p): Parameters<sharelist::SharelistIdParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("sharelist_detail", || sharelist::sharelist_detail(&mctx, p)).await
+        measured_tool_call("sharelist_detail", format!("{p:?}"), || {
+            sharelist::sharelist_detail(&mctx, p)
+        })
+        .await
     }
 
     /// Create a community sharelist.
@@ -3570,7 +4307,10 @@ impl Longbridge {
         Parameters(p): Parameters<sharelist::SharelistCreateParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("sharelist_create", || sharelist::sharelist_create(&mctx, p)).await
+        measured_tool_call("sharelist_create", format!("{p:?}"), || {
+            sharelist::sharelist_create(&mctx, p)
+        })
+        .await
     }
 
     /// Delete a community sharelist.
@@ -3590,7 +4330,10 @@ impl Longbridge {
         Parameters(p): Parameters<sharelist::SharelistIdParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("sharelist_delete", || sharelist::sharelist_delete(&mctx, p)).await
+        measured_tool_call("sharelist_delete", format!("{p:?}"), || {
+            sharelist::sharelist_delete(&mctx, p)
+        })
+        .await
     }
 
     /// Add stocks to a sharelist.
@@ -3610,7 +4353,10 @@ impl Longbridge {
         Parameters(p): Parameters<sharelist::SharelistItemsParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("sharelist_add", || sharelist::sharelist_add(&mctx, p)).await
+        measured_tool_call("sharelist_add", format!("{p:?}"), || {
+            sharelist::sharelist_add(&mctx, p)
+        })
+        .await
     }
 
     /// Remove stocks from a sharelist.
@@ -3630,7 +4376,10 @@ impl Longbridge {
         Parameters(p): Parameters<sharelist::SharelistItemsParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("sharelist_remove", || sharelist::sharelist_remove(&mctx, p)).await
+        measured_tool_call("sharelist_remove", format!("{p:?}"), || {
+            sharelist::sharelist_remove(&mctx, p)
+        })
+        .await
     }
 
     /// Reorder stocks in a sharelist.
@@ -3650,7 +4399,10 @@ impl Longbridge {
         Parameters(p): Parameters<sharelist::SharelistItemsParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("sharelist_sort", || sharelist::sharelist_sort(&mctx, p)).await
+        measured_tool_call("sharelist_sort", format!("{p:?}"), || {
+            sharelist::sharelist_sort(&mctx, p)
+        })
+        .await
     }
 
     /// Get popular community sharelists.
@@ -3671,7 +4423,7 @@ impl Longbridge {
         Parameters(p): Parameters<sharelist::SharelistCountParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("sharelist_popular", || {
+        measured_tool_call("sharelist_popular", format!("{p:?}"), || {
             sharelist::sharelist_popular(&mctx, p)
         })
         .await
@@ -3694,7 +4446,10 @@ impl Longbridge {
         Parameters(p): Parameters<quant::RunScriptParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("quant_run", || quant::run_script(&mctx, p)).await
+        measured_tool_call("quant_run", format!("{p:?}"), || {
+            quant::run_script(&mctx, p)
+        })
+        .await
     }
 
     /// Search news by keyword.
@@ -3714,7 +4469,10 @@ impl Longbridge {
         Parameters(p): Parameters<search::NewsSearchParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("news_search", || search::news_search(&mctx, p)).await
+        measured_tool_call("news_search", format!("{p:?}"), || {
+            search::news_search(&mctx, p)
+        })
+        .await
     }
 
     /// Search community topics by keyword.
@@ -3734,7 +4492,10 @@ impl Longbridge {
         Parameters(p): Parameters<search::TopicSearchParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("topic_search", || search::topic_search(&mctx, p)).await
+        measured_tool_call("topic_search", format!("{p:?}"), || {
+            search::topic_search(&mctx, p)
+        })
+        .await
     }
 
     /// Get financial statements for a security.
@@ -3755,7 +4516,7 @@ impl Longbridge {
         Parameters(p): Parameters<fundamental::FinancialStatementParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("financial_statement", || {
+        measured_tool_call("financial_statement", format!("{p:?}"), || {
             fundamental::financial_statement(&mctx, p)
         })
         .await
@@ -3771,7 +4532,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::us_market::FinancialReportKeyMetricsResponse>(),
-        description = "Get key financial metrics (fin-keyfactor) for a US symbol. report: af (annual, default), saf, qf, q1/q2/q3. US accounts only; errors with DcRegionRestricted for HK/CN/SG accounts."
+        description = "Get key financial metrics (fin-keyfactor) for a US symbol. report: af (annual, default), saf, qf, q1/q2/q3. US accounts only; errors with DcRegionRestricted for AP accounts."
     )]
     async fn financial_report_key_metrics(
         &self,
@@ -3779,7 +4540,7 @@ impl Longbridge {
         Parameters(p): Parameters<fundamental::SymbolReportParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("financial_report_key_metrics", || {
+        measured_tool_call("financial_report_key_metrics", format!("{p:?}"), || {
             fundamental::financial_report_key_metrics(&mctx, p)
         })
         .await
@@ -3795,7 +4556,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::us_market::EtfDocsResponse>(),
-        description = "Get regulatory/prospectus documents (etf-files) for a US ETF. US accounts only; errors with DcRegionRestricted for HK/CN/SG accounts."
+        description = "Get regulatory/prospectus documents (etf-files) for a US ETF. US accounts only; errors with DcRegionRestricted for AP accounts."
     )]
     async fn etf_docs(
         &self,
@@ -3803,7 +4564,10 @@ impl Longbridge {
         Parameters(p): Parameters<fundamental::EtfDocsParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("etf_docs", || fundamental::etf_docs(&mctx, p)).await
+        measured_tool_call("etf_docs", format!("{p:?}"), || {
+            fundamental::etf_docs(&mctx, p)
+        })
+        .await
     }
 
     /// Get latest financial report summary for a security.
@@ -3824,7 +4588,7 @@ impl Longbridge {
         Parameters(p): Parameters<fundamental::SymbolParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("financial_report_latest", || {
+        measured_tool_call("financial_report_latest", format!("{p:?}"), || {
             fundamental::financial_report_latest(&mctx, p)
         })
         .await
@@ -3847,7 +4611,10 @@ impl Longbridge {
         Parameters(p): Parameters<fundamental::ValuationRankParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("valuation_rank", || fundamental::valuation_rank(&mctx, p)).await
+        measured_tool_call("valuation_rank", format!("{p:?}"), || {
+            fundamental::valuation_rank(&mctx, p)
+        })
+        .await
     }
 
     /// Get institution rating history for a security.
@@ -3868,7 +4635,7 @@ impl Longbridge {
         Parameters(p): Parameters<fundamental::SymbolParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("institution_rating_history", || {
+        measured_tool_call("institution_rating_history", format!("{p:?}"), || {
             fundamental::institution_rating_history(&mctx, p)
         })
         .await
@@ -3892,7 +4659,7 @@ impl Longbridge {
         Parameters(p): Parameters<fundamental::InstitutionRatingIndustryRankParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("institution_rating_industry_rank", || {
+        measured_tool_call("institution_rating_industry_rank", format!("{p:?}"), || {
             fundamental::institution_rating_industry_rank(&mctx, p)
         })
         .await
@@ -3914,7 +4681,7 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("short_margin", || trade::short_margin(&mctx)).await
+        measured_tool_call("short_margin", String::new(), || trade::short_margin(&mctx)).await
     }
 
     /// List linked withdrawal bank cards.
@@ -3933,7 +4700,7 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("bank_cards", || atm::bank_cards(&mctx)).await
+        measured_tool_call("bank_cards", String::new(), || atm::bank_cards(&mctx)).await
     }
 
     /// List withdrawal history.
@@ -3953,7 +4720,10 @@ impl Longbridge {
         Parameters(p): Parameters<atm::WithdrawalParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("withdrawals", || atm::withdrawals(&mctx, p)).await
+        measured_tool_call("withdrawals", format!("{p:?}"), || {
+            atm::withdrawals(&mctx, p)
+        })
+        .await
     }
 
     /// List deposit history.
@@ -3973,7 +4743,7 @@ impl Longbridge {
         Parameters(p): Parameters<atm::DepositParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("deposits", || atm::deposits(&mctx, p)).await
+        measured_tool_call("deposits", format!("{p:?}"), || atm::deposits(&mctx, p)).await
     }
 
     /// List IPO stocks currently in subscription stage (HK and US).
@@ -3993,7 +4763,10 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("ipo_subscriptions", || ipo::ipo_subscriptions(&mctx)).await
+        measured_tool_call("ipo_subscriptions", String::new(), || {
+            ipo::ipo_subscriptions(&mctx)
+        })
+        .await
     }
 
     /// Show the IPO calendar.
@@ -4013,7 +4786,7 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("ipo_calendar", || ipo::ipo_calendar(&mctx)).await
+        measured_tool_call("ipo_calendar", String::new(), || ipo::ipo_calendar(&mctx)).await
     }
 
     /// List recently listed IPO stocks.
@@ -4034,7 +4807,7 @@ impl Longbridge {
         Parameters(p): Parameters<ipo::IpoListedParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("ipo_listed", || ipo::ipo_listed(&mctx, p)).await
+        measured_tool_call("ipo_listed", format!("{p:?}"), || ipo::ipo_listed(&mctx, p)).await
     }
 
     /// Show IPO detail for a symbol.
@@ -4055,7 +4828,7 @@ impl Longbridge {
         Parameters(p): Parameters<ipo::IpoDetailParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("ipo_detail", || ipo::ipo_detail(&mctx, p)).await
+        measured_tool_call("ipo_detail", format!("{p:?}"), || ipo::ipo_detail(&mctx, p)).await
     }
 
     /// List IPO orders (active and history).
@@ -4076,7 +4849,7 @@ impl Longbridge {
         Parameters(p): Parameters<ipo::IpoOrdersParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("ipo_orders", || ipo::ipo_orders(&mctx, p)).await
+        measured_tool_call("ipo_orders", format!("{p:?}"), || ipo::ipo_orders(&mctx, p)).await
     }
 
     /// Show IPO order detail by order ID.
@@ -4097,7 +4870,10 @@ impl Longbridge {
         Parameters(p): Parameters<ipo::IpoOrderDetailParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("ipo_order_detail", || ipo::ipo_order_detail(&mctx, p)).await
+        measured_tool_call("ipo_order_detail", format!("{p:?}"), || {
+            ipo::ipo_order_detail(&mctx, p)
+        })
+        .await
     }
 
     /// Show IPO profit/loss summary and breakdown.
@@ -4118,7 +4894,10 @@ impl Longbridge {
         Parameters(p): Parameters<ipo::IpoProfitLossParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("ipo_profit_loss", || ipo::ipo_profit_loss(&mctx, p)).await
+        measured_tool_call("ipo_profit_loss", format!("{p:?}"), || {
+            ipo::ipo_profit_loss(&mctx, p)
+        })
+        .await
     }
 
     /// Get current-period business segment revenue breakdown.
@@ -4138,7 +4917,7 @@ impl Longbridge {
         Parameters(p): Parameters<fundamental::BusinessSegmentsParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("business_segments", || {
+        measured_tool_call("business_segments", format!("{p:?}"), || {
             fundamental::business_segments(&mctx, p)
         })
         .await
@@ -4162,7 +4941,7 @@ impl Longbridge {
         Parameters(p): Parameters<fundamental::BusinessSegmentsHistoryParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("business_segments_history", || {
+        measured_tool_call("business_segments_history", format!("{p:?}"), || {
             fundamental::business_segments_history(&mctx, p)
         })
         .await
@@ -4186,7 +4965,7 @@ impl Longbridge {
         Parameters(p): Parameters<fundamental::SymbolParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("institutional_views", || {
+        measured_tool_call("institutional_views", format!("{p:?}"), || {
             fundamental::institutional_views(&mctx, p)
         })
         .await
@@ -4209,7 +4988,10 @@ impl Longbridge {
         Parameters(p): Parameters<market::IndustryRankParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("industry_rank", || market::industry_rank(&mctx, p)).await
+        measured_tool_call("industry_rank", format!("{p:?}"), || {
+            market::industry_rank(&mctx, p)
+        })
+        .await
     }
 
     /// Get hierarchical industry peer group tree for an industry index symbol.
@@ -4230,7 +5012,10 @@ impl Longbridge {
         Parameters(p): Parameters<fundamental::IndustryPeersParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("industry_peers", || fundamental::industry_peers(&mctx, p)).await
+        measured_tool_call("industry_peers", format!("{p:?}"), || {
+            fundamental::industry_peers(&mctx, p)
+        })
+        .await
     }
 
     /// Get financial report snapshot with actual vs forecast comparison.
@@ -4251,7 +5036,7 @@ impl Longbridge {
         Parameters(p): Parameters<fundamental::FinancialReportSnapshotParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("financial_report_snapshot", || {
+        measured_tool_call("financial_report_snapshot", format!("{p:?}"), || {
             fundamental::financial_report_snapshot(&mctx, p)
         })
         .await
@@ -4275,7 +5060,10 @@ impl Longbridge {
         Parameters(p): Parameters<fundamental::ShareholderTopParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("shareholder_top", || fundamental::shareholder_top(&mctx, p)).await
+        measured_tool_call("shareholder_top", format!("{p:?}"), || {
+            fundamental::shareholder_top(&mctx, p)
+        })
+        .await
     }
 
     /// Get single shareholder's holding history and trade details by object_id.
@@ -4296,7 +5084,7 @@ impl Longbridge {
         Parameters(p): Parameters<fundamental::ShareholderDetailParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("shareholder_detail", || {
+        measured_tool_call("shareholder_detail", format!("{p:?}"), || {
             fundamental::shareholder_detail(&mctx, p)
         })
         .await
@@ -4320,7 +5108,7 @@ impl Longbridge {
         Parameters(p): Parameters<fundamental::ValuationComparisonParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("valuation_comparison", || {
+        measured_tool_call("valuation_comparison", format!("{p:?}"), || {
             fundamental::valuation_comparison(&mctx, p)
         })
         .await
@@ -4344,7 +5132,10 @@ impl Longbridge {
         Parameters(p): Parameters<market::ShortTradesParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("short_trades", || market::short_trades(&mctx, p)).await
+        measured_tool_call("short_trades", format!("{p:?}"), || {
+            market::short_trades(&mctx, p)
+        })
+        .await
     }
 
     /// Get top movers — stocks whose price exceeds the 20-day standard deviation.
@@ -4365,7 +5156,10 @@ impl Longbridge {
         Parameters(p): Parameters<market::StockEventsParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("top_movers", || market::top_movers(&mctx, p)).await
+        measured_tool_call("top_movers", format!("{p:?}"), || {
+            market::top_movers(&mctx, p)
+        })
+        .await
     }
 
     /// Get rank tab category configurations for the popularity leaderboard.
@@ -4385,7 +5179,10 @@ impl Longbridge {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("rank_categories", || market::rank_categories(&mctx)).await
+        measured_tool_call("rank_categories", String::new(), || {
+            market::rank_categories(&mctx)
+        })
+        .await
     }
 
     /// Get ranked stock list by leaderboard tab key.
@@ -4406,7 +5203,10 @@ impl Longbridge {
         Parameters(p): Parameters<market::RankListParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("rank_list", || market::rank_list(&mctx, p)).await
+        measured_tool_call("rank_list", format!("{p:?}"), || {
+            market::rank_list(&mctx, p)
+        })
+        .await
     }
 
     /// List platform-preset stock screener strategies.
@@ -4427,7 +5227,7 @@ impl Longbridge {
         Parameters(p): Parameters<screener::ScreenerRecommendStrategiesParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("screener_recommend_strategies", || {
+        measured_tool_call("screener_recommend_strategies", format!("{p:?}"), || {
             screener::screener_recommend_strategies(&mctx, p)
         })
         .await
@@ -4451,7 +5251,7 @@ impl Longbridge {
         Parameters(p): Parameters<screener::ScreenerUserStrategiesParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("screener_user_strategies", || {
+        measured_tool_call("screener_user_strategies", format!("{p:?}"), || {
             screener::screener_user_strategies(&mctx, p)
         })
         .await
@@ -4475,7 +5275,7 @@ impl Longbridge {
         Parameters(p): Parameters<screener::ScreenerStrategyParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("screener_strategy", || {
+        measured_tool_call("screener_strategy", format!("{p:?}"), || {
             screener::screener_strategy(&mctx, p)
         })
         .await
@@ -4499,7 +5299,10 @@ impl Longbridge {
         Parameters(p): Parameters<screener::ScreenerSearchParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("screener_search", || screener::screener_search(&mctx, p)).await
+        measured_tool_call("screener_search", format!("{p:?}"), || {
+            screener::screener_search(&mctx, p)
+        })
+        .await
     }
 
     /// Get all available stock screener indicator metadata.
@@ -4520,7 +5323,7 @@ impl Longbridge {
         Parameters(p): Parameters<screener::ScreenerIndicatorsParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("screener_indicators", || {
+        measured_tool_call("screener_indicators", format!("{p:?}"), || {
             screener::screener_indicators(&mctx, p)
         })
         .await
@@ -4529,7 +5332,7 @@ impl Longbridge {
 
 #[tool_handler(
     name = "longbridge-mcp",
-    instructions = "Longbridge OpenAPI MCP Server - provides market data, trading, and financial analysis tools"
+    instructions = "Longbridge OpenAPI MCP — market data, trading, analysis. Order writes (submit_order, cancel_order, replace_order, grid_*) are two-step: call once without execute to get a confirmation_code, show the preview, then re-call with execute=code after the user confirms. On failure, tools return a JSON envelope with an `error_code` and a `recoverable` field: `reauth` (re-authenticate then retry), `backoff` (wait then retry), `fix_params` (fix arguments then retry), or `none` (do not retry; tell the user)."
 )]
 impl ServerHandler for Longbridge {
     // `get_info` mirrors the `#[tool_handler]` default tool metadata, plus the
@@ -4551,7 +5354,7 @@ impl ServerHandler for Longbridge {
             env!("CARGO_PKG_VERSION"),
         ))
         .with_instructions(
-            "Longbridge OpenAPI MCP Server - provides market data, trading, and financial analysis tools",
+            "Longbridge OpenAPI MCP — market data, trading, analysis. Order writes (submit_order, cancel_order, replace_order, grid_*) are two-step: call once without execute to get a confirmation_code, show the preview, then re-call with execute=code after the user confirms. On failure, tools return a JSON envelope with an `error_code` and a `recoverable` field: `reauth` (re-authenticate then retry), `backoff` (wait then retry), `fix_params` (fix arguments then retry), or `none` (do not retry; tell the user).",
         )
     }
 
@@ -5115,6 +5918,87 @@ mod tests {
             "US_ONLY_TOOLS and AP_ONLY_TOOLS must be disjoint"
         );
     }
+
+    #[test]
+    fn region_scoped_us_params_are_optional() {
+        // A `us_*` input is region-scoped (meaningful only for US accounts). It must never be `required` — an AP-account session cannot
+        // satisfy it, and the region is inferred from the account rather than
+        // passed by the caller. Guards against a future region-scoped param
+        // being added as required.
+        for tool in crate::tools::list_tools() {
+            let required: std::collections::HashSet<&str> = tool
+                .input_schema
+                .get("required")
+                .and_then(|r| r.as_array())
+                .map(|a| a.iter().filter_map(|v| v.as_str()).collect())
+                .unwrap_or_default();
+            let Some(props) = tool
+                .input_schema
+                .get("properties")
+                .and_then(|p| p.as_object())
+            else {
+                continue;
+            };
+            for name in props.keys() {
+                if name.starts_with("us_") {
+                    assert!(
+                        !required.contains(name.as_str()),
+                        "tool `{}`: region-scoped param `{}` must be optional, not required",
+                        tool.name,
+                        name
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn region_branching_fundamental_output_schemas_have_no_required_fields() {
+        // dividend/consensus/valuation/company branch by DC region and return a
+        // US-specific field set (ai_summary, details[], intro, …). Their output
+        // schema must impose no required fields — every field optional and no
+        // `deny_unknown_fields` — so BOTH the generic and the US variant conform.
+        // Otherwise the US structuredContent would violate the declared schema.
+        let tools = crate::tools::list_tools();
+        for name in ["dividend", "consensus", "valuation", "company"] {
+            let tool = tools
+                .iter()
+                .find(|t| t.name == name)
+                .unwrap_or_else(|| panic!("tool `{name}` not found"));
+            let schema = tool
+                .output_schema
+                .as_ref()
+                .unwrap_or_else(|| panic!("tool `{name}` must declare an output_schema"));
+            let required = schema.get("required").and_then(|r| r.as_array());
+            assert!(
+                required.is_none_or(|a| a.is_empty()),
+                "tool `{name}`: output_schema must have no required fields so both the generic \
+                 and US variants conform, got required={required:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn region_account_terminology_is_standardized() {
+        // Region-account terminology is standardized on "US accounts" / "AP
+        // accounts". The earlier mixed forms ("US-data-center accounts",
+        // "HK/CN/SG accounts") must not reappear in any tool description.
+        // (A bare market list like "US/HK/CN/SG" is fine — only the
+        // *-accounts* forms are checked.)
+        for tool in crate::tools::list_tools() {
+            let desc = tool.description.as_deref().unwrap_or_default();
+            assert!(
+                !desc.contains("US-data-center accounts"),
+                "tool `{}`: use 'US accounts', not 'US-data-center accounts'",
+                tool.name
+            );
+            assert!(
+                !desc.contains("HK/CN/SG accounts"),
+                "tool `{}`: use 'AP accounts', not 'HK/CN/SG accounts'",
+                tool.name
+            );
+        }
+    }
 }
 
 #[cfg(test)]
@@ -5572,5 +6456,676 @@ mod quote_cmd_tests {
             "expected hot path ({hot_us:.1}µs) to be at least 5× faster \
              than rebuild ({rebuild_us:.1}µs)"
         );
+    }
+}
+
+#[cfg(test)]
+mod tool_error_tests {
+    use super::{error_hint, measured_tool_call, tool_error, tool_result};
+    use crate::test_support::SharedBuffer;
+    use rmcp::ErrorData as McpError;
+    use rmcp::model::CallToolResult;
+
+    // Tests that capture logs from `measured_tool_call` serialize on the
+    // process-global `crate::test_support::LOG_CAPTURE_LOCK` (see its docs for
+    // why the callsite interest cache forces this). Shared across modules so
+    // these can't race `auth::middleware`'s log-capturing test either.
+    use crate::test_support::LOG_CAPTURE_LOCK;
+
+    fn text_of(result: &CallToolResult) -> String {
+        result
+            .content
+            .iter()
+            .filter_map(|c| c.as_text().map(|t| t.text.clone()))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn tool_error_emits_a_structured_envelope() {
+        let err = McpError::internal_error("upstream exploded", None);
+        let result = tool_error("finance_calendar", &err);
+        assert_eq!(result.is_error, Some(true));
+        assert!(result.structured_content.is_none());
+        let v: serde_json::Value =
+            serde_json::from_str(&text_of(&result)).expect("content must be JSON");
+        assert_eq!(v["message"], "upstream exploded");
+        assert_eq!(v["recoverable"], "none");
+        assert!(v["error_code"].is_null());
+        assert!(v["data"].is_null());
+    }
+
+    #[test]
+    fn tool_error_reauth_envelope_carries_code_and_hint() {
+        let err = McpError::internal_error(
+            "openapi error: code=401103: token is expired".to_string(),
+            None,
+        );
+        let result = tool_error("quote", &err);
+        assert_eq!(result.is_error, Some(true));
+        let v: serde_json::Value = serde_json::from_str(&text_of(&result)).unwrap();
+        assert_eq!(v["recoverable"], "reauth");
+        assert!(
+            v["hint"]
+                .as_str()
+                .is_some_and(|h| h.contains("re-auth") || h.contains("reconnect"))
+        );
+    }
+
+    #[test]
+    fn terminal_object_rooted_returns_success_with_schema_valid_content() {
+        let err = McpError::internal_error(
+            "WsResponseErrorDetail { code: 301604, msg: \"no quote access\" }".to_string(),
+            None,
+        );
+        let result = tool_error("depth", &err);
+        assert_eq!(
+            result.is_error,
+            Some(false),
+            "terminal condition must be isError:false"
+        );
+        let v: serde_json::Value = serde_json::from_str(&text_of(&result)).unwrap();
+        assert_eq!(v["recoverable"], "none");
+        assert!(
+            v["note"].as_str().is_some(),
+            "must carry an explanatory note"
+        );
+        let sc = result
+            .structured_content
+            .expect("object-rooted tool must set structuredContent");
+        assert!(sc.is_object());
+        let schema = super::output_schema_map()
+            .get("depth")
+            .expect("depth schema");
+        for req in schema
+            .get("required")
+            .and_then(|r| r.as_array())
+            .into_iter()
+            .flatten()
+        {
+            let key = req.as_str().unwrap();
+            assert!(sc.get(key).is_some(), "missing required field {key}");
+        }
+    }
+
+    #[test]
+    fn terminal_array_rooted_returns_success_without_structured_content() {
+        let err = McpError::internal_error(
+            "WsResponseErrorDetail { code: 301603, msg: \"no quotes\" }".to_string(),
+            Some(serde_json::json!({ "openapi_error_code": 301603 })),
+        );
+        let result = tool_error("option_quote", &err);
+        assert_eq!(result.is_error, Some(false));
+        assert!(
+            result.structured_content.is_none(),
+            "array-rooted terminal must leave structuredContent unset"
+        );
+        let v: serde_json::Value = serde_json::from_str(&text_of(&result)).unwrap();
+        assert_eq!(v["error_code"], 301603);
+    }
+
+    #[test]
+    fn every_schema_backed_terminal_instance_matches_its_schema() {
+        let err = McpError::internal_error(
+            "WsResponseErrorDetail { code: 301604, msg: \"no quote access\" }".to_string(),
+            None,
+        );
+        for name in super::TERMINAL_OBJECT_ROOTED {
+            let result = tool_error(name, &err);
+            let sc = result
+                .structured_content
+                .unwrap_or_else(|| panic!("{name} must set structuredContent"));
+            let schema = super::output_schema_map()
+                .get(*name)
+                .unwrap_or_else(|| panic!("{name} must have a schema"));
+            for req in schema
+                .get("required")
+                .and_then(|r| r.as_array())
+                .into_iter()
+                .flatten()
+            {
+                let key = req.as_str().unwrap();
+                assert!(
+                    sc.get(key).is_some(),
+                    "{name}: missing required field {key}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn envelope_message_uses_clean_upstream_message_when_present() {
+        // Real errors stash a clean `upstream_message` in data (see
+        // `Error::clean_message`); the envelope must surface that, not the
+        // SDK's Debug-wrapped display text.
+        let err = McpError::internal_error(
+            "longbridge: response error: 7: detail:Some(WsResponseErrorDetail { code: 301604, \
+             msg: \"no quote access\" })"
+                .to_string(),
+            Some(serde_json::json!({
+                "openapi_error_code": 301604,
+                "upstream_message": "no quote access"
+            })),
+        );
+        let result = tool_error("option_quote", &err);
+        let v: serde_json::Value = serde_json::from_str(&text_of(&result)).unwrap();
+        assert_eq!(
+            v["message"], "no quote access",
+            "envelope should use the clean upstream message, not the raw debug string"
+        );
+        assert!(
+            v["note"]
+                .as_str()
+                .is_some_and(|n| n.contains("EMPTY") && n.contains("access")),
+            "terminal note should stress the empty values are an access/no-data placeholder"
+        );
+    }
+
+    #[test]
+    fn envelope_message_falls_back_to_display_when_no_clean_message() {
+        let err = McpError::internal_error("some raw failure".to_string(), None);
+        let result = tool_error("quote", &err);
+        let v: serde_json::Value = serde_json::from_str(&text_of(&result)).unwrap();
+        assert_eq!(v["message"], "some raw failure");
+    }
+
+    #[test]
+    fn invalid_params_hint_points_at_the_input_schema() {
+        let err = McpError::invalid_params("invalid period 'daily'", None);
+        assert!(
+            error_hint(&err).is_some_and(|h| h.contains("input schema")),
+            "expected an input-schema hint"
+        );
+    }
+
+    #[test]
+    fn permission_errors_hint_at_reconnecting_for_full_scopes() {
+        for message in [
+            "403 Forbidden",
+            "no permission for this endpoint",
+            "missing scope: trade",
+        ] {
+            let err = McpError::internal_error(message.to_string(), None);
+            let hint = error_hint(&err).unwrap_or_else(|| panic!("no hint for {message:?}"));
+            assert!(
+                hint.contains("reconnect") && hint.contains("scopes"),
+                "hint for {message:?} should mention reconnecting for full scopes, got: {hint}"
+            );
+        }
+    }
+
+    #[test]
+    fn expired_token_errors_hint_at_reauthorizing() {
+        let err = McpError::internal_error("access token expired", None);
+        assert!(
+            error_hint(&err).is_some_and(|h| h.contains("reconnect")),
+            "expected a re-authorization hint"
+        );
+    }
+
+    #[test]
+    fn rate_limit_errors_hint_at_backing_off() {
+        for message in [
+            "openapi error: code=429002: 已达到 1S 区间调用上限，请 0.4 秒后重试",
+            "openapi error: code=429003: minimum interval between two calls should be 0.02 seconds",
+            "rate limit of 1-second interval has been reached, please retry after: 1s",
+        ] {
+            let err = McpError::internal_error(message.to_string(), None);
+            let hint = error_hint(&err).unwrap_or_else(|| panic!("no hint for {message:?}"));
+            assert!(
+                hint.contains("rate-limited"),
+                "hint for {message:?} should mention rate limiting, got: {hint}"
+            );
+        }
+    }
+
+    #[test]
+    fn dc_region_restricted_errors_hint_at_using_the_account_own_region() {
+        let err = McpError::internal_error(
+            "this API (/v1/us/stock-info/fin-keyfactor) is only available in the US data \
+             center and is not supported for your AP-region account"
+                .to_string(),
+            None,
+        );
+        let hint = error_hint(&err).expect("expected a DC-region hint");
+        assert!(
+            hint.contains("data center") && hint.contains("region"),
+            "unexpected hint: {hint}"
+        );
+    }
+
+    #[test]
+    fn no_quote_access_errors_hint_at_a_missing_subscription() {
+        let err = McpError::internal_error(
+            "response error: 7: detail:Some(WsResponseErrorDetail { code: 301604, msg: \
+             \"no quote access\" })"
+                .to_string(),
+            None,
+        );
+        let hint = error_hint(&err).expect("expected a no-quote-access hint");
+        assert!(hint.contains("subscription"), "unexpected hint: {hint}");
+    }
+
+    #[test]
+    fn structured_error_code_is_preferred_over_substring_matching() {
+        // A message that happens to embed "301604" in an unrelated field
+        // (e.g. a trace id) must NOT get the no-quote-access hint once a
+        // structured code is available and says otherwise.
+        let err = McpError::internal_error(
+            "openapi error: code=401103: token is expired (trace_id=301604-abc)".to_string(),
+            Some(serde_json::json!({ "openapi_error_code": 401103 })),
+        );
+        let hint = error_hint(&err).expect("expected a hint");
+        assert!(
+            hint.contains("reconnect") && !hint.contains("subscription"),
+            "structured code 401103 should win over the substring '301604' in the trace id, got: {hint}"
+        );
+    }
+
+    #[test]
+    fn structured_rate_limit_code_is_matched_even_without_matching_text() {
+        let err = McpError::internal_error(
+            "openapi error: unexpected rejection".to_string(),
+            Some(serde_json::json!({ "openapi_error_code": 429002 })),
+        );
+        let hint = error_hint(&err).expect("expected a rate-limit hint from the structured code");
+        assert!(hint.contains("rate-limited"), "unexpected hint: {hint}");
+    }
+
+    #[test]
+    fn descriptive_text_still_hints_under_an_unenumerated_error_code() {
+        // Regression test: an earlier version of error_hint() only fell back
+        // to string matching when `code` was entirely absent, so any
+        // structured code not in RATE_LIMIT_CODES/NO_QUOTE_ACCESS_CODE
+        // silently disabled the hint even when the message text plainly
+        // said "rate limit" / "no quote access".
+        let rate_limited = McpError::internal_error(
+            "openapi error: code=429001: rate limit exceeded".to_string(),
+            Some(serde_json::json!({ "openapi_error_code": 429001 })),
+        );
+        let hint = error_hint(&rate_limited)
+            .expect("an unenumerated rate-limit code with descriptive text must still hint");
+        assert!(hint.contains("rate-limited"), "unexpected hint: {hint}");
+
+        let no_quote_access = McpError::internal_error(
+            "longbridge: response error: 7: detail:Some(WsResponseErrorDetail { code: 301609, \
+             msg: \"no quote access\" })"
+                .to_string(),
+            Some(serde_json::json!({ "openapi_error_code": 301609 })),
+        );
+        let hint = error_hint(&no_quote_access)
+            .expect("an unenumerated no-quote-access code with descriptive text must still hint");
+        assert!(hint.contains("subscription"), "unexpected hint: {hint}");
+    }
+
+    #[test]
+    fn structured_dc_region_restriction_hints_without_matching_text() {
+        let err = McpError::internal_error(
+            "openapi error: unexpected rejection".to_string(),
+            Some(serde_json::json!({
+                "dc_region_restricted": { "path": "/v1/us/foo", "required": "us", "current": "ap" }
+            })),
+        );
+        let hint = error_hint(&err).expect("expected a DC-region hint from the structured field");
+        assert!(hint.contains("data center"), "unexpected hint: {hint}");
+    }
+
+    #[test]
+    fn dc_region_check_runs_before_rate_limit_so_it_cannot_be_shadowed() {
+        // A DC-region-restricted error always has code=None (mutually
+        // exclusive with openapi_error_code on any given longbridge::Error),
+        // so its message text is visible to the rate-limit check's
+        // numeric-needle fallback. If the DC-region check ran second, this
+        // message (which happens to contain "429002" in its path) would get
+        // the wrong hint.
+        let err = McpError::internal_error(
+            "this API (/v1/us/429002/foo) is only available in the US data center".to_string(),
+            Some(serde_json::json!({
+                "dc_region_restricted": { "path": "/v1/us/429002/foo", "required": "us", "current": "ap" }
+            })),
+        );
+        let hint = error_hint(&err).expect("expected a hint");
+        assert!(
+            hint.contains("data center") && !hint.contains("rate-limited"),
+            "DC-region's structured signal must win even though the path contains a \
+             rate-limit-looking numeric needle, got: {hint}"
+        );
+    }
+
+    #[test]
+    fn a_rate_limit_code_outside_the_hardcoded_list_still_matches_via_the_429_range() {
+        // No text needle matches here on purpose — this must be caught by
+        // the numeric-range check on the structured code, not by string
+        // matching, unlike descriptive_text_still_hints_under_an_unenumerated_error_code
+        // above which covers the text-needle path for an unenumerated code.
+        let err = McpError::internal_error(
+            "openapi error: code=429001: too many concurrent connections".to_string(),
+            Some(serde_json::json!({ "openapi_error_code": 429001 })),
+        );
+        let hint = error_hint(&err).expect("429xxx codes must match via the range check");
+        assert!(hint.contains("rate-limited"), "unexpected hint: {hint}");
+    }
+
+    #[test]
+    fn a_bare_401_substring_does_not_misfire_when_a_different_code_is_present() {
+        // Same false-positive class the rate-limit/no-quote-access branches
+        // were hardened against: a bare "401" can appear in an unrelated
+        // field (here, a trace id) — it must not win once a different,
+        // authoritative structured code is present.
+        let err = McpError::internal_error(
+            "openapi error: code=403308: scope not authorized (trace_id=401-abc)".to_string(),
+            Some(serde_json::json!({ "openapi_error_code": 403308 })),
+        );
+        let hint = error_hint(&err).expect("expected a permission hint");
+        assert!(
+            hint.contains("scopes") && !hint.contains("access token"),
+            "structured code 403308 should win over the substring '401' in the trace id (403 \
+             scope hint, not the 401 token hint), got: {hint}"
+        );
+    }
+
+    #[test]
+    fn a_permission_code_outside_the_hardcoded_needles_still_matches_via_the_403_range() {
+        let err = McpError::internal_error(
+            "openapi error: code=403309: unexpected access rejection".to_string(),
+            Some(serde_json::json!({ "openapi_error_code": 403309 })),
+        );
+        let hint = error_hint(&err).expect("403xxx codes must match via the range check");
+        assert!(hint.contains("scopes"), "unexpected hint: {hint}");
+    }
+
+    #[test]
+    fn a_token_code_outside_the_hardcoded_needles_still_matches_via_the_401_range() {
+        let err = McpError::internal_error(
+            "openapi error: code=401104: session invalid".to_string(),
+            Some(serde_json::json!({ "openapi_error_code": 401104 })),
+        );
+        let hint = error_hint(&err).expect("401xxx codes must match via the range check");
+        assert!(hint.contains("re-authorize"), "unexpected hint: {hint}");
+    }
+
+    #[test]
+    fn ordinary_errors_get_no_hint() {
+        let err = McpError::internal_error("symbol not found", None);
+        assert!(error_hint(&err).is_none());
+    }
+
+    #[tokio::test]
+    async fn measured_tool_call_reports_failures_as_tool_errors() {
+        let _lock = LOG_CAPTURE_LOCK.lock().await;
+        let result = measured_tool_call("some_tool", "test-params".to_string(), || async {
+            Err(McpError::internal_error("upstream 500", None))
+        })
+        .await
+        .expect("a failing tool must not surface as a protocol error");
+
+        assert_eq!(result.is_error, Some(true));
+        assert!(text_of(&result).contains("upstream 500"));
+    }
+
+    #[tokio::test]
+    async fn measured_tool_call_passes_success_through_untouched() {
+        let _lock = LOG_CAPTURE_LOCK.lock().await;
+        let result = measured_tool_call("some_tool", "test-params".to_string(), || async {
+            Ok(tool_result(r#"{"ok":true}"#.to_string()))
+        })
+        .await
+        .expect("successful call");
+
+        assert_eq!(result.is_error, Some(false));
+        assert_eq!(
+            result.structured_content,
+            Some(serde_json::json!({"ok": true}))
+        );
+    }
+
+    #[tokio::test]
+    async fn measured_tool_call_logs_failures_only() {
+        let _lock = LOG_CAPTURE_LOCK.lock().await;
+        let buf = SharedBuffer::default();
+        let writer = buf.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(move || writer.clone())
+            .with_ansi(false)
+            .without_time()
+            .finish();
+        // Thread-local default; valid across the `.await`s below because
+        // `#[tokio::test]` defaults to a single-threaded runtime.
+        let _guard = tracing::subscriber::set_default(subscriber);
+        // `tracing`'s per-callsite interest cache is process-global: another
+        // test's thread can reach one of `measured_tool_call`'s log sites
+        // first with no subscriber installed and cache it as disabled
+        // forever, which silently swallows our events under `cargo test`'s
+        // default parallelism. Force a fresh interest computation against
+        // the subscriber we just installed. (Note: this test's own
+        // subscriber has no `payload_guard`, so the off-by-default
+        // `error_detail` target is NOT capped here — that cap is asserted
+        // separately in `logging.rs`'s tests, against the real filter stack.)
+        tracing::callsite::rebuild_interest_cache();
+
+        // Success logs nothing — volume for successful calls is covered by
+        // the metric recorded alongside, not by a per-call log line.
+        measured_tool_call("logged_ok_tool", "test-params".to_string(), || async {
+            Ok(tool_result(r#"{"ok":true}"#.to_string()))
+        })
+        .await
+        .expect("successful call");
+
+        measured_tool_call(
+            "logged_failing_tool",
+            "sym=BADSTOCK".to_string(),
+            || async { Err(McpError::internal_error("upstream 500", None)) },
+        )
+        .await
+        .expect("a failing tool must not surface as a protocol error");
+
+        measured_tool_call("logged_bad_params_tool", "sym=???".to_string(), || async {
+            Err(McpError::invalid_params("bad symbol", None))
+        })
+        .await
+        .expect("a failing tool must not surface as a protocol error");
+
+        let logged = buf.contents();
+        let lines: Vec<&str> = logged.lines().collect();
+        let line_with = |needle: &str, other: &str| -> &str {
+            lines
+                .iter()
+                .find(|l| l.contains(needle) && l.contains(other))
+                .unwrap_or_else(|| panic!("no line containing {needle:?} and {other:?}: {logged}"))
+        };
+        fn call_id_of(line: &str) -> &str {
+            line.split("call_id=")
+                .nth(1)
+                .and_then(|rest| rest.split_whitespace().next())
+                .unwrap_or_else(|| panic!("no call_id field in line: {line}"))
+        }
+
+        assert!(
+            !logged.contains("logged_ok_tool"),
+            "successful call must not be logged: {logged}"
+        );
+
+        // Backend/upstream failures stay at WARN on both lines.
+        let failed = line_with("logged_failing_tool", "tool call failed");
+        assert!(failed.contains("WARN"), "expected WARN: {failed}");
+        // Message text lives on the separate, cappable `error_detail` target
+        // (see logging.rs's PAYLOAD_CAPS), not on the safe `tool call failed`
+        // event itself.
+        let failed_detail = line_with("logged_failing_tool", "tool call error detail");
+        assert!(
+            failed_detail.contains("WARN") && failed_detail.contains("upstream 500"),
+            "expected WARN detail line: {failed_detail}"
+        );
+        assert!(
+            failed_detail.contains("sym=BADSTOCK"),
+            "expected the caller's input params on the detail line: {failed_detail}"
+        );
+        // Both of this call's lines carry the same call_id, so a reader can
+        // pair them up even if another call's lines interleave.
+        assert_eq!(call_id_of(failed), call_id_of(failed_detail));
+
+        // A caller mistake (INVALID_PARAMS) is routine, not an incident — both
+        // its classification and detail line are downgraded to INFO, not WARN,
+        // so enabling payload logging doesn't reintroduce WARN-level noise for
+        // routine typos.
+        let rejected = line_with("logged_bad_params_tool", "tool call rejected");
+        assert!(rejected.contains("INFO"), "expected INFO: {rejected}");
+        let rejected_detail = line_with("logged_bad_params_tool", "tool call error detail");
+        assert!(
+            rejected_detail.contains("INFO"),
+            "expected INFO detail line: {rejected_detail}"
+        );
+        assert!(
+            rejected_detail.contains("sym=???"),
+            "expected the caller's input params on the detail line: {rejected_detail}"
+        );
+        assert_eq!(call_id_of(rejected), call_id_of(rejected_detail));
+
+        // Different calls get different ids.
+        assert_ne!(call_id_of(failed), call_id_of(rejected));
+    }
+
+    #[test]
+    fn recoverable_of_classifies_each_action_class() {
+        use super::recoverable_of;
+        let cases = [
+            ("openapi error: code=401103: token is expired", "reauth"),
+            (
+                "openapi error: code=403308: Target API's scope is not in authorized scopes",
+                "reauth",
+            ),
+            (
+                "openapi error: code=429003: minimum interval between two calls",
+                "backoff",
+            ),
+            (
+                "response error: 7: detail:Some(WsResponseErrorDetail { code: 301607, msg: \"too many symbols in one page\" })",
+                "fix_params",
+            ),
+            (
+                "response error: 7: detail:Some(WsResponseErrorDetail { code: 301604, msg: \"no quote access\" })",
+                "none",
+            ),
+            (
+                "response error: 7: detail:Some(WsResponseErrorDetail { code: 301603, msg: \"no quotes\" })",
+                "none",
+            ),
+            ("something we have never seen code=999999", "none"),
+        ];
+        for (message, expected) in cases {
+            let err = McpError::internal_error(message.to_string(), None);
+            assert_eq!(recoverable_of(&err), expected, "message: {message:?}");
+        }
+        assert_eq!(
+            recoverable_of(&McpError::invalid_params("bad period", None)),
+            "fix_params",
+            "INVALID_PARAMS must be fix_params"
+        );
+    }
+
+    #[test]
+    fn is_terminal_none_only_for_no_access_and_no_quotes() {
+        use super::is_terminal_none;
+        for msg in ["no quote access", "no quotes"] {
+            let err = McpError::internal_error(
+                format!("WsResponseErrorDetail {{ code: 301604, msg: \"{msg}\" }}"),
+                None,
+            );
+            assert!(is_terminal_none(&err), "should be terminal: {msg}");
+        }
+        for msg in [
+            "token is expired",
+            "no access to trade",
+            "rate limit reached",
+        ] {
+            let err = McpError::internal_error(msg.to_string(), None);
+            assert!(!is_terminal_none(&err), "should NOT be terminal: {msg}");
+        }
+    }
+
+    #[test]
+    fn scope_error_hint_warns_a_plain_refresh_wont_help() {
+        let err = McpError::internal_error(
+            "openapi error: code=403308: Target API's scope is not in authorized scopes"
+                .to_string(),
+            None,
+        );
+        let hint = error_hint(&err).expect("expected a scope hint");
+        assert!(
+            hint.contains("re-authorize") && hint.contains("scope"),
+            "scope hint should tell the user to re-authorize granting the scope, got: {hint}"
+        );
+    }
+
+    #[test]
+    fn too_many_symbols_hint_tells_caller_to_reduce_symbols() {
+        let err = McpError::internal_error(
+            "WsResponseErrorDetail { code: 301607, msg: \"too many symbols in one page\" }"
+                .to_string(),
+            None,
+        );
+        let hint = error_hint(&err).expect("expected a 301607 hint");
+        assert!(
+            hint.contains("fewer") || hint.contains("reduce"),
+            "got: {hint}"
+        );
+    }
+
+    #[test]
+    fn minimal_valid_instance_fills_required_fields_with_typed_zeros() {
+        use serde_json::json;
+        let schema: rmcp::model::JsonObject = serde_json::from_value(json!({
+            "type": "object",
+            "required": ["name", "count", "flag", "items", "nested"],
+            "properties": {
+                "name": {"type": "string"},
+                "count": {"type": "integer"},
+                "flag": {"type": "boolean"},
+                "items": {"type": "array"},
+                "nested": {
+                    "type": "object",
+                    "required": ["inner"],
+                    "properties": {"inner": {"type": "number"}}
+                },
+                "optional_ignored": {"type": "string"}
+            }
+        }))
+        .unwrap();
+        let out = super::minimal_valid_instance(&schema);
+        assert_eq!(
+            out,
+            json!({
+                "name": "", "count": 0, "flag": false, "items": [],
+                "nested": {"inner": 0}
+            })
+        );
+    }
+
+    #[test]
+    fn minimal_valid_instance_prefers_first_enum_value() {
+        use serde_json::json;
+        let schema: rmcp::model::JsonObject = serde_json::from_value(json!({
+            "type": "object",
+            "required": ["status"],
+            "properties": {"status": {"type": "string", "enum": ["open", "closed"]}}
+        }))
+        .unwrap();
+        assert_eq!(
+            super::minimal_valid_instance(&schema),
+            json!({"status": "open"})
+        );
+    }
+
+    #[test]
+    fn output_schema_map_covers_the_schema_backed_terminal_tools() {
+        // Only the object-rooted terminal tools that actually declare an
+        // `output_schema` need schema-valid structured content; those are the
+        // members of `TERMINAL_OBJECT_ROOTED`. (Object-rooted-but-schemaless
+        // tools like static_info/intraday/capital_flow/calc_indexes carry no
+        // schema contract and leave structuredContent unset.)
+        let map = super::output_schema_map();
+        for name in super::TERMINAL_OBJECT_ROOTED {
+            assert!(map.contains_key(*name), "schema map missing {name}");
+        }
     }
 }

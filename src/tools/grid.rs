@@ -16,6 +16,7 @@ use rmcp::schemars::JsonSchema;
 use rmcp::serde::Deserialize;
 
 use crate::error::Error;
+use crate::tools::support::dry_run;
 use crate::tools::{tool_json, tool_result};
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -215,6 +216,20 @@ pub struct GridSubmitParam {
     pub settlement_currency: String,
     #[serde(flatten)]
     pub rule: GridRuleParam,
+    /// The `confirmation_code` from this request's dry run. WITHOUT IT NOTHING
+    /// IS SENT.
+    ///
+    /// Omitted (the default) makes this a DRY RUN: the request is validated and
+    /// echoed back with a three-digit `confirmation_code`, and nothing reaches
+    /// the exchange.
+    ///
+    /// Required protocol: call once without `execute`, show the returned
+    /// preview to the user, and call again quoting the code only after the user
+    /// has explicitly confirmed it. The code is single use, expires in 10
+    /// minutes, and applies only to this exact request — change any field and
+    /// it stops working. A grid strategy keeps placing orders on its own once
+    /// live, so never quote the code back on your own initiative.
+    pub execute: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -223,12 +238,40 @@ pub struct GridReplaceParam {
     pub order_id: String,
     #[serde(flatten)]
     pub rule: GridRuleParam,
+    /// The `confirmation_code` from this request's dry run. WITHOUT IT NOTHING
+    /// IS SENT.
+    ///
+    /// Omitted (the default) makes this a DRY RUN: the request is validated and
+    /// echoed back with a three-digit `confirmation_code`, and nothing reaches
+    /// the exchange.
+    ///
+    /// Required protocol: call once without `execute`, show the returned
+    /// preview to the user, and call again quoting the code only after the user
+    /// has explicitly confirmed it. The code is single use, expires in 10
+    /// minutes, and applies only to this exact request — change any field and
+    /// it stops working. A grid strategy keeps placing orders on its own once
+    /// live, so never quote the code back on your own initiative.
+    pub execute: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct GridOrderIdParam {
     /// Grid order ID.
     pub order_id: String,
+    /// The `confirmation_code` from this request's dry run. WITHOUT IT NOTHING
+    /// IS SENT.
+    ///
+    /// Omitted (the default) makes this a DRY RUN: the request is validated and
+    /// echoed back with a three-digit `confirmation_code`, and nothing reaches
+    /// the exchange.
+    ///
+    /// Required protocol: call once without `execute`, show the returned
+    /// preview to the user, and call again quoting the code only after the user
+    /// has explicitly confirmed it. The code is single use, expires in 10
+    /// minutes, and applies only to this exact request — change any field and
+    /// it stops working. A grid strategy keeps placing orders on its own once
+    /// live, so never quote the code back on your own initiative.
+    pub execute: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -292,19 +335,64 @@ pub async fn grid_submit(
     mctx: &crate::tools::McpContext,
     p: GridSubmitParam,
 ) -> Result<CallToolResult, McpError> {
+    let execute = p.execute.clone();
+    // Read the two numbers a reader checks on a grid preview before the rule is
+    // consumed to build the request.
+    let scope = dry_run::Scope::grid(
+        "submit",
+        &p.symbol,
+        p.rule.trigger_quantity.as_deref().unwrap_or(""),
+        p.rule.submitted_base_price.as_deref().unwrap_or(""),
+    );
+    // Build (and validate) the rule next, so the dry run reports the same
+    // errors a real submit would.
     let rule = build_rule(p.rule)?;
-    let opts = SubmitGridOrderOptions::new(p.symbol, p.settlement_currency, rule);
+    let opts = SubmitGridOrderOptions::new(p.symbol.clone(), p.settlement_currency.clone(), rule);
+    let rule_json = serde_json::to_value(&opts).unwrap_or_default();
+    // Two-step by design: without a confirmation code this submits nothing.
+    let Some(code) = execute else {
+        return dry_run::result(
+            &scope,
+            serde_json::json!({
+                "action": "grid_submit",
+                "symbol": p.symbol,
+                "settlement_currency": p.settlement_currency,
+                "rule": rule_json,
+            }),
+        );
+    };
+    scope.verify(&code)?;
     let ctx = GridContext::new(mctx.create_config());
     let result = ctx.submit(opts).await.map_err(Error::longbridge)?;
-    tool_json(&result)
+    // Same envelope as the dry run so both outcomes validate against
+    // `output::grid::GridSubmitResponse`, and `dry_run` alone tells them apart.
+    tool_json(&serde_json::json!({
+        "dry_run": false,
+        "order_id": result.order_id,
+    }))
 }
 
 pub async fn grid_replace(
     mctx: &crate::tools::McpContext,
     p: GridReplaceParam,
 ) -> Result<CallToolResult, McpError> {
+    let execute = p.execute.clone();
     let rule = build_rule(p.rule)?;
-    let opts = ReplaceGridOrderOptions::new(p.order_id, rule);
+    let opts = ReplaceGridOrderOptions::new(p.order_id.clone(), rule);
+    let rule_json = serde_json::to_value(&opts).unwrap_or_default();
+    let scope = dry_run::Scope::on_order("grid replace", &p.order_id);
+    // Two-step by design: without a confirmation code this changes nothing.
+    let Some(code) = execute else {
+        return dry_run::result(
+            &scope,
+            serde_json::json!({
+                "action": "grid_replace",
+                "order_id": p.order_id,
+                "rule": rule_json,
+            }),
+        );
+    };
+    scope.verify(&code)?;
     let ctx = GridContext::new(mctx.create_config());
     ctx.replace(opts).await.map_err(Error::longbridge)?;
     Ok(tool_result("grid order replaced".to_string()))
@@ -314,6 +402,18 @@ pub async fn grid_cancel(
     mctx: &crate::tools::McpContext,
     p: GridOrderIdParam,
 ) -> Result<CallToolResult, McpError> {
+    let scope = dry_run::Scope::on_order("grid cancel", &p.order_id);
+    // Two-step by design: without a confirmation code this does nothing.
+    let Some(code) = p.execute.clone() else {
+        return dry_run::result(
+            &scope,
+            serde_json::json!({
+                "action": "grid_cancel",
+                "order_id": p.order_id,
+            }),
+        );
+    };
+    scope.verify(&code)?;
     let ctx = GridContext::new(mctx.create_config());
     ctx.cancel(p.order_id).await.map_err(Error::longbridge)?;
     Ok(tool_result("grid order cancelled".to_string()))
@@ -323,6 +423,18 @@ pub async fn grid_suspend(
     mctx: &crate::tools::McpContext,
     p: GridOrderIdParam,
 ) -> Result<CallToolResult, McpError> {
+    let scope = dry_run::Scope::on_order("grid suspend", &p.order_id);
+    // Two-step by design: without a confirmation code this does nothing.
+    let Some(code) = p.execute.clone() else {
+        return dry_run::result(
+            &scope,
+            serde_json::json!({
+                "action": "grid_suspend",
+                "order_id": p.order_id,
+            }),
+        );
+    };
+    scope.verify(&code)?;
     let ctx = GridContext::new(mctx.create_config());
     ctx.suspend(p.order_id).await.map_err(Error::longbridge)?;
     Ok(tool_result("grid order suspended".to_string()))
@@ -332,6 +444,18 @@ pub async fn grid_restart(
     mctx: &crate::tools::McpContext,
     p: GridOrderIdParam,
 ) -> Result<CallToolResult, McpError> {
+    let scope = dry_run::Scope::on_order("grid restart", &p.order_id);
+    // Two-step by design: without a confirmation code this does nothing.
+    let Some(code) = p.execute.clone() else {
+        return dry_run::result(
+            &scope,
+            serde_json::json!({
+                "action": "grid_restart",
+                "order_id": p.order_id,
+            }),
+        );
+    };
+    scope.verify(&code)?;
     let ctx = GridContext::new(mctx.create_config());
     ctx.restart(p.order_id).await.map_err(Error::longbridge)?;
     Ok(tool_result("grid order restarted".to_string()))

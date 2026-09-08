@@ -49,9 +49,11 @@ pub struct TopicRepliesParam {
     pub topic_id: String,
     /// Page number, 1-based (default: 1).
     #[serde(default, deserialize_with = "tolerant_option_i32")]
+    #[schemars(extend("default" = 1))]
     pub page: Option<i32>,
     /// Records per page, 1-50 (default: 20).
     #[serde(default, deserialize_with = "tolerant_option_i32")]
+    #[schemars(extend("default" = 20))]
     pub size: Option<i32>,
 }
 
@@ -118,7 +120,7 @@ pub async fn news_detail(
                     None,
                 )
             }
-            _ => McpError::internal_error(e.to_string(), None),
+            _ => Error::longbridge(e.into()).into(),
         })?;
     // The tool declares an outputSchema, so it must return a structured
     // object — never a bare `null` if the payload is missing `item`.

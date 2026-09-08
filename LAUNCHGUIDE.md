@@ -50,7 +50,7 @@ Real-time quotes, options chain analysis, order routing, portfolio analytics, DC
 - "Pause my DCA plan for VOO until next month."
 - Tool: `realtime_quote` — Get real-time bid/ask, last price, volume and 52-week range for any US/HK symbol.
 - Tool: `option_chain_expiry_date_list` — List option expiry dates for a given underlying.
-- Tool: `submit_order` — Place a market or limit order with full TIF / outside-RTH controls.
+- Tool: `submit_order` — Place a market or limit order with full TIF / outside-RTH controls. Dry run by default: it previews the order and places nothing until you pass the `confirmation_code` its dry run returns, so the assistant has to show you the order and get your confirmation first (`cancel_order`, `replace_order` and every `grid_*` write work the same way).
 - Tool: `stock_positions` — List all stock positions across your linked accounts.
 - Tool: `analyst_rating` — Pull current Wall Street ratings, price targets and revision history.
 - Tool: `pnl_analysis` — Compute realised and unrealised P&L over an optional date range, in your preferred currency.
