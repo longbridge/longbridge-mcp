@@ -39,22 +39,22 @@ pub struct TodayOrdersParam {
     pub symbol: Option<String>,
     /// Filter by order ID: a parent order ID, or (with is_attached=true) the ID
     /// of an attached take-profit / stop-loss leg. Has no effect for
-    /// US-data-center accounts, which are served by the US order endpoint.
+    /// US accounts, which are served by the US order endpoint.
     pub order_id: Option<String>,
     /// Only meaningful together with order_id: it says that order_id is the ID
     /// of an attached take-profit / stop-loss leg, and the response then
     /// carries that leg itself as an order entry. On its own it does nothing,
-    /// and it has no effect for US-data-center accounts either.
+    /// and it has no effect for US accounts either.
     pub is_attached: Option<bool>,
-    /// US-data-center accounts only: filter by side, "Buy" or "Sell". Omit for
-    /// all. Ignored for HK/CN/SG accounts (the region is inferred from the
+    /// US accounts only: filter by side, "Buy" or "Sell". Omit for
+    /// all. Ignored for AP accounts (the region is inferred from the
     /// account — do not pass it).
     pub us_action: Option<String>,
-    /// US-data-center accounts only: page number (default 1). Ignored for
-    /// HK/CN/SG accounts.
+    /// US accounts only: page number (default 1). Ignored for
+    /// AP accounts.
     pub us_page: Option<i32>,
-    /// US-data-center accounts only: page size (default 20). Ignored for
-    /// HK/CN/SG accounts.
+    /// US accounts only: page size (default 20). Ignored for
+    /// AP accounts.
     pub us_limit: Option<i32>,
 }
 
@@ -273,11 +273,11 @@ pub struct HistoryOrdersParam {
     pub start_at: String,
     /// End time (RFC3339)
     pub end_at: String,
-    /// US-data-center accounts only: page number (default 1). Ignored for
-    /// HK/CN/SG accounts (the region is inferred from the account — do not pass it).
+    /// US accounts only: page number (default 1). Ignored for
+    /// AP accounts (the region is inferred from the account — do not pass it).
     pub us_page: Option<i32>,
-    /// US-data-center accounts only: page size (default 20). Ignored for
-    /// HK/CN/SG accounts.
+    /// US accounts only: page size (default 20). Ignored for
+    /// AP accounts.
     pub us_limit: Option<i32>,
 }
 
