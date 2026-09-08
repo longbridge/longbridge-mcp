@@ -1648,7 +1648,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get static info for securities. Returns per symbol: symbol, name_cn, name_en, exchange (e.g. NASDAQ), type (e.g. US_Stock), lot_size, listed_date, delisted (bool). US accounts only: .BKKT crypto symbols (e.g. BTCUSD.BKKT) are routed to a separate US crypto overview endpoint; .HAS/.OSL crypto symbols are unaffected."
+        description = "Get static info for securities. Returns per symbol: symbol, name_cn, name_en, exchange (e.g. NASDAQ), type (e.g. US_Stock), lot_size, listed_date, delisted (bool). US-data-center accounts only: .BKKT crypto symbols (e.g. BTCUSD.BKKT) are routed to a separate US crypto overview endpoint; .HAS/.OSL crypto symbols are unaffected."
     )]
     async fn static_info(
         &self,
@@ -2321,7 +2321,7 @@ impl Longbridge {
         title = "Stock Positions",
         annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = true),
         output_schema = schema_for::<output::StockPositionsResponse>(),
-        description = "Get current stock positions across all channels. Returns list[].stock_info[]{symbol, symbol_name, quantity, available_quantity, currency, cost_price, market}. US accounts only: an additional us_asset_overview field {cash_list, stock_list, option_list, crypto_list, cash_buy_power, overnight_buy_power} is included alongside the existing data."
+        description = "Get current stock positions across all channels. Returns list[].stock_info[]{symbol, symbol_name, quantity, available_quantity, currency, cost_price, market}. US-data-center accounts only: an additional us_asset_overview field {cash_list, stock_list, option_list, crypto_list, cash_buy_power, overnight_buy_power} is included alongside the existing data."
     )]
     async fn stock_positions(
         &self,
@@ -2380,7 +2380,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get orders placed today. Returns orders[]{order_id, symbol, side, order_type, status, quantity, price, submitted_at, executed_quantity, executed_price, attached_orders[]}, where attached_orders[] holds the order's take-profit/stop-loss legs. Pass symbol to filter by security, or order_id for one order. To fetch an attached leg by its own ID, pass that ID as order_id together with is_attached=true — the leg itself comes back as the order entry. is_attached does nothing without order_id, and neither has any effect for US accounts, which are served by the US order endpoint. US accounts only: us_action (Buy/Sell), us_page, us_limit filter/paginate via a separate US order endpoint."
+        description = "Get orders placed today. Returns orders[]{order_id, symbol, side, order_type, status, quantity, price, submitted_at, executed_quantity, executed_price, attached_orders[]}, where attached_orders[] holds the order's take-profit/stop-loss legs. Pass symbol to filter by security, or order_id for one order. To fetch an attached leg by its own ID, pass that ID as order_id together with is_attached=true — the leg itself comes back as the order entry. is_attached does nothing without order_id, and neither has any effect for US-data-center accounts, which are served by the US order endpoint. US-data-center accounts only: us_action (Buy/Sell), us_page, us_limit filter/paginate via a separate US order endpoint."
     )]
     async fn today_orders(
         &self,
@@ -2399,7 +2399,7 @@ impl Longbridge {
         title = "Order Detail",
         annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = true),
         output_schema = schema_for::<output::OrderDetailResponse>(),
-        description = "Get detailed information about a specific order. Returns {order_id, symbol, status, side, order_type, quantity, price, executed_quantity, executed_price, submitted_at, time_in_force, msg, attached_orders[]}, where attached_orders[] holds the order's take-profit/stop-loss legs with their own order IDs. To look up such a leg by its own ID instead, pass it as order_id with is_attached=true: the response is then that leg, with charge_detail null. is_attached has no effect for US accounts, which are served by the US order endpoint and return their attached legs nested under order."
+        description = "Get detailed information about a specific order. Returns {order_id, symbol, status, side, order_type, quantity, price, executed_quantity, executed_price, submitted_at, time_in_force, msg, attached_orders[]}, where attached_orders[] holds the order's take-profit/stop-loss legs with their own order IDs. To look up such a leg by its own ID instead, pass it as order_id with is_attached=true: the response is then that leg, with charge_detail null. US-data-center accounts get a US-specific variant served by the US order endpoint, with the order (and its attached legs) nested under `order`. The region is detected from the account automatically."
     )]
     async fn order_detail(
         &self,
@@ -2468,7 +2468,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get historical orders between dates (excludes today). Returns orders[]{order_id, symbol, side, status, quantity, price, submitted_at}. start_at/end_at in RFC3339. US accounts only: us_page, us_limit paginate via a separate US order endpoint (default page size 20 — pass us_page to see more than the first page)."
+        description = "Get historical orders between dates (excludes today). Returns orders[]{order_id, symbol, side, status, quantity, price, submitted_at}. start_at/end_at in RFC3339. US-data-center accounts only: us_page, us_limit paginate via a separate US order endpoint (default page size 20 — pass us_page to see more than the first page)."
     )]
     async fn history_orders(
         &self,
@@ -2601,7 +2601,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::us_market::FinancialReportResponse>(),
-        description = "Get financial reports (income statement, balance sheet, cash flow). kind: IS/BS/CF/ALL. report_type: af (annual), saf (semi-annual), q1/q2/q3, qf (quarterly full). US accounts querying a .US symbol without kind are routed to a US-specific overview endpoint; passing kind explicitly always uses the generic path."
+        description = "Get financial reports (income statement, balance sheet, cash flow). kind: IS/BS/CF/ALL. report_type: af (annual), saf (semi-annual), q1/q2/q3, qf (quarterly full). US-data-center accounts querying a .US symbol without kind are routed to a US-specific overview endpoint; passing kind explicitly always uses the generic path."
     )]
     async fn financial_report(
         &self,
@@ -2673,7 +2673,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::fundamental::DividendResponse>(),
-        description = "Get dividend history for the symbol. US accounts querying a .US symbol get a differently-shaped response not matching output_schema (dividend_yield_ttm etc. are percent values, e.g. 0.34 means 0.34%); other combinations match output_schema."
+        description = "Get dividend history for the symbol. US-data-center accounts querying a .US symbol get a US-specific variant (e.g. dividend_yield_ttm is a percent value: 0.34 means 0.34%). The region is detected from the account automatically."
     )]
     async fn dividend(
         &self,
@@ -2745,7 +2745,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::fundamental::ConsensusResponse>(),
-        description = "Get financial consensus estimates for upcoming periods. US accounts querying a .US symbol get a differently-shaped response not matching output_schema (ai_summary plus a details[] list per period); other combinations match output_schema."
+        description = "Get financial consensus estimates for upcoming periods. US-data-center accounts querying a .US symbol get a US-specific variant (ai_summary plus a details[] list per period, instead of items[]). The region is detected from the account automatically."
     )]
     async fn consensus(
         &self,
@@ -2769,7 +2769,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::fundamental::ValuationResponse>(),
-        description = "Get valuation overview with peer comparison. US accounts querying a .US symbol get a differently-shaped response not matching output_schema (ai_summary plus a metrics.pe object with different sub-fields); other combos match output_schema."
+        description = "Get valuation overview with peer comparison. US-data-center accounts querying a .US symbol get a US-specific variant (ai_summary plus a metrics.pe object with different sub-fields). The region is detected from the account automatically."
     )]
     async fn valuation(
         &self,
@@ -2865,7 +2865,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::fundamental::CompanyResponse>(),
-        description = "Get company overview. US accounts querying a .US symbol get a differently-shaped response not matching output_schema (intro, market_cap, top_rank_tags, sharelist, detail_url); other combinations match output_schema."
+        description = "Get company overview. US-data-center accounts querying a .US symbol get a US-specific variant (intro, market_cap, top_rank_tags, sharelist, detail_url). The region is detected from the account automatically."
     )]
     async fn company(
         &self,
@@ -3333,7 +3333,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::us_market::PortfolioRealizedPlResponse>(),
-        description = "Get realized P&L for a US account, broken down by category (stock/option/crypto) and period. US accounts only; errors with DcRegionRestricted for HK/CN/SG accounts."
+        description = "Get realized P&L for a US account, broken down by category (stock/option/crypto) and period. US-data-center accounts only; errors with DcRegionRestricted for HK/CN/SG accounts."
     )]
     async fn profit_analysis_realized(
         &self,
@@ -4483,7 +4483,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::us_market::FinancialStatementResponse>(),
-        description = "Get financial statements (income statement, balance sheet, or cash flow) for a security. kind: IS/BS/CF/ALL. report: af (annual, default), saf (semi-annual), qf (quarterly full), q1/q2/q3. US accounts querying a .US symbol are routed to a US-specific statement endpoint (same report vocabulary as the generic path); kind=ALL/default fans out to IS+BS+CF and returns {income_statement, balance_sheet, cash_flow} since the backend doesn't support a combined request; all other symbol/account combinations use the generic path."
+        description = "Get financial statements (income statement, balance sheet, or cash flow) for a security. kind: IS/BS/CF/ALL. report: af (annual, default), saf (semi-annual), qf (quarterly full), q1/q2/q3. US-data-center accounts querying a .US symbol are routed to a US-specific statement endpoint (same report vocabulary as the generic path); kind=ALL/default fans out to IS+BS+CF and returns {income_statement, balance_sheet, cash_flow} since the backend doesn't support a combined request; all other symbol/account combinations use the generic path."
     )]
     async fn financial_statement(
         &self,
@@ -4507,7 +4507,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::us_market::FinancialReportKeyMetricsResponse>(),
-        description = "Get key financial metrics (fin-keyfactor) for a US symbol. report: af (annual, default), saf, qf, q1/q2/q3. US accounts only; errors with DcRegionRestricted for HK/CN/SG accounts."
+        description = "Get key financial metrics (fin-keyfactor) for a US symbol. report: af (annual, default), saf, qf, q1/q2/q3. US-data-center accounts only; errors with DcRegionRestricted for HK/CN/SG accounts."
     )]
     async fn financial_report_key_metrics(
         &self,
@@ -4531,7 +4531,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::us_market::EtfDocsResponse>(),
-        description = "Get regulatory/prospectus documents (etf-files) for a US ETF. US accounts only; errors with DcRegionRestricted for HK/CN/SG accounts."
+        description = "Get regulatory/prospectus documents (etf-files) for a US ETF. US-data-center accounts only; errors with DcRegionRestricted for HK/CN/SG accounts."
     )]
     async fn etf_docs(
         &self,
@@ -5891,6 +5891,66 @@ mod tests {
                 .all(|n| !super::AP_ONLY_TOOLS.contains(n)),
             "US_ONLY_TOOLS and AP_ONLY_TOOLS must be disjoint"
         );
+    }
+
+    #[test]
+    fn region_scoped_us_params_are_optional() {
+        // A `us_*` input is region-scoped (meaningful only for US-data-center
+        // accounts). It must never be `required` — an HK/CN/SG session cannot
+        // satisfy it, and the region is inferred from the account rather than
+        // passed by the caller. Guards against a future region-scoped param
+        // being added as required.
+        for tool in crate::tools::list_tools() {
+            let required: std::collections::HashSet<&str> = tool
+                .input_schema
+                .get("required")
+                .and_then(|r| r.as_array())
+                .map(|a| a.iter().filter_map(|v| v.as_str()).collect())
+                .unwrap_or_default();
+            let Some(props) = tool
+                .input_schema
+                .get("properties")
+                .and_then(|p| p.as_object())
+            else {
+                continue;
+            };
+            for name in props.keys() {
+                if name.starts_with("us_") {
+                    assert!(
+                        !required.contains(name.as_str()),
+                        "tool `{}`: region-scoped param `{}` must be optional, not required",
+                        tool.name,
+                        name
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn region_branching_fundamental_output_schemas_have_no_required_fields() {
+        // dividend/consensus/valuation/company branch by DC region and return a
+        // US-specific field set (ai_summary, details[], intro, …). Their output
+        // schema must impose no required fields — every field optional and no
+        // `deny_unknown_fields` — so BOTH the generic and the US variant conform.
+        // Otherwise the US structuredContent would violate the declared schema.
+        let tools = crate::tools::list_tools();
+        for name in ["dividend", "consensus", "valuation", "company"] {
+            let tool = tools
+                .iter()
+                .find(|t| t.name == name)
+                .unwrap_or_else(|| panic!("tool `{name}` not found"));
+            let schema = tool
+                .output_schema
+                .as_ref()
+                .unwrap_or_else(|| panic!("tool `{name}` must declare an output_schema"));
+            let required = schema.get("required").and_then(|r| r.as_array());
+            assert!(
+                required.is_none_or(|a| a.is_empty()),
+                "tool `{name}`: output_schema must have no required fields so both the generic \
+                 and US-data-center variants conform, got required={required:?}"
+            );
+        }
     }
 }
 
