@@ -68,7 +68,7 @@ pub struct TodayExecutionsParam {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct SubmitOrderParam {
-    /// Security symbol, e.g. "700.HK"
+    /// Security symbol, e.g. "700.HK". Use the canonical form — a padded code like "00700.HK" returns an empty record, not an error.
     pub symbol: String,
     /// Order type (HK supports all; US supports LO/MO/LIT/MIT/TSLPAMT/TSLPPCT only):
     /// - LO (Limit Order): requires submitted_price
@@ -323,7 +323,7 @@ pub struct CashFlowParam {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct EstimateMaxQtyParam {
-    /// Security symbol, e.g. "700.HK"
+    /// Security symbol, e.g. "700.HK". Use the canonical form — a padded code like "00700.HK" returns an empty record, not an error.
     pub symbol: String,
     /// Buy or Sell (case-insensitive; default: Buy)
     #[serde(default = "default_order_side")]

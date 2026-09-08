@@ -18,7 +18,7 @@ use crate::tools::tool_json;
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct SymbolsParam {
-    /// Security symbols, e.g. ["700.HK", "AAPL.US"]
+    /// Security symbols, e.g. ["700.HK", "AAPL.US"]. Use the canonical form — a padded code like "00700.HK" returns an empty record, not an error.
     #[serde(deserialize_with = "tolerant_vec_string")]
     pub symbols: Vec<String>,
 }
@@ -35,13 +35,13 @@ pub struct OptionSymbolsParam {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct SymbolParam {
-    /// Security symbol, e.g. "700.HK"
+    /// Security symbol, e.g. "700.HK". Use the canonical form — a padded code like "00700.HK" returns an empty record, not an error.
     pub symbol: String,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct IntradayParam {
-    /// Security symbol, e.g. "700.HK"
+    /// Security symbol, e.g. "700.HK". Use the canonical form — a padded code like "00700.HK" returns an empty record, not an error.
     pub symbol: String,
     /// Trade sessions to include: "intraday" (default, regular hours only) or "all" (include pre-market and post-market).
     pub trade_sessions: Option<String>,
@@ -49,7 +49,7 @@ pub struct IntradayParam {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct SymbolCountParam {
-    /// Security symbol, e.g. "700.HK"
+    /// Security symbol, e.g. "700.HK". Use the canonical form — a padded code like "00700.HK" returns an empty record, not an error.
     pub symbol: String,
     /// Maximum number of results (max 1000)
     #[serde(deserialize_with = "tolerant_usize")]
@@ -58,7 +58,7 @@ pub struct SymbolCountParam {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct CandlesticksParam {
-    /// Security symbol, e.g. "700.HK"
+    /// Security symbol, e.g. "700.HK". Use the canonical form — a padded code like "00700.HK" returns an empty record, not an error.
     pub symbol: String,
     /// Period: 1m, 5m, 15m, 30m, 60m, day, week, month, year (default: day)
     #[serde(default = "default_candlestick_period")]
@@ -91,7 +91,7 @@ fn default_trade_sessions() -> String {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct HistoryCandlesticksByOffsetParam {
-    /// Security symbol, e.g. "700.HK"
+    /// Security symbol, e.g. "700.HK". Use the canonical form — a padded code like "00700.HK" returns an empty record, not an error.
     pub symbol: String,
     /// Period: 1m, 5m, 15m, 30m, 60m, day, week, month, year (default: day)
     #[serde(default = "default_candlestick_period")]
@@ -117,7 +117,7 @@ pub struct HistoryCandlesticksByOffsetParam {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct HistoryCandlesticksByDateParam {
-    /// Security symbol, e.g. "700.HK"
+    /// Security symbol, e.g. "700.HK". Use the canonical form — a padded code like "00700.HK" returns an empty record, not an error.
     pub symbol: String,
     /// Period: 1m, 5m, 15m, 30m, 60m, day, week, month, year (default: day)
     #[serde(default = "default_candlestick_period")]
@@ -152,7 +152,7 @@ pub struct MarketDateRangeParam {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct SymbolDateParam {
-    /// Security symbol, e.g. "700.HK"
+    /// Security symbol, e.g. "700.HK". Use the canonical form — a padded code like "00700.HK" returns an empty record, not an error.
     pub symbol: String,
     /// Date (yyyy-mm-dd)
     pub date: String,
@@ -185,7 +185,7 @@ pub struct WarrantListParam {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct CalcIndexesParam {
-    /// Security symbols, e.g. ["700.HK", "AAPL.US"]
+    /// Security symbols, e.g. ["700.HK", "AAPL.US"]. Use the canonical form — a padded code like "00700.HK" returns an empty record, not an error.
     #[serde(deserialize_with = "tolerant_vec_string")]
     pub symbols: Vec<String>,
     /// Calc indexes (optional; defaults to LastDone, ChangeValue, ChangeRate, Volume, PeTtmRatio, PbRatio, DividendRatioTtm, TurnoverRate, TotalMarketValue): LastDone, ChangeValue, ChangeRate, Volume, Turnover, YtdChangeRate, TurnoverRate, TotalMarketValue, CapitalFlow, Amplitude, VolumeRatio, PeTtmRatio, PbRatio, DividendRatioTtm, FiveDayChangeRate, TenDayChangeRate, HalfYearChangeRate, FiveMinutesChangeRate, ExpiryDate, StrikePrice, UpperStrikePrice, LowerStrikePrice, OutstandingQty, OutstandingRatio, Premium, ItmOtm, ImpliedVolatility, WarrantDelta, CallPrice, ToCallPrice, EffectiveLeverage, LeverageRatio, ConversionRatio, BalancePoint, OpenInterest, Delta, Gamma, Theta, Vega, Rho

@@ -13,7 +13,7 @@ use crate::tools::tool_json;
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct SymbolParam {
-    /// Security symbol, e.g. "700.HK"
+    /// Security symbol, e.g. "700.HK". Use the canonical form — a padded code like "00700.HK" returns an empty record, not an error.
     pub symbol: String,
 }
 
@@ -29,7 +29,7 @@ pub struct AnomalyParam {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct BrokerHoldingDailyParam {
-    /// Security symbol, e.g. "700.HK"
+    /// Security symbol, e.g. "700.HK". Use the canonical form — a padded code like "00700.HK" returns an empty record, not an error.
     pub symbol: String,
     /// Broker participant number
     pub broker_id: String,
@@ -37,7 +37,7 @@ pub struct BrokerHoldingDailyParam {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct BrokerHoldingParam {
-    /// Security symbol, e.g. "700.HK"
+    /// Security symbol, e.g. "700.HK". Use the canonical form — a padded code like "00700.HK" returns an empty record, not an error.
     pub symbol: String,
     /// Period: "rct_1" (1 day, default), "rct_5" (5 days), "rct_20" (20 days), "rct_60" (60 days)
     pub period: Option<String>,
@@ -45,7 +45,7 @@ pub struct BrokerHoldingParam {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct AhPremiumParam {
-    /// Security symbol, e.g. "700.HK"
+    /// Security symbol, e.g. "700.HK". Use the canonical form — a padded code like "00700.HK" returns an empty record, not an error.
     pub symbol: String,
     /// K-line period: "1m", "5m", "15m", "30m", "60m", "day" (default), "week", "month", "year"
     pub period: Option<String>,
