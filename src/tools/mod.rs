@@ -1059,7 +1059,6 @@ const TOOL_ENDPOINTS: &[(&str, u8)] = &[
     ("grid_detail", 0),
     ("grid_list", 0),
     ("grid_list_by_ids", 0),
-    ("grid_questionnaire", 0),
     ("grid_replace", 0),
     ("grid_restart", 0),
     ("grid_submit", 0),
@@ -3871,7 +3870,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::grid::GridSubmitResponse>(),
-        description = "Submit a grid trading order. DRY RUN unless execute is the confirmation_code from its own dry run: call once without execute, show the preview, then re-call quoting the code only after the user confirms. A live grid keeps trading on its own. Requires symbol, settlement_currency, and the grid rule: base/upper/lower price, trigger_price_type (1=spread, 2=percent) with the matching spread/percent up/down, trigger_quantity, upper/lower_limit_quantity, time_in_force (0=Day, 1=GTC, 6=GTD), grid_order_type_up/down (GMO/GLO/GTG), and boundary events (1=ignore, 2=close-at-last). Prices/quantities are decimal strings. Requires the one-time grid_questionnaire consent."
+        description = "Submit a grid trading order. DRY RUN unless execute is the confirmation_code from its own dry run: call once without execute, show the preview, then re-call quoting the code only after the user confirms. A live grid keeps trading on its own. Requires symbol, settlement_currency, and the grid rule: base/upper/lower price, trigger_price_type (1=spread, 2=percent) with the matching spread/percent up/down, trigger_quantity, upper/lower_limit_quantity, time_in_force (0=Day, 1=GTC, 6=GTD), grid_order_type_up/down (GMO/GLO/GTG), and boundary events (1=ignore, 2=close-at-last). Prices/quantities are decimal strings."
     )]
     async fn grid_submit(
         &self,
@@ -3973,29 +3972,6 @@ impl Longbridge {
         let mctx = extract_context(&ctx)?;
         measured_tool_call("grid_restart", format!("{p:?}"), || {
             grid::grid_restart(&mctx, p)
-        })
-        .await
-    }
-
-    /// Submit the grid strategy risk-disclosure questionnaire.
-    #[tool(
-        title = "Grid Strategy Consent",
-        annotations(
-            read_only_hint = false,
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = true
-        ),
-        description = "Record the one-time grid strategy risk-disclosure consent required before submitting grid orders. Takes no parameters."
-    )]
-    async fn grid_questionnaire(
-        &self,
-        ctx: RequestContext<RoleServer>,
-        Parameters(p): Parameters<grid::GridQuestionnaireParam>,
-    ) -> Result<CallToolResult, McpError> {
-        let mctx = extract_context(&ctx)?;
-        measured_tool_call("grid_questionnaire", format!("{p:?}"), || {
-            grid::grid_questionnaire(&mctx, p)
         })
         .await
     }
