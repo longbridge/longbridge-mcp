@@ -12,19 +12,7 @@ use rmcp::{
 use serde_json::Value;
 
 type Filter = jaq_core::Filter<data::JustLut<Val>>;
-pub(super) const INSTRUCTIONS: &str = concat!(
-    "All tools accept optional _jq (string), a jq-compatible expression applied to the returned JSON ",
-    "after the tool executes. It filters the response, not the upstream query or business arguments. ",
-    "Use it to select fields, filter rows, or summarize data. Match the expression to the response shape: ",
-    "map({symbol}) for a root array; .data | map({symbol}) for a data array; ",
-    ".data | map(select(.price > 10)) to filter rows; .data | length to count them. ",
-    "Omit the parameter or pass null for the full response. One output value is returned directly, ",
-    "multiple values as an array, and no values as []. Objects also populate structuredContent; ",
-    "arrays and scalars are returned as JSON text. Tool errors and permission/no-data explanations ",
-    "remain unfiltered. Invalid expressions are rejected before execution; runtime filtering errors ",
-    "mean the tool has already executed, so do not automatically retry writes. ",
-    "Original typed response schemas are available at lb://tools/{tool-name}/output-schema for schema-backed tools."
-);
+pub(super) const INSTRUCTIONS: &str = "All tools accept _jq to filter JSON, e.g. .data | map({symbol}). Omit for full output. Multiple results form an array; errors stay unchanged.";
 const MAX_RESULTS: usize = 10_000;
 const MAX_OUTPUT_BYTES: usize = 8 * 1024 * 1024;
 
