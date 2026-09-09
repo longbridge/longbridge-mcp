@@ -41,9 +41,51 @@ Sign in once with your Longbridge account. Every request runs over the same host
 - **163 tools, one endpoint** — quotes, options, order routing, fundamentals, analyst research, screeners, IPO, alerts, DCA, grid trading and portfolio analytics across **US and HK markets**.
 - **Stateless by design** — every request forwards its Bearer token straight to the Longbridge SDK. No sessions, no database, nothing stored server-side.
 - **OAuth 2.1, auto-discovered** — RFC 9728 protected-resource and RFC 8414 authorization-server metadata; clients complete the flow with no token to paste.
-- **Clean, typed responses** — snake_case fields, RFC 3339 timestamps, human-readable symbols, and typed `outputSchema` descriptors for compatible clients.
+- **Clean, typed responses** — snake_case fields, RFC 3339 timestamps, human-readable symbols, and typed response schemas available as MCP resources.
 
 Built in Rust with [rmcp](https://github.com/anthropics/rmcp) and [axum](https://github.com/tokio-rs/axum).
+
+## Filter tool responses with jq
+
+Every tool accepts an optional `_jq` string in its arguments. The expression runs
+on the complete returned JSON, after the normal response serialization. The `_jq`
+name is reserved for response filtering to avoid conflicts with business parameters.
+Usage guidance is sent once in the MCP `initialize` response's `instructions`;
+each tool schema declares only the optional parameter name and type.
+For example:
+
+```json
+{
+  "name": "quote",
+  "arguments": {
+    "symbols": ["AAPL.US", "MSFT.US"],
+    "_jq": "map({symbol, last_done})"
+  }
+}
+```
+
+Use `.data[:5]` to take the first five entries of a `data` array,
+`.data | map(select(.price > 10))` to select rows, or `{total: .total}` to
+project fields. Expressions use the embedded [jaq](https://github.com/01mf02/jaq)
+engine's jq-compatible syntax; no separate `jq` executable is needed.
+
+- Omit `_jq` (or pass `null`) to preserve the original response.
+- One output value is returned directly, multiple values as an array, and no
+  values as `[]`. Scalars and arrays are JSON text; objects also appear in
+  `structuredContent`, containing only the filtered fields.
+- Plain text responses are available as JSON strings. Multiple content blocks
+  without structured content are available as an array.
+- Tool errors and permission/no-data explanations remain unfiltered.
+- Empty, invalid, or non-string expressions are rejected before the tool runs.
+  If filtering fails at runtime, the response explicitly says the tool already
+  executed. Do not automatically retry writes such as placing an order.
+- Environment access, filesystem imports, and logging filters are unavailable.
+  Output is limited to 10,000 values and 8 MiB; exceeding a limit returns an
+  error rather than a partial result.
+
+Because filters can change the response shape, tools do not advertise a fixed
+`outputSchema`. Original typed schemas remain available through `resources/list`
+and `resources/read` at `lb://tools/{tool-name}/output-schema` for schema-backed tools.
 
 ## Connect your own client
 

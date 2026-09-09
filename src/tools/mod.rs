@@ -461,6 +461,7 @@ mod dca;
 mod fundamental;
 mod grid;
 mod ipo;
+mod jq;
 mod macrodata;
 mod market;
 mod output;
@@ -574,9 +575,8 @@ const TERMINAL_OBJECT_ROOTED: &[&str] = &["depth", "capital_distribution"];
 pub struct Longbridge;
 
 pub(crate) fn tool_result(json: String) -> CallToolResult {
-    // MCP spec §tool-result: a tool that declares an `outputSchema` MUST
-    // return `structuredContent`. We populate it for every response so the
-    // invariant holds regardless of which tools gain a schema in the future.
+    // Keep object responses available to clients as structured content.
+    // Optional jq projection replaces both representations together.
     let structured = serde_json::from_str::<serde_json::Value>(&json)
         .ok()
         .filter(serde_json::Value::is_object);
@@ -1088,8 +1088,8 @@ fn all_tools_cached() -> &'static [rmcp::model::Tool] {
             .iter()
             .cloned()
             .map(|mut tool| {
-                compact_output_schema_for_tool_list(&mut tool);
                 compact_tool_description_for_tool_list(&mut tool);
+                jq::describe(&mut tool);
                 tool
             })
             .collect()
@@ -1373,8 +1373,8 @@ pub fn v2_list_tools() -> Vec<rmcp::model::Tool> {
 
 /// Returns the tool router, built once and cached for the lifetime of the process.
 ///
-/// Shared by `ServerHandler::call_tool` (dispatch) and `ServerHandler::get_tool`
-/// (task-support validation, called by rmcp on every `CallToolRequest`).
+/// Used for dispatch and as the source of the cached public tool descriptors.
+/// `get_tool` returns those public descriptors, including the common _jq input.
 fn cached_router() -> &'static rmcp::handler::server::router::tool::ToolRouter<Longbridge> {
     use rmcp::handler::server::router::tool::ToolRouter;
     static ROUTER: std::sync::OnceLock<ToolRouter<Longbridge>> = std::sync::OnceLock::new();
@@ -1408,54 +1408,6 @@ fn strip_null_from_type_arrays(value: &mut serde_json::Value) {
             }
         }
         _ => {}
-    }
-}
-
-/// Recursively remove documentation-only JSON Schema keys from tool descriptors.
-/// Validation keywords stay in `tools/list`; verbose descriptions remain
-/// available through `lb://tools/{tool}/output-schema` resources.
-fn strip_schema_documentation_keys(value: &mut serde_json::Value) {
-    match value {
-        serde_json::Value::Object(map) => {
-            map.remove("$schema");
-            map.remove("title");
-            map.remove("description");
-            for (key, v) in map.iter_mut() {
-                // The values of these keywords are maps keyed by *names*
-                // (property / definition names), not schema objects — a
-                // property legitimately named "title" or "description" must
-                // not be stripped. Recurse into each named child schema
-                // directly instead.
-                if matches!(
-                    key.as_str(),
-                    "properties" | "patternProperties" | "$defs" | "definitions"
-                ) && let serde_json::Value::Object(children) = v
-                {
-                    for child in children.values_mut() {
-                        strip_schema_documentation_keys(child);
-                    }
-                    continue;
-                }
-                strip_schema_documentation_keys(v);
-            }
-        }
-        serde_json::Value::Array(arr) => {
-            for v in arr.iter_mut() {
-                strip_schema_documentation_keys(v);
-            }
-        }
-        _ => {}
-    }
-}
-
-fn compact_output_schema_for_tool_list(tool: &mut rmcp::model::Tool) {
-    let Some(schema) = tool.output_schema.as_ref() else {
-        return;
-    };
-    let mut schema = serde_json::Value::Object(schema.as_ref().clone());
-    strip_schema_documentation_keys(&mut schema);
-    if let serde_json::Value::Object(obj) = schema {
-        tool.output_schema = Some(std::sync::Arc::new(obj));
     }
 }
 
@@ -1579,7 +1531,7 @@ fn output_schema_resources() -> Vec<Resource> {
             let mut raw = RawResource::new(uri, format!("{}.output_schema", tool.name))
                 .with_title(format!("{title} Output Schema"))
                 .with_description(format!(
-                    "Full JSON Schema output contract for the `{}` tool.",
+                    "Full JSON Schema for the `{}` tool before optional jq filtering.",
                     tool.name
                 ))
                 .with_mime_type(OUTPUT_SCHEMA_RESOURCE_MIME);
@@ -5346,9 +5298,8 @@ impl ServerHandler for Longbridge {
 
     /// `initialize`, with endpoint-aware `instructions`.
     ///
-    /// Main endpoint: byte-for-byte the macro default (`get_info`), so the
-    /// pre-feature `initialize` response is unchanged. Unauthenticated
-    /// `/agent` sessions instead get instructions that explicitly frame the
+    /// Each endpoint gets shared response-filtering guidance. Unauthenticated
+    /// `/agent` sessions also get instructions that explicitly frame the
     /// endpoint as a temporary authorization channel, so AI clients do not
     /// mistake `<host>/agent` for the Longbridge MCP service address itself.
     async fn initialize(
@@ -5386,6 +5337,13 @@ impl ServerHandler for Longbridge {
                 }
             });
         }
+        // Shared guidance belongs in initialize once, after endpoint-specific
+        // instructions are selected, rather than in every tool's input schema.
+        info.instructions = Some(format!(
+            "{}\n\n{}",
+            info.instructions.as_deref().unwrap_or_default(),
+            jq::INSTRUCTIONS
+        ));
         Ok(info)
     }
 
@@ -5404,7 +5362,10 @@ impl ServerHandler for Longbridge {
     ///   self-authorize. After `authenticate` succeeds and the client starts
     ///   sending the returned token, the next `tools/list` returns the full set.
     fn get_tool(&self, name: &str) -> Option<rmcp::model::Tool> {
-        cached_router().get(name).cloned()
+        all_tools_cached()
+            .iter()
+            .find(|tool| tool.name == name)
+            .cloned()
     }
 
     async fn call_tool(
@@ -5454,10 +5415,13 @@ impl ServerHandler for Longbridge {
         // same spawned task, so a `CURRENT_CLIENT` scope set here is visible to
         // `record_tool_call`; one set in the middleware would not be.
         let client = client_bucket_from_context(&context);
-        let tcc = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
-        crate::metrics::CURRENT_CLIENT
-            .scope(client, cached_router().call(tcc))
-            .await
+        jq::call(request, |request| async move {
+            let tcc = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
+            crate::metrics::CURRENT_CLIENT
+                .scope(client, cached_router().call(tcc))
+                .await
+        })
+        .await
     }
 
     async fn list_tools(
@@ -5508,37 +5472,6 @@ impl ServerHandler for Longbridge {
 
 #[cfg(test)]
 mod tests {
-    use super::strip_schema_documentation_keys;
-
-    #[test]
-    fn schema_compactor_keeps_properties_named_title_or_description() {
-        // "title"/"description" are documentation keywords on a *schema*
-        // object, but inside a `properties` map they are property *names* —
-        // stripping them there deletes real fields (news_detail's headline
-        // fields) from the advertised outputSchema.
-        let mut schema = serde_json::json!({
-            "title": "NewsDetailResponse",
-            "description": "doc",
-            "type": "object",
-            "properties": {
-                "title": { "type": "string", "description": "Title." },
-                "description": { "type": "string", "description": "Excerpt." },
-                "body": { "type": "string", "description": "Markdown." }
-            }
-        });
-        strip_schema_documentation_keys(&mut schema);
-        let props = schema["properties"].as_object().unwrap();
-        assert!(props.contains_key("title"), "property name must survive");
-        assert!(
-            props.contains_key("description"),
-            "property name must survive"
-        );
-        // Schema-level annotations are stripped, including on child schemas.
-        assert!(schema.get("title").is_none());
-        assert!(schema.get("description").is_none());
-        assert!(props["body"].get("description").is_none());
-    }
-
     use axum::http::{HeaderMap, HeaderName, HeaderValue};
 
     use super::collect_headers;
@@ -5954,7 +5887,7 @@ mod tests {
         // schema must impose no required fields — every field optional and no
         // `deny_unknown_fields` — so BOTH the generic and the US variant conform.
         // Otherwise the US structuredContent would violate the declared schema.
-        let tools = crate::tools::list_tools();
+        let tools = super::all_tools_full_cached();
         for name in ["dividend", "consensus", "valuation", "company"] {
             let tool = tools
                 .iter()
@@ -6158,29 +6091,6 @@ mod quote_cmd_tests {
     }
 
     #[test]
-    fn tool_list_output_schemas_are_compact_validation_contracts() {
-        let depth = super::list_tools()
-            .into_iter()
-            .find(|tool| tool.name == "depth")
-            .expect("depth tool must be registered");
-        let output_schema = depth
-            .output_schema
-            .expect("depth tool must keep an outputSchema in tools/list");
-        let output_schema = serde_json::Value::Object(output_schema.as_ref().clone());
-
-        assert!(
-            output_schema.get("properties").is_some(),
-            "compact outputSchema must keep validation structure"
-        );
-        for stripped_key in ["$schema", "title", "description"] {
-            assert!(
-                !schema_contains_key(&output_schema, stripped_key),
-                "`{stripped_key}` should move out of the tools/list outputSchema"
-            );
-        }
-    }
-
-    #[test]
     fn tool_list_output_schema_tools_omit_redundant_return_field_lists() {
         let screener_search = super::list_tools()
             .into_iter()
@@ -6188,7 +6098,7 @@ mod quote_cmd_tests {
             .expect("screener_search tool must be registered");
 
         assert!(
-            screener_search.output_schema.is_some(),
+            super::output_schema_map().contains_key("screener_search"),
             "fixture must cover a typed-output tool"
         );
         assert!(
@@ -6217,8 +6127,8 @@ mod quote_cmd_tests {
             assert_eq!(annotations.destructive_hint, Some(false));
             assert_eq!(annotations.open_world_hint, Some(true));
             assert!(
-                tool.output_schema.is_some(),
-                "{name} must declare an outputSchema"
+                super::output_schema_map().contains_key(name),
+                "{name} must provide an unfiltered output schema resource"
             );
         }
     }
@@ -6251,8 +6161,8 @@ mod quote_cmd_tests {
             assert_eq!(annotations.destructive_hint, Some(false));
             assert_eq!(annotations.open_world_hint, Some(true));
             assert!(
-                tool.output_schema.is_some(),
-                "{name} must declare an outputSchema"
+                super::output_schema_map().contains_key(name),
+                "{name} must provide an unfiltered output schema resource"
             );
         }
     }
@@ -6261,7 +6171,7 @@ mod quote_cmd_tests {
     fn tool_metadata_lint_keeps_typed_output_descriptions_compact() {
         let offenders: Vec<String> = super::list_tools()
             .into_iter()
-            .filter(|tool| tool.output_schema.is_some())
+            .filter(|tool| super::output_schema_map().contains_key(tool.name.as_ref()))
             .filter_map(|tool| {
                 let description = tool.description.as_deref().unwrap_or_default();
                 let lower = description.to_ascii_lowercase();
@@ -7121,6 +7031,42 @@ mod tool_error_tests {
         let map = super::output_schema_map();
         for name in super::TERMINAL_OBJECT_ROOTED {
             assert!(map.contains_key(*name), "schema map missing {name}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod jq_catalog_tests {
+    use super::*;
+
+    #[test]
+    fn jq_is_optional_on_every_public_tool_and_lookup() {
+        for tool in list_tools() {
+            assert_eq!(
+                tool.input_schema["properties"]["_jq"]["type"], "string",
+                "{}",
+                tool.name
+            );
+            assert!(
+                !tool
+                    .input_schema
+                    .get("required")
+                    .and_then(serde_json::Value::as_array)
+                    .is_some_and(|fields| fields.iter().any(|field| field == "_jq"))
+            );
+            assert!(
+                tool.output_schema.is_none(),
+                "{} cannot constrain arbitrary jq output",
+                tool.name
+            );
+            assert!(
+                tool.input_schema["properties"]["_jq"]
+                    .get("description")
+                    .is_none()
+            );
+            let lookup = Longbridge.get_tool(&tool.name).unwrap();
+            assert_eq!(lookup.input_schema, tool.input_schema);
+            assert!(lookup.output_schema.is_none());
         }
     }
 }
