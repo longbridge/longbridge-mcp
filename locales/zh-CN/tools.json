@@ -65,7 +65,7 @@
       "title": "保证金比率",
       "description": "查询标的保证金比率，返回 {im_factor（初始保证金）, mm_factor（维持保证金）, fm_factor（强平保证金）}",
       "properties": {
-        "symbol": "证券代码，例如 `\"700.HK\"`"
+        "symbol": "证券代码，例如 `\"700.HK\"`。请用规范代码，补零的代码（如 \"00700.HK\"）会返回空记录而非报错"
       }
     },
     "profit_analysis": {
@@ -80,7 +80,7 @@
       "title": "盈亏分析明细",
       "description": "获取指定标的详细盈亏分析。start/end（yyyy-mm-dd）须成对传入，只传其中之一会返回空结果",
       "properties": {
-        "symbol": "证券代码，例如 `\"700.HK\"`",
+        "symbol": "证券代码，例如 `\"700.HK\"`。请用规范代码，补零的代码（如 \"00700.HK\"）会返回空记录而非报错",
         "start": "起始日期（`yyyy-mm-dd`）。必须与 `end` 成对传入，只传其一会返回空结果",
         "end": "结束日期（`yyyy-mm-dd`）。必须与 `start` 成对传入，只传其一会返回空结果"
       }
@@ -309,11 +309,24 @@
         "execute": "本次试运行返回的 confirmation_code。省略（默认）表示 DRY RUN：只校验并回显请求，同时返回一个三位确认码，不会发往交易所。必须先不带该参数调用一次，把预览展示给用户，待用户明确确认后才可再次调用并回填该码。确认码由订单本身（代码、方向、数量、价格）推导而来，只对这一笔完全相同的请求生效——改动任何字段即失效。不可自行决定回填。"
       }
     },
+    "submit_multileg_order": {
+      "title": "提交组合期权委托",
+      "description": "提交多腿期权组合委托，各腿作为一个策略单一起成交或挂单。strategy：CoveredCall（备兑看涨）/ CoveredPut（备兑看跌）/ VerticalCallSpread（垂直看涨价差）/ VerticalPutSpread（垂直看跌价差）/ Collar（领口）/ Straddle（跨式）/ Strangle（宽跨式）；side：Buy/Sell（整个策略的方向）；order_type：LO（需 submitted_price，为组合净价）或 MO；legs[]：{symbol, ratio_quantity}，按策略顺序排列，仅接受期权代码；ratio_quantity 恒为正数——每条腿的买卖方向由 strategy 与 side 共同决定",
+      "properties": {
+        "strategy": "组合策略，决定所需腿数与每条腿的方向：`CoveredCall`（备兑看涨）/ `CoveredPut`（备兑看跌）/ `VerticalCallSpread`（垂直看涨价差）/ `VerticalPutSpread`（垂直看跌价差）/ `Collar`（领口）/ `Straddle`（跨式）/ `Strangle`（宽跨式）",
+        "side": "买卖方向：`Buy`（买入）或 `Sell`（卖出），指整个策略的方向",
+        "order_type": "委托类型：`LO`（限价，需 `submitted_price`）或 `MO`（市价）",
+        "submitted_quantity": "委托组数（每组为一套按 `legs` 比例构成的腿）",
+        "legs": "组合的各条腿，按策略顺序排列，仅接受期权代码",
+        "submitted_price": "整个组合的净限价，`LO` 必填",
+        "remark": "委托备注（最多 255 字符）"
+      }
+    },
     "ah_premium": {
       "title": "A/H 溢价",
       "description": "获取 A/H 股溢价历史 K 线数据，返回 items[]{timestamp, open, high, low, close}，表示溢价百分比",
       "properties": {
-        "symbol": "证券代码，例如 `\"700.HK\"`",
+        "symbol": "证券代码，例如 `\"700.HK\"`。请用规范代码，补零的代码（如 \"00700.HK\"）会返回空记录而非报错",
         "period": "K 线周期：`1m`、`5m`、`15m`、`30m`、`60m`、`day`（默认）、`week`、`month`、`year`",
         "count": "返回的 K 线数量（默认 100）"
       }
@@ -322,14 +335,14 @@
       "title": "A/H 溢价（分时）",
       "description": "获取 A/H 股溢价当日分时数据，返回 items[]{timestamp, premium_rate}，逐分钟展示溢价百分比",
       "properties": {
-        "symbol": "证券代码，例如 `\"700.HK\"`"
+        "symbol": "证券代码，例如 `\"700.HK\"`。请用规范代码，补零的代码（如 \"00700.HK\"）会返回空记录而非报错"
       }
     },
     "alert_add": {
       "title": "新增价格预警",
       "description": "新增价格预警，返回已创建的预警对象。condition：price_rise/price_fall（绝对价格）或 percent_rise/percent_fall（涨跌幅）；frequency：once/daily/every",
       "properties": {
-        "symbol": "证券代码，例如 `\"700.HK\"`",
+        "symbol": "证券代码，例如 `\"700.HK\"`。请用规范代码，补零的代码（如 \"00700.HK\"）会返回空记录而非报错",
         "condition": "预警条件：`price_rise`、`price_fall`、`percent_rise`、`percent_fall`",
         "price": "阈值价格或百分比数值",
         "frequency": "预警频率：`once`（触发一次后停用）、`daily`（每日一次）、`every`（每次满足条件都触发）"
@@ -358,7 +371,7 @@
     },
     "alert_list": {
       "title": "价格预警列表",
-      "description": "获取所有已配置的价格预警，返回 lists[]{counter_id, indicators[]{id, condition, price, frequency, enabled, triggered_at}}"
+      "description": "获取所有已配置的价格预警，返回 lists[]{symbol, indicators[]{id, condition, price, frequency, enabled, triggered_at}}"
     },
     "anomaly": {
       "title": "市场异动",
@@ -373,7 +386,7 @@
       "title": "券商持仓",
       "description": "获取指定证券的主要券商持仓数据，返回 items[]{broker_name, holding_quantity, holding_change, holding_ratio}",
       "properties": {
-        "symbol": "证券代码，例如 `\"700.HK\"`",
+        "symbol": "证券代码，例如 `\"700.HK\"`。请用规范代码，补零的代码（如 \"00700.HK\"）会返回空记录而非报错",
         "period": "时间窗口：`rct_1`（近 1 日，默认）、`rct_5`（近 5 日）、`rct_20`（近 20 日）、`rct_60`（近 60 日）"
       }
     },
@@ -381,7 +394,7 @@
       "title": "券商持仓（日度）",
       "description": "获取指定券商（broker_id）对某证券的逐日持仓历史，返回 items[]{date, holding_quantity, holding_change, holding_ratio}",
       "properties": {
-        "symbol": "证券代码，例如 `\"700.HK\"`",
+        "symbol": "证券代码，例如 `\"700.HK\"`。请用规范代码，补零的代码（如 \"00700.HK\"）会返回空记录而非报错",
         "broker_id": "券商参与者编号"
       }
     },
@@ -389,14 +402,14 @@
       "title": "券商持仓明细",
       "description": "获取完整的券商持仓明细列表，返回 items[]{broker_id, broker_name, holding_quantity, holding_ratio, holding_change, date}",
       "properties": {
-        "symbol": "证券代码，例如 `\"700.HK\"`"
+        "symbol": "证券代码，例如 `\"700.HK\"`。请用规范代码，补零的代码（如 \"00700.HK\"）会返回空记录而非报错"
       }
     },
     "brokers": {
       "title": "经纪商队列",
       "description": "获取港股经纪商买卖盘队列（仅港股），返回 bid_brokers/ask_brokers[]{position, broker_ids}，通过 participants 工具将 broker_id 映射为名称",
       "properties": {
-        "symbol": "证券代码，例如 `\"700.HK\"`"
+        "symbol": "证券代码，例如 `\"700.HK\"`。请用规范代码，补零的代码（如 \"00700.HK\"）会返回空记录而非报错"
       }
     },
     "calc_indexes": {
@@ -422,28 +435,28 @@
       "title": "资金分布",
       "description": "获取资金分布（大/中/小单流入流出），返回 {timestamp, capital_in{large, medium, small}, capital_out{large, medium, small}, data_available}。data_available 为 false 时表示该标的（如指数）没有资金流数据，此时其余字段仍会返回但都是无意义的零值",
       "properties": {
-        "symbol": "证券代码，例如 `\"700.HK\"`"
+        "symbol": "证券代码，例如 `\"700.HK\"`。请用规范代码，补零的代码（如 \"00700.HK\"）会返回空记录而非报错"
       }
     },
     "capital_flow": {
       "title": "资金流向",
       "description": "获取资金净流入/流出当日时间序列，返回 items[]{timestamp, inflow, outflow, net_flow}",
       "properties": {
-        "symbol": "证券代码，例如 `\"700.HK\"`"
+        "symbol": "证券代码，例如 `\"700.HK\"`。请用规范代码，补零的代码（如 \"00700.HK\"）会返回空记录而非报错"
       }
     },
     "company": {
       "title": "公司概况",
       "description": "获取公司概况，返回 name、description、employees、CEO、founded_year、website、exchange、industry、market_cap 等信息。美股账户查询 `.US` 标的会得到美股专属变体（intro、market_cap、top_rank_tags、sharelist、detail_url）。区域由账户自动识别",
       "properties": {
-        "symbol": "证券代码，例如 `\"700.HK\"`"
+        "symbol": "证券代码，例如 `\"700.HK\"`。请用规范代码，补零的代码（如 \"00700.HK\"）会返回空记录而非报错"
       }
     },
     "consensus": {
       "title": "一致预期",
       "description": "获取分析师一致预期，返回 items[]{period, revenue_estimate, eps_estimate, net_income_estimate, analyst_count, last_updated}。美股账户查询 `.US` 标的会得到美股专属变体（ai_summary + 按期间的 details[] 列表，替代 items[]）。区域由账户自动识别",
       "properties": {
-        "symbol": "证券代码，例如 `\"700.HK\"`"
+        "symbol": "证券代码，例如 `\"700.HK\"`。请用规范代码，补零的代码（如 \"00700.HK\"）会返回空记录而非报错"
       }
     },
     "constituent": {
@@ -457,7 +470,7 @@
       "title": "公司行动",
       "description": "获取公司行动信息（拆股、回购、更名等），返回 items[]{action_type, effective_date, ratio, description}",
       "properties": {
-        "symbol": "证券代码，例如 `\"700.HK\"`"
+        "symbol": "证券代码，例如 `\"700.HK\"`。请用规范代码，补零的代码（如 \"00700.HK\"）会返回空记录而非报错"
       }
     },
     "dca_check": {
@@ -471,21 +484,21 @@
       "title": "盘口深度",
       "description": "获取买卖盘深度（最多 10 档），返回 {bids[]{position, price, volume, order_num}, asks[]{position, price, volume, order_num}}",
       "properties": {
-        "symbol": "证券代码，例如 `\"700.HK\"`"
+        "symbol": "证券代码，例如 `\"700.HK\"`。请用规范代码，补零的代码（如 \"00700.HK\"）会返回空记录而非报错"
       }
     },
     "dividend": {
       "title": "派息历史",
       "description": "获取证券的派息历史，返回 items[]{ex_date（除权日）, pay_date（派发日）, record_date, dividend_type, amount, currency, status}。美股账户查询 `.US` 标的会按 ETF/个股得到美股专属变体（dividend_yield/dividend_yield_ttm 是百分比数值，例如 0.34 代表 0.34%，不是 0-1 的小数）。区域由账户自动识别",
       "properties": {
-        "symbol": "证券代码，例如 `\"700.HK\"`"
+        "symbol": "证券代码，例如 `\"700.HK\"`。请用规范代码，补零的代码（如 \"00700.HK\"）会返回空记录而非报错"
       }
     },
     "dividend_detail": {
       "title": "派息明细",
       "description": "获取详细派息分红方案，返回 details[]{period, cash_dividend, stock_dividend, record_date, ex_date, pay_date, currency}",
       "properties": {
-        "symbol": "证券代码，例如 `\"700.HK\"`"
+        "symbol": "证券代码，例如 `\"700.HK\"`。请用规范代码，补零的代码（如 \"00700.HK\"）会返回空记录而非报错"
       }
     },
     "etf_docs": {
@@ -504,14 +517,14 @@
       "title": "高管与董事",
       "description": "获取公司高管及董事会成员信息，返回 members[]{name, title, appointed_date, age, biography, compensation}",
       "properties": {
-        "symbol": "证券代码，例如 `\"700.HK\"`"
+        "symbol": "证券代码，例如 `\"700.HK\"`。请用规范代码，补零的代码（如 \"00700.HK\"）会返回空记录而非报错"
       }
     },
     "filings": {
       "title": "监管公告",
       "description": "获取监管文件公告（8-K、10-Q、10-K 等），返回 items[]{id, title, type, language, filing_date, url}",
       "properties": {
-        "symbol": "证券代码，例如 `\"700.HK\"`"
+        "symbol": "证券代码，例如 `\"700.HK\"`。请用规范代码，补零的代码（如 \"00700.HK\"）会返回空记录而非报错"
       }
     },
     "finance_calendar": {
@@ -545,14 +558,14 @@
       "title": "EPS 预测",
       "description": "获取 EPS 预测及分析师预期历史，返回 items[]{forecast_start_date, forecast_end_date, eps_estimate, eps_actual, surprise_pct, analyst_count}",
       "properties": {
-        "symbol": "证券代码，例如 `\"700.HK\"`"
+        "symbol": "证券代码，例如 `\"700.HK\"`。请用规范代码，补零的代码（如 \"00700.HK\"）会返回空记录而非报错"
       }
     },
     "fund_holder": {
       "title": "持仓基金",
       "description": "获取持有指定证券的基金及 ETF，返回 fund_holders[]{fund_name, fund_symbol, shares, ratio, change, reported_at}",
       "properties": {
-        "symbol": "证券代码，例如 `\"700.HK\"`"
+        "symbol": "证券代码，例如 `\"700.HK\"`。请用规范代码，补零的代码（如 \"00700.HK\"）会返回空记录而非报错"
       }
     },
     "grid_symbol_info": {
@@ -722,35 +735,35 @@
       "title": "行业估值",
       "description": "获取同行业可比公司估值对比，返回 list[]{symbol, name, pe, pb, ps, dividend_yield, history[]{date, pe, pb}}",
       "properties": {
-        "symbol": "证券代码，例如 `\"700.HK\"`"
+        "symbol": "证券代码，例如 `\"700.HK\"`。请用规范代码，补零的代码（如 \"00700.HK\"）会返回空记录而非报错"
       }
     },
     "industry_valuation_dist": {
       "title": "行业估值分布",
       "description": "获取行业 PE/PB/PS 估值分布，返回 distributions{pe/pb/ps}{min, p25, median, p75, max, current_percentile}，显示个股在行业中的分位",
       "properties": {
-        "symbol": "证券代码，例如 `\"700.HK\"`"
+        "symbol": "证券代码，例如 `\"700.HK\"`。请用规范代码，补零的代码（如 \"00700.HK\"）会返回空记录而非报错"
       }
     },
     "institution_rating": {
       "title": "机构评级",
       "description": "获取机构评级汇总，返回 analyst{buy, outperform, hold, underperform, sell 家数, target_price, consensus_rating} 及评级列表",
       "properties": {
-        "symbol": "证券代码，例如 `\"700.HK\"`"
+        "symbol": "证券代码，例如 `\"700.HK\"`。请用规范代码，补零的代码（如 \"00700.HK\"）会返回空记录而非报错"
       }
     },
     "institution_rating_detail": {
       "title": "机构评级明细",
       "description": "获取机构评级与目标价历史明细，返回 target.list[]{analyst, firm, rating, target_price, timestamp}",
       "properties": {
-        "symbol": "证券代码，例如 `\"700.HK\"`"
+        "symbol": "证券代码，例如 `\"700.HK\"`。请用规范代码，补零的代码（如 \"00700.HK\"）会返回空记录而非报错"
       }
     },
     "intraday": {
       "title": "分时数据",
       "description": "获取分时（逐分钟）价格/成交量数据。trade_sessions：intraday（默认，仅正常时段）或 all（含盘前盘后）",
       "properties": {
-        "symbol": "证券代码，例如 `\"700.HK\"`",
+        "symbol": "证券代码，例如 `\"700.HK\"`。请用规范代码，补零的代码（如 \"00700.HK\"）会返回空记录而非报错",
         "trade_sessions": "包含的交易时段：`intraday`（默认，仅常规时段）或 `all`（含盘前盘后）"
       }
     },
@@ -758,7 +771,7 @@
       "title": "投资者关系",
       "description": "获取投资者关系事件与公告，返回 items[]{title, event_type, event_date, url, description}",
       "properties": {
-        "symbol": "证券代码，例如 `\"700.HK\"`"
+        "symbol": "证券代码，例如 `\"700.HK\"`。请用规范代码，补零的代码（如 \"00700.HK\"）会返回空记录而非报错"
       }
     },
     "market_status": {
@@ -797,7 +810,7 @@
       "title": "资讯",
       "description": "获取证券相关最新新闻，返回 items[]{id, title, source, publish_time, summary, url, related_symbols[]}",
       "properties": {
-        "symbol": "证券代码，例如 `\"700.HK\"`"
+        "symbol": "证券代码，例如 `\"700.HK\"`。请用规范代码，补零的代码（如 \"00700.HK\"）会返回空记录而非报错"
       }
     },
     "news_detail": {
@@ -815,14 +828,14 @@
       "title": "经营业绩",
       "description": "获取公司经营指标（仅港股），返回 items[]{period, metric_name, value, unit}，如客运量、货运量、门店数等",
       "properties": {
-        "symbol": "证券代码，例如 `\"700.HK\"`"
+        "symbol": "证券代码，例如 `\"700.HK\"`。请用规范代码，补零的代码（如 \"00700.HK\"）会返回空记录而非报错"
       }
     },
     "option_chain_expiry_date_list": {
       "title": "期权到期日列表",
       "description": "获取期权链可选到期日列表，返回 expiry_dates[]（yyyy-mm-dd）。配合 option_chain_info_by_date 查询行权价和 Greeks",
       "properties": {
-        "symbol": "证券代码，例如 `\"700.HK\"`"
+        "symbol": "证券代码，例如 `\"700.HK\"`。请用规范代码，补零的代码（如 \"00700.HK\"）会返回空记录而非报错"
       }
     },
     "option_chain_info_by_date": {
@@ -870,7 +883,7 @@
       "title": "机构股东",
       "description": "获取证券的机构股东信息，返回 shareholders[]{institution, shares, ratio, change, change_type, reported_at}",
       "properties": {
-        "symbol": "证券代码，例如 `\"700.HK\"`"
+        "symbol": "证券代码，例如 `\"700.HK\"`。请用规范代码，补零的代码（如 \"00700.HK\"）会返回空记录而非报错"
       }
     },
     "sharelist_add": {
@@ -952,7 +965,7 @@
       "title": "讨论列表",
       "description": "获取证券相关的社区讨论，返回 items[]{id, title, author, created_at, like_count, comment_count, content_summary}",
       "properties": {
-        "symbol": "证券代码，例如 `\"700.HK\"`"
+        "symbol": "证券代码，例如 `\"700.HK\"`。请用规范代码，补零的代码（如 \"00700.HK\"）会返回空记录而非报错"
       }
     },
     "topic_create": {
@@ -994,7 +1007,7 @@
       "title": "成交统计",
       "description": "获取成交统计（主动买/主动卖/中性盘成交量分布），返回 items[]{price_range, buy_volume, sell_volume, neutral_volume}",
       "properties": {
-        "symbol": "证券代码，例如 `\"700.HK\"`"
+        "symbol": "证券代码，例如 `\"700.HK\"`。请用规范代码，补零的代码（如 \"00700.HK\"）会返回空记录而非报错"
       }
     },
     "trades": {
@@ -1022,14 +1035,14 @@
       "title": "估值",
       "description": "获取估值概览及同业对比，返回 metrics.pe/pb/ps/dividend_yield{current, industry_avg, 5yr_avg, percentile} 及同业对比列表。美股账户查询 `.US` 标的会得到美股专属变体（ai_summary + 字段不同的 metrics.pe）。区域由账户自动识别",
       "properties": {
-        "symbol": "证券代码，例如 `\"700.HK\"`"
+        "symbol": "证券代码，例如 `\"700.HK\"`。请用规范代码，补零的代码（如 \"00700.HK\"）会返回空记录而非报错"
       }
     },
     "valuation_history": {
       "title": "估值历史",
       "description": "获取详细估值历史时间序列，返回 history.metrics{pe/pb/ps/dividend_yield}[]{timestamp, value}，用于长期分位分析",
       "properties": {
-        "symbol": "证券代码，例如 `\"700.HK\"`"
+        "symbol": "证券代码，例如 `\"700.HK\"`。请用规范代码，补零的代码（如 \"00700.HK\"）会返回空记录而非报错"
       }
     },
     "warrant_issuers": {

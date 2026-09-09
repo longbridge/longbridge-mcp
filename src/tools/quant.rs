@@ -4,7 +4,6 @@ use rmcp::schemars::JsonSchema;
 use rmcp::serde::Deserialize;
 use time::Time;
 
-use crate::counter::symbol_to_counter_id;
 use crate::tools::support::http_client::http_post_tool;
 use crate::tools::support::parse;
 
@@ -56,7 +55,6 @@ pub async fn run_script(
     mctx: &crate::tools::McpContext,
     p: RunScriptParam,
 ) -> Result<CallToolResult, McpError> {
-    let counter_id = symbol_to_counter_id(&p.symbol);
     let line_type = period_to_line_type(&p.period)?;
 
     let start_dt = parse::parse_date(&p.start)?
@@ -95,7 +93,7 @@ pub async fn run_script(
     };
 
     let body = serde_json::json!({
-        "counter_id": counter_id,
+        "symbol": p.symbol,
         "start_time": start_time,
         "end_time": end_time,
         "script": script,
