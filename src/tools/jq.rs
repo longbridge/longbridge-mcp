@@ -12,7 +12,7 @@ use rmcp::{
 use serde_json::Value;
 
 type Filter = jaq_core::Filter<data::JustLut<Val>>;
-pub(super) const INSTRUCTIONS: &str = "All tools accept _jq to filter JSON, e.g. .data | map({symbol}). Omit for full output. Multiple results form an array; errors stay unchanged.";
+pub(super) const INSTRUCTIONS: &str = "Optional _jq filters response JSON, e.g. .data[:5].";
 const MAX_RESULTS: usize = 10_000;
 const MAX_OUTPUT_BYTES: usize = 8 * 1024 * 1024;
 
@@ -343,7 +343,6 @@ mod tests {
             let init: Value = serde_json::from_str(&line).unwrap();
             let instructions = init["result"]["instructions"].as_str().unwrap();
             assert_eq!(instructions.matches("_jq").count(), 1);
-            assert!(instructions.contains("map({symbol})"));
             writer.write_all(b"{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}\n").await.unwrap();
             for (id, jq, expected) in [(2, ". | {kind: type}", json!({"kind":"string"})), (3, "empty", json!([]))] {
                 let call = json!({"jsonrpc":"2.0","id":id,"method":"tools/call","params":{"name":"now","arguments":{"_jq":jq}}});
