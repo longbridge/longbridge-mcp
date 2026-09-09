@@ -12,7 +12,7 @@ use rmcp::{
 use serde_json::Value;
 
 type Filter = jaq_core::Filter<data::JustLut<Val>>;
-pub(super) const INSTRUCTIONS: &str = "Optional _jq filters response JSON, e.g. .data[:5].";
+pub(super) const INSTRUCTIONS: &str = "All tools accept optional _jq to filter response JSON, e.g. .data | map({symbol}). Omit it for the full response.";
 const MAX_RESULTS: usize = 10_000;
 const MAX_OUTPUT_BYTES: usize = 8 * 1024 * 1024;
 
