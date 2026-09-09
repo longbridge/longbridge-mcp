@@ -6,6 +6,14 @@ use std::sync::LazyLock;
 
 static REGISTRY: LazyLock<Registry> = LazyLock::new(Registry::new);
 
+tokio::task_local! {
+    /// 当前 MCP 请求的来源客户端桶(`"claude"` / `"chatgpt"` / `"other"` /
+    /// `"unknown"`),由 `mcp_auth_layer` 在每个 MCP 请求外层设置,供
+    /// [`record_tool_call`] 给工具指标打 `client` label。在 MCP 请求之外
+    /// (如服务初始化或单元测试)未设置,此时回落为 `"unknown"`。
+    pub(crate) static CURRENT_CLIENT: &'static str;
+}
+
 /// 把 MCP 客户端的 `User-Agent` 映射到一个有界的客户端桶,以便作为低基数的
 /// Prometheus label。大小写不敏感的子串匹配;缺失或空白归为 `"unknown"`。
 pub fn classify_client(user_agent: Option<&str>) -> &'static str {
@@ -27,7 +35,7 @@ pub fn classify_client(user_agent: Option<&str>) -> &'static str {
 static TOOL_CALLS_TOTAL: LazyLock<IntCounterVec> = LazyLock::new(|| {
     let counter = IntCounterVec::new(
         Opts::new("mcp_tool_calls_total", "Total tool calls"),
-        &["tool_name"],
+        &["tool_name", "client"],
     )
     .unwrap();
     REGISTRY.register(Box::new(counter.clone())).unwrap();
@@ -37,7 +45,7 @@ static TOOL_CALLS_TOTAL: LazyLock<IntCounterVec> = LazyLock::new(|| {
 static TOOL_CALL_ERRORS_TOTAL: LazyLock<IntCounterVec> = LazyLock::new(|| {
     let counter = IntCounterVec::new(
         Opts::new("mcp_tool_call_errors_total", "Total tool call errors"),
-        &["tool_name"],
+        &["tool_name", "client"],
     )
     .unwrap();
     REGISTRY.register(Box::new(counter.clone())).unwrap();
@@ -50,7 +58,7 @@ static TOOL_CALL_DURATION: LazyLock<HistogramVec> = LazyLock::new(|| {
             "mcp_tool_call_duration_seconds",
             "Tool call duration in seconds",
         ),
-        &["tool_name"],
+        &["tool_name", "client"],
     )
     .unwrap();
     REGISTRY.register(Box::new(histogram.clone())).unwrap();
@@ -81,12 +89,17 @@ static QUOTE_WS_POOL_ENTRIES: LazyLock<IntGauge> = LazyLock::new(|| {
 });
 
 pub fn record_tool_call(tool_name: &str, duration_secs: f64, is_error: bool) {
-    TOOL_CALLS_TOTAL.with_label_values(&[tool_name]).inc();
+    let client = CURRENT_CLIENT.try_with(|c| *c).unwrap_or("unknown");
+    TOOL_CALLS_TOTAL
+        .with_label_values(&[tool_name, client])
+        .inc();
     TOOL_CALL_DURATION
-        .with_label_values(&[tool_name])
+        .with_label_values(&[tool_name, client])
         .observe(duration_secs);
     if is_error {
-        TOOL_CALL_ERRORS_TOTAL.with_label_values(&[tool_name]).inc();
+        TOOL_CALL_ERRORS_TOTAL
+            .with_label_values(&[tool_name, client])
+            .inc();
     }
 }
 
@@ -132,5 +145,35 @@ mod tests {
         assert_eq!(classify_client(Some("")), "unknown");
         assert_eq!(classify_client(Some("   ")), "unknown");
         assert_eq!(classify_client(None), "unknown");
+    }
+
+    #[test]
+    fn record_tool_call_labels_by_client() {
+        let before = TOOL_CALLS_TOTAL
+            .with_label_values(&["telemetry_test_tool", "chatgpt"])
+            .get();
+        CURRENT_CLIENT.sync_scope("chatgpt", || {
+            record_tool_call("telemetry_test_tool", 0.01, false);
+        });
+        let after = TOOL_CALLS_TOTAL
+            .with_label_values(&["telemetry_test_tool", "chatgpt"])
+            .get();
+        assert_eq!(after - before, 1);
+    }
+
+    #[test]
+    fn record_tool_call_falls_back_to_unknown_outside_scope() {
+        let before = TOOL_CALLS_TOTAL
+            .with_label_values(&["telemetry_test_tool2", "unknown"])
+            .get();
+        record_tool_call("telemetry_test_tool2", 0.01, true);
+        let calls = TOOL_CALLS_TOTAL
+            .with_label_values(&["telemetry_test_tool2", "unknown"])
+            .get();
+        let errs = TOOL_CALL_ERRORS_TOTAL
+            .with_label_values(&["telemetry_test_tool2", "unknown"])
+            .get();
+        assert_eq!(calls - before, 1);
+        assert!(errs >= 1);
     }
 }
