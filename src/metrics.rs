@@ -6,6 +6,24 @@ use std::sync::LazyLock;
 
 static REGISTRY: LazyLock<Registry> = LazyLock::new(Registry::new);
 
+/// 把 MCP 客户端的 `User-Agent` 映射到一个有界的客户端桶,以便作为低基数的
+/// Prometheus label。大小写不敏感的子串匹配;缺失或空白归为 `"unknown"`。
+pub fn classify_client(user_agent: Option<&str>) -> &'static str {
+    match user_agent {
+        Some(ua) if !ua.trim().is_empty() => {
+            let ua = ua.to_ascii_lowercase();
+            if ua.contains("claude") || ua.contains("anthropic") {
+                "claude"
+            } else if ua.contains("chatgpt") || ua.contains("openai") {
+                "chatgpt"
+            } else {
+                "other"
+            }
+        }
+        _ => "unknown",
+    }
+}
+
 static TOOL_CALLS_TOTAL: LazyLock<IntCounterVec> = LazyLock::new(|| {
     let counter = IntCounterVec::new(
         Opts::new("mcp_tool_calls_total", "Total tool calls"),
@@ -97,5 +115,22 @@ pub async fn metrics_handler() -> impl IntoResponse {
             [("content-type", "text/plain; version=0.0.4")],
             format!("encode error: {e}").into_bytes(),
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn classify_client_buckets() {
+        assert_eq!(classify_client(Some("claude-code/2.1.89 (cli)")), "claude");
+        assert_eq!(classify_client(Some("ChatGPT-User/1.0")), "chatgpt");
+        assert_eq!(classify_client(Some("x-openai-mcp/2")), "chatgpt");
+        assert_eq!(classify_client(Some("Anthropic-Internal")), "claude");
+        assert_eq!(classify_client(Some("curl/8.0")), "other");
+        assert_eq!(classify_client(Some("")), "unknown");
+        assert_eq!(classify_client(Some("   ")), "unknown");
+        assert_eq!(classify_client(None), "unknown");
     }
 }
