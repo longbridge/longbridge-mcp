@@ -601,7 +601,7 @@
     },
     "grid_submit": {
       "title": "提交网格订单",
-      "description": "提交网格交易订单。需提供 symbol、settlement_currency 及网格规则:基准价/上限价/下限价、trigger_price_type(1=价差,2=百分比)及对应的价差/百分比上下沿、trigger_quantity、上下限数量、time_in_force(0=当日,1=GTC,6=GTD)、grid_order_type_up/down(GMO/GLO/GTG)、边界事件(1=忽略,2=按最新价平仓)。价格/数量为字符串。需先通过 grid_questionnaire 授权。【必须两步确认】未传本次试运行返回的 confirmation_code 时，本工具为 DRY RUN（试运行）：只校验并回显请求内容，不会发往交易所。请先不带 execute 调用一次，把返回的预览完整展示给用户，只有在用户明确确认之后，才可再次调用并把该确认码传入 execute。确认码由订单本身（代码、方向、数量、价格）推导而来，只对这一笔完全相同的请求生效。绝不可自行决定回填确认码。网格一旦生效会自行持续交易",
+      "description": "提交网格交易订单。需提供 symbol、settlement_currency 及网格规则:基准价/上限价/下限价、trigger_price_type(1=价差,2=百分比)及对应的价差/百分比上下沿、trigger_quantity、上下限数量、time_in_force(0=当日,1=GTC,6=GTD)、grid_order_type_up/down(GMO/GLO/GTG)、边界事件(1=忽略,2=按最新价平仓)。价格/数量为字符串。【必须两步确认】未传本次试运行返回的 confirmation_code 时，本工具为 DRY RUN（试运行）：只校验并回显请求内容，不会发往交易所。请先不带 execute 调用一次，把返回的预览完整展示给用户，只有在用户明确确认之后，才可再次调用并把该确认码传入 execute。确认码由订单本身（代码、方向、数量、价格）推导而来，只对这一笔完全相同的请求生效。绝不可自行决定回填确认码。网格一旦生效会自行持续交易",
       "properties": {
         "symbol": "证券代码,例如 \"700.HK\"",
         "settlement_currency": "结算货币,例如 \"HKD\"",
@@ -683,10 +683,6 @@
         "order_id": "网格订单号",
         "execute": "本次试运行返回的 confirmation_code。省略（默认）表示 DRY RUN：只校验并回显请求，同时返回一个三位确认码，不会发往交易所。必须先不带该参数调用一次，把预览展示给用户，待用户明确确认后才可再次调用并回填该码。确认码由订单本身（代码、方向、数量、价格）推导而来，只对这一笔完全相同的请求生效——改动任何字段即失效。不可自行决定回填。"
       }
-    },
-    "grid_questionnaire": {
-      "title": "网格策略授权",
-      "description": "记录提交网格订单前所需的一次性策略风险披露同意,无需参数。"
     },
     "history_candlesticks_by_date": {
       "title": "历史 K 线（按日期）",

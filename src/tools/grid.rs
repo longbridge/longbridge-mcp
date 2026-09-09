@@ -7,8 +7,7 @@ use longbridge::Decimal;
 use longbridge::grid::{
     GetGridOrderDetailOptions, GetGridOrdersByIdsOptions, GetGridOrdersOptions,
     GetGridTriggerHistoryOptions, GridContext, GridLimitEvent, GridTimeInForce, GridTradeRule,
-    ReplaceGridOrderOptions, SubmitGridOrderOptions, SubmitStrategyQuestionnaireOptions,
-    TriggerPriceType,
+    ReplaceGridOrderOptions, SubmitGridOrderOptions, TriggerPriceType,
 };
 use rmcp::ErrorData as McpError;
 use rmcp::model::CallToolResult;
@@ -274,9 +273,6 @@ pub struct GridOrderIdParam {
     pub execute: Option<String>,
 }
 
-#[derive(Debug, Deserialize, JsonSchema)]
-pub struct GridQuestionnaireParam {}
-
 fn parse_decimal(field: &str, value: &Option<String>) -> Result<Option<Decimal>, McpError> {
     match value {
         Some(s) => Decimal::from_str(s)
@@ -459,19 +455,6 @@ pub async fn grid_restart(
     let ctx = GridContext::new(mctx.create_config());
     ctx.restart(p.order_id).await.map_err(Error::longbridge)?;
     Ok(tool_result("grid order restarted".to_string()))
-}
-
-pub async fn grid_questionnaire(
-    mctx: &crate::tools::McpContext,
-    _p: GridQuestionnaireParam,
-) -> Result<CallToolResult, McpError> {
-    let ctx = GridContext::new(mctx.create_config());
-    ctx.submit_strategy_questionnaire(SubmitStrategyQuestionnaireOptions::new())
-        .await
-        .map_err(Error::longbridge)?;
-    Ok(tool_result(
-        "strategy risk-disclosure questionnaire submitted".to_string(),
-    ))
 }
 
 #[cfg(test)]
