@@ -1213,10 +1213,9 @@ mod execute_gate_tests {
 
     #[test]
     fn gated_output_schemas_admit_the_dry_run_shape() {
-        // MCP requires every response from a tool with an `outputSchema` to
-        // validate against it. The dry run has no order ID, so `order_id` must
-        // not be required — otherwise the safe path returns an invalid result.
-        let tools = crate::tools::list_tools();
+        // The original response schema remains available as a resource even
+        // when jq projections have a different shape. It must admit dry runs.
+        let tools = crate::tools::all_tools_full_cached();
         for name in ["submit_order", "grid_submit"] {
             let schema = tools
                 .iter()
