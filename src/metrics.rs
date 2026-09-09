@@ -73,7 +73,14 @@ static TOOL_CALL_DURATION: LazyLock<HistogramVec> = LazyLock::new(|| {
         prometheus::HistogramOpts::new(
             "mcp_tool_call_duration_seconds",
             "Tool call duration in seconds",
-        ),
+        )
+        // Extend the default buckets' 10s ceiling: some tools (candlesticks,
+        // financial reports) can exceed 10s against upstream, and without tail
+        // buckets every such call lands in +Inf, making p99 uncomputable above
+        // 10s.
+        .buckets(vec![
+            0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 20.0, 30.0, 60.0,
+        ]),
         &["tool_name", "client"],
     )
     .unwrap();
