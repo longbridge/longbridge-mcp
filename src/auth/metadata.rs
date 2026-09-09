@@ -7,19 +7,15 @@ use serde::Serialize;
 
 use crate::auth::AppState;
 
-fn longbridge_oauth_url() -> String {
-    std::env::var("LONGBRIDGE_HTTP_URL")
-        .unwrap_or_else(|_| "https://openapi.longbridge.com".to_string())
-}
-
 /// Authorization-server URL advertised to clients that reached us through the
 /// global single-domain entry (allowlisted `X-Host`, see [`public_hosts`]).
-/// Unset/empty = such requests keep advertising [`longbridge_oauth_url`].
+/// Unset/empty = such requests keep advertising the running environment's OAuth
+/// base URL (see [`crate::endpoints`]).
 ///
-/// Deliberately separate from `LONGBRIDGE_HTTP_URL`: that variable is also the
-/// longbridge SDK upstream base and the `/agent` reverse-auth base, so pointing
-/// it at the global edge domain would reroute this server's own upstream calls
-/// through the public edge.
+/// Deliberately kept out of [`crate::endpoints`]: this is the public edge
+/// domain, whereas the environment's OAuth base is also this server's own
+/// upstream, so conflating them would reroute our upstream calls through the
+/// public edge.
 fn global_oauth_url() -> Option<String> {
     std::env::var("LONGBRIDGE_GLOBAL_OAUTH_URL")
         .ok()
@@ -146,7 +142,7 @@ const V2_SCOPES_SUPPORTED: &[&str] = &["4", "6", "10"];
 /// Picks the authorization server to advertise: requests that came through the
 /// global single-domain entry get [`global_oauth_url`] (when configured) so the
 /// whole OAuth bootstrap stays on the global domains; everything else keeps the
-/// per-DC [`longbridge_oauth_url`].
+/// running environment's OAuth base URL.
 pub(crate) fn select_authorization_server(
     via_global_entry: bool,
     global: Option<String>,
@@ -207,7 +203,11 @@ pub async fn protected_resource_metadata_v2(
 
 /// Longbridge OAuth upstream selected for this public entry point.
 pub(crate) fn oauth_upstream_url(via_global_entry: bool) -> String {
-    select_authorization_server(via_global_entry, global_oauth_url(), longbridge_oauth_url())
+    select_authorization_server(
+        via_global_entry,
+        global_oauth_url(),
+        crate::endpoints::oauth_url(),
+    )
 }
 
 /// RFC 8414 metadata for the minimal OAuth facade hosted by this MCP server.
@@ -424,7 +424,11 @@ mod tests {
     #[test]
     fn authorization_server_selection_matrix() {
         let global = || Some("https://openapi-global.longbridge.xyz".to_string());
-        let fallback = || "https://openapi.longbridge.xyz".to_string();
+        let fallback = || {
+            crate::endpoints::Environment::Canary
+                .oauth_url()
+                .to_string()
+        };
 
         // Global entry + configured → advertise the global AS.
         assert_eq!(

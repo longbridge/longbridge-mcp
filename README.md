@@ -137,17 +137,25 @@ Config lives at `~/.longbridge/mcp/config.json` (override the directory with `LO
 | Log directory | `log_dir` | `--log-dir` | *(stderr)* | Directory for rolling log files |
 | TLS certificate | `tls_cert` | `--tls-cert` | *(none)* | PEM certificate file for HTTPS |
 | TLS private key | `tls_key` | `--tls-key` | *(none)* | PEM private key file for HTTPS |
+| Canary upstream | `canary` | `--canary` | `false` | Talk to the Longbridge canary environment (`*.longbridge.xyz`) instead of production. `--canary=false` forces production even when the config file enables it |
 
-Advanced environment variables — most deployments never touch these; they exist for non-production Longbridge environments and SDK debugging.
+**Upstream endpoints** are fixed by the mode, not by the environment:
+
+| | Production (default) | Canary (`--canary`) |
+|---|---|---|
+| OpenAPI | `https://openapi.longbridge.com` | `https://openapi.longbridge.xyz` |
+| Quote WebSocket | `wss://openapi-quote.longbridge.com/v2` | `wss://openapi-quote.longbridge.xyz/v2` |
+| Trade WebSocket | `wss://openapi-trade.longbridge.com/v2` | `wss://openapi-trade.longbridge.xyz/v2` |
+
+All three are set explicitly on the SDK, so `LONGBRIDGE_HTTP_URL`, `LONGBRIDGE_QUOTE_WS_URL`, `LONGBRIDGE_TRADE_WS_URL`, their `LONGPORT_*` aliases, `LONGBRIDGE_REGION`, and a `.env` file are all inert — as is the SDK's geolocation probe, which means the `openapi.longbridge.cn` access point is never selected. Which data center serves a request is unaffected: that is decided by the `x-dc-region` header the SDK derives from the credential's `us_` / `ap_` prefix.
+
+Advanced environment variables — most deployments never touch these; they exist for SDK debugging and edge/global-entry deployments.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `LONGBRIDGE_MCP_CONFIG_DIR` | `~/.longbridge/mcp` | Config file directory |
-| `LONGBRIDGE_HTTP_URL` | `https://openapi.longbridge.com` | Longbridge API base URL (also used for OAuth metadata) |
 | `LONGBRIDGE_PUBLIC_HOSTS` | *(none)* | Comma-separated hostnames accepted from the edge-injected `X-Host` header; matching requests echo that host in the 401 challenge / RFC 9728 metadata. Unset = `X-Host` ignored |
-| `LONGBRIDGE_GLOBAL_OAUTH_URL` | *(none)* | Authorization-server URL advertised to requests arriving via an allowlisted `X-Host` (global single-domain entry). Unset = fall back to `LONGBRIDGE_HTTP_URL` |
-| `LONGBRIDGE_QUOTE_WS_URL` | `wss://openapi-quote.longbridge.com/v2` | Quote WebSocket endpoint |
-| `LONGBRIDGE_TRADE_WS_URL` | `wss://openapi-trade.longbridge.com/v2` | Trade WebSocket endpoint |
+| `LONGBRIDGE_GLOBAL_OAUTH_URL` | *(none)* | Authorization-server URL advertised to requests arriving via an allowlisted `X-Host` (global single-domain entry). Unset = fall back to the mode's OpenAPI base URL |
 | `LONGBRIDGE_MCP_QUOTE_WS_IDLE_TTL_SECS` | `600` | Idle seconds before a cached quote WebSocket context is evicted |
 | `LONGBRIDGE_MCP_QUOTE_WS_MAX_CONTEXTS` | `1024` | Maximum cached quote WebSocket contexts per server process |
 | `LONGBRIDGE_MCP_LOG_PAYLOADS` | *(unset)* | `1` lifts the payload log caps (see below). Never set this in production |

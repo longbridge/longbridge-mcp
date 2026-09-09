@@ -582,38 +582,6 @@ pub struct McpContext {
     pub extra_headers: Vec<(String, String)>,
 }
 
-/// Global-gateway endpoints, pinned for US-data-center tokens.
-///
-/// # Which access point can serve which data center
-///
-/// Every Longbridge credential carries its data center as a prefix: `us_…` for
-/// the US data center, `ap_…` (or unprefixed) for Asia-Pacific. That prefix
-/// decides which access point can serve it:
-///
-/// | Data center | `.com` | `.cn` |
-/// |-------------|--------|-------|
-/// | `us`        | yes — the only usable access point | no |
-/// | `ap`        | yes    | yes   |
-///
-/// `.cn` has no path to the US data center. This is a hard constraint, not a
-/// latency or preference question.
-///
-/// # Why this is pinned
-///
-/// Left unset, the SDK picks an access point by geolocation at request time,
-/// which resolves to `.cn` on a China Mainland network. A US token sent to `.cn`
-/// still authenticates — the WebSocket connects and basic calls such as
-/// `static_info` succeed — but every market-data request comes back
-/// `301604 no quote access`, because `.cn` cannot source US-account quotes. The
-/// failure reads like a missing permission and is not one, so pin the endpoints
-/// rather than letting geolocation decide.
-///
-/// AP tokens are deliberately left to geolocation: both access points serve
-/// them, so the nearer one is the right choice.
-const US_HTTP_URL: &str = "https://openapi.longbridge.com";
-const US_QUOTE_WS_URL: &str = "wss://openapi-quote.longbridge.com/v2";
-const US_TRADE_WS_URL: &str = "wss://openapi-trade.longbridge.com/v2";
-
 /// Server-side beacon endpoint. Quote operations flow over the WebSocket quote
 /// channel and never reach the HTTP access log; a request to this fake path lets
 /// the server record (and count) that a WS-backed quote tool ran. The path only
@@ -632,17 +600,6 @@ pub(crate) async fn send_quote_cmd(client: &longbridge::httpclient::HttpClient) 
         .await;
 }
 
-/// Serializes tests that mutate the process-global `LONGBRIDGE_HTTP_URL` env var
-/// to redirect the SDK base URL at a local capture server. Multiple such tests
-/// run concurrently in one binary and would otherwise clobber each other's URL.
-///
-/// `tokio::sync::Mutex` is used so the guard can be held across `.await` points
-/// without blocking the executor thread (needed by authenticate.rs's test, which
-/// must keep the env var set for the duration of an async call).
-#[cfg(test)]
-pub(crate) static HTTP_URL_ENV_LOCK: std::sync::LazyLock<tokio::sync::Mutex<()>> =
-    std::sync::LazyLock::new(|| tokio::sync::Mutex::new(()));
-
 impl McpContext {
     /// This server's own identity as an RFC 9110 product token.
     const SELF_USER_AGENT: &'static str = concat!("longbridge-mcp/", env!("CARGO_PKG_VERSION"));
@@ -660,16 +617,11 @@ impl McpContext {
         }
     }
 
-    /// Whether this request's token belongs to the US data center and so needs
-    /// the global gateway pinned instead of geotest-selected endpoints.
+    /// Build an SDK `Config` for this request.
     ///
-    /// `LONGBRIDGE_HTTP_URL` takes precedence when set, so tests and local mock
-    /// servers can still redirect the SDK.
-    fn pin_us_endpoints(&self) -> bool {
-        std::env::var("LONGBRIDGE_HTTP_URL").is_err()
-            && longbridge::DcRegion::from_credential(&self.token) == longbridge::DcRegion::Us
-    }
-
+    /// All three upstream URLs are set explicitly from [`crate::endpoints`], so
+    /// the SDK neither reads them from the environment nor geolocates an access
+    /// point — see that module for why the endpoints are pinned.
     pub fn create_config(&self) -> Arc<longbridge::Config> {
         let mut config =
             longbridge::Config::from_oauth(longbridge::oauth::OAuth::from_token(&self.token))
@@ -677,13 +629,10 @@ impl McpContext {
                 .enable_overnight()
                 // Identify MCP-originated requests on the Context path (REST and
                 // WebSocket upgrades), mirroring how longbridge-cli tags itself.
-                .header("user-agent", self.user_agent());
-        if self.pin_us_endpoints() {
-            config = config
-                .http_url(US_HTTP_URL)
-                .quote_ws_url(US_QUOTE_WS_URL)
-                .trade_ws_url(US_TRADE_WS_URL);
-        }
+                .header("user-agent", self.user_agent())
+                .http_url(crate::endpoints::http_url())
+                .quote_ws_url(crate::endpoints::quote_ws_url())
+                .trade_ws_url(crate::endpoints::trade_ws_url());
         if let Some(ref lang) = self.language {
             let lb_lang = if lang.contains("zh-CN") || lang.contains("zh-Hans") {
                 longbridge::Language::ZH_CN
@@ -702,15 +651,14 @@ impl McpContext {
         Arc::new(config)
     }
 
+    /// Build an SDK `HttpClient` for this request. The base URL is pinned the
+    /// same way as in [`McpContext::create_config`], so REST calls can never
+    /// drift to a different access point than the WebSocket.
     pub fn create_http_client(&self) -> longbridge::httpclient::HttpClient {
-        let mut http_config = longbridge::httpclient::HttpClientConfig::from_oauth(
+        let http_config = longbridge::httpclient::HttpClientConfig::from_oauth(
             longbridge::oauth::OAuth::from_token(&self.token),
-        );
-        // Same US pinning as `create_config`, so REST calls do not drift to the
-        // CN node while the WebSocket is pinned to the global one.
-        if self.pin_us_endpoints() {
-            http_config = http_config.http_url(US_HTTP_URL);
-        }
+        )
+        .http_url(crate::endpoints::http_url());
         let mut client = longbridge::httpclient::HttpClient::new(http_config);
         // NOTE: This is very important for passing headers to upstream Longbridge services.
         // Do not remove this unless you have a good reason and know exactly which headers to forward instead.
@@ -1024,12 +972,37 @@ fn extract_context(ctx: &RequestContext<RoleServer>) -> Result<McpContext, McpEr
 fn all_tools_full_cached() -> &'static [rmcp::model::Tool] {
     static TOOLS: std::sync::OnceLock<Vec<rmcp::model::Tool>> = std::sync::OnceLock::new();
     TOOLS.get_or_init(|| {
+        // Descriptions and schema docs are literals naming
+        // `endpoints::STATIC_CONNECT_PAGE`; retarget them here, the one place
+        // every descriptor passes through, so a canary process does not send
+        // users to the production connect page. `None` in production, where
+        // there is nothing to rewrite. The matching rewrite for the translated
+        // descriptions lives in `crate::auth::build_locales_node`.
+        let connect_page = crate::endpoints::connect_page_url();
+        let retarget =
+            (connect_page != crate::endpoints::STATIC_CONNECT_PAGE).then_some(connect_page);
         cached_router()
             .list_all()
             .into_iter()
             .map(|mut tool| {
                 let mut schema = serde_json::Value::Object((*tool.input_schema).clone());
                 strip_null_from_type_arrays(&mut schema);
+                if let Some(connect_page) = retarget {
+                    replace_in_json_strings(
+                        &mut schema,
+                        crate::endpoints::STATIC_CONNECT_PAGE,
+                        connect_page,
+                    );
+                    if let Some(description) = &tool.description
+                        && description.contains(crate::endpoints::STATIC_CONNECT_PAGE)
+                    {
+                        tool.description = Some(
+                            description
+                                .replace(crate::endpoints::STATIC_CONNECT_PAGE, connect_page)
+                                .into(),
+                        );
+                    }
+                }
                 if let serde_json::Value::Object(obj) = schema {
                     tool.input_schema = std::sync::Arc::new(obj);
                 }
@@ -1349,6 +1322,31 @@ fn cached_router() -> &'static rmcp::handler::server::router::tool::ToolRouter<L
 
 /// Recursively remove `"null"` from JSON Schema `type` arrays.
 /// When the array is left with a single element it is unwrapped to a plain string.
+/// Replace every occurrence of `from` with `to` in all strings of a JSON value.
+/// Used to retarget URLs baked into static tool metadata (see
+/// [`all_tools_full_cached`]); descriptions live both at the top level of a
+/// schema and nested under `properties`, so the walk has to be recursive.
+fn replace_in_json_strings(value: &mut serde_json::Value, from: &str, to: &str) {
+    match value {
+        serde_json::Value::String(text) => {
+            if text.contains(from) {
+                *text = text.replace(from, to);
+            }
+        }
+        serde_json::Value::Object(map) => {
+            for v in map.values_mut() {
+                replace_in_json_strings(v, from, to);
+            }
+        }
+        serde_json::Value::Array(arr) => {
+            for v in arr.iter_mut() {
+                replace_in_json_strings(v, from, to);
+            }
+        }
+        _ => {}
+    }
+}
+
 fn strip_null_from_type_arrays(value: &mut serde_json::Value) {
     match value {
         serde_json::Value::Object(map) => {
@@ -5695,16 +5693,10 @@ mod tests {
             extra_headers: Vec::new(),
         };
         // Build the client with the SDK base URL redirected at the local server.
-        // Serialized against other env-mutating tests; the guard is released
-        // before the await so it is never held across a suspension point.
-        let client = {
-            let _env_guard = super::HTTP_URL_ENV_LOCK.lock().await;
-            // SAFETY: guarded by HTTP_URL_ENV_LOCK; set before build, cleared after.
-            unsafe { std::env::set_var("LONGBRIDGE_HTTP_URL", format!("http://{addr}")) };
-            let client = mctx.create_http_client();
-            unsafe { std::env::remove_var("LONGBRIDGE_HTTP_URL") };
-            client
-        };
+        // The override only has to cover construction: `HttpClientConfig`
+        // snapshots the base URL, so the later send needs no scope.
+        let client = crate::endpoints::UPSTREAM_OVERRIDE
+            .sync_scope(format!("http://{addr}"), || mctx.create_http_client());
         let _ = client
             .request(reqwest::Method::GET, "/v1/ping")
             .response::<String>()
@@ -5896,7 +5888,7 @@ mod tests {
 
 #[cfg(test)]
 mod quote_cmd_tests {
-    use super::{CURRENT_TOOL, HTTP_URL_ENV_LOCK, McpContext, QUOTE_CMD_PATH, send_quote_cmd};
+    use super::{CURRENT_TOOL, McpContext, QUOTE_CMD_PATH, send_quote_cmd};
     use std::time::Duration;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -5949,15 +5941,11 @@ mod quote_cmd_tests {
 
         // Build the client inside a `CURRENT_TOOL` scope (as `measured_tool_call`
         // does for real tool calls), with the SDK base URL redirected at the
-        // local server. `sync_scope` keeps the locked region free of any await.
-        let client = {
-            let _env_guard = HTTP_URL_ENV_LOCK.lock().await;
-            // SAFETY: guarded by HTTP_URL_ENV_LOCK; set before build, cleared after.
-            unsafe { std::env::set_var("LONGBRIDGE_HTTP_URL", format!("http://127.0.0.1:{port}")) };
-            let client = CURRENT_TOOL.sync_scope("depth", || mctx.create_http_client());
-            unsafe { std::env::remove_var("LONGBRIDGE_HTTP_URL") };
-            client
-        };
+        // local server.
+        let client = crate::endpoints::UPSTREAM_OVERRIDE
+            .sync_scope(format!("http://127.0.0.1:{port}"), || {
+                CURRENT_TOOL.sync_scope("depth", || mctx.create_http_client())
+            });
 
         send_quote_cmd(&client).await;
 
@@ -6041,6 +6029,49 @@ mod quote_cmd_tests {
              All other code must use `mctx.get_quote_context()` so calls go \
              through the connection pool and the /v1/quote/cmd beacon. \
              Untracked constructor at:\n{}",
+            offenders.join("\n")
+        );
+    }
+
+    /// Guard: upstream URLs come from `crate::endpoints` alone. The SDK would
+    /// happily pick them up from the environment (or a `.env` file) if any code
+    /// here read them back, which would reintroduce exactly the ambiguity that
+    /// module exists to remove. Structural rather than behavioral on purpose —
+    /// asserting it by setting the variables would need `unsafe` env mutation,
+    /// which the crate forbids.
+    #[test]
+    fn upstream_urls_are_never_read_from_the_environment() {
+        // Assembled from parts so this test does not match its own source.
+        const PREFIXES: &[&str] = &["LONGBRIDGE", "LONGPORT"];
+        const SUFFIXES: &[&str] = &["HTTP_URL", "QUOTE_WS_URL", "TRADE_WS_URL", "REGION"];
+        let forbidden: Vec<String> = PREFIXES
+            .iter()
+            .flat_map(|prefix| {
+                SUFFIXES
+                    .iter()
+                    .map(move |suffix| format!("{prefix}_{suffix}"))
+            })
+            .collect();
+        let src_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        // endpoints.rs names them in its module docs, as the variables it
+        // deliberately does not consult.
+        let allowed = src_dir.join("endpoints.rs");
+        let mut offenders = Vec::new();
+        for file in rs_files(&src_dir) {
+            if file == allowed {
+                continue;
+            }
+            let src = std::fs::read_to_string(&file).unwrap();
+            for (i, line) in src.lines().enumerate() {
+                if let Some(name) = forbidden.iter().find(|name| line.contains(name.as_str())) {
+                    offenders.push(format!("{}:{} ({name})", file.display(), i + 1));
+                }
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "upstream endpoint selection must come from `crate::endpoints`, not \
+             the environment. Remove these references:\n{}",
             offenders.join("\n")
         );
     }

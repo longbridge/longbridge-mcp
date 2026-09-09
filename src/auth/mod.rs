@@ -30,8 +30,15 @@ fn build_locales_node(sources: &[&[(&str, &str)]]) -> serde_json::Value {
     let mut locales = serde_json::Map::new();
     for src in sources {
         for (code, raw) in src.iter() {
+            // Translations name the production connect page too; retarget it the
+            // same way the live descriptions are (see
+            // `crate::tools::all_tools_full_cached`). A no-op in production.
+            let raw = raw.replace(
+                crate::endpoints::STATIC_CONNECT_PAGE,
+                crate::endpoints::connect_page_url(),
+            );
             let parsed: serde_json::Value =
-                serde_json::from_str(raw).expect("locale file must be valid JSON");
+                serde_json::from_str(&raw).expect("locale file must be valid JSON");
             let entry = locales
                 .entry((*code).to_string())
                 .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
@@ -329,6 +336,49 @@ pub fn create_router(state: Arc<AppState>) -> Router {
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
+
+    /// Guard: in static tool metadata — descriptions, input schemas, and the
+    /// translations — the connect page may only appear as
+    /// `endpoints::STATIC_CONNECT_PAGE`, optionally with a path suffix such as
+    /// `/done`. That exact prefix is what both retarget passes
+    /// (`tools::all_tools_full_cached` and `build_locales_node`) replace, so any
+    /// other spelling would survive into a canary process and send users to the
+    /// production page — whose code then fails the exchange with an opaque
+    /// `invalid_grant`.
+    #[test]
+    fn static_connect_page_urls_all_start_with_the_placeholder() {
+        let placeholder = crate::endpoints::STATIC_CONNECT_PAGE;
+        let mut sources: Vec<(String, String)> = super::TOOL_LOCALES
+            .iter()
+            .map(|(code, raw)| (format!("locales/{code}/tools.json"), (*raw).to_string()))
+            .collect();
+        for tool in crate::tools::list_tools() {
+            sources.push((
+                format!("tool `{}`", tool.name),
+                format!(
+                    "{} {}",
+                    tool.description.as_deref().unwrap_or_default(),
+                    serde_json::to_string(&tool.input_schema).expect("schema must serialize")
+                ),
+            ));
+        }
+
+        let mut offenders = Vec::new();
+        for (origin, text) in &sources {
+            for (at, _) in text.match_indices("https://open.longbridge") {
+                if !text[at..].starts_with(placeholder) {
+                    let end = (at + placeholder.len() + 8).min(text.len());
+                    offenders.push(format!("{origin}: {}…", &text[at..end]));
+                }
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "static tool metadata must spell the connect page as `{placeholder}` \
+             so it can be retargeted for canary. Offending occurrences:\n{}",
+            offenders.join("\n")
+        );
+    }
 
     /// Every locale file must cover every registered tool, and every locale
     /// param key must exist in the live JSON Schema. Catches drift when a
