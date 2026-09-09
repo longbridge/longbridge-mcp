@@ -6,6 +6,7 @@ use axum::response::Json;
 use serde::Serialize;
 
 use crate::auth::AppState;
+use crate::endpoints::Scope;
 
 /// Authorization-server URL advertised to clients that reached us through the
 /// global single-domain entry (allowlisted `X-Host`, see [`public_hosts`]).
@@ -126,18 +127,11 @@ pub(crate) struct ProtectedResourceMetadata {
     scopes_supported: Vec<String>,
 }
 
-/// OAuth scope ids advertised by the Longbridge authorization server.
-///
-/// - 4: Watchlist management, including creating, updating, and deleting user
-///   watchlists.
-/// - 6: Account assets and cash details, including fund/stock positions, cash
-///   balances, and cash-flow history for portfolio overview and reconciliation.
-/// - 10: Trade order lookup, covering read-only order lifecycle and execution
-///   reports, plus pre-order buying-power estimates.
-/// - 11: Trade execution, including submit/replace/cancel orders and recurring
-///   investment operations.
-const SCOPES_SUPPORTED: &[&str] = &["4", "6", "10", "11"];
-const V2_SCOPES_SUPPORTED: &[&str] = &["4", "6", "10"];
+/// OAuth scopes advertised by this server. The concepts live in
+/// [`crate::endpoints::Scope`]; the numeric ids the authorization server
+/// expects are environment-specific and resolved there.
+const SCOPES_SUPPORTED: &[Scope] = crate::endpoints::SCOPES;
+const V2_SCOPES_SUPPORTED: &[Scope] = crate::endpoints::V2_SCOPES;
 
 /// Picks the authorization server to advertise: requests that came through the
 /// global single-domain entry get [`global_oauth_url`] (when configured) so the
@@ -157,15 +151,12 @@ pub(crate) fn select_authorization_server(
 fn build_resource_metadata(
     authorization_server: String,
     resource: String,
-    scopes_supported: &[&str],
+    scopes_supported: &[Scope],
 ) -> ProtectedResourceMetadata {
     ProtectedResourceMetadata {
         resource,
         authorization_servers: vec![authorization_server],
-        scopes_supported: scopes_supported
-            .iter()
-            .map(|scope| scope.to_string())
-            .collect(),
+        scopes_supported: crate::endpoints::scope_ids(scopes_supported),
     }
 }
 
@@ -242,7 +233,7 @@ fn build_authorization_server_metadata(
         revocation_endpoint: format!("{issuer}/oauth2/revoke"),
         registration_endpoint: format!("{upstream}/oauth2/register"),
         jwks_uri: format!("{upstream}/.well-known/jwks.json"),
-        scopes_supported: SCOPES_SUPPORTED.iter().map(|s| s.to_string()).collect(),
+        scopes_supported: crate::endpoints::scope_ids(SCOPES_SUPPORTED),
         response_types_supported: vec!["code"],
         grant_types_supported: vec!["authorization_code", "refresh_token"],
         token_endpoint_auth_methods_supported: vec!["none"],

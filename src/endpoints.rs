@@ -68,7 +68,7 @@ impl Environment {
     pub fn http_url(self) -> &'static str {
         match self {
             Environment::Production => "https://openapi.longbridge.com",
-            Environment::Canary => "https://openapi.longbridge.xyz",
+            Environment::Canary => CANARY_GLOBAL_GATEWAY,
         }
     }
 
@@ -76,7 +76,7 @@ impl Environment {
     pub fn quote_ws_url(self) -> &'static str {
         match self {
             Environment::Production => "wss://openapi-quote.longbridge.com/v2",
-            Environment::Canary => "wss://openapi-quote.longbridge.xyz/v2",
+            Environment::Canary => "wss://openapi-global-quote.longbridge.xyz/v2",
         }
     }
 
@@ -84,18 +84,19 @@ impl Environment {
     pub fn trade_ws_url(self) -> &'static str {
         match self {
             Environment::Production => "wss://openapi-trade.longbridge.com/v2",
-            Environment::Canary => "wss://openapi-trade.longbridge.xyz/v2",
+            Environment::Canary => "wss://openapi-global-trade.longbridge.xyz/v2",
         }
     }
 
     /// OAuth base URL: the authorization server advertised in the RFC 8414 /
     /// RFC 9728 metadata and the host the `authenticate` tool exchanges codes
-    /// against. Currently the same host as [`Environment::http_url`], kept
-    /// separate so the two can diverge without touching callers.
+    /// against. The same host as [`Environment::http_url`] in both
+    /// environments, kept as its own method so the two can diverge without
+    /// touching callers.
     pub fn oauth_url(self) -> &'static str {
         match self {
             Environment::Production => "https://openapi.longbridge.com",
-            Environment::Canary => "https://openapi.longbridge.xyz",
+            Environment::Canary => CANARY_GLOBAL_GATEWAY,
         }
     }
 
@@ -126,6 +127,19 @@ impl Environment {
     }
 }
 
+/// Canary's global gateway — the counterpart of production's
+/// `openapi.longbridge.com`.
+///
+/// Canary fronts the same backend with two gateways: this one, which is
+/// CloudFront-fronted and performs `x-dc-region` data-center routing exactly
+/// like production, and `openapi.longbridge.xyz`, which resolves to regional
+/// (ap-east-1) addresses. This server serves `us_`- and `ap_`-prefixed
+/// credentials from one process and depends on that routing, so the regional
+/// endpoint would reproduce the `301604 no quote access` failure described
+/// above. `longbridge-terminal` (`src/region.rs`) and the SDK's staging OAuth
+/// base point at the same host.
+const CANARY_GLOBAL_GATEWAY: &str = "https://openapi-global.longbridge.xyz";
+
 /// The connect page baked into static tool metadata: the `#[tool]` description
 /// and `auth_code` schema doc, which need literals, and the locale files.
 ///
@@ -136,6 +150,76 @@ impl Environment {
 /// resulting code against canary, and the `redirect_uri` mismatch surfaces as
 /// an opaque `invalid_grant`.
 pub const STATIC_CONNECT_PAGE: &str = "https://open.longbridge.com/connect";
+
+/// An OAuth scope this server advertises in its RFC 8414 / RFC 9728 metadata.
+///
+/// The authorization server identifies scopes by *numeric id* in the `scope`
+/// request parameter, and those ids are environment-specific: production uses
+/// `4/6/10/11` while canary uses `18/20/21/24` for the same four concepts
+/// (observed from dynamic client registration, which reports each
+/// environment's available set — `4 6 10 11 12` vs `18 20 21 24 25`). The
+/// stable identifier is the `key`, which is what the token endpoint echoes back
+/// and what `data/scopes.json` records; the numeric id is resolved per
+/// environment by [`Scope::id`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Scope {
+    /// Watchlist group management.
+    Watchlist,
+    /// Account assets, positions, and cash flow (read-only).
+    AccountRead,
+    /// Order and execution lookup (read-only).
+    TradeRead,
+    /// Order placement, DCA, and grid writes.
+    TradeWrite,
+}
+
+impl Scope {
+    /// Stable scope key, matching the `key` field in `data/scopes.json` and the
+    /// `scope` value the token endpoint returns.
+    pub fn key(self) -> &'static str {
+        match self {
+            Scope::Watchlist => "watchlist",
+            Scope::AccountRead => "account.read",
+            Scope::TradeRead => "trade.read",
+            Scope::TradeWrite => "trade.write",
+        }
+    }
+
+    /// Numeric id the given environment's authorization server expects.
+    pub fn id(self, environment: Environment) -> &'static str {
+        match (self, environment) {
+            (Scope::Watchlist, Environment::Production) => "4",
+            (Scope::AccountRead, Environment::Production) => "6",
+            (Scope::TradeRead, Environment::Production) => "10",
+            (Scope::TradeWrite, Environment::Production) => "11",
+            (Scope::Watchlist, Environment::Canary) => "18",
+            (Scope::AccountRead, Environment::Canary) => "20",
+            (Scope::TradeRead, Environment::Canary) => "21",
+            (Scope::TradeWrite, Environment::Canary) => "24",
+        }
+    }
+}
+
+/// Scopes advertised on the full endpoints (`/mcp`, `/agent`, root).
+pub const SCOPES: &[Scope] = &[
+    Scope::Watchlist,
+    Scope::AccountRead,
+    Scope::TradeRead,
+    Scope::TradeWrite,
+];
+
+/// Scopes advertised on the restricted `/v2` endpoint: the read-only subset,
+/// deliberately without [`Scope::TradeWrite`].
+pub const V2_SCOPES: &[Scope] = &[Scope::Watchlist, Scope::AccountRead, Scope::TradeRead];
+
+/// Scope ids to advertise for the current environment.
+pub fn scope_ids(scopes: &[Scope]) -> Vec<String> {
+    let environment = current();
+    scopes
+        .iter()
+        .map(|scope| scope.id(environment).to_string())
+        .collect()
+}
 
 static ENVIRONMENT: OnceLock<Environment> = OnceLock::new();
 
@@ -157,6 +241,7 @@ pub fn init(environment: Environment) {
         http_url = environment.http_url(),
         quote_ws_url = environment.quote_ws_url(),
         trade_ws_url = environment.trade_ws_url(),
+        oauth_url = environment.oauth_url(),
         "upstream endpoints fixed"
     );
 }
@@ -234,10 +319,10 @@ mod tests {
             ),
             (
                 Environment::Canary,
-                "https://openapi.longbridge.xyz",
-                "wss://openapi-quote.longbridge.xyz/v2",
-                "wss://openapi-trade.longbridge.xyz/v2",
-                "https://openapi.longbridge.xyz",
+                "https://openapi-global.longbridge.xyz",
+                "wss://openapi-global-quote.longbridge.xyz/v2",
+                "wss://openapi-global-trade.longbridge.xyz/v2",
+                "https://openapi-global.longbridge.xyz",
                 "https://open.longbridge.xyz/connect",
                 "https://open.longbridge.xyz/connect/done",
             ),
@@ -294,6 +379,58 @@ mod tests {
             assert!(!env.http_url().ends_with('/'), "http_url for {env:?}");
             assert!(!env.oauth_url().ends_with('/'), "oauth_url for {env:?}");
         }
+    }
+
+    /// Guard: the production ids in [`Scope::id`] must match `data/scopes.json`,
+    /// which is the catalogue the public `/mcp/scopes.json` manifest and the
+    /// translations are built from. Keys are the stable identifier, so this
+    /// pins the id-to-concept mapping against the only other place that
+    /// records it.
+    #[test]
+    fn production_scope_ids_match_the_catalogue() {
+        let catalogue: serde_json::Value =
+            serde_json::from_str(include_str!("../data/scopes.json"))
+                .expect("data/scopes.json must be valid JSON");
+        let entries = catalogue["scopes"]
+            .as_array()
+            .expect("scopes.json must hold a `scopes` array");
+        for scope in SCOPES {
+            let entry = entries
+                .iter()
+                .find(|e| e["key"].as_str() == Some(scope.key()))
+                .unwrap_or_else(|| panic!("no `{}` entry in data/scopes.json", scope.key()));
+            assert_eq!(
+                entry["id"].as_str(),
+                Some(scope.id(Environment::Production)),
+                "production id for `{}` disagrees with data/scopes.json",
+                scope.key()
+            );
+        }
+    }
+
+    /// Every environment must map the four concepts onto four distinct ids, and
+    /// the `/v2` set must never carry trade execution.
+    #[test]
+    fn scope_sets_are_well_formed() {
+        for env in [Environment::Production, Environment::Canary] {
+            let ids: Vec<&str> = SCOPES.iter().map(|s| s.id(env)).collect();
+            let mut unique = ids.clone();
+            unique.sort_unstable();
+            unique.dedup();
+            assert_eq!(
+                unique.len(),
+                ids.len(),
+                "duplicate scope id for {env:?}: {ids:?}"
+            );
+        }
+        assert!(
+            !V2_SCOPES.contains(&Scope::TradeWrite),
+            "/v2 is the read-only surface and must not advertise trade execution"
+        );
+        assert!(
+            V2_SCOPES.iter().all(|s| SCOPES.contains(s)),
+            "/v2 scopes must be a subset of the full set"
+        );
     }
 
     #[test]

@@ -143,9 +143,12 @@ Config lives at `~/.longbridge/mcp/config.json` (override the directory with `LO
 
 | | Production (default) | Canary (`--canary`) |
 |---|---|---|
-| OpenAPI | `https://openapi.longbridge.com` | `https://openapi.longbridge.xyz` |
-| Quote WebSocket | `wss://openapi-quote.longbridge.com/v2` | `wss://openapi-quote.longbridge.xyz/v2` |
-| Trade WebSocket | `wss://openapi-trade.longbridge.com/v2` | `wss://openapi-trade.longbridge.xyz/v2` |
+| OpenAPI | `https://openapi.longbridge.com` | `https://openapi-global.longbridge.xyz` |
+| Quote WebSocket | `wss://openapi-quote.longbridge.com/v2` | `wss://openapi-global-quote.longbridge.xyz/v2` |
+| Trade WebSocket | `wss://openapi-trade.longbridge.com/v2` | `wss://openapi-global-trade.longbridge.xyz/v2` |
+| OAuth / connect page | `openapi.longbridge.com` / `open.longbridge.com` | `openapi-global.longbridge.xyz` / `open.longbridge.xyz` |
+
+Canary uses the `-global` gateway, not `openapi.longbridge.xyz`: only the former is CloudFront-fronted and performs `x-dc-region` data-center routing, which this server depends on to serve `us_`- and `ap_`-prefixed credentials from one process.
 
 All three are set explicitly on the SDK, so `LONGBRIDGE_HTTP_URL`, `LONGBRIDGE_QUOTE_WS_URL`, `LONGBRIDGE_TRADE_WS_URL`, their `LONGPORT_*` aliases, `LONGBRIDGE_REGION`, and a `.env` file are all inert — as is the SDK's geolocation probe, which means the `openapi.longbridge.cn` access point is never selected. Which data center serves a request is unaffected: that is decided by the `x-dc-region` header the SDK derives from the credential's `us_` / `ap_` prefix.
 

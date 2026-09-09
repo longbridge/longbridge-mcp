@@ -54,6 +54,33 @@ fn build_locales_node(sources: &[&[(&str, &str)]]) -> serde_json::Value {
     serde_json::Value::Object(locales)
 }
 
+/// Rewrite each scope catalogue entry's `id` to the current environment's id.
+///
+/// `data/scopes.json` records production ids, but the authorization server
+/// numbers the same concepts differently on canary (see
+/// [`crate::endpoints::Scope`]). The `key` field is stable across environments,
+/// so it drives the rewrite. A no-op in production, and entries with no
+/// matching [`crate::endpoints::Scope`] (e.g. the `General` bucket) are left
+/// untouched.
+fn retarget_scope_ids(scopes: &mut serde_json::Value) {
+    let Some(entries) = scopes.as_array_mut() else {
+        return;
+    };
+    let environment = crate::endpoints::current();
+    for entry in entries {
+        let Some(key) = entry.get("key").and_then(|k| k.as_str()) else {
+            continue;
+        };
+        let Some(scope) = crate::endpoints::SCOPES.iter().find(|s| s.key() == key) else {
+            continue;
+        };
+        let id = scope.id(environment).to_string();
+        if let Some(slot) = entry.get_mut("id") {
+            *slot = serde_json::Value::String(id);
+        }
+    }
+}
+
 /// Build the `/mcp/tools.json` (and `/v1/tools.json`, `/v2/tools.json`) body.
 ///
 /// Order: tools → scopes → locales (relies on serde_json's `preserve_order`).
@@ -89,6 +116,7 @@ fn build_tools_json(allow: Option<&std::collections::HashSet<&'static str>>) -> 
                     !tools_arr.is_empty()
                 });
             }
+            retarget_scope_ids(&mut v);
             // Live tool list always wins over any `tools` in scopes.json.
             out.entry(k).or_insert(v);
         }
@@ -125,6 +153,9 @@ async fn scopes_json() -> axum::Json<&'static serde_json::Value> {
                 Ok(serde_json::Value::Object(m)) => m,
                 _ => panic!("scopes.json must be a JSON object"),
             };
+        if let Some(scopes) = out.get_mut("scopes") {
+            retarget_scope_ids(scopes);
+        }
         // Only the scope-specific locale files — no tool translations here.
         out.insert("locales".to_string(), build_locales_node(&[SCOPE_LOCALES]));
         serde_json::Value::Object(out)
