@@ -838,26 +838,20 @@ pub async fn valuation_comparison(
     mctx: &crate::tools::McpContext,
     p: ValuationComparisonParam,
 ) -> Result<CallToolResult, McpError> {
-    let client = mctx.create_http_client();
-    let mut params: Vec<(&str, &str)> = vec![
-        ("symbol", p.symbol.as_str()),
-        ("currency", p.currency.as_str()),
-    ];
-    // Peers are serialized as a JSON array string, e.g.
-    // comparison_symbols=["700.HK","80700.HK"]
-    let comp_json: String;
-    if let Some(ref syms) = p.comparison_symbols {
-        let peers: Vec<&str> = syms.split(',').map(str::trim).collect();
-        comp_json = serde_json::to_string(&peers).unwrap_or_default();
-        params.push(("comparison_symbols", comp_json.as_str()));
-    }
-    http_get_tool_unix(
-        &client,
-        "/v1/quote/compare/valuation",
-        &params,
-        &["list.*.history.*.date"],
-    )
-    .await
+    // Delegate to the SDK: the gateway does not yet accept user symbols for
+    // the peers parameter, and the SDK's `valuation_comparison` handles the
+    // required `comparison_counter_ids` conversion internally (and converts
+    // history dates to RFC 3339).
+    let ctx = longbridge::fundamental::FundamentalContext::new(mctx.create_config());
+    let peers = p
+        .comparison_symbols
+        .as_deref()
+        .map(|syms| syms.split(',').map(|s| s.trim().to_string()).collect());
+    let result = ctx
+        .valuation_comparison(p.symbol, p.currency, peers)
+        .await
+        .map_err(crate::error::Error::longbridge)?;
+    crate::tools::tool_json(&result)
 }
 
 #[cfg(test)]
