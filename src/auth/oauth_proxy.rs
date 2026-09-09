@@ -27,13 +27,54 @@ static OAUTH_HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
 const TOKEN_CREDENTIALS: &[&str] = &["refresh_token", "code"];
 const REVOKE_CREDENTIALS: &[&str] = &["token"];
 
+/// 正在代理的是哪种携带凭据的 OAuth POST,决定 `forward` 记哪个指标。
+#[derive(Clone, Copy)]
+enum OAuthOp {
+    Token,
+    Revoke,
+}
+
+/// 把 form 里的 `grant_type` 归到有界桶,作为低基数 label。
+fn grant_type_of(pairs: &[(String, String)]) -> &'static str {
+    match pairs
+        .iter()
+        .find(|(key, _)| key == "grant_type")
+        .map(|(_, value)| value.as_str())
+    {
+        Some("authorization_code") => "authorization_code",
+        Some("refresh_token") => "refresh_token",
+        _ => "other",
+    }
+}
+
+/// 把上游是否 2xx 映射为指标 `result` label。
+fn result_label(is_success: bool) -> &'static str {
+    if is_success { "success" } else { "error" }
+}
+
+/// 按操作类型记录对应的 OAuth 指标。
+fn record(op: OAuthOp, grant_type: &str, result: &str) {
+    match op {
+        OAuthOp::Token => crate::metrics::record_oauth_token(grant_type, result),
+        OAuthOp::Revoke => crate::metrics::record_oauth_revoke(result),
+    }
+}
+
 /// Proxy a token exchange and attach the region derived from its credential.
 pub async fn token(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    forward(&state, &headers, "/oauth2/token", TOKEN_CREDENTIALS, body).await
+    forward(
+        &state,
+        &headers,
+        "/oauth2/token",
+        TOKEN_CREDENTIALS,
+        OAuthOp::Token,
+        body,
+    )
+    .await
 }
 
 /// Proxy token revocation and attach the region derived from the token.
@@ -42,7 +83,15 @@ pub async fn revoke(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    forward(&state, &headers, "/oauth2/revoke", REVOKE_CREDENTIALS, body).await
+    forward(
+        &state,
+        &headers,
+        "/oauth2/revoke",
+        REVOKE_CREDENTIALS,
+        OAuthOp::Revoke,
+        body,
+    )
+    .await
 }
 
 fn derive_region(pairs: &[(String, String)], credential_fields: &[&str]) -> DcRegion {
@@ -62,22 +111,29 @@ async fn forward(
     headers: &HeaderMap,
     upstream_path: &str,
     credential_fields: &[&str],
+    op: OAuthOp,
     body: Bytes,
 ) -> Response {
-    let region = serde_urlencoded::from_bytes::<Vec<(String, String)>>(&body)
-        .map(|pairs| derive_region(&pairs, credential_fields))
-        .unwrap_or(DcRegion::Ap);
+    let pairs = serde_urlencoded::from_bytes::<Vec<(String, String)>>(&body).unwrap_or_default();
+    let region = derive_region(&pairs, credential_fields);
+    let grant_type = grant_type_of(&pairs);
     let public = public_url_from_headers(headers, &state.base_url);
     let upstream = oauth_upstream_url(public.via_global_entry);
     let url = format!("{}{upstream_path}", upstream.trim_end_matches('/'));
 
     match upstream_request(&url, region, body).send().await {
-        Ok(response) => relay(response).await,
-        Err(error) => (
-            StatusCode::BAD_GATEWAY,
-            format!("upstream OAuth request failed: {error}"),
-        )
-            .into_response(),
+        Ok(response) => {
+            record(op, grant_type, result_label(response.status().is_success()));
+            relay(response).await
+        }
+        Err(error) => {
+            record(op, grant_type, "error");
+            (
+                StatusCode::BAD_GATEWAY,
+                format!("upstream OAuth request failed: {error}"),
+            )
+                .into_response()
+        }
     }
 }
 
@@ -123,6 +179,29 @@ mod tests {
             .iter()
             .map(|(key, value)| ((*key).to_string(), (*value).to_string()))
             .collect()
+    }
+
+    #[test]
+    fn grant_type_buckets() {
+        assert_eq!(
+            grant_type_of(&pairs(&[("grant_type", "authorization_code")])),
+            "authorization_code"
+        );
+        assert_eq!(
+            grant_type_of(&pairs(&[("grant_type", "refresh_token")])),
+            "refresh_token"
+        );
+        assert_eq!(
+            grant_type_of(&pairs(&[("grant_type", "client_credentials")])),
+            "other"
+        );
+        assert_eq!(grant_type_of(&pairs(&[("code", "x")])), "other");
+    }
+
+    #[test]
+    fn result_label_maps_status() {
+        assert_eq!(result_label(true), "success");
+        assert_eq!(result_label(false), "error");
     }
 
     #[test]
