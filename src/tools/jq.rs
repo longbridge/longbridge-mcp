@@ -21,7 +21,7 @@ pub(super) fn describe(tool: &mut Tool) {
         .as_object_mut().expect("tool properties must be an object")
         .insert("_jq".into(), serde_json::json!({
             "type": "string",
-            "description": "Optional jq expression applied to the returned JSON, e.g. .data | map({symbol}). Omit for full output. One result is returned directly; multiple results as an array; no results as []. Errors remain unfiltered. Original response schemas: lb://tools/{tool-name}/output-schema."
+            "description": "Optional jq filter on response JSON, e.g. .data | map({symbol}). Omit for full output."
         }));
     // A jq projection may return any JSON value. A fixed object schema would
     // reject valid filtered results. Full unfiltered schemas remain resources.
