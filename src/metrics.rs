@@ -7,10 +7,11 @@ use std::sync::LazyLock;
 static REGISTRY: LazyLock<Registry> = LazyLock::new(Registry::new);
 
 tokio::task_local! {
-    /// 当前 MCP 请求的来源客户端桶(`"claude"` / `"chatgpt"` / `"other"` /
-    /// `"unknown"`),由 `mcp_auth_layer` 在每个 MCP 请求外层设置,供
-    /// [`record_tool_call`] 给工具指标打 `client` label。在 MCP 请求之外
-    /// (如服务初始化或单元测试)未设置,此时回落为 `"unknown"`。
+    /// 当前 MCP 请求的来源产品桶(见 [`classify_client`]:`claude_ai` /
+    /// `claude_code` / `claude_desktop` / `claude_vscode` / `claude` /
+    /// `chatgpt` / `other` / `unknown`),由 `mcp_auth_layer` 在每个 MCP 请求
+    /// 外层设置,供 [`record_tool_call`] 给工具指标打 `client` label。在 MCP
+    /// 请求之外(如服务初始化或单元测试)未设置,此时回落为 `"unknown"`。
     pub(crate) static CURRENT_CLIENT: &'static str;
 }
 
