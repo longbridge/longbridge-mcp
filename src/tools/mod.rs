@@ -73,6 +73,14 @@ where
             if let Err(err) = &result {
                 let code = err.code.0;
                 let elapsed_ms = (duration * 1000.0) as u64;
+                // Same task-local `record_tool_call` labels the metric with, so
+                // failures can be sliced by originating client in logs too (the
+                // "error_code drill-down by client" half of the telemetry). It
+                // also doubles as a propagation check: if this reads `unknown`
+                // in prod, the metric's `client` label is `unknown` as well.
+                let client = crate::metrics::CURRENT_CLIENT
+                    .try_with(|c| *c)
+                    .unwrap_or("unknown");
                 // `tool` name alone isn't unique on a hosted, multi-tenant
                 // server — two concurrent calls to the same tool can each
                 // fail and interleave their log lines. `call_id` is the only
@@ -104,7 +112,14 @@ where
                 // pre-bound to a local, so it's only evaluated when the
                 // target is actually enabled.
                 if routine {
-                    tracing::info!(tool = name, call_id, elapsed_ms, code, "tool call rejected");
+                    tracing::info!(
+                        tool = name,
+                        client,
+                        call_id,
+                        elapsed_ms,
+                        code,
+                        "tool call rejected"
+                    );
                     tracing::info!(
                         target: "longbridge_mcp::tools::error_detail",
                         tool = name,
@@ -114,7 +129,14 @@ where
                         "tool call error detail"
                     );
                 } else {
-                    tracing::warn!(tool = name, call_id, elapsed_ms, code, "tool call failed");
+                    tracing::warn!(
+                        tool = name,
+                        client,
+                        call_id,
+                        elapsed_ms,
+                        code,
+                        "tool call failed"
+                    );
                     tracing::warn!(
                         target: "longbridge_mcp::tools::error_detail",
                         tool = name,
