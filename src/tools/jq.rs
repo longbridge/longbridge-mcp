@@ -12,17 +12,18 @@ use rmcp::{
 use serde_json::Value;
 
 type Filter = jaq_core::Filter<data::JustLut<Val>>;
+pub(super) const INSTRUCTIONS: &str = "All tools accept optional _jq to filter response JSON, e.g. .data | map({symbol}). Omit for full output. One result is returned directly, multiple as an array, none as []. Errors remain unfiltered.";
 const MAX_RESULTS: usize = 10_000;
 const MAX_OUTPUT_BYTES: usize = 8 * 1024 * 1024;
 
 pub(super) fn describe(tool: &mut Tool) {
     let schema = std::sync::Arc::make_mut(&mut tool.input_schema);
-    schema.entry("properties").or_insert_with(|| serde_json::json!({}))
-        .as_object_mut().expect("tool properties must be an object")
-        .insert("_jq".into(), serde_json::json!({
-            "type": "string",
-            "description": "Optional jq filter on response JSON, e.g. .data | map({symbol}). Omit for full output."
-        }));
+    schema
+        .entry("properties")
+        .or_insert_with(|| serde_json::json!({}))
+        .as_object_mut()
+        .expect("tool properties must be an object")
+        .insert("_jq".into(), serde_json::json!({"type": "string"}));
     // A jq projection may return any JSON value. A fixed object schema would
     // reject valid filtered results. Full unfiltered schemas remain resources.
     tool.output_schema = None;
@@ -339,7 +340,10 @@ mod tests {
             }});
             writer.write_all(format!("{initialize}\n").as_bytes()).await.unwrap();
             reader.read_line(&mut line).await.unwrap();
-            assert!(serde_json::from_str::<Value>(&line).unwrap().get("result").is_some());
+            let init: Value = serde_json::from_str(&line).unwrap();
+            let instructions = init["result"]["instructions"].as_str().unwrap();
+            assert_eq!(instructions.matches("_jq").count(), 1);
+            assert!(instructions.contains("map({symbol})"));
             writer.write_all(b"{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}\n").await.unwrap();
             for (id, jq, expected) in [(2, ". | {kind: type}", json!({"kind":"string"})), (3, "empty", json!([]))] {
                 let call = json!({"jsonrpc":"2.0","id":id,"method":"tools/call","params":{"name":"now","arguments":{"_jq":jq}}});

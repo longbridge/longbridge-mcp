@@ -5298,9 +5298,8 @@ impl ServerHandler for Longbridge {
 
     /// `initialize`, with endpoint-aware `instructions`.
     ///
-    /// Main endpoint: byte-for-byte the macro default (`get_info`), so the
-    /// pre-feature `initialize` response is unchanged. Unauthenticated
-    /// `/agent` sessions instead get instructions that explicitly frame the
+    /// Each endpoint gets shared response-filtering guidance. Unauthenticated
+    /// `/agent` sessions also get instructions that explicitly frame the
     /// endpoint as a temporary authorization channel, so AI clients do not
     /// mistake `<host>/agent` for the Longbridge MCP service address itself.
     async fn initialize(
@@ -5338,6 +5337,13 @@ impl ServerHandler for Longbridge {
                 }
             });
         }
+        // Shared guidance belongs in initialize once, after endpoint-specific
+        // instructions are selected, rather than in every tool's input schema.
+        info.instructions = Some(format!(
+            "{}\n\n{}",
+            info.instructions.as_deref().unwrap_or_default(),
+            jq::INSTRUCTIONS
+        ));
         Ok(info)
     }
 
@@ -7052,6 +7058,11 @@ mod jq_catalog_tests {
                 tool.output_schema.is_none(),
                 "{} cannot constrain arbitrary jq output",
                 tool.name
+            );
+            assert!(
+                tool.input_schema["properties"]["_jq"]
+                    .get("description")
+                    .is_none()
             );
             let lookup = Longbridge.get_tool(&tool.name).unwrap();
             assert_eq!(lookup.input_schema, tool.input_schema);

@@ -50,6 +50,8 @@ Built in Rust with [rmcp](https://github.com/anthropics/rmcp) and [axum](https:/
 Every tool accepts an optional `_jq` string in its arguments. The expression runs
 on the complete returned JSON, after the normal response serialization. The `_jq`
 name is reserved for response filtering to avoid conflicts with business parameters.
+Usage guidance is sent once in the MCP `initialize` response's `instructions`;
+each tool schema declares only the optional parameter name and type.
 For example:
 
 ```json
