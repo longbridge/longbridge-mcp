@@ -823,6 +823,19 @@ fn extract_context(ctx: &RequestContext<RoleServer>) -> Result<McpContext, McpEr
     })
 }
 
+/// Classify the originating client from the request's `User-Agent`, for the
+/// `CURRENT_CLIENT` metric/log label. Unlike [`extract_context`] this never
+/// fails (a request with no parts or no UA is simply `"unknown"`), so it can
+/// run on every `call_tool`, including token-less `authenticate` calls.
+fn client_bucket_from_context(ctx: &RequestContext<RoleServer>) -> &'static str {
+    let user_agent = ctx
+        .extensions
+        .get::<axum::http::request::Parts>()
+        .and_then(|parts| parts.headers.get("user-agent"))
+        .and_then(|value| value.to_str().ok());
+    crate::metrics::classify_client(user_agent)
+}
+
 /// Returns all registered MCP tools with full schema metadata, sorted by name.
 ///
 /// This is used for documentation resources where verbose field descriptions
@@ -5241,8 +5254,18 @@ impl ServerHandler for Longbridge {
                 ));
             }
         }
+        // Classify the originating client here — NOT in the HTTP middleware. In
+        // stateless mode rmcp runs the service (and therefore every `#[tool]`
+        // method and its `measured_tool_call`/`record_tool_call`) on a task it
+        // `tokio::spawn`s, which does not inherit task-locals set by the axum
+        // layer. `call_tool` is the innermost funnel that still runs on that
+        // same spawned task, so a `CURRENT_CLIENT` scope set here is visible to
+        // `record_tool_call`; one set in the middleware would not be.
+        let client = client_bucket_from_context(&context);
         let tcc = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
-        cached_router().call(tcc).await
+        crate::metrics::CURRENT_CLIENT
+            .scope(client, cached_router().call(tcc))
+            .await
     }
 
     async fn list_tools(

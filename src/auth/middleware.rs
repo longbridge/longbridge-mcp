@@ -167,14 +167,7 @@ pub async fn mcp_auth_layer(
         req.extensions_mut().insert(RestrictedEndpoint(version));
     }
 
-    let client = crate::metrics::classify_client(
-        req.headers()
-            .get("user-agent")
-            .and_then(|v| v.to_str().ok()),
-    );
-    crate::metrics::CURRENT_CLIENT
-        .scope(client, next.run(req))
-        .await
+    next.run(req).await
 }
 
 #[cfg(test)]
@@ -212,37 +205,6 @@ mod tests {
             response.headers().contains_key("www-authenticate"),
             "401 must carry WWW-Authenticate per RFC 9728"
         );
-    }
-
-    #[tokio::test]
-    async fn sets_current_client_from_user_agent() {
-        let app = Router::new().route(
-            "/mcp",
-            get(|| async {
-                crate::metrics::CURRENT_CLIENT
-                    .try_with(|c| *c)
-                    .unwrap_or("MISSING")
-            })
-            .layer(axum::middleware::from_fn(
-                move |req: Request, next: Next| async move {
-                    mcp_auth_layer(req, next, "https://example.com", AuthMode::Optional, None).await
-                },
-            )),
-        );
-        let response = app
-            .oneshot(
-                axum::http::Request::builder()
-                    .uri("/mcp")
-                    .header("user-agent", "claude-code/2.1.89 (cli)")
-                    .body(axum::body::Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        assert_eq!(&body[..], b"claude_code");
     }
 
     /// The 401 above is otherwise silent — logging the rejection is the whole
