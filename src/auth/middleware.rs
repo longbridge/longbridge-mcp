@@ -242,7 +242,7 @@ mod tests {
         let body = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
             .unwrap();
-        assert_eq!(&body[..], b"claude");
+        assert_eq!(&body[..], b"claude_code");
     }
 
     /// The 401 above is otherwise silent — logging the rejection is the whole

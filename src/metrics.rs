@@ -14,13 +14,28 @@ tokio::task_local! {
     pub(crate) static CURRENT_CLIENT: &'static str;
 }
 
-/// 把 MCP 客户端的 `User-Agent` 映射到一个有界的客户端桶,以便作为低基数的
+/// 把 MCP 客户端的 `User-Agent` 映射到一个有界的产品桶,以便作为低基数的
 /// Prometheus label。大小写不敏感的子串匹配;缺失或空白归为 `"unknown"`。
+///
+/// Claude 各产品发的 UA 有区分度(实测):claude.ai 网页/connector 发
+/// `Mozilla/5.0 ... Claude-User/1.0 ... +claude-user@anthropic.com`;其余
+/// 是 `claude-code/<ver> (<surface>)`,`<surface>` 标明宿主(cli、sdk-cli、
+/// sdk-ts、local-agent、claude-desktop、claude-vscode)。匹配顺序从具体到
+/// 笼统:先认 claude.ai / desktop / vscode,再落到通用的 claude_code。
+/// 「全部 Claude 流量」在查询侧用 `client=~"claude.*"` 聚合。
 pub fn classify_client(user_agent: Option<&str>) -> &'static str {
     match user_agent {
         Some(ua) if !ua.trim().is_empty() => {
             let ua = ua.to_ascii_lowercase();
-            if ua.contains("claude") || ua.contains("anthropic") {
+            if ua.contains("claude-user") {
+                "claude_ai"
+            } else if ua.contains("claude-desktop") {
+                "claude_desktop"
+            } else if ua.contains("claude-vscode") {
+                "claude_vscode"
+            } else if ua.contains("claude-code") {
+                "claude_code"
+            } else if ua.contains("claude") || ua.contains("anthropic") {
                 "claude"
             } else if ua.contains("chatgpt") || ua.contains("openai") {
                 "chatgpt"
@@ -177,10 +192,36 @@ mod tests {
 
     #[test]
     fn classify_client_buckets() {
-        assert_eq!(classify_client(Some("claude-code/2.1.89 (cli)")), "claude");
+        // Real UAs observed hitting the server (401-rejection logs).
+        assert_eq!(
+            classify_client(Some(
+                "Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; compatible; Claude-User/1.0; +claude-user@anthropic.com)"
+            )),
+            "claude_ai"
+        );
+        assert_eq!(
+            classify_client(Some(
+                "claude-code/2.1.260 (claude-desktop, agent-sdk/0.3.260)"
+            )),
+            "claude_desktop"
+        );
+        assert_eq!(
+            classify_client(Some(
+                "claude-code/2.1.263 (claude-vscode, agent-sdk/0.3.263)"
+            )),
+            "claude_vscode"
+        );
+        assert_eq!(
+            classify_client(Some("claude-code/2.1.220 (cli)")),
+            "claude_code"
+        );
+        assert_eq!(
+            classify_client(Some("claude-code/2.1.218 (sdk-ts, agent-sdk/0.3.218)")),
+            "claude_code"
+        );
+        assert_eq!(classify_client(Some("Anthropic-Internal")), "claude");
         assert_eq!(classify_client(Some("ChatGPT-User/1.0")), "chatgpt");
         assert_eq!(classify_client(Some("x-openai-mcp/2")), "chatgpt");
-        assert_eq!(classify_client(Some("Anthropic-Internal")), "claude");
         assert_eq!(classify_client(Some("curl/8.0")), "other");
         assert_eq!(classify_client(Some("")), "unknown");
         assert_eq!(classify_client(Some("   ")), "unknown");
