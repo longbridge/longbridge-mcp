@@ -88,6 +88,32 @@ static QUOTE_WS_POOL_ENTRIES: LazyLock<IntGauge> = LazyLock::new(|| {
     gauge
 });
 
+static OAUTH_TOKEN_TOTAL: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    let counter = IntCounterVec::new(
+        Opts::new(
+            "mcp_oauth_token_total",
+            "OAuth token exchanges proxied through this server",
+        ),
+        &["grant_type", "result"],
+    )
+    .unwrap();
+    REGISTRY.register(Box::new(counter.clone())).unwrap();
+    counter
+});
+
+static OAUTH_REVOKE_TOTAL: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    let counter = IntCounterVec::new(
+        Opts::new(
+            "mcp_oauth_revoke_total",
+            "OAuth token revocations proxied through this server",
+        ),
+        &["result"],
+    )
+    .unwrap();
+    REGISTRY.register(Box::new(counter.clone())).unwrap();
+    counter
+});
+
 pub fn record_tool_call(tool_name: &str, duration_secs: f64, is_error: bool) {
     let client = CURRENT_CLIENT.try_with(|c| *c).unwrap_or("unknown");
     TOOL_CALLS_TOTAL
@@ -101,6 +127,20 @@ pub fn record_tool_call(tool_name: &str, duration_secs: f64, is_error: bool) {
             .with_label_values(&[tool_name, client])
             .inc();
     }
+}
+
+/// 记录一次经本服务代理的 OAuth token 交换。`grant_type` 已由调用方归到有界桶,
+/// `result` 为 `"success"`(上游 2xx)或 `"error"`。
+pub fn record_oauth_token(grant_type: &str, result: &str) {
+    OAUTH_TOKEN_TOTAL
+        .with_label_values(&[grant_type, result])
+        .inc();
+}
+
+/// 记录一次经本服务代理的 OAuth token 撤销(断连信号)。`result` 为
+/// `"success"`(上游 2xx)或 `"error"`。
+pub fn record_oauth_revoke(result: &str) {
+    OAUTH_REVOKE_TOTAL.with_label_values(&[result]).inc();
 }
 
 pub fn record_quote_ws_pool_event(event: &str, count: u64) {
@@ -175,5 +215,25 @@ mod tests {
             .get();
         assert_eq!(calls - before, 1);
         assert!(errs >= 1);
+    }
+
+    #[test]
+    fn record_oauth_token_increments() {
+        let before = OAUTH_TOKEN_TOTAL
+            .with_label_values(&["authorization_code", "success"])
+            .get();
+        record_oauth_token("authorization_code", "success");
+        let after = OAUTH_TOKEN_TOTAL
+            .with_label_values(&["authorization_code", "success"])
+            .get();
+        assert_eq!(after - before, 1);
+    }
+
+    #[test]
+    fn record_oauth_revoke_increments() {
+        let before = OAUTH_REVOKE_TOTAL.with_label_values(&["error"]).get();
+        record_oauth_revoke("error");
+        let after = OAUTH_REVOKE_TOTAL.with_label_values(&["error"]).get();
+        assert_eq!(after - before, 1);
     }
 }
