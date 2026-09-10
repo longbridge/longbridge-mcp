@@ -520,7 +520,9 @@ pub async fn financial_statement(
     let cid = symbol_to_counter_id(&p.symbol);
     let kind = p.kind.unwrap_or_else(|| "ALL".to_string()).to_uppercase();
     let report = p.report.unwrap_or_else(|| "af".to_string()).to_lowercase();
-    http_get_tool(
+    // Per statement-line render metadata with no analytic value: `value_type`
+    // (constant "bignumber") and `display_order` (the array is already ordered).
+    http_get_tool_dropping(
         &client,
         "/v1/quote/financials/statements",
         &[
@@ -528,6 +530,7 @@ pub async fn financial_statement(
             ("kind", kind.as_str()),
             ("report", report.as_str()),
         ],
+        &["value_type", "display_order"],
     )
     .await
 }
@@ -797,7 +800,9 @@ pub async fn industry_peers(
     } else {
         symbol_to_counter_id(&p.symbol)
     };
-    http_get_tool(
+    // Per-node `market` (constant), `parent_code` (== parent node's code in the
+    // tree), and `level` (== nesting depth) are all derivable from structure.
+    http_get_tool_dropping(
         &client,
         "/v1/quote/industries/peers",
         &[
@@ -806,6 +811,7 @@ pub async fn industry_peers(
             ("industry_id", ""),
             ("counter_id", cid.as_str()),
         ],
+        &["market", "parent_code", "level"],
     )
     .await
 }
