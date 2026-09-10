@@ -770,7 +770,12 @@ pub async fn warrant_list(
             mctx.evict_quote_context();
             Error::longbridge(e)
         })?;
-    tool_json(&result)
+    // Warrant analytics (premium, implied_volatility, delta, effective_leverage,
+    // leverage_ratio, balance_point, change_rate) serialize at ~17 significant
+    // digits; cap fractional precision at 6 across all 700+ rows.
+    let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;
+    crate::serialize::round_decimals(&mut value, 6);
+    tool_json(&value)
 }
 
 /// Default calc indexes when the caller omits `indexes`: common quote fields

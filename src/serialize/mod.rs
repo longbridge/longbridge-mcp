@@ -71,6 +71,42 @@ pub(crate) fn strip_nulls(value: &mut serde_json::Value) {
     }
 }
 
+/// Recursively cap the fractional precision of decimal-valued strings to at
+/// most `dp` digits.
+///
+/// Only touches strings that parse as a plain decimal and carry *more* than
+/// `dp` fractional digits (e.g. an SDK leverage field serialized as
+/// `"11.50005084745763"`). Symbols (`700.HK`), dates, integers, and values
+/// already within `dp` are left byte-for-byte unchanged, so display formatting
+/// like `"438.400"` is preserved. `dp` is a floor: callers pass 6 to keep at
+/// least six decimal places.
+pub(crate) fn round_decimals(value: &mut serde_json::Value, dp: u32) {
+    match value {
+        serde_json::Value::Object(map) => {
+            for v in map.values_mut() {
+                round_decimals(v, dp);
+            }
+        }
+        serde_json::Value::Array(arr) => {
+            for v in arr.iter_mut() {
+                round_decimals(v, dp);
+            }
+        }
+        serde_json::Value::String(s) => {
+            let frac = match s.rsplit_once('.') {
+                Some((_, frac)) => frac.len(),
+                None => return,
+            };
+            if frac > dp as usize
+                && let Ok(d) = s.parse::<rust_decimal::Decimal>()
+            {
+                *s = d.round_dp(dp).to_string();
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Recursively drop entries whose (snake_case) key is in `keys` from every
 /// object in `value`, at any depth and through arrays.
 ///
@@ -337,6 +373,25 @@ mod tests {
         let mut v = serde_json::json!({"s": "", "arr": [], "n": 0, "gone": null});
         strip_nulls(&mut v);
         assert_eq!(v, serde_json::json!({"s": "", "arr": [], "n": 0}));
+    }
+
+    #[test]
+    fn round_decimals_caps_precision_at_six() {
+        let mut v = serde_json::json!({
+            "leverage": "11.50005084745763",
+            "premium": "0.23161592505854794",
+            "price": "438.400",
+            "symbol": "700.HK",
+            "date": "2026-09-10",
+            "ts": "1789007822"
+        });
+        round_decimals(&mut v, 6);
+        assert_eq!(v["leverage"], "11.500051");
+        assert_eq!(v["premium"], "0.231616");
+        assert_eq!(v["price"], "438.400", "already <=6 dp: untouched");
+        assert_eq!(v["symbol"], "700.HK", "non-numeric: untouched");
+        assert_eq!(v["date"], "2026-09-10", "date: untouched");
+        assert_eq!(v["ts"], "1789007822", "integer: untouched");
     }
 
     #[test]
