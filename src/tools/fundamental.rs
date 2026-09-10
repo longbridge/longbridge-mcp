@@ -221,6 +221,47 @@ pub async fn forecast_eps(
     .await
 }
 
+/// Hoist the per-metric `name`/`description` (identical across every period) out
+/// of `list[].details[]` into a single top-level `legend` keyed by `key`, and
+/// drop empty-string fields (unreleased periods carry empty
+/// actual/comp_value/comp_desc/comp). Restructures the non-US consensus shape
+/// `{list:[{..., details:[{key,name,description,actual,estimate,...}]}]}`.
+fn hoist_consensus_legend(value: &mut serde_json::Value) {
+    let Some(obj) = value.as_object_mut() else {
+        return;
+    };
+    let Some(list) = obj.get_mut("list").and_then(|v| v.as_array_mut()) else {
+        return;
+    };
+    let mut legend = serde_json::Map::new();
+    for period in list.iter_mut() {
+        let Some(details) = period.get_mut("details").and_then(|v| v.as_array_mut()) else {
+            continue;
+        };
+        for detail in details.iter_mut() {
+            let Some(dobj) = detail.as_object_mut() else {
+                continue;
+            };
+            if let Some(key) = dobj.get("key").and_then(|v| v.as_str()).map(str::to_owned)
+                && !legend.contains_key(&key)
+            {
+                let mut entry = serde_json::Map::new();
+                if let Some(name) = dobj.get("name").cloned() {
+                    entry.insert("name".to_string(), name);
+                }
+                if let Some(desc) = dobj.get("description").cloned() {
+                    entry.insert("description".to_string(), desc);
+                }
+                legend.insert(key, serde_json::Value::Object(entry));
+            }
+            dobj.remove("name");
+            dobj.remove("description");
+            dobj.retain(|_, v| !matches!(v, serde_json::Value::String(s) if s.is_empty()));
+        }
+    }
+    obj.insert("legend".to_string(), serde_json::Value::Object(legend));
+}
+
 pub async fn consensus(
     mctx: &crate::tools::McpContext,
     p: SymbolParam,
@@ -243,12 +284,22 @@ pub async fn consensus(
     }
     let client = mctx.create_http_client();
     let cid = symbol_to_counter_id(&p.symbol);
-    http_get_tool(
+    let raw = http_get_tool(
         &client,
         "/v1/quote/financial-consensus-detail",
         &[("counter_id", cid.as_str())],
     )
-    .await
+    .await?;
+    let json = raw
+        .content
+        .first()
+        .and_then(|c| c.as_text())
+        .map(|t| t.text.clone())
+        .unwrap_or_default();
+    let mut value: serde_json::Value =
+        serde_json::from_str(&json).map_err(crate::error::Error::Serialize)?;
+    hoist_consensus_legend(&mut value);
+    crate::tools::tool_json(&value)
 }
 
 pub async fn valuation(
@@ -942,6 +993,37 @@ mod tests {
     use super::rating_part;
     use rmcp::ErrorData as McpError;
     use rmcp::model::Content;
+
+    #[test]
+    fn hoist_consensus_legend_dedups_name_desc_and_drops_empties() {
+        let mut v = serde_json::json!({
+            "list": [
+                {"period_text": "Q2 2026", "details": [
+                    {"key": "revenue", "name": "营业收入", "description": "主营业务收入。",
+                     "actual": "236", "estimate": "233", "comp_desc": "超出预期", "is_released": true}
+                ]},
+                {"period_text": "Q1 2027", "details": [
+                    {"key": "revenue", "name": "营业收入", "description": "主营业务收入。",
+                     "actual": "", "estimate": "249", "comp_desc": "", "is_released": false}
+                ]}
+            ],
+            "currency": "HKD"
+        });
+        super::hoist_consensus_legend(&mut v);
+        // legend carries name/description once
+        assert_eq!(v["legend"]["revenue"]["name"], "营业收入");
+        assert_eq!(v["legend"]["revenue"]["description"], "主营业务收入。");
+        // per-period rows no longer carry name/description
+        let released = &v["list"][0]["details"][0];
+        assert!(released.get("name").is_none() && released.get("description").is_none());
+        assert_eq!(released["actual"], "236");
+        assert_eq!(released["comp_desc"], "超出预期");
+        // unreleased row: empty-string fields dropped, estimate kept
+        let unreleased = &v["list"][1]["details"][0];
+        assert!(unreleased.get("actual").is_none() && unreleased.get("comp_desc").is_none());
+        assert_eq!(unreleased["estimate"], "249");
+        assert_eq!(unreleased["is_released"], false);
+    }
 
     #[test]
     fn rating_part_returns_the_payload_and_no_warning_on_success() {
