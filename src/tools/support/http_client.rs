@@ -135,6 +135,31 @@ pub async fn http_get_tool_rounding(
     Ok(success_with_structured(json))
 }
 
+/// Same as `http_get_tool`, but after the standard transform runs, every plain
+/// decimal string has its non-significant trailing zeros stripped (lossless).
+/// For passthrough tools whose upstream pads integer counts with a fake
+/// fractional part (e.g. share-count deltas stored as `"123.0000"`).
+pub async fn http_get_tool_trimming_zeros(
+    client: &HttpClient,
+    path: &str,
+    params: &[(&str, &str)],
+) -> Result<CallToolResult, McpError> {
+    let params: Vec<(&str, &str)> = params.to_vec();
+    let resp: String = client
+        .request(Method::GET, path)
+        .query_params(params)
+        .response::<String>()
+        .send()
+        .await
+        .map_err(|e| Error::longbridge(e.into()))?;
+    let transformed = transform_json(resp.as_bytes()).map_err(Error::Serialize)?;
+    let mut value: serde_json::Value =
+        serde_json::from_str(&transformed).map_err(Error::Serialize)?;
+    crate::serialize::strip_trailing_zeros(&mut value);
+    let json = serde_json::to_string(&value).map_err(Error::Serialize)?;
+    Ok(success_with_structured(json))
+}
+
 /// Combines `http_get_tool_unix` (unix-seconds → RFC3339 at `unix_paths`) with
 /// decimal-precision capping: every string number in the response with more
 /// than `dp` fractional digits is rounded to `dp` places. For passthrough tools

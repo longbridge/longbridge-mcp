@@ -10,7 +10,8 @@ use crate::counter::{index_symbol_to_counter_id, is_etf, symbol_to_counter_id};
 use crate::error::Error;
 use crate::serialize::convert_unix_paths;
 use crate::tools::support::http_client::{
-    http_get_tool, http_get_tool_dropping, http_get_tool_unix, http_get_tool_unix_dropping,
+    http_get_tool, http_get_tool_dropping, http_get_tool_trimming_zeros, http_get_tool_unix,
+    http_get_tool_unix_dropping,
 };
 use crate::tools::tool_json;
 
@@ -119,7 +120,10 @@ pub async fn broker_holding_detail(
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
     let cid = symbol_to_counter_id(&p.symbol);
-    http_get_tool(
+    // The share-count delta fields (shares.chg_*) are integers padded with a
+    // fake ".0000" fractional part across all rows; strip the trailing zeros
+    // (lossless) — they are ~half the bytes of this ~100 KB payload.
+    http_get_tool_trimming_zeros(
         &client,
         "/v1/quote/broker-holding/detail",
         &[("counter_id", cid.as_str())],

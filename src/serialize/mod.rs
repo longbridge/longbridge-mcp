@@ -107,6 +107,56 @@ pub(crate) fn round_decimals(value: &mut serde_json::Value, dp: u32) {
     }
 }
 
+/// Recursively strip non-significant trailing zeros from every plain decimal
+/// string in `value` (e.g. `"459962879.0000"` → `"459962879"`, `"4.50"` →
+/// `"4.5"`, `"0.0000"` → `"0"`).
+///
+/// This is lossless — it never rounds, only removes zeros that carry no value —
+/// so unlike [`round_decimals`] it is safe to apply blindly. Only a bare decimal
+/// (optional sign, digits, one `.`, digits) is touched; dates (`"2026.09.09"`),
+/// versions and ids are left alone. For passthrough tools whose upstream pads
+/// integer counts with a fake fractional part (e.g. share-count deltas stored as
+/// `"123.0000"`).
+pub(crate) fn strip_trailing_zeros(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(map) => {
+            for v in map.values_mut() {
+                strip_trailing_zeros(v);
+            }
+        }
+        serde_json::Value::Array(arr) => {
+            for v in arr.iter_mut() {
+                strip_trailing_zeros(v);
+            }
+        }
+        serde_json::Value::String(s) => {
+            if let Some(trimmed) = trimmed_decimal(s) {
+                *s = trimmed;
+            }
+        }
+        _ => {}
+    }
+}
+
+/// If `s` is a plain decimal string with trailing zeros in its fractional part,
+/// return the trimmed form; otherwise `None`. Requires exactly one `.` with
+/// digits on both sides, so multi-dot strings (dates, versions) are ignored.
+fn trimmed_decimal(s: &str) -> Option<String> {
+    let body = s.strip_prefix('-').unwrap_or(s);
+    let (int_part, frac_part) = body.split_once('.')?;
+    let is_digits = |p: &str| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit());
+    if !is_digits(int_part) || !is_digits(frac_part) || !frac_part.ends_with('0') {
+        return None;
+    }
+    let trimmed_frac = frac_part.trim_end_matches('0');
+    let sign = if s.starts_with('-') { "-" } else { "" };
+    Some(if trimmed_frac.is_empty() {
+        format!("{sign}{int_part}")
+    } else {
+        format!("{sign}{int_part}.{trimmed_frac}")
+    })
+}
+
 /// Rewrite `[st]TYPE/MARKET/CODE#Readable[/st]` cashtag markup to just
 /// `Readable` (the text after `#`, or the inner text when there is no `#`).
 /// Community posts wrap every ticker mention in this markup, which is pure
@@ -446,6 +496,31 @@ mod tests {
         assert_eq!(v["symbol"], "700.HK", "non-numeric: untouched");
         assert_eq!(v["date"], "2026-09-10", "date: untouched");
         assert_eq!(v["ts"], "1789007822", "integer: untouched");
+    }
+
+    #[test]
+    fn strip_trailing_zeros_is_lossless_and_skips_non_decimals() {
+        let mut v = serde_json::json!({
+            "shares": {"value": "459962879", "chg_1": "123.0000", "chg_5": "-45.0000"},
+            "ratio": "0.0505",
+            "padded": "4.50",
+            "zero": "0.0000",
+            "date": "2026.09.09",
+            "iso": "2026-09-10",
+            "symbol": "700.HK",
+            "int": "42"
+        });
+        strip_trailing_zeros(&mut v);
+        assert_eq!(v["shares"]["value"], "459962879", "integer untouched");
+        assert_eq!(v["shares"]["chg_1"], "123", "fake .0000 stripped");
+        assert_eq!(v["shares"]["chg_5"], "-45", "negative fake .0000 stripped");
+        assert_eq!(v["ratio"], "0.0505", "significant digits kept");
+        assert_eq!(v["padded"], "4.5", "trailing zero stripped");
+        assert_eq!(v["zero"], "0", "0.0000 becomes 0");
+        assert_eq!(v["date"], "2026.09.09", "multi-dot date untouched");
+        assert_eq!(v["iso"], "2026-09-10", "iso date untouched");
+        assert_eq!(v["symbol"], "700.HK", "ticker untouched");
+        assert_eq!(v["int"], "42", "plain integer untouched");
     }
 
     #[test]
