@@ -107,6 +107,60 @@ pub(crate) fn round_decimals(value: &mut serde_json::Value, dp: u32) {
     }
 }
 
+/// Rewrite `[st]TYPE/MARKET/CODE#Readable[/st]` cashtag markup to just
+/// `Readable` (the text after `#`, or the inner text when there is no `#`).
+/// Community posts wrap every ticker mention in this markup, which is pure
+/// noise to a model reading the prose.
+fn strip_cashtags(input: &str) -> String {
+    if !input.contains("[st]") {
+        return input.to_string();
+    }
+    let mut out = String::with_capacity(input.len());
+    let mut rest = input;
+    while let Some(start) = rest.find("[st]") {
+        out.push_str(&rest[..start]);
+        let after = &rest[start + "[st]".len()..];
+        match after.find("[/st]") {
+            Some(end) => {
+                let inner = &after[..end];
+                let readable = inner.rsplit_once('#').map_or(inner, |(_, r)| r);
+                out.push_str(readable);
+                rest = &after[end + "[/st]".len()..];
+            }
+            None => {
+                out.push_str(&rest[start..]);
+                return out;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Apply [`strip_cashtags`] to every `field`-keyed string in `value`,
+/// recursively (through nested objects and arrays).
+pub(crate) fn strip_cashtags_in_field(value: &mut serde_json::Value, field: &str) {
+    match value {
+        serde_json::Value::Object(map) => {
+            for (k, v) in map.iter_mut() {
+                if k == field
+                    && let serde_json::Value::String(s) = v
+                {
+                    *s = strip_cashtags(s);
+                } else {
+                    strip_cashtags_in_field(v, field);
+                }
+            }
+        }
+        serde_json::Value::Array(arr) => {
+            for v in arr.iter_mut() {
+                strip_cashtags_in_field(v, field);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Recursively drop entries whose (snake_case) key is in `keys` from every
 /// object in `value`, at any depth and through arrays.
 ///
@@ -392,6 +446,27 @@ mod tests {
         assert_eq!(v["symbol"], "700.HK", "non-numeric: untouched");
         assert_eq!(v["date"], "2026-09-10", "date: untouched");
         assert_eq!(v["ts"], "1789007822", "integer: untouched");
+    }
+
+    #[test]
+    fn strip_cashtags_in_field_keeps_readable_ticker() {
+        let mut v = serde_json::json!({
+            "items": [
+                {"description": "[st]ST/HK/700#TENCENT.HK[/st] CFO said prepaid 50bn"},
+                {"description": "no markup here"},
+                {"description": "[st]ST/US/BABA#Alibaba.US[/st][st]ST/HK/700#TENCENT.HK[/st] two tags"}
+            ]
+        });
+        strip_cashtags_in_field(&mut v, "description");
+        assert_eq!(
+            v["items"][0]["description"],
+            "TENCENT.HK CFO said prepaid 50bn"
+        );
+        assert_eq!(v["items"][1]["description"], "no markup here");
+        assert_eq!(
+            v["items"][2]["description"],
+            "Alibaba.USTENCENT.HK two tags"
+        );
     }
 
     #[test]

@@ -142,7 +142,11 @@ pub async fn topic(
 ) -> Result<CallToolResult, McpError> {
     let ctx = ContentContext::new(mctx.create_config());
     let result = ctx.topics(p.symbol).await.map_err(Error::longbridge)?;
-    tool_json(&result)
+    // Community posts wrap every ticker mention in `[st]…#Name.HK[/st]` markup;
+    // rewrite it to the readable ticker.
+    let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;
+    crate::serialize::strip_cashtags_in_field(&mut value, "description");
+    tool_json(&value)
 }
 
 pub async fn topic_detail(
