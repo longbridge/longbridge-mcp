@@ -6,8 +6,8 @@ use rmcp::serde::Deserialize;
 use crate::counter::{counter_id_to_symbol, symbol_to_counter_id};
 use crate::serialize::convert_unix_paths;
 use crate::tools::support::http_client::{
-    http_get_tool, http_get_tool_dropping, http_get_tool_unix, http_get_tool_unix_dropping,
-    http_get_tool_unix_rounding,
+    http_get_tool, http_get_tool_dropping, http_get_tool_rounding, http_get_tool_unix,
+    http_get_tool_unix_dropping, http_get_tool_unix_rounding,
 };
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -212,10 +212,12 @@ pub async fn dividend_detail(
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
     let cid = symbol_to_counter_id(&p.symbol);
-    http_get_tool(
+    // Each row's `symbol` is empty (the query already fixes the security).
+    http_get_tool_dropping(
         &client,
         "/v1/quote/dividends/details",
         &[("counter_id", cid.as_str())],
+        &["symbol"],
     )
     .await
 }
@@ -393,10 +395,13 @@ pub async fn industry_valuation_dist(
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
     let cid = symbol_to_counter_id(&p.symbol);
-    http_get_tool(
+    // Every pe/pb/ps bound arrives with ~16-19 fractional digits of bogus
+    // precision (e.g. "4.7548672033913246"); cap at 6 dp.
+    http_get_tool_rounding(
         &client,
         "/v1/quote/industry-valuation-distribution",
         &[("counter_id", cid.as_str())],
+        6,
     )
     .await
 }

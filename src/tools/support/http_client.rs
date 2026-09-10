@@ -109,6 +109,32 @@ pub async fn http_get_tool_unix_dropping(
     Ok(success_with_structured(json))
 }
 
+/// Same as `http_get_tool`, but after the standard transform runs, every string
+/// number in the response with more than `dp` fractional digits is rounded to
+/// `dp` places. For passthrough tools whose upstream emits absurd precision
+/// (e.g. 16-19 fractional digits on valuation ratios) that no consumer needs.
+pub async fn http_get_tool_rounding(
+    client: &HttpClient,
+    path: &str,
+    params: &[(&str, &str)],
+    dp: u32,
+) -> Result<CallToolResult, McpError> {
+    let params: Vec<(&str, &str)> = params.to_vec();
+    let resp: String = client
+        .request(Method::GET, path)
+        .query_params(params)
+        .response::<String>()
+        .send()
+        .await
+        .map_err(|e| Error::longbridge(e.into()))?;
+    let transformed = transform_json(resp.as_bytes()).map_err(Error::Serialize)?;
+    let mut value: serde_json::Value =
+        serde_json::from_str(&transformed).map_err(Error::Serialize)?;
+    crate::serialize::round_decimals(&mut value, dp);
+    let json = serde_json::to_string(&value).map_err(Error::Serialize)?;
+    Ok(success_with_structured(json))
+}
+
 /// Combines `http_get_tool_unix` (unix-seconds → RFC3339 at `unix_paths`) with
 /// decimal-precision capping: every string number in the response with more
 /// than `dp` fractional digits is rounded to `dp` places. For passthrough tools
