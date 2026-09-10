@@ -63,7 +63,11 @@ pub async fn news(
 ) -> Result<CallToolResult, McpError> {
     let ctx = ContentContext::new(mctx.create_config());
     let result = ctx.news(p.symbol).await.map_err(Error::longbridge)?;
-    tool_json(&result)
+    // News items sourced from community posts embed `[st]…#Name.HK[/st]` ticker
+    // markup in their description; rewrite it to the readable ticker.
+    let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;
+    crate::serialize::strip_cashtags_in_field(&mut value, "description");
+    tool_json(&value)
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -178,7 +182,13 @@ pub async fn topic_replies(
         .list_topic_replies(p.topic_id, opts)
         .await
         .map_err(Error::longbridge)?;
-    tool_json(&result)
+    let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;
+    // Reply bodies can embed `[st]…#Name.HK[/st]` ticker markup like topics do;
+    // rewrite it to the readable ticker.
+    crate::serialize::strip_cashtags_in_field(&mut value, "body");
+    // Drop the per-author avatar image URL — pure display, no analytic value.
+    crate::serialize::drop_keys(&mut value, &["avatar"]);
+    tool_json(&value)
 }
 
 pub async fn topic_create(
