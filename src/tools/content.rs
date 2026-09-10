@@ -158,7 +158,11 @@ pub async fn topic_detail(
         .topic_detail(p.topic_id)
         .await
         .map_err(Error::longbridge)?;
-    tool_json(&result)
+    let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;
+    for field in ["description", "body"] {
+        crate::serialize::strip_cashtags_in_field(&mut value, field);
+    }
+    tool_json(&value)
 }
 
 pub async fn topic_replies(
