@@ -362,7 +362,10 @@ pub async fn warrant_quote(
         mctx.evict_quote_context();
         Error::longbridge(e)
     })?;
-    tool_json(&result)
+    // Cap warrant analytics precision at 6 dp (same as warrant_list).
+    let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;
+    crate::serialize::round_decimals(&mut value, 6);
+    tool_json(&value)
 }
 
 pub async fn depth(
