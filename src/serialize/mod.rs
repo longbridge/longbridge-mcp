@@ -71,6 +71,30 @@ pub(crate) fn strip_nulls(value: &mut serde_json::Value) {
     }
 }
 
+/// Recursively drop entries whose (snake_case) key is in `keys` from every
+/// object in `value`, at any depth and through arrays.
+///
+/// For passthrough tools that echo upstream fields with no analytic value:
+/// duplicates (`code` == `symbol` without suffix), derivable fields
+/// (`market`), constant flags (`delay`), and display assets (`icon`). Keys
+/// must be given in the post-transform snake_case form.
+pub(crate) fn drop_keys(value: &mut serde_json::Value, keys: &[&str]) {
+    match value {
+        serde_json::Value::Object(map) => {
+            map.retain(|k, _| !keys.contains(&k.as_str()));
+            for v in map.values_mut() {
+                drop_keys(v, keys);
+            }
+        }
+        serde_json::Value::Array(arr) => {
+            for v in arr.iter_mut() {
+                drop_keys(v, keys);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Return `true` iff `s` matches the `<PREFIX>/<MARKET>/<CODE>` counter_id
 /// pattern used internally by Longbridge (e.g. `ST/US/AAPL`, `ETF/HK/2800`,
 /// `IX/HK/HSI`, `OP/US/AAPL270115C300000`). Used to distinguish dynamic map
@@ -313,6 +337,27 @@ mod tests {
         let mut v = serde_json::json!({"s": "", "arr": [], "n": 0, "gone": null});
         strip_nulls(&mut v);
         assert_eq!(v, serde_json::json!({"s": "", "arr": [], "n": 0}));
+    }
+
+    #[test]
+    fn drop_keys_removes_named_keys_recursively() {
+        let mut v = serde_json::json!({
+            "items": [
+                {"symbol": "9988.HK", "code": "09988", "market": "HK", "chg": "0.01"},
+                {"symbol": "700.HK", "code": "00700", "market": "HK", "chg": "0.02"}
+            ],
+            "market": "HK"
+        });
+        drop_keys(&mut v, &["code", "market"]);
+        assert_eq!(
+            v,
+            serde_json::json!({
+                "items": [
+                    {"symbol": "9988.HK", "chg": "0.01"},
+                    {"symbol": "700.HK", "chg": "0.02"}
+                ]
+            })
+        );
     }
 
     #[test]

@@ -58,6 +58,31 @@ pub async fn http_get_tool(
     result_from_raw_json(&resp)
 }
 
+/// Same as `http_get_tool`, but after the standard transform runs, the given
+/// (snake_case) `drop` keys are removed from every object in the response at any
+/// depth. For passthrough tools that echo upstream fields with no analytic
+/// value (duplicate `code`, derivable `market`, constant flags, display URLs).
+pub async fn http_get_tool_dropping(
+    client: &HttpClient,
+    path: &str,
+    params: &[(&str, &str)],
+    drop: &[&str],
+) -> Result<CallToolResult, McpError> {
+    let params: Vec<(&str, &str)> = params.to_vec();
+    let resp: String = client
+        .request(Method::GET, path)
+        .query_params(params)
+        .response::<String>()
+        .send()
+        .await
+        .map_err(|e| Error::longbridge(e.into()))?;
+    let json = transform_json(resp.as_bytes()).map_err(Error::Serialize)?;
+    let mut value: serde_json::Value = serde_json::from_str(&json).map_err(Error::Serialize)?;
+    crate::serialize::drop_keys(&mut value, drop);
+    let json = serde_json::to_string(&value).map_err(Error::Serialize)?;
+    Ok(success_with_structured(json))
+}
+
 /// Same as `http_get_tool`, but after the standard transform runs, the
 /// specified `unix_paths` are walked and any unix-seconds strings found are
 /// converted to RFC3339 in place. Use this for tools whose upstream returns

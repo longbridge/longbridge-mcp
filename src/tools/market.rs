@@ -9,7 +9,9 @@ use rmcp::serde::{Deserialize, Serialize};
 use crate::counter::{index_symbol_to_counter_id, is_etf, symbol_to_counter_id};
 use crate::error::Error;
 use crate::serialize::convert_unix_paths;
-use crate::tools::support::http_client::{http_get_tool, http_get_tool_unix};
+use crate::tools::support::http_client::{
+    http_get_tool, http_get_tool_dropping, http_get_tool_unix,
+};
 use crate::tools::tool_json;
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -588,7 +590,11 @@ pub async fn rank_list(
         .or_else(|| p.market.as_deref().map(|m| m.to_uppercase()))
         .unwrap_or_else(|| "US".to_string());
     let size = p.size.unwrap_or(20).to_string();
-    http_get_tool(
+    // Per-row upstream fields with no analytic value: `code` (== symbol without
+    // suffix), `market` (single-market query, derivable), constant/empty flags
+    // (`delay`, `is_pre_post`, `pre_post_*`, `extend_*`), the editorial `intro`
+    // blurb, and the `article` object.
+    http_get_tool_dropping(
         &client,
         "/v1/quote/market/rank/list",
         &[
@@ -597,6 +603,19 @@ pub async fn rank_list(
             ("need_article", need_article.as_str()),
             ("market", key_market.as_str()),
             ("size", size.as_str()),
+        ],
+        &[
+            "code",
+            "market",
+            "delay",
+            "is_pre_post",
+            "pre_post_price",
+            "pre_post_chg",
+            "extend_state",
+            "extend_price",
+            "extend_chg",
+            "article",
+            "intro",
         ],
     )
     .await
