@@ -10,7 +10,7 @@ use crate::counter::{index_symbol_to_counter_id, is_etf, symbol_to_counter_id};
 use crate::error::Error;
 use crate::serialize::convert_unix_paths;
 use crate::tools::support::http_client::{
-    http_get_tool, http_get_tool_dropping, http_get_tool_unix,
+    http_get_tool, http_get_tool_dropping, http_get_tool_unix, http_get_tool_unix_dropping,
 };
 use crate::tools::tool_json;
 
@@ -162,7 +162,7 @@ pub async fn ah_premium(
         _ => "1000", // day
     };
     let count_str = p.count.unwrap_or(100).to_string();
-    http_get_tool_unix(
+    http_get_tool_unix_dropping(
         &client,
         "/v1/quote/ahpremium/klines",
         &[
@@ -171,6 +171,7 @@ pub async fn ah_premium(
             ("line_num", count_str.as_str()),
         ],
         &["klines.*.timestamp"],
+        &["price_spread"],
     )
     .await
 }

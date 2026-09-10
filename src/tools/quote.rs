@@ -9,7 +9,9 @@ use rmcp::serde::Deserialize;
 use crate::counter::symbol_to_counter_id;
 use crate::error::Error;
 use crate::tools::output;
-use crate::tools::support::http_client::{http_get_tool, http_get_tool_unix};
+use crate::tools::support::http_client::{
+    http_get_tool, http_get_tool_unix, http_get_tool_unix_dropping,
+};
 use crate::tools::support::parse;
 use crate::tools::support::tolerant::{
     tolerant_bool, tolerant_i64, tolerant_option_usize, tolerant_option_vec_i32,
@@ -1069,11 +1071,13 @@ pub async fn option_volume_daily(
         ("line_num", line_num.as_str()),
         ("direction", "1"),
     ];
-    http_get_tool_unix(
+    // `underlying_symbol` on every row == the queried `symbol`.
+    http_get_tool_unix_dropping(
         &client,
         "/v1/quote/option-volume-stats/daily",
         &params,
         &["stats.*.timestamp"],
+        &["underlying_symbol"],
     )
     .await
 }

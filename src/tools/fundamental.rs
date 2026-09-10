@@ -6,7 +6,7 @@ use rmcp::serde::Deserialize;
 use crate::counter::{counter_id_to_symbol, symbol_to_counter_id};
 use crate::serialize::convert_unix_paths;
 use crate::tools::support::http_client::{
-    http_get_tool, http_get_tool_dropping, http_get_tool_unix,
+    http_get_tool, http_get_tool_dropping, http_get_tool_unix, http_get_tool_unix_dropping,
 };
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -592,7 +592,8 @@ pub async fn valuation_rank(
     if let Some(ref e) = p.end {
         params.push(("end_date", e.as_str()));
     }
-    http_get_tool_unix(
+    // Every pe/pb/ps/dvd row carries `total` == the top-level `max_num`.
+    http_get_tool_unix_dropping(
         &client,
         "/v1/quote/valuation/rank",
         &params,
@@ -602,6 +603,7 @@ pub async fn valuation_rank(
             "ps.*.timestamp",
             "dvd.*.timestamp",
         ],
+        &["total"],
     )
     .await
 }

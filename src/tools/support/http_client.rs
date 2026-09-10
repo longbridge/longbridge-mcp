@@ -83,6 +83,32 @@ pub async fn http_get_tool_dropping(
     Ok(success_with_structured(json))
 }
 
+/// Combines `http_get_tool_unix` (unix-seconds → RFC3339 at `unix_paths`) with
+/// `drop` key removal, for passthrough tools that need both.
+pub async fn http_get_tool_unix_dropping(
+    client: &HttpClient,
+    path: &str,
+    params: &[(&str, &str)],
+    unix_paths: &[&str],
+    drop: &[&str],
+) -> Result<CallToolResult, McpError> {
+    let params: Vec<(&str, &str)> = params.to_vec();
+    let resp: String = client
+        .request(Method::GET, path)
+        .query_params(params)
+        .response::<String>()
+        .send()
+        .await
+        .map_err(|e| Error::longbridge(e.into()))?;
+    let transformed = transform_json(resp.as_bytes()).map_err(Error::Serialize)?;
+    let mut value: serde_json::Value =
+        serde_json::from_str(&transformed).map_err(Error::Serialize)?;
+    convert_unix_paths(&mut value, unix_paths);
+    crate::serialize::drop_keys(&mut value, drop);
+    let json = serde_json::to_string(&value).map_err(Error::Serialize)?;
+    Ok(success_with_structured(json))
+}
+
 /// Same as `http_get_tool`, but after the standard transform runs, the
 /// specified `unix_paths` are walked and any unix-seconds strings found are
 /// converted to RFC3339 in place. Use this for tools whose upstream returns
