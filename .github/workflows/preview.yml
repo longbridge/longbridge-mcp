@@ -1,11 +1,17 @@
-name: Canary Docker Build
+# Unreleased preview image, built on demand from the current branch.
+#
+# This is a release channel, not an environment: the image is byte-identical to
+# a release build and talks to production unless it is started with `--canary`.
+# Do not confuse it with that flag, which selects the Longbridge canary
+# upstream at runtime.
+name: Preview Docker Build
 
 on:
   workflow_dispatch:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}-canary
+  IMAGE_NAME: ${{ github.repository }}-preview
 
 jobs:
   docker:
