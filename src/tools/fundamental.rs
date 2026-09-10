@@ -59,7 +59,15 @@ pub async fn financial_report(
     if !report_type.is_empty() {
         params.push(("report", report_type.as_str()));
     }
-    http_get_tool(&client, "/v1/quote/financial-reports", &params).await
+    // Per-indicator app scaffolding: `entry` (tips/entries with light_icon/
+    // dark_icon/router nav URLs) and the constant `periods` nav array.
+    http_get_tool_dropping(
+        &client,
+        "/v1/quote/financial-reports",
+        &params,
+        &["entry", "periods"],
+    )
+    .await
 }
 
 /// Pull one half of `institution_rating`'s response out of a sub-request,
@@ -418,10 +426,13 @@ pub async fn operating(
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
     let cid = symbol_to_counter_id(&p.symbol);
-    http_get_tool(
+    // `keywords` is always empty and `web_url` is a derivable community link;
+    // the nested `financial.*` label fields are empty on every row.
+    http_get_tool_dropping(
         &client,
         "/v1/quote/operatings",
         &[("counter_id", cid.as_str())],
+        &["keywords", "web_url"],
     )
     .await
 }
