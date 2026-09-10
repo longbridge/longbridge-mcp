@@ -162,6 +162,31 @@ pub async fn http_post_tool_unix(
     result_from_raw_json_with_unix_paths(&resp, unix_paths)
 }
 
+/// `http_post_tool_unix` plus `drop` key removal, for POST passthrough tools
+/// that need both unix conversion and field trimming.
+pub async fn http_post_tool_unix_dropping(
+    client: &HttpClient,
+    path: &str,
+    body: serde_json::Value,
+    unix_paths: &[&str],
+    drop: &[&str],
+) -> Result<CallToolResult, McpError> {
+    let resp: String = client
+        .request(Method::POST, path)
+        .body(Json(body))
+        .response::<String>()
+        .send()
+        .await
+        .map_err(|e| Error::longbridge(e.into()))?;
+    let transformed = transform_json(resp.as_bytes()).map_err(Error::Serialize)?;
+    let mut value: serde_json::Value =
+        serde_json::from_str(&transformed).map_err(Error::Serialize)?;
+    convert_unix_paths(&mut value, unix_paths);
+    crate::serialize::drop_keys(&mut value, drop);
+    let json = serde_json::to_string(&value).map_err(Error::Serialize)?;
+    Ok(success_with_structured(json))
+}
+
 pub async fn http_delete_tool(
     client: &HttpClient,
     path: &str,

@@ -500,11 +500,14 @@ pub async fn top_movers(
     if let Some(ref d) = p.date {
         body["date"] = serde_json::Value::String(d.clone());
     }
-    crate::tools::support::http_client::http_post_tool_unix(
+    // Per-event stock display noise: `profile` (~150-word paragraph), `logo`
+    // (URL), `full_name` (== name), and constant `latency`/`duplicate` flags.
+    crate::tools::support::http_client::http_post_tool_unix_dropping(
         &client,
         "/v1/quote/market/stock-events",
         body,
         &["events.*.timestamp"],
+        &["profile", "logo", "full_name", "latency", "duplicate"],
     )
     .await
 }

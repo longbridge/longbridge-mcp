@@ -378,10 +378,13 @@ pub async fn shareholder(
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
     let cid = symbol_to_counter_id(&p.symbol);
-    http_get_tool(
+    // `shareholder_id` is a constant "0" (no drill-down; use shareholder_top),
+    // and `institution_type` is empty on every row.
+    http_get_tool_dropping(
         &client,
         "/v1/quote/shareholders",
         &[("counter_id", cid.as_str()), ("position", "detail")],
+        &["shareholder_id", "institution_type"],
     )
     .await
 }
