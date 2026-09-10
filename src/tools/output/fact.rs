@@ -111,43 +111,42 @@ impl NlField {
 
 /// Slim the `citations` payload on a natural-language field.
 ///
-/// The value is a JSON-encoded array of the raw source documents behind the
-/// narrative — full article bodies, descriptions, favicons, source logos,
-/// member ids and display-ordering indices that together dominate a
-/// `security_facts` response (~75% of its bytes) while adding nothing beyond
-/// attribution. Reduce each citation to the provenance an AI consumer can act
-/// on: the source kind and drill-down `id` (fetch the article with
-/// `news_detail`), plus the human-facing `title`, `source`, `url` and
-/// `published_at`. A value that is not the expected JSON array is returned
-/// unchanged so an unexpected shape survives rather than being dropped.
+/// The value is a JSON-encoded array of the source documents behind the
+/// narrative. Each carries a readable summary an AI consumer may need even when
+/// the source URL is unreachable — a news/topic `description` or a web-search
+/// `content` snippet — which is kept. What is dropped is only the pure
+/// display/plumbing chrome (favicons, source logos, the derivable `domain`,
+/// internal `member_id`s, display-ordering indices) and the full-article `body`
+/// (redundant with the `description` summary and reachable via the retained
+/// `id`/`url`). Chrome plus the raw bodies dominate the payload, so this cuts
+/// roughly 60% of a `security_facts` response while losing no source's readable
+/// summary. A value that is not a JSON array is returned unchanged so an
+/// unexpected shape survives rather than being dropped.
 fn slim_citations(raw: &str) -> String {
-    let Ok(items) = serde_json::from_str::<Vec<serde_json::Value>>(raw) else {
+    /// Pure display / plumbing fields, plus the full-article `body`, dropped
+    /// from each citation and its nested source document.
+    const DROP: &[&str] = &[
+        "favicon",
+        "source_logo",
+        "source_url",
+        "domain",
+        "kind",
+        "content_via",
+        "member_id",
+        "logo",
+        "icon",
+        "index",
+        "original_index",
+        "body",
+    ];
+    let Ok(mut items) = serde_json::from_str::<serde_json::Value>(raw) else {
         return raw.to_owned();
     };
-    let is_empty = |v: &serde_json::Value| {
-        v.is_null() || matches!(v, serde_json::Value::String(s) if s.is_empty())
-    };
-    let slimmed: Vec<serde_json::Value> = items
-        .iter()
-        .map(|item| {
-            let content = item.get("content");
-            let mut out = serde_json::Map::new();
-            // Source kind and drill-down id come from the citation entry itself.
-            for key in ["type", "id"] {
-                if let Some(v) = item.get(key).filter(|v| !is_empty(v)) {
-                    out.insert(key.to_owned(), v.clone());
-                }
-            }
-            // Human-facing provenance comes from the nested source document.
-            for key in ["title", "source", "url", "published_at"] {
-                if let Some(v) = content.and_then(|c| c.get(key)).filter(|v| !is_empty(v)) {
-                    out.insert(key.to_owned(), v.clone());
-                }
-            }
-            serde_json::Value::Object(out)
-        })
-        .collect();
-    serde_json::to_string(&slimmed).unwrap_or_else(|_| raw.to_owned())
+    if !items.is_array() {
+        return raw.to_owned();
+    }
+    crate::serialize::drop_keys(&mut items, DROP);
+    serde_json::to_string(&items).unwrap_or_else(|_| raw.to_owned())
 }
 
 /// Natural-language rendering of a fact, in the caller's language.
@@ -368,47 +367,56 @@ mod tests {
     }
 
     #[test]
-    fn slim_citations_keeps_only_provenance() {
+    fn slim_citations_keeps_summaries_and_drops_chrome_and_body() {
         let raw = r#"[
             {"type":"NewsArticle","id":"9","index":3,"original_index":7,
-             "content":{"title":"T","source":"Nasdaq","url":"http://x",
-                        "favicon":"http://f","source_logo":"http://l",
-                        "body":"a very long article body","member_id":"42",
-                        "published_at":"2026-09-10T00:00:00Z"}},
+             "content":{"title":"NewsTitle","source":"Nasdaq","url":"http://x",
+                        "favicon":"http://f","source_logo":"http://l","domain":"nasdaq.com",
+                        "description":"a concise news summary","body":"the very long article body",
+                        "member_id":"42","published_at":"2026-09-10T00:00:00Z"}},
             {"type":"WebSearch",
-             "content":{"title":"W","source":"Bing","url":"http://y",
-                        "domain":"y.com","favicon":"http://g","content":"raw"}}
+             "content":{"title":"WebTitle","source":"Bing","url":"http://y",
+                        "domain":"y.com","favicon":"http://g","content":"a readable page snippet"}}
         ]"#;
         let out = slim_citations(raw);
         let v: Vec<serde_json::Value> = serde_json::from_str(&out).expect("slimmed must be JSON");
         assert_eq!(v.len(), 2, "every citation is kept");
-        assert_eq!(
-            v[0],
-            serde_json::json!({
-                "type": "NewsArticle", "id": "9", "title": "T",
-                "source": "Nasdaq", "url": "http://x",
-                "published_at": "2026-09-10T00:00:00Z"
-            }),
-            "a news citation keeps drill-down id + provenance, drops the raw body"
+        // Readable per-source summaries survive — the caller can read them even
+        // when the source URL is unreachable.
+        assert!(
+            out.contains("a concise news summary"),
+            "the news description summary must be kept"
         );
-        assert_eq!(
-            v[1],
-            serde_json::json!({
-                "type": "WebSearch", "title": "W", "source": "Bing", "url": "http://y"
-            }),
-            "a web citation keeps provenance; absent fields are omitted"
+        assert!(
+            out.contains("a readable page snippet"),
+            "the web-search content snippet must be kept"
         );
-        for heavy in [
-            "favicon",
-            "source_logo",
-            "body",
-            "member_id",
-            "original_index",
-            "domain",
+        // Drill-down and provenance survive.
+        for keep in [
+            "\"id\":\"9\"",
+            "http://x",
+            "Nasdaq",
+            "NewsTitle",
+            "WebTitle",
+            "2026-09-10",
         ] {
             assert!(
-                !out.contains(heavy),
-                "the heavy display/plumbing field {heavy} must be dropped"
+                out.contains(keep),
+                "the provenance field {keep} must be kept"
+            );
+        }
+        // Chrome and the full raw body are dropped.
+        for drop in [
+            "favicon",
+            "source_logo",
+            "\"domain\"",
+            "member_id",
+            "original_index",
+            "the very long article body",
+        ] {
+            assert!(
+                !out.contains(drop),
+                "the chrome/body field {drop} must be dropped"
             );
         }
     }
@@ -418,7 +426,12 @@ mod tests {
         assert_eq!(
             slim_citations("not json"),
             "not json",
-            "an unexpected citations shape must survive unchanged"
+            "an unparsable citations payload must survive unchanged"
+        );
+        assert_eq!(
+            slim_citations(r#"{"a":1}"#),
+            r#"{"a":1}"#,
+            "a non-array JSON citations payload must survive unchanged"
         );
     }
 
@@ -428,19 +441,20 @@ mod tests {
             "tag": "citations",
             "value": serde_json::to_string(&serde_json::json!([{
                 "type": "NewsArticle", "id": "1",
-                "content": {"title": "T", "url": "http://x", "body": "huge body"}
+                "content": {"title": "T", "url": "http://x",
+                            "description": "kept summary", "body": "huge body", "favicon": "f"}
             }])).unwrap()
         }])
         .to_string();
         let field = NlField::parse(&embedded);
         let json = serde_json::to_value(&field).expect("field must serialize");
         assert_eq!(json[0]["tag"], "citations", "the tag is preserved");
-        let inner: Vec<serde_json::Value> =
-            serde_json::from_str(json[0]["value"].as_str().expect("value is a string"))
-                .expect("slimmed citations must be JSON");
+        let value = json[0]["value"].as_str().expect("value is a string");
         assert!(
-            inner[0].get("body").is_none() && inner[0]["title"] == "T",
-            "the citations tag value is slimmed in place"
+            value.contains("kept summary")
+                && !value.contains("huge body")
+                && !value.contains("favicon"),
+            "the citations tag value is slimmed in place, keeping the summary"
         );
     }
 
