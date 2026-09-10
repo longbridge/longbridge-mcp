@@ -429,10 +429,14 @@ pub async fn executive(
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
     let cid = symbol_to_counter_id(&p.symbol);
-    http_get_tool(
+    // `name_zhcn` and `name_en` are unpopulated duplicates of the localized
+    // `name` (upstream echoes the same value into all three — the `_zhcn` field
+    // carries the romanized name, not 中文), and `photo` is a display image URL.
+    http_get_tool_dropping(
         &client,
         "/v1/quote/company-professionals",
         &[("counter_ids", cid.as_str())],
+        &["name_zhcn", "name_en", "photo"],
     )
     .await
 }
@@ -460,10 +464,13 @@ pub async fn fund_holder(
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
     let cid = symbol_to_counter_id(&p.symbol);
-    http_get_tool(
+    // `code` is just `symbol` without its market suffix (e.g. "159983.SZ" →
+    // "159983"), derivable and redundant.
+    http_get_tool_dropping(
         &client,
         "/v1/quote/fund-holders",
         &[("counter_id", cid.as_str())],
+        &["code"],
     )
     .await
 }
@@ -1095,11 +1102,15 @@ pub async fn valuation_comparison(
         comp_json = serde_json::to_string(&cids).unwrap_or_default();
         params.push(("comparison_counter_ids", comp_json.as_str()));
     }
-    http_get_tool_unix(
+    // Valuation ratios arrive with ~16-19 fractional digits of bogus precision
+    // (e.g. pe "41.0867665494152307"), both on the top-level metrics and across
+    // every `history` row; cap at 6 dp.
+    http_get_tool_unix_rounding(
         &client,
         "/v1/quote/compare/valuation",
         &params,
         &["list.*.history.*.date"],
+        6,
     )
     .await
 }
