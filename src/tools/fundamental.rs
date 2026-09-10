@@ -286,11 +286,23 @@ pub async fn valuation_history(
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
     let cid = symbol_to_counter_id(&p.symbol);
-    http_get_tool_unix(
+    // ~90% of this response is chart scaffolding: `symbols` (a re-keyed dup of
+    // `stocks`), `layouts` (distribution-histogram buckets), `aichat_data`
+    // (chatbot routing), per-metric `circle`/`part` (plot coords), and
+    // `ai_summary` (a dup of `overview.metrics.*.desc`).
+    http_get_tool_unix_dropping(
         &client,
         "/v1/quote/valuation/detail",
         &[("counter_id", cid.as_str())],
         &["history.metrics.pe.list.*.timestamp"],
+        &[
+            "symbols",
+            "layouts",
+            "aichat_data",
+            "circle",
+            "part",
+            "ai_summary",
+        ],
     )
     .await
 }
