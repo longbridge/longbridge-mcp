@@ -106,7 +106,9 @@ pub async fn broker_holding(
     let client = mctx.create_http_client();
     let cid = symbol_to_counter_id(&p.symbol);
     let period = p.period.as_deref().unwrap_or("rct_1");
-    http_get_tool(
+    // Each entry's `chg` is an integer share delta padded with a fake ".0000"
+    // fractional part; strip the trailing zeros (lossless).
+    http_get_tool_trimming_zeros(
         &client,
         "/v1/quote/broker-holding",
         &[("counter_id", cid.as_str()), ("type", period)],

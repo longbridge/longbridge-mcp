@@ -486,7 +486,10 @@ pub async fn corp_action(
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
     let cid = symbol_to_counter_id(&p.symbol);
-    http_get_tool(
+    // `date_str` is `date` reformatted ("20260812" → "08.12"), `date_zone` is a
+    // constant display label ("北京时间"), `security` is null on every row, and
+    // `icon` (inside `live`) is a constant replay-badge image URL.
+    http_get_tool_dropping(
         &client,
         "/v1/quote/company-act",
         &[
@@ -494,6 +497,7 @@ pub async fn corp_action(
             ("req_type", "1"),
             ("version", "3"),
         ],
+        &["date_str", "date_zone", "security", "icon"],
     )
     .await
 }
