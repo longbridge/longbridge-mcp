@@ -689,18 +689,80 @@ pub async fn valuation_rank(
 }
 
 /// Get institution rating history (target price + evaluate history) for a security.
+/// The rating-distribution signature of one `evaluate_history` row (everything
+/// except the date range), used to collapse consecutive unchanged rows.
+fn eval_signature(o: &serde_json::Map<String, serde_json::Value>) -> Vec<serde_json::Value> {
+    ["buy", "over", "hold", "under", "sell", "no_opinion"]
+        .iter()
+        .map(|k| o.get(*k).cloned().unwrap_or(serde_json::Value::Null))
+        .collect()
+}
+
+/// Collapse runs of consecutive `evaluate_history` rows with an identical rating
+/// distribution into one row spanning `start_date`..`end_date`, drop the
+/// derivable `total`, and round `target_history` prices to 6 dp. The raw history
+/// carries one row per change *event date* even when the distribution is
+/// unchanged (hundreds of near-duplicate daily rows).
+fn dedup_rating_history(value: &mut serde_json::Value) {
+    let Some(obj) = value.as_object_mut() else {
+        return;
+    };
+    if let Some(hist) = obj
+        .get_mut("evaluate_history")
+        .and_then(|v| v.as_array_mut())
+    {
+        let mut merged: Vec<serde_json::Value> = Vec::with_capacity(hist.len());
+        for row in hist.drain(..) {
+            let same_as_prev = merged
+                .last()
+                .and_then(|l| l.as_object())
+                .zip(row.as_object())
+                .is_some_and(|(l, r)| eval_signature(l) == eval_signature(r));
+            if same_as_prev {
+                if let (Some(end), Some(last)) = (
+                    row.get("end_date").cloned(),
+                    merged.last_mut().and_then(|l| l.as_object_mut()),
+                ) {
+                    last.insert("end_date".to_string(), end);
+                }
+            } else {
+                merged.push(row);
+            }
+        }
+        for row in merged.iter_mut() {
+            if let Some(o) = row.as_object_mut() {
+                o.remove("total");
+            }
+        }
+        *hist = merged;
+    }
+    if let Some(tgt) = obj.get_mut("target_history") {
+        crate::serialize::round_decimals(tgt, 6);
+    }
+}
+
 pub async fn institution_rating_history(
     mctx: &crate::tools::McpContext,
     p: SymbolParam,
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
     let cid = symbol_to_counter_id(&p.symbol);
-    http_get_tool(
+    let raw = http_get_tool(
         &client,
         "/v1/quote/ratings/history",
         &[("counter_id", cid.as_str())],
     )
-    .await
+    .await?;
+    let json = raw
+        .content
+        .first()
+        .and_then(|c| c.as_text())
+        .map(|t| t.text.clone())
+        .unwrap_or_default();
+    let mut value: serde_json::Value =
+        serde_json::from_str(&json).map_err(crate::error::Error::Serialize)?;
+    dedup_rating_history(&mut value);
+    crate::tools::tool_json(&value)
 }
 
 /// Get institution rating industry rank for a security (peers ranked by analyst ratings).
@@ -993,6 +1055,34 @@ mod tests {
     use super::rating_part;
     use rmcp::ErrorData as McpError;
     use rmcp::model::Content;
+
+    #[test]
+    fn dedup_rating_history_collapses_unchanged_runs() {
+        let mut v = serde_json::json!({
+            "evaluate_history": [
+                {"buy":"17","over":"6","hold":"0","under":"1","sell":"0","no_opinion":"0","total":"24","start_date":"100","end_date":"200"},
+                {"buy":"17","over":"6","hold":"0","under":"1","sell":"0","no_opinion":"0","total":"24","start_date":"200","end_date":"300"},
+                {"buy":"18","over":"5","hold":"0","under":"1","sell":"0","no_opinion":"0","total":"24","start_date":"300","end_date":"400"}
+            ],
+            "target_history": [
+                {"timestamp":"1","close":"136.1","high_target_price":"217.2819933602771364252","low_target_price":"118.96"}
+            ]
+        });
+        super::dedup_rating_history(&mut v);
+        let hist = v["evaluate_history"].as_array().unwrap();
+        assert_eq!(hist.len(), 2, "two identical rows collapse to one");
+        assert_eq!(hist[0]["start_date"], "100");
+        assert_eq!(
+            hist[0]["end_date"], "300",
+            "end_date extended to the run's last"
+        );
+        assert!(hist[0].get("total").is_none(), "derivable total dropped");
+        assert_eq!(hist[1]["start_date"], "300");
+        assert_eq!(
+            v["target_history"][0]["high_target_price"], "217.281993",
+            "price rounded to 6 dp"
+        );
+    }
 
     #[test]
     fn hoist_consensus_legend_dedups_name_desc_and_drops_empties() {
