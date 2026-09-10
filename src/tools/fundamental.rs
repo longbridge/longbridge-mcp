@@ -7,6 +7,7 @@ use crate::counter::{counter_id_to_symbol, symbol_to_counter_id};
 use crate::serialize::convert_unix_paths;
 use crate::tools::support::http_client::{
     http_get_tool, http_get_tool_dropping, http_get_tool_unix, http_get_tool_unix_dropping,
+    http_get_tool_unix_rounding,
 };
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -491,10 +492,15 @@ pub async fn invest_relation(
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
     let cid = symbol_to_counter_id(&p.symbol);
-    http_get_tool(
+    // `company_name_zhcn` and `company_name_en` are unpopulated duplicates of
+    // the localized `company_name` (upstream echoes the same display name into
+    // all three — the `_en` field carries Chinese too), and `company_id` is a
+    // constant "0" placeholder.
+    http_get_tool_dropping(
         &client,
         "/v1/quote/invest-relations",
         &[("counter_id", cid.as_str()), ("count", "0")],
+        &["company_id", "company_name_zhcn", "company_name_en"],
     )
     .await
 }
@@ -886,11 +892,14 @@ pub async fn institutional_views(
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
     let cid = symbol_to_counter_id(&p.symbol);
-    http_get_tool_unix(
+    // The `tlist` price series arrives with ~19 fractional digits of bogus
+    // precision (e.g. "803.3032108278430037073"); cap it at 6 dp.
+    http_get_tool_unix_rounding(
         &client,
         "/v1/quote/ratings/institutional",
         &[("counter_id", cid.as_str())],
         &["elist.*.date"],
+        6,
     )
     .await
 }
