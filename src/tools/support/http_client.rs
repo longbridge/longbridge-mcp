@@ -146,24 +146,8 @@ pub async fn http_post_tool(
     result_from_raw_json(&resp)
 }
 
-pub async fn http_post_tool_unix(
-    client: &HttpClient,
-    path: &str,
-    body: serde_json::Value,
-    unix_paths: &[&str],
-) -> Result<CallToolResult, McpError> {
-    let resp: String = client
-        .request(Method::POST, path)
-        .body(Json(body))
-        .response::<String>()
-        .send()
-        .await
-        .map_err(|e| Error::longbridge(e.into()))?;
-    result_from_raw_json_with_unix_paths(&resp, unix_paths)
-}
-
-/// `http_post_tool_unix` plus `drop` key removal, for POST passthrough tools
-/// that need both unix conversion and field trimming.
+/// POST passthrough with unix conversion at `unix_paths` and `drop` key
+/// removal.
 pub async fn http_post_tool_unix_dropping(
     client: &HttpClient,
     path: &str,
