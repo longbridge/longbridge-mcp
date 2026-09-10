@@ -693,7 +693,11 @@ pub async fn watchlist(mctx: &crate::tools::McpContext) -> Result<CallToolResult
         mctx.evict_quote_context();
         Error::longbridge(e)
     })?;
-    tool_json(&result)
+    // `market` on every security is derivable from the symbol suffix (and is
+    // "Unknown" for crypto).
+    let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;
+    crate::serialize::drop_keys(&mut value, &["market"]);
+    tool_json(&value)
 }
 
 pub async fn filings(

@@ -77,6 +77,10 @@ pub async fn macrodata_indicators(
         for item in list {
             if let Some(obj) = item.as_object_mut() {
                 strip_indicator(obj);
+                // `describe` is a ~200-word essay per indicator; a directory
+                // listing of hundreds of indicators does not need it (the
+                // single-indicator `macrodata` tool keeps its explanation).
+                obj.remove("describe");
             }
         }
     }
