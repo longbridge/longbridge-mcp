@@ -400,7 +400,10 @@ pub async fn participants(mctx: &crate::tools::McpContext) -> Result<CallToolRes
         mctx.evict_quote_context();
         Error::longbridge(e)
     })?;
-    tool_json(&result)
+    // `name_hk` is the Traditional-script twin of `name_cn` on every broker row.
+    let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;
+    crate::serialize::drop_keys(&mut value, &["name_hk"]);
+    tool_json(&value)
 }
 
 pub async fn trades(
@@ -711,7 +714,10 @@ pub async fn warrant_issuers(mctx: &crate::tools::McpContext) -> Result<CallTool
         mctx.evict_quote_context();
         Error::longbridge(e)
     })?;
-    tool_json(&result)
+    // `name_hk` is the Traditional-script twin of `name_cn` on every issuer row.
+    let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;
+    crate::serialize::drop_keys(&mut value, &["name_hk"]);
+    tool_json(&value)
 }
 
 pub async fn warrant_list(
