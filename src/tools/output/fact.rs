@@ -91,15 +91,63 @@ impl NlField {
         match serde_json::from_str::<Vec<longbridge::signal::NlTag>>(raw) {
             Ok(tags) => Self::Tags(
                 tags.into_iter()
-                    .map(|t| NlTag {
-                        tag: t.tag,
-                        value: t.value,
+                    .map(|t| {
+                        // The `citations` entry embeds a JSON array of the raw
+                        // source documents behind the narrative; slim it to the
+                        // usable provenance (see `slim_citations`).
+                        let value = if t.tag == "citations" {
+                            slim_citations(&t.value)
+                        } else {
+                            t.value
+                        };
+                        NlTag { tag: t.tag, value }
                     })
                     .collect(),
             ),
             Err(_) => Self::Raw(raw.to_owned()),
         }
     }
+}
+
+/// Slim the `citations` payload on a natural-language field.
+///
+/// The value is a JSON-encoded array of the raw source documents behind the
+/// narrative — full article bodies, descriptions, favicons, source logos,
+/// member ids and display-ordering indices that together dominate a
+/// `security_facts` response (~75% of its bytes) while adding nothing beyond
+/// attribution. Reduce each citation to the provenance an AI consumer can act
+/// on: the source kind and drill-down `id` (fetch the article with
+/// `news_detail`), plus the human-facing `title`, `source`, `url` and
+/// `published_at`. A value that is not the expected JSON array is returned
+/// unchanged so an unexpected shape survives rather than being dropped.
+fn slim_citations(raw: &str) -> String {
+    let Ok(items) = serde_json::from_str::<Vec<serde_json::Value>>(raw) else {
+        return raw.to_owned();
+    };
+    let is_empty = |v: &serde_json::Value| {
+        v.is_null() || matches!(v, serde_json::Value::String(s) if s.is_empty())
+    };
+    let slimmed: Vec<serde_json::Value> = items
+        .iter()
+        .map(|item| {
+            let content = item.get("content");
+            let mut out = serde_json::Map::new();
+            // Source kind and drill-down id come from the citation entry itself.
+            for key in ["type", "id"] {
+                if let Some(v) = item.get(key).filter(|v| !is_empty(v)) {
+                    out.insert(key.to_owned(), v.clone());
+                }
+            }
+            // Human-facing provenance comes from the nested source document.
+            for key in ["title", "source", "url", "published_at"] {
+                if let Some(v) = content.and_then(|c| c.get(key)).filter(|v| !is_empty(v)) {
+                    out.insert(key.to_owned(), v.clone());
+                }
+            }
+            serde_json::Value::Object(out)
+        })
+        .collect();
+    serde_json::to_string(&slimmed).unwrap_or_else(|_| raw.to_owned())
 }
 
 /// Natural-language rendering of a fact, in the caller's language.
@@ -316,6 +364,83 @@ mod tests {
             serde_json::to_value(&field).expect("field must serialize"),
             serde_json::Value::String("not json".into()),
             "an unparsable payload must survive rather than be dropped"
+        );
+    }
+
+    #[test]
+    fn slim_citations_keeps_only_provenance() {
+        let raw = r#"[
+            {"type":"NewsArticle","id":"9","index":3,"original_index":7,
+             "content":{"title":"T","source":"Nasdaq","url":"http://x",
+                        "favicon":"http://f","source_logo":"http://l",
+                        "body":"a very long article body","member_id":"42",
+                        "published_at":"2026-09-10T00:00:00Z"}},
+            {"type":"WebSearch",
+             "content":{"title":"W","source":"Bing","url":"http://y",
+                        "domain":"y.com","favicon":"http://g","content":"raw"}}
+        ]"#;
+        let out = slim_citations(raw);
+        let v: Vec<serde_json::Value> = serde_json::from_str(&out).expect("slimmed must be JSON");
+        assert_eq!(v.len(), 2, "every citation is kept");
+        assert_eq!(
+            v[0],
+            serde_json::json!({
+                "type": "NewsArticle", "id": "9", "title": "T",
+                "source": "Nasdaq", "url": "http://x",
+                "published_at": "2026-09-10T00:00:00Z"
+            }),
+            "a news citation keeps drill-down id + provenance, drops the raw body"
+        );
+        assert_eq!(
+            v[1],
+            serde_json::json!({
+                "type": "WebSearch", "title": "W", "source": "Bing", "url": "http://y"
+            }),
+            "a web citation keeps provenance; absent fields are omitted"
+        );
+        for heavy in [
+            "favicon",
+            "source_logo",
+            "body",
+            "member_id",
+            "original_index",
+            "domain",
+        ] {
+            assert!(
+                !out.contains(heavy),
+                "the heavy display/plumbing field {heavy} must be dropped"
+            );
+        }
+    }
+
+    #[test]
+    fn slim_citations_passes_through_non_array_payloads() {
+        assert_eq!(
+            slim_citations("not json"),
+            "not json",
+            "an unexpected citations shape must survive unchanged"
+        );
+    }
+
+    #[test]
+    fn nl_field_slims_a_citations_tag() {
+        let embedded = serde_json::json!([{
+            "tag": "citations",
+            "value": serde_json::to_string(&serde_json::json!([{
+                "type": "NewsArticle", "id": "1",
+                "content": {"title": "T", "url": "http://x", "body": "huge body"}
+            }])).unwrap()
+        }])
+        .to_string();
+        let field = NlField::parse(&embedded);
+        let json = serde_json::to_value(&field).expect("field must serialize");
+        assert_eq!(json[0]["tag"], "citations", "the tag is preserved");
+        let inner: Vec<serde_json::Value> =
+            serde_json::from_str(json[0]["value"].as_str().expect("value is a string"))
+                .expect("slimmed citations must be JSON");
+        assert!(
+            inner[0].get("body").is_none() && inner[0]["title"] == "T",
+            "the citations tag value is slimmed in place"
         );
     }
 
