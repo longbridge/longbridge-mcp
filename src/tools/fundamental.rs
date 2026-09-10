@@ -972,18 +972,50 @@ pub struct ShareholderTopParam {
     pub symbol: String,
 }
 
+/// Drop the per-holder `period` (== the enclosing `info[].period` on every row)
+/// and the always-empty `title`, without touching the segment-level `period`
+/// label. NB: the leading "最新" segment is kept — it shares the newest quarter's
+/// share counts but recomputes `percent_shares_*` against current shares
+/// outstanding, so it is not a duplicate.
+fn trim_shareholder_top(value: &mut serde_json::Value) {
+    let Some(info) = value.get_mut("info").and_then(|v| v.as_array_mut()) else {
+        return;
+    };
+    for seg in info.iter_mut() {
+        let Some(holders) = seg.get_mut("share_holders").and_then(|v| v.as_array_mut()) else {
+            continue;
+        };
+        for holder in holders.iter_mut() {
+            if let Some(o) = holder.as_object_mut() {
+                o.remove("period");
+                o.remove("title");
+            }
+        }
+    }
+}
+
 pub async fn shareholder_top(
     mctx: &crate::tools::McpContext,
     p: ShareholderTopParam,
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
     let cid = symbol_to_counter_id(&p.symbol);
-    http_get_tool(
+    let raw = http_get_tool(
         &client,
         "/v1/quote/shareholders/top",
         &[("counter_id", cid.as_str())],
     )
-    .await
+    .await?;
+    let json = raw
+        .content
+        .first()
+        .and_then(|c| c.as_text())
+        .map(|t| t.text.clone())
+        .unwrap_or_default();
+    let mut value: serde_json::Value =
+        serde_json::from_str(&json).map_err(crate::error::Error::Serialize)?;
+    trim_shareholder_top(&mut value);
+    crate::tools::tool_json(&value)
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -1055,6 +1087,40 @@ mod tests {
     use super::rating_part;
     use rmcp::ErrorData as McpError;
     use rmcp::model::Content;
+
+    #[test]
+    fn trim_shareholder_top_drops_holder_period_and_title_keeps_segment() {
+        let mut v = serde_json::json!({
+            "periods": ["最新", "Q2 2026"],
+            "info": [
+                {"period": "最新", "share_holders": [
+                    {"object_id": "1", "name": "BlackRock", "title": "", "shares_held": "100",
+                     "percent_shares_held": "7.97%", "period": "最新"}
+                ]},
+                {"period": "Q2 2026", "share_holders": [
+                    {"object_id": "1", "name": "BlackRock", "title": "", "shares_held": "100",
+                     "percent_shares_held": "7.95%", "period": "Q2 2026"}
+                ]}
+            ]
+        });
+        super::trim_shareholder_top(&mut v);
+        // segment-level period label kept; both "最新" and "Q2 2026" segments kept
+        assert_eq!(v["info"][0]["period"], "最新");
+        assert_eq!(v["info"][1]["period"], "Q2 2026");
+        // per-holder redundant period + empty title dropped
+        let h = &v["info"][0]["share_holders"][0];
+        assert!(h.get("period").is_none() && h.get("title").is_none());
+        // the differing percent (the reason we keep 最新) is preserved
+        assert_eq!(
+            v["info"][0]["share_holders"][0]["percent_shares_held"],
+            "7.97%"
+        );
+        assert_eq!(
+            v["info"][1]["share_holders"][0]["percent_shares_held"],
+            "7.95%"
+        );
+        assert_eq!(h["object_id"], "1");
+    }
 
     #[test]
     fn dedup_rating_history_collapses_unchanged_runs() {
