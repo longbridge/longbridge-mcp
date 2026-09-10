@@ -137,7 +137,14 @@ pub async fn news_detail(
             None,
         ));
     }
-    tool_json(item)
+    let mut item = item.clone();
+    // Rewrite `[st]…#Name.HK[/st]` ticker markup to the readable ticker, and
+    // drop the display-only author avatar URL.
+    for field in ["description", "body"] {
+        crate::serialize::strip_cashtags_in_field(&mut item, field);
+    }
+    crate::serialize::drop_keys(&mut item, &["avatar"]);
+    tool_json(&item)
 }
 
 pub async fn topic(
