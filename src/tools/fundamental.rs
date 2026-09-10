@@ -5,7 +5,9 @@ use rmcp::serde::Deserialize;
 
 use crate::counter::{counter_id_to_symbol, symbol_to_counter_id};
 use crate::serialize::convert_unix_paths;
-use crate::tools::support::http_client::{http_get_tool, http_get_tool_unix};
+use crate::tools::support::http_client::{
+    http_get_tool, http_get_tool_dropping, http_get_tool_unix,
+};
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct SymbolParam {
@@ -677,10 +679,13 @@ pub async fn business_segments(
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
     let cid = symbol_to_counter_id(&p.symbol);
-    http_get_tool(
+    // `bus_ids`/`reg_ids` re-list the per-row segment ids; `report` (e.g. "qf")
+    // duplicates the human-readable `report_txt`.
+    http_get_tool_dropping(
         &client,
         "/v1/quote/fundamentals/business-segments",
         &[("counter_id", cid.as_str())],
+        &["bus_ids", "reg_ids", "report"],
     )
     .await
 }

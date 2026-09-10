@@ -242,10 +242,13 @@ pub async fn constituent(
 
     let client = mctx.create_http_client();
     let cid = index_symbol_to_counter_id(&p.symbol);
-    http_get_tool(
+    // Per-constituent noise: `intro` (long blurb), `market` (derivable from
+    // symbol), constant `delay`/`trade_status`.
+    http_get_tool_dropping(
         &client,
         "/v1/quote/index-constituents",
         &[("counter_id", cid.as_str())],
+        &["intro", "market", "delay", "trade_status"],
     )
     .await
 }
