@@ -90,6 +90,18 @@ fn rating_part(label: &str, result: Result<CallToolResult, McpError>) -> (String
     }
 }
 
+/// `instratings.evaluate` re-encodes `analyst.evaluate`'s rating counts with
+/// renamed keys (strong_buy=buy, buy=over) and strictly less detail (no
+/// `total`/`no_opinion`/dates), so it is a lossy duplicate — drop it. Keep the
+/// rest of `instratings` (recommend/target/change are unique). `ccy_symbol` is
+/// a display glyph.
+fn trim_institution_rating(value: &mut serde_json::Value) {
+    if let Some(inst) = value.get_mut("instratings").and_then(|v| v.as_object_mut()) {
+        inst.remove("evaluate");
+        inst.remove("ccy_symbol");
+    }
+}
+
 pub async fn institution_rating(
     mctx: &crate::tools::McpContext,
     p: SymbolParam,
@@ -138,6 +150,7 @@ pub async fn institution_rating(
             "analyst.target.end_date",
         ],
     );
+    trim_institution_rating(&mut value);
     let out = serde_json::to_string(&value).map_err(crate::error::Error::Serialize)?;
     Ok(crate::tools::tool_result(out))
 }
@@ -1087,6 +1100,25 @@ mod tests {
     use super::rating_part;
     use rmcp::ErrorData as McpError;
     use rmcp::model::Content;
+
+    #[test]
+    fn trim_institution_rating_drops_redundant_instratings_evaluate() {
+        let mut v = serde_json::json!({
+            "analyst": {"evaluate": {"buy": 19, "over": 6, "hold": 14, "under": 2, "sell": 3, "total": 45, "no_opinion": 1}},
+            "instratings": {"recommend": "buy", "target": "324.4", "change": "2.87", "ccy_symbol": "$",
+                            "evaluate": {"strong_buy": 19, "buy": 6, "hold": 14, "sell": 3, "under": 2, "date": ""}}
+        });
+        super::trim_institution_rating(&mut v);
+        // redundant dup block + display glyph gone
+        assert!(v["instratings"].get("evaluate").is_none());
+        assert!(v["instratings"].get("ccy_symbol").is_none());
+        // unique instratings fields kept
+        assert_eq!(v["instratings"]["recommend"], "buy");
+        assert_eq!(v["instratings"]["target"], "324.4");
+        // the authoritative analyst.evaluate untouched
+        assert_eq!(v["analyst"]["evaluate"]["buy"], 19);
+        assert_eq!(v["analyst"]["evaluate"]["no_opinion"], 1);
+    }
 
     #[test]
     fn trim_shareholder_top_drops_holder_period_and_title_keeps_segment() {
