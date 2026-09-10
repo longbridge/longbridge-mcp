@@ -45,6 +45,32 @@ pub fn transform_json(input: &[u8]) -> Result<String, serde_json::Error> {
     Ok(String::from_utf8(buf).expect("serde_json produces valid UTF-8"))
 }
 
+/// Recursively drop `null`-valued entries from every object in `value`,
+/// recursing through nested objects and arrays.
+///
+/// MCP consumers treat an absent key and an explicit `null` identically, so
+/// dropping nulls is lossless for them and cuts tokens. The motivating case is
+/// wide "all possible fields" SDK structs (e.g. `SecurityCalcIndex`, which
+/// serializes ~40 fields where every index the caller did not request comes
+/// back as `null`). Safe against `output_schema` validation because a field
+/// that can be `null` is `Option`-derived and therefore not `required`.
+pub(crate) fn strip_nulls(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(map) => {
+            map.retain(|_, v| !v.is_null());
+            for v in map.values_mut() {
+                strip_nulls(v);
+            }
+        }
+        serde_json::Value::Array(arr) => {
+            for v in arr.iter_mut() {
+                strip_nulls(v);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Return `true` iff `s` matches the `<PREFIX>/<MARKET>/<CODE>` counter_id
 /// pattern used internally by Longbridge (e.g. `ST/US/AAPL`, `ETF/HK/2800`,
 /// `IX/HK/HSI`, `OP/US/AAPL270115C300000`). Used to distinguish dynamic map
@@ -260,6 +286,33 @@ mod tests {
         assert_eq!(to_snake_case("createdAt"), "created_at");
         assert_eq!(to_snake_case("counterIds"), "counter_ids");
         assert_eq!(to_snake_case("already_snake"), "already_snake");
+    }
+
+    #[test]
+    fn strip_nulls_drops_null_keys_recursively() {
+        let mut v = serde_json::json!({
+            "pe": "22.5",
+            "pb": null,
+            "nested": {"a": 1, "b": null},
+            "rows": [{"x": 1, "y": null}, {"x": null}]
+        });
+        strip_nulls(&mut v);
+        assert_eq!(
+            v,
+            serde_json::json!({
+                "pe": "22.5",
+                "nested": {"a": 1},
+                "rows": [{"x": 1}, {}]
+            })
+        );
+    }
+
+    #[test]
+    fn strip_nulls_keeps_non_null_and_empty() {
+        // Empty string / empty array / zero are NOT null — they stay.
+        let mut v = serde_json::json!({"s": "", "arr": [], "n": 0, "gone": null});
+        strip_nulls(&mut v);
+        assert_eq!(v, serde_json::json!({"s": "", "arr": [], "n": 0}));
     }
 
     #[test]

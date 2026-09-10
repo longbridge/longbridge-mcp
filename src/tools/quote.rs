@@ -335,6 +335,9 @@ pub async fn quote(
     })?;
     let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;
     normalize_extended_sessions(&mut value);
+    // Non-US symbols carry `pre_market_quote`/`post_market_quote`/
+    // `overnight_quote` as `null`; drop those (and any other absent optional).
+    crate::serialize::strip_nulls(&mut value);
     tool_json(&value)
 }
 
@@ -820,7 +823,12 @@ pub async fn calc_indexes(
         }
     }
 
-    tool_json(&result)
+    // `SecurityCalcIndex` is a wide struct: every one of its ~40 index fields
+    // the caller did not request serializes as an explicit `null`. Drop those
+    // so a per-symbol array doesn't carry ~38 dead `"x": null` pairs per row.
+    let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;
+    crate::serialize::strip_nulls(&mut value);
+    tool_json(&value)
 }
 
 pub async fn create_watchlist_group(
