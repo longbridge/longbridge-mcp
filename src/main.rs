@@ -1,7 +1,12 @@
 #![recursion_limit = "256"]
+// Nothing in this crate needs `unsafe`. It is forbidden mainly to keep tests
+// from reaching for `std::env::set_var` to redirect upstream URLs — see
+// `crate::endpoints::UPSTREAM_OVERRIDE` for the supported way to do that.
+#![forbid(unsafe_code)]
 
 mod auth;
 mod counter;
+mod endpoints;
 mod error;
 mod logging;
 mod metrics;
@@ -19,6 +24,8 @@ use clap::Parser;
 use serde::Deserialize;
 use tokio::net::TcpListener;
 
+use crate::endpoints::Environment;
+
 fn default_bind() -> SocketAddr {
     "127.0.0.1:8000".parse().unwrap()
 }
@@ -30,6 +37,7 @@ struct FileConfig {
     log_dir: Option<PathBuf>,
     tls_cert: Option<PathBuf>,
     tls_key: Option<PathBuf>,
+    canary: Option<bool>,
 }
 
 #[derive(Debug, Parser)]
@@ -55,6 +63,12 @@ struct Cli {
     #[arg(long)]
     tls_key: Option<PathBuf>,
 
+    /// Talk to the canary Longbridge environment (`*.longbridge.xyz`) instead
+    /// of production (`*.longbridge.com`). `--canary=false` forces production
+    /// even when the config file enables canary.
+    #[arg(long, num_args = 0..=1, default_missing_value = "true")]
+    canary: Option<bool>,
+
     /// Run as a stdio MCP server instead of HTTP.
     /// Exposes tools/list without authentication for directory scanners
     /// (e.g. Glama).  tools/call will return auth errors for upstream
@@ -70,6 +84,8 @@ pub struct AppConfig {
     pub log_dir: Option<PathBuf>,
     pub tls_cert: Option<PathBuf>,
     pub tls_key: Option<PathBuf>,
+    pub environment: Environment,
+    pub stdio: bool,
 }
 
 fn config_path() -> PathBuf {
@@ -113,6 +129,19 @@ fn load_config() -> AppConfig {
         log_dir: cli.log_dir.or(file_config.log_dir),
         tls_cert,
         tls_key,
+        environment: resolve_environment(cli.canary, file_config.canary),
+        stdio: cli.stdio,
+    }
+}
+
+/// Pick the upstream environment from the CLI flag and the config file, CLI
+/// first. Both are `Option<bool>` so `--canary=false` can force production on a
+/// host whose config file enables canary.
+fn resolve_environment(cli: Option<bool>, file: Option<bool>) -> Environment {
+    if cli.or(file).unwrap_or(false) {
+        Environment::Canary
+    } else {
+        Environment::Production
     }
 }
 
@@ -126,10 +155,10 @@ fn print_startup_banner(config: &AppConfig, tools: usize, v2_tools: usize) {
     use std::io::IsTerminal;
 
     let color = std::io::stderr().is_terminal();
-    let (b, d, c, r) = if color {
-        ("\x1b[1m", "\x1b[2m", "\x1b[36m", "\x1b[0m")
+    let (b, d, c, y, r) = if color {
+        ("\x1b[1m", "\x1b[2m", "\x1b[36m", "\x1b[33m", "\x1b[0m")
     } else {
-        ("", "", "", "")
+        ("", "", "", "", "")
     };
 
     let base = &config.base_url;
@@ -152,6 +181,16 @@ fn print_startup_banner(config: &AppConfig, tools: usize, v2_tools: usize) {
     eprintln!("  {d}Listening{r}  {scheme}://{}", config.bind);
     eprintln!("  {d}Base URL{r}   {base}");
     eprintln!("  {d}Logs{r}       {logs}");
+    eprintln!(
+        "  {d}Upstream{r}   {}  {d}{}{r}",
+        crate::endpoints::http_url(),
+        crate::endpoints::quote_ws_url()
+    );
+    if config.environment == Environment::Canary {
+        eprintln!(
+            "  {d}Mode{r}       {y}CANARY{r} {d}— upstream is the Longbridge canary environment, not production{r}"
+        );
+    }
     eprintln!();
     eprintln!("  {b}Endpoints{r}");
     eprintln!(
@@ -188,11 +227,21 @@ async fn main() -> anyhow::Result<()> {
         .install_default()
         .expect("failed to install rustls crypto provider");
 
-    // stdio mode: serve via stdin/stdout for directory scanners like Glama.
-    // tools/list works without credentials; tools/call returns auth errors.
-    if std::env::args().any(|a| a == "--stdio") {
+    // Configuration is resolved before the transport branch so `--canary` and
+    // the config file apply to stdio mode too, and so the upstream endpoints
+    // are fixed before the first `list_tools()` bakes the tool descriptors.
+    let config = load_config();
+    if config.stdio {
         // In stdio mode stdout is the MCP transport; send all logs to stderr.
         crate::logging::init_stdio();
+    } else {
+        crate::logging::init(config.log_dir.as_deref());
+    }
+    crate::endpoints::init(config.environment);
+
+    // stdio mode: serve via stdin/stdout for directory scanners like Glama.
+    // tools/list works without credentials; tools/call returns auth errors.
+    if config.stdio {
         let tools = crate::tools::list_tools();
         // count includes all registered tools; authenticated clients on /mcp see one fewer
         // (the `authenticate` tool is only surfaced on the unauthenticated /agent endpoint).
@@ -207,9 +256,6 @@ async fn main() -> anyhow::Result<()> {
         }
         return Ok(());
     }
-
-    let config = load_config();
-    crate::logging::init(config.log_dir.as_deref());
 
     let app_state = Arc::new(crate::auth::AppState {
         base_url: config.base_url.clone(),
@@ -247,4 +293,32 @@ async fn main() -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn canary_precedence_matrix() {
+        let cases = [
+            (None, None, Environment::Production),
+            (Some(true), None, Environment::Canary),
+            (None, Some(true), Environment::Canary),
+            (None, Some(false), Environment::Production),
+            // The CLI wins in both directions, which is why both sides are
+            // `Option<bool>`: `--canary=false` must be able to force production
+            // on a host whose config file enables canary.
+            (Some(false), Some(true), Environment::Production),
+            (Some(true), Some(false), Environment::Canary),
+        ];
+
+        for (cli, file, expected) in cases {
+            assert_eq!(
+                resolve_environment(cli, file),
+                expected,
+                "cli={cli:?} file={file:?}"
+            );
+        }
+    }
 }

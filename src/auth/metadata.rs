@@ -6,20 +6,17 @@ use axum::response::Json;
 use serde::Serialize;
 
 use crate::auth::AppState;
-
-fn longbridge_oauth_url() -> String {
-    std::env::var("LONGBRIDGE_HTTP_URL")
-        .unwrap_or_else(|_| "https://openapi.longbridge.com".to_string())
-}
+use crate::endpoints::Scope;
 
 /// Authorization-server URL advertised to clients that reached us through the
 /// global single-domain entry (allowlisted `X-Host`, see [`public_hosts`]).
-/// Unset/empty = such requests keep advertising [`longbridge_oauth_url`].
+/// Unset/empty = such requests keep advertising the running environment's OAuth
+/// base URL (see [`crate::endpoints`]).
 ///
-/// Deliberately separate from `LONGBRIDGE_HTTP_URL`: that variable is also the
-/// longbridge SDK upstream base and the `/agent` reverse-auth base, so pointing
-/// it at the global edge domain would reroute this server's own upstream calls
-/// through the public edge.
+/// Deliberately kept out of [`crate::endpoints`]: this is the public edge
+/// domain, whereas the environment's OAuth base is also this server's own
+/// upstream, so conflating them would reroute our upstream calls through the
+/// public edge.
 fn global_oauth_url() -> Option<String> {
     std::env::var("LONGBRIDGE_GLOBAL_OAUTH_URL")
         .ok()
@@ -130,23 +127,16 @@ pub(crate) struct ProtectedResourceMetadata {
     scopes_supported: Vec<String>,
 }
 
-/// OAuth scope ids advertised by the Longbridge authorization server.
-///
-/// - 4: Watchlist management, including creating, updating, and deleting user
-///   watchlists.
-/// - 6: Account assets and cash details, including fund/stock positions, cash
-///   balances, and cash-flow history for portfolio overview and reconciliation.
-/// - 10: Trade order lookup, covering read-only order lifecycle and execution
-///   reports, plus pre-order buying-power estimates.
-/// - 11: Trade execution, including submit/replace/cancel orders and recurring
-///   investment operations.
-const SCOPES_SUPPORTED: &[&str] = &["4", "6", "10", "11"];
-const V2_SCOPES_SUPPORTED: &[&str] = &["4", "6", "10"];
+/// OAuth scopes advertised by this server. The concepts live in
+/// [`crate::endpoints::Scope`]; the numeric ids the authorization server
+/// expects are environment-specific and resolved there.
+const SCOPES_SUPPORTED: &[Scope] = crate::endpoints::SCOPES;
+const V2_SCOPES_SUPPORTED: &[Scope] = crate::endpoints::V2_SCOPES;
 
 /// Picks the authorization server to advertise: requests that came through the
 /// global single-domain entry get [`global_oauth_url`] (when configured) so the
 /// whole OAuth bootstrap stays on the global domains; everything else keeps the
-/// per-DC [`longbridge_oauth_url`].
+/// running environment's OAuth base URL.
 pub(crate) fn select_authorization_server(
     via_global_entry: bool,
     global: Option<String>,
@@ -161,15 +151,12 @@ pub(crate) fn select_authorization_server(
 fn build_resource_metadata(
     authorization_server: String,
     resource: String,
-    scopes_supported: &[&str],
+    scopes_supported: &[Scope],
 ) -> ProtectedResourceMetadata {
     ProtectedResourceMetadata {
         resource,
         authorization_servers: vec![authorization_server],
-        scopes_supported: scopes_supported
-            .iter()
-            .map(|scope| scope.to_string())
-            .collect(),
+        scopes_supported: crate::endpoints::scope_ids(scopes_supported),
     }
 }
 
@@ -207,7 +194,11 @@ pub async fn protected_resource_metadata_v2(
 
 /// Longbridge OAuth upstream selected for this public entry point.
 pub(crate) fn oauth_upstream_url(via_global_entry: bool) -> String {
-    select_authorization_server(via_global_entry, global_oauth_url(), longbridge_oauth_url())
+    select_authorization_server(
+        via_global_entry,
+        global_oauth_url(),
+        crate::endpoints::oauth_url(),
+    )
 }
 
 /// RFC 8414 metadata for the minimal OAuth facade hosted by this MCP server.
@@ -242,7 +233,7 @@ fn build_authorization_server_metadata(
         revocation_endpoint: format!("{issuer}/oauth2/revoke"),
         registration_endpoint: format!("{upstream}/oauth2/register"),
         jwks_uri: format!("{upstream}/.well-known/jwks.json"),
-        scopes_supported: SCOPES_SUPPORTED.iter().map(|s| s.to_string()).collect(),
+        scopes_supported: crate::endpoints::scope_ids(SCOPES_SUPPORTED),
         response_types_supported: vec!["code"],
         grant_types_supported: vec!["authorization_code", "refresh_token"],
         token_endpoint_auth_methods_supported: vec!["none"],
@@ -424,7 +415,11 @@ mod tests {
     #[test]
     fn authorization_server_selection_matrix() {
         let global = || Some("https://openapi-global.longbridge.xyz".to_string());
-        let fallback = || "https://openapi.longbridge.xyz".to_string();
+        let fallback = || {
+            crate::endpoints::Environment::Canary
+                .oauth_url()
+                .to_string()
+        };
 
         // Global entry + configured → advertise the global AS.
         assert_eq!(

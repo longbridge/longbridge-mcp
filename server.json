@@ -52,26 +52,14 @@
           "description": "Externally reachable URL of the server. Required for public deployments; returned via OAuth protected resource metadata.",
           "isRequired": false,
           "default": "http://localhost:8000"
-        }
-      ],
-      "environmentVariables": [
-        {
-          "name": "LONGBRIDGE_HTTP_URL",
-          "description": "Longbridge OpenAPI base URL. Used for OAuth metadata discovery.",
-          "isRequired": false,
-          "default": "https://openapi.longbridge.com"
         },
         {
-          "name": "LONGBRIDGE_QUOTE_WS_URL",
-          "description": "Quote WebSocket endpoint used by the embedded Longbridge SDK.",
+          "type": "named",
+          "name": "--canary",
+          "description": "Talk to Longbridge's canary environment (*.longbridge.xyz) instead of production. Longbridge-internal; not usable with production credentials.",
           "isRequired": false,
-          "default": "wss://openapi-quote.longbridge.com/v2"
-        },
-        {
-          "name": "LONGBRIDGE_TRADE_WS_URL",
-          "description": "Trade WebSocket endpoint used by the embedded Longbridge SDK.",
-          "isRequired": false,
-          "default": "wss://openapi-trade.longbridge.com/v2"
+          "choices": ["true", "false"],
+          "default": "false"
         }
       ]
     }

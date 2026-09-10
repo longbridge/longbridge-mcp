@@ -40,7 +40,7 @@ Longbridge MCP Server is a Rust service with no durable session state that expos
 
 4. Tool handler:
    a. Extracts McpContext (token + Accept-Language) from request
-   b. Creates Config via OAuth::from_token(token)
+   b. Creates Config via OAuth::from_token(token), with the HTTP and both WebSocket URLs pinned from `endpoints`
    c. Reuses or creates a cached QuoteContext, or creates TradeContext / HttpClient as needed
    d. Calls the Longbridge SDK or HTTP API
    e. Serializes the response through TransformSerializer
@@ -59,6 +59,7 @@ src/
 ├── counter.rs              Symbol ↔ counter_id bidirectional conversion
 ├── metrics.rs              Prometheus metrics and /metrics handler
 ├── ws_pool.rs              Cached QuoteContext pool (idle TTL, capacity eviction)
+├── endpoints.rs            Upstream endpoint selection (production / canary)
 │
 ├── auth/
 │   ├── mod.rs              Router composition, AppState, MCP service wiring
@@ -239,14 +240,14 @@ Every tool call is wrapped with `measured_tool_call()` which records timing and 
 
 ## Configuration
 
-The server reads configuration from CLI arguments (highest priority), a JSON config file (`~/.longbridge/mcp/config.json`), and environment variables. Key settings:
+The server reads configuration from CLI arguments (highest priority), a JSON config file (`~/.longbridge/mcp/config.json`), and environment variables. Upstream endpoints are the exception: they are fixed at startup by the `canary` setting and set explicitly on the SDK, so no environment variable influences them and the SDK never geolocates an access point (`geotest.lbkrs.com` is not probed and `openapi.longbridge.cn` is never selected). Key settings:
 
 | Setting | Purpose |
 |---------|---------|
 | `bind` | Listen address (default: `127.0.0.1:8000`) |
 | `base_url` | Public URL for OAuth metadata (**required for public deployments**) |
 | `tls_cert` / `tls_key` | Enable HTTPS with PEM certificate and key |
-| `LONGBRIDGE_HTTP_URL` | Override Longbridge API endpoint (env var) |
+| `canary` | Talk to the Longbridge canary environment (`*.longbridge.xyz`) instead of production (CLI flag `--canary`) |
 | `LONGBRIDGE_MCP_QUOTE_WS_IDLE_TTL_SECS` | Idle TTL for cached quote WebSocket contexts (default: 600) |
 | `LONGBRIDGE_MCP_QUOTE_WS_MAX_CONTEXTS` | Maximum cached quote WebSocket contexts per process (default: 1024) |
 
@@ -296,6 +297,12 @@ trace or exceed the trace-chain limit. ALB then returns HTTP 463 before the
 request reaches the OpenAPI application. `collect_headers` therefore treats
 `ALICLOUD-ALB-TRACE` as hop-specific and removes it at the MCP-to-OpenAPI
 boundary.
+
+Since endpoint selection was pinned (see Configuration), the server's upstream
+calls always go to `openapi.longbridge.com` or `openapi.longbridge.xyz`, so the
+second traversal described above no longer originates here. The
+`ALICLOUD-ALB-TRACE` filter is kept regardless: it is a one-line allowlist entry
+and the 463 failure mode would return the moment a CN upstream is reintroduced.
 
 The failure mode was verified against
 `openapi.longbridge.cn/v1/quote/market-status`: changing only an

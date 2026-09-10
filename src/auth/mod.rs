@@ -30,8 +30,15 @@ fn build_locales_node(sources: &[&[(&str, &str)]]) -> serde_json::Value {
     let mut locales = serde_json::Map::new();
     for src in sources {
         for (code, raw) in src.iter() {
+            // Translations name the production connect page too; retarget it the
+            // same way the live descriptions are (see
+            // `crate::tools::all_tools_full_cached`). A no-op in production.
+            let raw = raw.replace(
+                crate::endpoints::STATIC_CONNECT_PAGE,
+                crate::endpoints::connect_page_url(),
+            );
             let parsed: serde_json::Value =
-                serde_json::from_str(raw).expect("locale file must be valid JSON");
+                serde_json::from_str(&raw).expect("locale file must be valid JSON");
             let entry = locales
                 .entry((*code).to_string())
                 .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
@@ -45,6 +52,33 @@ fn build_locales_node(sources: &[&[(&str, &str)]]) -> serde_json::Value {
         }
     }
     serde_json::Value::Object(locales)
+}
+
+/// Rewrite each scope catalogue entry's `id` to the current environment's id.
+///
+/// `data/scopes.json` records production ids, but the authorization server
+/// numbers the same concepts differently on canary (see
+/// [`crate::endpoints::Scope`]). The `key` field is stable across environments,
+/// so it drives the rewrite. A no-op in production, and entries with no
+/// matching [`crate::endpoints::Scope`] (e.g. the `General` bucket) are left
+/// untouched.
+fn retarget_scope_ids(scopes: &mut serde_json::Value) {
+    let Some(entries) = scopes.as_array_mut() else {
+        return;
+    };
+    let environment = crate::endpoints::current();
+    for entry in entries {
+        let Some(key) = entry.get("key").and_then(|k| k.as_str()) else {
+            continue;
+        };
+        let Some(scope) = crate::endpoints::SCOPES.iter().find(|s| s.key() == key) else {
+            continue;
+        };
+        let id = scope.id(environment).to_string();
+        if let Some(slot) = entry.get_mut("id") {
+            *slot = serde_json::Value::String(id);
+        }
+    }
 }
 
 /// Build the `/mcp/tools.json` (and `/v1/tools.json`, `/v2/tools.json`) body.
@@ -82,6 +116,7 @@ fn build_tools_json(allow: Option<&std::collections::HashSet<&'static str>>) -> 
                     !tools_arr.is_empty()
                 });
             }
+            retarget_scope_ids(&mut v);
             // Live tool list always wins over any `tools` in scopes.json.
             out.entry(k).or_insert(v);
         }
@@ -118,6 +153,9 @@ async fn scopes_json() -> axum::Json<&'static serde_json::Value> {
                 Ok(serde_json::Value::Object(m)) => m,
                 _ => panic!("scopes.json must be a JSON object"),
             };
+        if let Some(scopes) = out.get_mut("scopes") {
+            retarget_scope_ids(scopes);
+        }
         // Only the scope-specific locale files — no tool translations here.
         out.insert("locales".to_string(), build_locales_node(&[SCOPE_LOCALES]));
         serde_json::Value::Object(out)
@@ -329,6 +367,49 @@ pub fn create_router(state: Arc<AppState>) -> Router {
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
+
+    /// Guard: in static tool metadata — descriptions, input schemas, and the
+    /// translations — the connect page may only appear as
+    /// `endpoints::STATIC_CONNECT_PAGE`, optionally with a path suffix such as
+    /// `/done`. That exact prefix is what both retarget passes
+    /// (`tools::all_tools_full_cached` and `build_locales_node`) replace, so any
+    /// other spelling would survive into a canary process and send users to the
+    /// production page — whose code then fails the exchange with an opaque
+    /// `invalid_grant`.
+    #[test]
+    fn static_connect_page_urls_all_start_with_the_placeholder() {
+        let placeholder = crate::endpoints::STATIC_CONNECT_PAGE;
+        let mut sources: Vec<(String, String)> = super::TOOL_LOCALES
+            .iter()
+            .map(|(code, raw)| (format!("locales/{code}/tools.json"), (*raw).to_string()))
+            .collect();
+        for tool in crate::tools::list_tools() {
+            sources.push((
+                format!("tool `{}`", tool.name),
+                format!(
+                    "{} {}",
+                    tool.description.as_deref().unwrap_or_default(),
+                    serde_json::to_string(&tool.input_schema).expect("schema must serialize")
+                ),
+            ));
+        }
+
+        let mut offenders = Vec::new();
+        for (origin, text) in &sources {
+            for (at, _) in text.match_indices("https://open.longbridge") {
+                if !text[at..].starts_with(placeholder) {
+                    let end = (at + placeholder.len() + 8).min(text.len());
+                    offenders.push(format!("{origin}: {}…", &text[at..end]));
+                }
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "static tool metadata must spell the connect page as `{placeholder}` \
+             so it can be retargeted for canary. Offending occurrences:\n{}",
+            offenders.join("\n")
+        );
+    }
 
     /// Every locale file must cover every registered tool, and every locale
     /// param key must exist in the live JSON Schema. Catches drift when a
