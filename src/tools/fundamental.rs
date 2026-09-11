@@ -198,10 +198,14 @@ pub async fn dividend(
     }
     let client = mctx.create_http_client();
     let cid = symbol_to_counter_id(&p.symbol);
-    http_get_tool(
+    // Each row's `symbol` echoes the queried security, and `dividend_summary` is
+    // an always-empty `{title:"", desc:""}` object (verified across HK and US
+    // histories back to the 1980s).
+    http_get_tool_dropping(
         &client,
         "/v1/quote/dividends",
         &[("counter_id", cid.as_str())],
+        &["symbol", "dividend_summary"],
     )
     .await
 }

@@ -188,11 +188,13 @@ pub async fn ah_premium_intraday(
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
     let cid = symbol_to_counter_id(&p.symbol);
-    http_get_tool_unix(
+    // `price_spread` is empty on every intraday minute bar.
+    http_get_tool_unix_dropping(
         &client,
         "/v1/quote/ahpremium/timeshares",
         &[("counter_id", cid.as_str()), ("days", "1")],
         &["klines.*.timestamp"],
+        &["price_spread"],
     )
     .await
 }
