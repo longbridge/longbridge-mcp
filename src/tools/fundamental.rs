@@ -384,11 +384,15 @@ pub async fn industry_valuation(
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
     let cid = symbol_to_counter_id(&p.symbol);
-    http_get_tool_unix(
+    // Valuation ratios and per-share figures arrive with up to ~22 fractional
+    // digits of bogus precision (e.g. bps "145.6260066297869181464524"), on both
+    // the top-level metrics and every `history` row; cap at 6 dp.
+    http_get_tool_unix_rounding(
         &client,
         "/v1/quote/industry-valuation-comparison",
         &[("counter_id", cid.as_str())],
         &["list.*.history.*.date"],
+        6,
     )
     .await
 }
