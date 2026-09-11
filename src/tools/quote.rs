@@ -689,7 +689,12 @@ pub async fn history_market_temperature(
             mctx.evict_quote_context();
             Error::longbridge(e)
         })?;
-    tool_json(&result)
+    // The history series is numeric only: `description` (the point-in-time label
+    // populated by `market_temperature`) is empty on every row here — verified
+    // across markets and years. Drop it.
+    let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;
+    crate::serialize::drop_keys(&mut value, &["description"]);
+    tool_json(&value)
 }
 
 pub async fn watchlist(mctx: &crate::tools::McpContext) -> Result<CallToolResult, McpError> {
