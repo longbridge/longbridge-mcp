@@ -156,19 +156,52 @@ pub async fn institution_rating(
     Ok(crate::tools::tool_result(out))
 }
 
+/// Trim an institution_rating_detail response.
+///
+/// - `target.list[].date` duplicates the day of that row's `timestamp`, so it is
+///   dropped. `evaluate.list[].date` is kept — those rows carry no `timestamp`,
+///   so their `date` is the only time key.
+/// - The `avg_target`/`min_target`/`max_target` prices arrive with up to ~21
+///   fractional digits, and `target.prediction_accuracy` with ~18; capping the
+///   whole document at 6 dp removes that bogus precision (clean prices like the
+///   3 dp `price` and the 4 dp `data_percent` are left untouched).
+fn trim_institution_rating_detail(value: &mut serde_json::Value) {
+    if let Some(rows) = value
+        .pointer_mut("/target/list")
+        .and_then(serde_json::Value::as_array_mut)
+    {
+        for row in rows.iter_mut() {
+            if let Some(obj) = row.as_object_mut() {
+                obj.remove("date");
+            }
+        }
+    }
+    crate::serialize::round_decimals(value, 6);
+}
+
 pub async fn institution_rating_detail(
     mctx: &crate::tools::McpContext,
     p: SymbolParam,
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
     let cid = symbol_to_counter_id(&p.symbol);
-    http_get_tool_unix(
+    let raw = http_get_tool_unix(
         &client,
         "/v1/quote/institution-ratings/detail",
         &[("counter_id", cid.as_str())],
         &["target.list.*.timestamp"],
     )
-    .await
+    .await?;
+    let json = raw
+        .content
+        .first()
+        .and_then(|c| c.as_text())
+        .map(|t| t.text.clone())
+        .unwrap_or_default();
+    let mut value: serde_json::Value =
+        serde_json::from_str(&json).map_err(crate::error::Error::Serialize)?;
+    trim_institution_rating_detail(&mut value);
+    crate::tools::tool_json(&value)
 }
 
 pub async fn dividend(
@@ -1137,6 +1170,52 @@ mod tests {
     use super::rating_part;
     use rmcp::ErrorData as McpError;
     use rmcp::model::Content;
+
+    #[test]
+    fn trim_institution_rating_detail_drops_target_date_and_rounds() {
+        let mut v = serde_json::json!({
+            "ccy_symbol": "HK$",
+            "evaluate": {"list": [
+                {"strong_buy": 30, "buy": 10, "hold": 2, "sell": 0, "under": 1, "date": "2026/09/04"}
+            ]},
+            "target": {
+                "updated_at": "2026 年 9 月 11 日",
+                "prediction_accuracy": "53.756097560975609756",
+                "data_percent": "0.9934",
+                "list": [
+                    {"timestamp": "2026-09-04T16:00:00Z", "date": "2026/09/05", "price": "425.600",
+                     "meet": true, "avg_target": "652.784671964390839056078",
+                     "min_target": "352.1344841539118652849", "max_target": "856.6001736100176178146"}
+                ]
+            }
+        });
+        super::trim_institution_rating_detail(&mut v);
+
+        let trow = &v["target"]["list"][0];
+        // Derivable target-row date is dropped; the timestamp remains the time key.
+        assert!(trow.get("date").is_none(), "target.list date is dropped");
+        assert_eq!(
+            trow["timestamp"], "2026-09-04T16:00:00Z",
+            "timestamp is kept"
+        );
+        // Bogus target precision is capped at 6 dp; clean price is untouched.
+        assert_eq!(trow["avg_target"], "652.784672");
+        assert_eq!(trow["min_target"], "352.134484");
+        assert_eq!(trow["max_target"], "856.600174");
+        assert_eq!(trow["price"], "425.600", "clean 3dp price untouched");
+        assert_eq!(trow["meet"], true, "boolean kept");
+        assert_eq!(
+            v["target"]["prediction_accuracy"], "53.756098",
+            "18dp accuracy rounded"
+        );
+        assert_eq!(v["target"]["data_percent"], "0.9934", "4dp untouched");
+        // evaluate.list keeps its date — it is the only time key there.
+        assert_eq!(
+            v["evaluate"]["list"][0]["date"], "2026/09/04",
+            "evaluate.list date is preserved"
+        );
+        assert_eq!(v["ccy_symbol"], "HK$", "currency symbol kept");
+    }
 
     #[test]
     fn trim_institution_rating_drops_redundant_instratings_evaluate() {
