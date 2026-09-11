@@ -277,6 +277,11 @@ pub async fn static_info(
             results.push(serde_json::to_value(&entry).map_err(Error::Serialize)?);
         }
     }
+    // eps/eps_ttm/bps/dividend_yield arrive with ~16 fractional digits of bogus
+    // precision (e.g. eps "27.3458639853059994"); cap at 6 dp. Integer share
+    // counts and non-numeric fields are left untouched.
+    let mut results = serde_json::Value::Array(results);
+    crate::serialize::round_decimals(&mut results, 6);
     tool_json(&results)
 }
 

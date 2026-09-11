@@ -7,10 +7,20 @@ use crate::counter::symbol_to_counter_id;
 use crate::tools::support::http_client::{http_get_tool, http_get_tool_unix};
 
 fn make_result(json: String) -> CallToolResult {
-    let structured = serde_json::from_str::<serde_json::Value>(&json).ok();
-    let mut result = CallToolResult::success(vec![rmcp::model::Content::text(json)]);
-    result.structured_content = structured;
-    result
+    // Cap bogus decimal precision (e.g. investor `capital_ratio` values like
+    // "32.03116022394741") at 6 dp. When the payload parses, the rounded value
+    // is authoritative for both the text and structured content; a payload that
+    // does not parse is passed through unchanged.
+    match serde_json::from_str::<serde_json::Value>(&json) {
+        Ok(mut value) => {
+            crate::serialize::round_decimals(&mut value, 6);
+            let json = serde_json::to_string(&value).unwrap_or(json);
+            let mut result = CallToolResult::success(vec![rmcp::model::Content::text(json)]);
+            result.structured_content = Some(value);
+            result
+        }
+        Err(_) => CallToolResult::success(vec![rmcp::model::Content::text(json)]),
+    }
 }
 
 fn get_json(r: &CallToolResult) -> &str {
