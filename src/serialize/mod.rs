@@ -71,6 +71,30 @@ pub(crate) fn strip_nulls(value: &mut serde_json::Value) {
     }
 }
 
+/// Recursively drop object entries whose value is an empty string.
+///
+/// The sibling of [`strip_nulls`] for upstreams that signal "no value" with `""`
+/// rather than `null` (e.g. the `est_value`/`cmp` columns that only apply to a
+/// forecast row and are blank on an actuals row). To an AI consumer an absent
+/// key and an empty-string key both mean "no data", so removing them is
+/// lossless. Non-empty strings, and empty *arrays*/*objects*, are left intact.
+pub(crate) fn strip_empty_strings(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(map) => {
+            map.retain(|_, v| !matches!(v, serde_json::Value::String(s) if s.is_empty()));
+            for v in map.values_mut() {
+                strip_empty_strings(v);
+            }
+        }
+        serde_json::Value::Array(arr) => {
+            for v in arr.iter_mut() {
+                strip_empty_strings(v);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Recursively cap the fractional precision of decimal-valued strings to at
 /// most `dp` digits.
 ///
@@ -477,6 +501,34 @@ mod tests {
         let mut v = serde_json::json!({"s": "", "arr": [], "n": 0, "gone": null});
         strip_nulls(&mut v);
         assert_eq!(v, serde_json::json!({"s": "", "arr": [], "n": 0}));
+    }
+
+    #[test]
+    fn strip_empty_strings_drops_only_empty_string_keys() {
+        let mut v = serde_json::json!({
+            "fr_revenue": {"value": "416161000000", "yoy": "6.43", "est_value": "",
+                           "est_yoy": "", "cmp": "", "cmp_desc": ""},
+            "kept": "x",
+            "arr": [{"a": "", "b": "1"}],
+            "empty_arr": [],
+            "empty_obj": {},
+            "zero": 0,
+            "nul": null
+        });
+        strip_empty_strings(&mut v);
+        assert_eq!(
+            v,
+            serde_json::json!({
+                "fr_revenue": {"value": "416161000000", "yoy": "6.43"},
+                "kept": "x",
+                "arr": [{"b": "1"}],
+                "empty_arr": [],
+                "empty_obj": {},
+                "zero": 0,
+                "nul": null
+            }),
+            "only empty-string values are dropped, recursively; null, empty array/object, and 0 stay"
+        );
     }
 
     #[test]

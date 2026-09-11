@@ -1042,7 +1042,22 @@ pub async fn financial_report_snapshot(
     if !period.is_empty() {
         params.push(("fiscal_period", period.as_str()));
     }
-    http_get_tool(&client, "/v1/quote/financials/earnings-snapshot", &params).await
+    let raw = http_get_tool(&client, "/v1/quote/financials/earnings-snapshot", &params).await?;
+    let json = raw
+        .content
+        .first()
+        .and_then(|c| c.as_text())
+        .map(|t| t.text.clone())
+        .unwrap_or_default();
+    let mut value: serde_json::Value =
+        serde_json::from_str(&json).map_err(crate::error::Error::Serialize)?;
+    // The `fr_*` financial-ratio objects always carry blank est_value/est_yoy/
+    // cmp/cmp_desc columns (those only apply to the `fo_*` forecast rows); drop
+    // the empty strings. Every figure is also padded to four fractional digits
+    // (e.g. "416161000000.0000"); strip the non-significant zeros (lossless).
+    crate::serialize::strip_empty_strings(&mut value);
+    crate::serialize::strip_trailing_zeros(&mut value);
+    crate::tools::tool_json(&value)
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
