@@ -2429,7 +2429,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get today's trade executions (fills). Returns executions[]{order_id, symbol, side, quantity, price, trade_done_at}. Pass symbol or order_id to filter."
+        description = "Get today's trade executions (fills). Returns executions[]{order_id, trade_id, symbol, side, quantity, price, trade_done_at}. Pass symbol or order_id to filter."
     )]
     async fn today_executions(
         &self,
@@ -2475,7 +2475,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get historical trade executions between dates. Returns executions[]{order_id, symbol, side, quantity, price, trade_done_at}. start_at/end_at in RFC3339."
+        description = "Get every trade execution (fill) in a date range, filtered by execution time (trade_done_at) and auto-paginated to return the complete set (never truncated at the 1000-per-page cap). Returns executions[]{order_id, trade_id, symbol, side, quantity, price, trade_done_at}; trade_id is the stable dedupe key. start_at/end_at in RFC3339."
     )]
     async fn history_executions(
         &self,

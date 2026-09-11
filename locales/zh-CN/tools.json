@@ -151,7 +151,7 @@
     },
     "history_executions": {
       "title": "历史成交",
-      "description": "查询指定日期区间内的历史成交记录，返回 executions[]{order_id, symbol, side, quantity, price, trade_done_at}",
+      "description": "查询指定日期区间内的全部成交记录，按成交时间（trade_done_at）筛选并自动翻页返回完整结果（不受每页 1000 条截断），trade_id 为稳定去重键。返回 executions[]{order_id, trade_id, symbol, side, quantity, price, trade_done_at}",
       "properties": {
         "symbol": "按证券筛选（可选）",
         "start_at": "起始时间（RFC3339 格式）",
@@ -179,7 +179,7 @@
     },
     "today_executions": {
       "title": "当日成交",
-      "description": "查询当日成交（filled），返回 executions[]{order_id, symbol, side, quantity, price, trade_done_at}。可按 symbol 或 order_id 筛选",
+      "description": "查询当日成交（filled），返回 executions[]{order_id, trade_id, symbol, side, quantity, price, trade_done_at}。可按 symbol 或 order_id 筛选",
       "properties": {
         "symbol": "按证券筛选，例如 `\"700.HK\"`",
         "order_id": "按指定委托单号筛选"

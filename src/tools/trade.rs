@@ -616,41 +616,43 @@ pub async fn history_executions(
     mctx: &crate::tools::McpContext,
     p: HistoryOrdersParam,
 ) -> Result<CallToolResult, McpError> {
-    use std::collections::HashMap;
-
     let start = parse::parse_rfc3339(&p.start_at)?;
     let end = parse::parse_rfc3339(&p.end_at)?;
 
-    let mut exec_opts = longbridge::trade::GetHistoryExecutionsOptions::new()
-        .start_at(start)
-        .end_at(end);
-    let mut order_opts = longbridge::trade::GetHistoryOrdersOptions::new()
-        .start_at(start)
-        .end_at(end);
-    if let Some(ref symbol) = p.symbol {
-        exec_opts = exec_opts.symbol(symbol.clone());
-        order_opts = order_opts.symbol(symbol.clone());
-    }
-
     let (ctx, _) = TradeContext::new(mctx.create_config());
-    let (executions, orders) = tokio::try_join!(
-        ctx.history_executions(exec_opts),
-        ctx.history_orders(order_opts),
-    )
-    .map_err(Error::longbridge)?;
-
-    let side_map: HashMap<String, String> = orders
-        .into_iter()
-        .map(|o| (o.order_id, format!("{:?}", o.side)))
-        .collect();
+    // v3 `/trade/execution/all` filters by execution time and caps each page at
+    // 1000 records; walk `page` until `has_more` is false.
+    let mut executions: Vec<longbridge::trade::Execution> = Vec::new();
+    for page in 1..=1000u64 {
+        let mut exec_opts = longbridge::trade::GetAllExecutionsOptions::new()
+            .start_at(start)
+            .end_at(end)
+            .page(page);
+        if let Some(ref symbol) = p.symbol {
+            exec_opts = exec_opts.symbol(symbol.clone());
+        }
+        let resp = ctx
+            .all_executions(exec_opts)
+            .await
+            .map_err(Error::longbridge)?;
+        if resp.trades.is_empty() {
+            break;
+        }
+        executions.extend(resp.trades);
+        if !resp.has_more {
+            break;
+        }
+    }
 
     let result: Vec<serde_json::Value> = executions
         .iter()
         .map(|e| {
             let mut v = serde_json::to_value(e).unwrap_or_default();
             if let serde_json::Value::Object(ref mut map) = v {
-                let side = side_map.get(&e.order_id).cloned().unwrap_or_default();
-                map.insert("side".to_string(), serde_json::Value::String(side));
+                map.insert(
+                    "side".to_string(),
+                    serde_json::Value::String(format!("{:?}", e.side)),
+                );
             }
             v
         })
