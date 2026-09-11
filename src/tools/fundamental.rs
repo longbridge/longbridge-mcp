@@ -650,9 +650,7 @@ pub async fn financial_statement(
     let cid = symbol_to_counter_id(&p.symbol);
     let kind = p.kind.unwrap_or_else(|| "ALL".to_string()).to_uppercase();
     let report = p.report.unwrap_or_else(|| "af".to_string()).to_lowercase();
-    // Per statement-line render metadata with no analytic value: `value_type`
-    // (constant "bignumber") and `display_order` (the array is already ordered).
-    http_get_tool_dropping(
+    let raw = http_get_tool(
         &client,
         "/v1/quote/financials/statements",
         &[
@@ -660,9 +658,26 @@ pub async fn financial_statement(
             ("kind", kind.as_str()),
             ("report", report.as_str()),
         ],
-        &["value_type", "display_order"],
     )
-    .await
+    .await?;
+    let json = raw
+        .content
+        .first()
+        .and_then(|c| c.as_text())
+        .map(|t| t.text.clone())
+        .unwrap_or_default();
+    let mut value: serde_json::Value =
+        serde_json::from_str(&json).map_err(crate::error::Error::Serialize)?;
+    // Per statement-line render metadata with no analytic value: `value_type`
+    // (constant "bignumber") and `display_order` (the array is already ordered).
+    crate::serialize::drop_keys(&mut value, &["value_type", "display_order"]);
+    // Line values carry ~8 sub-unit decimals and `yoy` ~16 (e.g. value
+    // "821650052055.36005741", yoy "0.1496252509936191"); cap at 6 dp.
+    crate::serialize::round_decimals(&mut value, 6);
+    // Section-header rows (收入/成本/费用 …) and lines with no prior-year base
+    // carry empty value/yoy/field strings; drop them.
+    crate::serialize::strip_empty_strings(&mut value);
+    crate::tools::tool_json(&value)
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
