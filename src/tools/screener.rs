@@ -71,6 +71,9 @@ fn strip_strategy_keys(result: rmcp::model::CallToolResult) -> rmcp::model::Call
             strip_filter_prefix_from_strategy(s);
         }
     }
+    // Each filter condition carries a `min` and a `max`; the unbounded side is
+    // an empty string. Drop the blanks (an absent bound reads the same as "").
+    crate::serialize::strip_empty_strings(&mut d);
     let Ok(json) = serde_json::to_string(&d) else {
         return result;
     };
