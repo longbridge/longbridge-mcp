@@ -71,6 +71,9 @@ fn strip_strategy_keys(result: rmcp::model::CallToolResult) -> rmcp::model::Call
             strip_filter_prefix_from_strategy(s);
         }
     }
+    // Each filter condition carries a `min` and a `max`; the unbounded side is
+    // an empty string. Drop the blanks (an absent bound reads the same as "").
+    crate::serialize::strip_empty_strings(&mut d);
     let Ok(json) = serde_json::to_string(&d) else {
         return result;
     };
@@ -426,30 +429,67 @@ pub async fn screener_search(
         .map_err(|e| Error::longbridge(e.into()))?;
 
     let json = crate::serialize::transform_json(resp.as_bytes()).map_err(Error::Serialize)?;
-    // Strip filter_ prefix from indicators[].key so keys are consistent with
-    // screener_indicators and conditions input (no filter_ prefix anywhere).
-    let json = strip_filter_prefix_from_search_results(json);
+    // Strip the filter_ prefix from indicators[].key (consistent with
+    // screener_indicators and the conditions input), hoist the repeated
+    // per-key name/unit labels into a top-level legend, and cap value precision.
+    let json = postprocess_search_results(json);
     Ok(crate::tools::tool_result(json))
 }
 
-/// Strip "filter_" prefix from `indicators[].key` in screener_search results.
-fn strip_filter_prefix_from_search_results(json: String) -> String {
+/// Post-process a screener_search response:
+/// 1. Strip the `filter_` prefix from every `indicators[].key`.
+/// 2. Hoist the per-key `name`/`unit` display labels — identical for a given
+///    key across all rows — into a single top-level `legend` (`{ key: { name,
+///    unit } }`), dropping them from each row's indicators.
+/// 3. Cap indicator value precision at 6 dp (upstream emits ~15 fractional
+///    digits on ratios like pettm/roe).
+fn postprocess_search_results(json: String) -> String {
     let Ok(mut d) = serde_json::from_str::<serde_json::Value>(&json) else {
         return json;
     };
+    let mut legend = serde_json::Map::new();
     if let Some(items) = d.get_mut("items").and_then(|v| v.as_array_mut()) {
         for item in items.iter_mut() {
-            if let Some(indicators) = item.get_mut("indicators").and_then(|v| v.as_array_mut()) {
-                for ind in indicators.iter_mut() {
-                    if let Some(k) = ind.get("key").and_then(|v| v.as_str()) {
-                        let stripped = k.strip_prefix("filter_").unwrap_or(k).to_string();
-                        if let Some(obj) = ind.as_object_mut() {
-                            obj.insert("key".to_string(), serde_json::Value::String(stripped));
-                        }
+            let Some(indicators) = item.get_mut("indicators").and_then(|v| v.as_array_mut()) else {
+                continue;
+            };
+            for ind in indicators.iter_mut() {
+                let Some(obj) = ind.as_object_mut() else {
+                    continue;
+                };
+                let key = obj
+                    .get("key")
+                    .and_then(|v| v.as_str())
+                    .map(|k| k.strip_prefix("filter_").unwrap_or(k).to_string());
+                let Some(key) = key else {
+                    continue;
+                };
+                let name = obj.remove("name");
+                let unit = obj.remove("unit");
+                // Record this key's labels once. A null or empty-string label
+                // carries nothing, so it is not stored.
+                if !legend.contains_key(&key) {
+                    let is_empty = |v: &serde_json::Value| {
+                        v.is_null() || v.as_str().is_some_and(str::is_empty)
+                    };
+                    let mut meta = serde_json::Map::new();
+                    if let Some(name) = name.filter(|v| !is_empty(v)) {
+                        meta.insert("name".to_string(), name);
                     }
+                    if let Some(unit) = unit.filter(|v| !is_empty(v)) {
+                        meta.insert("unit".to_string(), unit);
+                    }
+                    legend.insert(key.clone(), serde_json::Value::Object(meta));
                 }
+                obj.insert("key".to_string(), serde_json::Value::String(key));
             }
         }
+    }
+    crate::serialize::round_decimals(&mut d, 6);
+    if let Some(obj) = d.as_object_mut()
+        && !legend.is_empty()
+    {
+        obj.insert("legend".to_string(), serde_json::Value::Object(legend));
     }
     serde_json::to_string(&d).unwrap_or(json)
 }
@@ -547,4 +587,71 @@ fn strip_filter_prefix_from_indicators(
         return result;
     };
     crate::tools::tool_result(json)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::postprocess_search_results;
+
+    #[test]
+    fn postprocess_hoists_legend_strips_prefix_and_rounds() {
+        let input = serde_json::json!({
+            "total": 839,
+            "items": [
+                {"symbol": "2460.HK", "name": "华润饮料", "indicators": [
+                    {"key": "filter_pettm", "name": "市盈率(TTM)", "value": "19.991124831097526", "unit": ""},
+                    {"key": "filter_marketcap", "name": "市值", "value": "17027195860", "unit": "亿"}
+                ]},
+                {"symbol": "866.HK", "name": "中国秦发", "indicators": [
+                    {"key": "filter_pettm", "name": "市盈率(TTM)", "value": "19.96675598973656", "unit": ""},
+                    {"key": "filter_marketcap", "name": "市值", "value": "5609528857.974999", "unit": "亿"}
+                ]}
+            ]
+        })
+        .to_string();
+        let out: serde_json::Value =
+            serde_json::from_str(&postprocess_search_results(input)).expect("valid JSON");
+
+        // Legend carries each key's labels exactly once.
+        assert_eq!(out["legend"]["pettm"]["name"], "市盈率(TTM)");
+        assert_eq!(out["legend"]["marketcap"]["unit"], "亿");
+        // Empty unit is omitted from the legend entry.
+        assert!(
+            out["legend"]["pettm"].get("unit").is_none(),
+            "an empty unit is not recorded"
+        );
+
+        let rows = out["items"].as_array().expect("items is an array");
+        for row in rows {
+            for ind in row["indicators"]
+                .as_array()
+                .expect("indicators is an array")
+            {
+                // filter_ prefix stripped; name/unit dropped from every row.
+                assert!(
+                    ind["key"]
+                        .as_str()
+                        .is_some_and(|k| !k.starts_with("filter_")),
+                    "filter_ prefix is stripped"
+                );
+                assert!(ind.get("name").is_none(), "per-row name is hoisted away");
+                assert!(ind.get("unit").is_none(), "per-row unit is hoisted away");
+            }
+        }
+        // Bogus precision is capped; already-short/integer values untouched.
+        assert_eq!(rows[0]["indicators"][0]["value"], "19.991125");
+        assert_eq!(
+            rows[0]["indicators"][1]["value"], "17027195860",
+            "integers are left alone"
+        );
+        assert_eq!(
+            rows[1]["indicators"][1]["value"], "5609528857.974999",
+            "exactly-6dp values are left alone"
+        );
+    }
+
+    #[test]
+    fn postprocess_passes_through_unparsable_payload() {
+        assert_eq!(postprocess_search_results("not json".into()), "not json");
+    }
 }

@@ -7,10 +7,20 @@ use crate::counter::symbol_to_counter_id;
 use crate::tools::support::http_client::{http_get_tool, http_get_tool_unix};
 
 fn make_result(json: String) -> CallToolResult {
-    let structured = serde_json::from_str::<serde_json::Value>(&json).ok();
-    let mut result = CallToolResult::success(vec![rmcp::model::Content::text(json)]);
-    result.structured_content = structured;
-    result
+    // Cap bogus decimal precision (e.g. investor `capital_ratio` values like
+    // "32.03116022394741") at 6 dp. When the payload parses, the rounded value
+    // is authoritative for both the text and structured content; a payload that
+    // does not parse is passed through unchanged.
+    match serde_json::from_str::<serde_json::Value>(&json) {
+        Ok(mut value) => {
+            crate::serialize::round_decimals(&mut value, 6);
+            let json = serde_json::to_string(&value).unwrap_or(json);
+            let mut result = CallToolResult::success(vec![rmcp::model::Content::text(json)]);
+            result.structured_content = Some(value);
+            result
+        }
+        Err(_) => CallToolResult::success(vec![rmcp::model::Content::text(json)]),
+    }
 }
 
 fn get_json(r: &CallToolResult) -> &str {
@@ -96,7 +106,14 @@ pub async fn ipo_listed(
     let hk = http_get_tool(&client, "/v1/ipo/listed", &params).await?;
     let us = http_get_tool(&client, "/v1/us/ipo/listed", &params).await?;
     let combined = format!(r#"{{"hk":{},"us":{}}}"#, get_json(&hk), get_json(&us));
-    Ok(make_result(combined))
+    // Each entry echoes `market` (already implied by the hk/us grouping key) and
+    // an `icon` display URL; drop both.
+    let Ok(mut value) = serde_json::from_str::<serde_json::Value>(&combined) else {
+        return Ok(make_result(combined));
+    };
+    crate::serialize::drop_keys(&mut value, &["market", "icon"]);
+    let json = serde_json::to_string(&value).unwrap_or(combined);
+    Ok(make_result(json))
 }
 
 /// Show IPO detail: profile + timeline + eligibility for a symbol.

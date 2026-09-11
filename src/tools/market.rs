@@ -8,8 +8,11 @@ use rmcp::serde::{Deserialize, Serialize};
 
 use crate::counter::{index_symbol_to_counter_id, is_etf, symbol_to_counter_id};
 use crate::error::Error;
-use crate::serialize::convert_unix_paths;
-use crate::tools::support::http_client::{http_get_tool, http_get_tool_unix};
+use crate::serialize::{convert_unix_paths, transform_json};
+use crate::tools::support::http_client::{
+    http_get_tool, http_get_tool_dropping, http_get_tool_trimming_zeros, http_get_tool_unix,
+    http_get_tool_unix_dropping,
+};
 use crate::tools::tool_json;
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -103,7 +106,9 @@ pub async fn broker_holding(
     let client = mctx.create_http_client();
     let cid = symbol_to_counter_id(&p.symbol);
     let period = p.period.as_deref().unwrap_or("rct_1");
-    http_get_tool(
+    // Each entry's `chg` is an integer share delta padded with a fake ".0000"
+    // fractional part; strip the trailing zeros (lossless).
+    http_get_tool_trimming_zeros(
         &client,
         "/v1/quote/broker-holding",
         &[("counter_id", cid.as_str()), ("type", period)],
@@ -117,7 +122,10 @@ pub async fn broker_holding_detail(
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
     let cid = symbol_to_counter_id(&p.symbol);
-    http_get_tool(
+    // The share-count delta fields (shares.chg_*) are integers padded with a
+    // fake ".0000" fractional part across all rows; strip the trailing zeros
+    // (lossless) — they are ~half the bytes of this ~100 KB payload.
+    http_get_tool_trimming_zeros(
         &client,
         "/v1/quote/broker-holding/detail",
         &[("counter_id", cid.as_str())],
@@ -160,7 +168,7 @@ pub async fn ah_premium(
         _ => "1000", // day
     };
     let count_str = p.count.unwrap_or(100).to_string();
-    http_get_tool_unix(
+    http_get_tool_unix_dropping(
         &client,
         "/v1/quote/ahpremium/klines",
         &[
@@ -169,8 +177,51 @@ pub async fn ah_premium(
             ("line_num", count_str.as_str()),
         ],
         &["klines.*.timestamp"],
+        &["price_spread"],
     )
     .await
+}
+
+/// Hoist the per-bar prior-close fields (`apreclose`, `hpreclose`) out of the
+/// `klines` array to the top level.
+///
+/// These are the A-share and H-share *previous* closing prices: fixed for the
+/// whole session by definition, so upstream repeats the identical value on every
+/// one of the ~240 minute bars. Lifting them to a single top-level copy is
+/// lossless and keeps a stable shape (always hoisted). The FX `currency_rate` is
+/// deliberately left per-bar — unlike a prior close it can move intraday.
+fn hoist_intraday_prev_closes(value: &mut serde_json::Value) {
+    let first = value
+        .get("klines")
+        .and_then(serde_json::Value::as_array)
+        .and_then(|k| k.first());
+    let Some(first) = first else {
+        return;
+    };
+    let apreclose = first.get("apreclose").cloned();
+    let hpreclose = first.get("hpreclose").cloned();
+    if apreclose.is_none() && hpreclose.is_none() {
+        return;
+    }
+    if let Some(bars) = value
+        .get_mut("klines")
+        .and_then(serde_json::Value::as_array_mut)
+    {
+        for bar in bars.iter_mut() {
+            if let Some(obj) = bar.as_object_mut() {
+                obj.remove("apreclose");
+                obj.remove("hpreclose");
+            }
+        }
+    }
+    if let Some(obj) = value.as_object_mut() {
+        if let Some(v) = apreclose {
+            obj.insert("apreclose".to_owned(), v);
+        }
+        if let Some(v) = hpreclose {
+            obj.insert("hpreclose".to_owned(), v);
+        }
+    }
 }
 
 pub async fn ah_premium_intraday(
@@ -179,13 +230,22 @@ pub async fn ah_premium_intraday(
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
     let cid = symbol_to_counter_id(&p.symbol);
-    http_get_tool_unix(
-        &client,
-        "/v1/quote/ahpremium/timeshares",
-        &[("counter_id", cid.as_str()), ("days", "1")],
-        &["klines.*.timestamp"],
-    )
-    .await
+    let resp: String = client
+        .request(Method::GET, "/v1/quote/ahpremium/timeshares")
+        .query_params(vec![("counter_id", cid.as_str()), ("days", "1")])
+        .response::<String>()
+        .send()
+        .await
+        .map_err(|e| Error::longbridge(e.into()))?;
+    let transformed = transform_json(resp.as_bytes()).map_err(Error::Serialize)?;
+    let mut value: serde_json::Value =
+        serde_json::from_str(&transformed).map_err(Error::Serialize)?;
+    convert_unix_paths(&mut value, &["klines.*.timestamp"]);
+    // `price_spread` is empty on every intraday minute bar.
+    crate::serialize::drop_keys(&mut value, &["price_spread"]);
+    hoist_intraday_prev_closes(&mut value);
+    let json = serde_json::to_string(&value).map_err(Error::Serialize)?;
+    Ok(crate::tools::tool_result(json))
 }
 
 pub async fn trade_stats(
@@ -240,10 +300,13 @@ pub async fn constituent(
 
     let client = mctx.create_http_client();
     let cid = index_symbol_to_counter_id(&p.symbol);
-    http_get_tool(
+    // Per-constituent noise: `intro` (long blurb), `market` (derivable from
+    // symbol), constant `delay`/`trade_status`.
+    http_get_tool_dropping(
         &client,
         "/v1/quote/index-constituents",
         &[("counter_id", cid.as_str())],
+        &["intro", "market", "delay", "trade_status"],
     )
     .await
 }
@@ -309,8 +372,14 @@ pub async fn industry_rank(
         .send()
         .await
         .map_err(|e| Error::longbridge(e.into()))?;
-    let data: serde_json::Value =
+    let mut data: serde_json::Value =
         serde_json::from_str(&raw).map_err(crate::error::Error::Serialize)?;
+    // The response wraps the real rows in a group element whose own
+    // counter_id/symbol/name/chg are blank, and each row carries value_name/
+    // value_data/prev_close that are empty unless a value-column indicator (e.g.
+    // 市值) was requested. Drop the empty-string fields; they are re-added
+    // automatically when an indicator actually populates them.
+    crate::serialize::strip_empty_strings(&mut data);
     let out = serde_json::to_string(&data).map_err(crate::error::Error::Serialize)?;
     let structured = serde_json::from_str::<serde_json::Value>(&out).ok();
     let mut res = rmcp::model::CallToolResult::success(vec![rmcp::model::Content::text(out)]);
@@ -494,11 +563,14 @@ pub async fn top_movers(
     if let Some(ref d) = p.date {
         body["date"] = serde_json::Value::String(d.clone());
     }
-    crate::tools::support::http_client::http_post_tool_unix(
+    // Per-event stock display noise: `profile` (~150-word paragraph), `logo`
+    // (URL), `full_name` (== name), and constant `latency`/`duplicate` flags.
+    crate::tools::support::http_client::http_post_tool_unix_dropping(
         &client,
         "/v1/quote/market/stock-events",
         body,
         &["events.*.timestamp"],
+        &["profile", "logo", "full_name", "latency", "duplicate"],
     )
     .await
 }
@@ -588,7 +660,11 @@ pub async fn rank_list(
         .or_else(|| p.market.as_deref().map(|m| m.to_uppercase()))
         .unwrap_or_else(|| "US".to_string());
     let size = p.size.unwrap_or(20).to_string();
-    http_get_tool(
+    // Per-row upstream fields with no analytic value: `code` (== symbol without
+    // suffix), `market` (single-market query, derivable), constant/empty flags
+    // (`delay`, `is_pre_post`, `pre_post_*`, `extend_*`), the editorial `intro`
+    // blurb, and the `article` object.
+    http_get_tool_dropping(
         &client,
         "/v1/quote/market/rank/list",
         &[
@@ -598,13 +674,75 @@ pub async fn rank_list(
             ("market", key_market.as_str()),
             ("size", size.as_str()),
         ],
+        &[
+            "code",
+            "market",
+            "delay",
+            "is_pre_post",
+            "pre_post_price",
+            "pre_post_chg",
+            "extend_state",
+            "extend_price",
+            "extend_chg",
+            "article",
+            "intro",
+        ],
     )
     .await
 }
 
 #[cfg(test)]
 mod tests {
-    use super::trade_status_label;
+    use super::{hoist_intraday_prev_closes, trade_status_label};
+
+    #[test]
+    fn hoist_intraday_prev_closes_lifts_prior_closes_and_keeps_live_fields() {
+        let mut v = serde_json::json!({
+            "klines": [
+                {"aprice": "55.160", "apreclose": "52.890", "hprice": "53.750",
+                 "hpreclose": "56.250", "currency_rate": "0.855300",
+                 "ahpremium_rate": "-0.166563", "timestamp": "2026-09-11T01:30:00Z"},
+                {"aprice": "54.810", "apreclose": "52.890", "hprice": "53.550",
+                 "hpreclose": "56.250", "currency_rate": "0.855300",
+                 "ahpremium_rate": "-0.164362", "timestamp": "2026-09-11T01:31:00Z"}
+            ]
+        });
+        hoist_intraday_prev_closes(&mut v);
+
+        // Prior closes are lifted once to the top level.
+        assert_eq!(v["apreclose"], "52.890", "A-share prior close is hoisted");
+        assert_eq!(v["hpreclose"], "56.250", "H-share prior close is hoisted");
+        // …and removed from every bar.
+        for bar in v["klines"].as_array().expect("klines is an array") {
+            assert!(
+                bar.get("apreclose").is_none(),
+                "per-bar apreclose is dropped"
+            );
+            assert!(
+                bar.get("hpreclose").is_none(),
+                "per-bar hpreclose is dropped"
+            );
+            // Live per-bar fields stay put — including currency_rate.
+            assert!(bar.get("aprice").is_some(), "live aprice is kept");
+            assert!(bar.get("hprice").is_some(), "live hprice is kept");
+            assert!(
+                bar.get("currency_rate").is_some(),
+                "currency_rate stays per-bar (it can move intraday)"
+            );
+            assert!(bar.get("ahpremium_rate").is_some(), "premium rate is kept");
+        }
+    }
+
+    #[test]
+    fn hoist_intraday_prev_closes_tolerates_empty_klines() {
+        let mut v = serde_json::json!({ "klines": [] });
+        hoist_intraday_prev_closes(&mut v);
+        assert_eq!(
+            v,
+            serde_json::json!({ "klines": [] }),
+            "empty input is unchanged"
+        );
+    }
 
     #[test]
     fn trade_status_label_matches_openapi_status() {

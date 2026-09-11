@@ -45,6 +45,220 @@ pub fn transform_json(input: &[u8]) -> Result<String, serde_json::Error> {
     Ok(String::from_utf8(buf).expect("serde_json produces valid UTF-8"))
 }
 
+/// Recursively drop `null`-valued entries from every object in `value`,
+/// recursing through nested objects and arrays.
+///
+/// MCP consumers treat an absent key and an explicit `null` identically, so
+/// dropping nulls is lossless for them and cuts tokens. The motivating case is
+/// wide "all possible fields" SDK structs (e.g. `SecurityCalcIndex`, which
+/// serializes ~40 fields where every index the caller did not request comes
+/// back as `null`). Safe against `output_schema` validation because a field
+/// that can be `null` is `Option`-derived and therefore not `required`.
+pub(crate) fn strip_nulls(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(map) => {
+            map.retain(|_, v| !v.is_null());
+            for v in map.values_mut() {
+                strip_nulls(v);
+            }
+        }
+        serde_json::Value::Array(arr) => {
+            for v in arr.iter_mut() {
+                strip_nulls(v);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Recursively drop object entries whose value is an empty string.
+///
+/// The sibling of [`strip_nulls`] for upstreams that signal "no value" with `""`
+/// rather than `null` (e.g. the `est_value`/`cmp` columns that only apply to a
+/// forecast row and are blank on an actuals row). To an AI consumer an absent
+/// key and an empty-string key both mean "no data", so removing them is
+/// lossless. Non-empty strings, and empty *arrays*/*objects*, are left intact.
+pub(crate) fn strip_empty_strings(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(map) => {
+            map.retain(|_, v| !matches!(v, serde_json::Value::String(s) if s.is_empty()));
+            for v in map.values_mut() {
+                strip_empty_strings(v);
+            }
+        }
+        serde_json::Value::Array(arr) => {
+            for v in arr.iter_mut() {
+                strip_empty_strings(v);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Recursively cap the fractional precision of decimal-valued strings to at
+/// most `dp` digits.
+///
+/// Only touches strings that parse as a plain decimal and carry *more* than
+/// `dp` fractional digits (e.g. an SDK leverage field serialized as
+/// `"11.50005084745763"`). Symbols (`700.HK`), dates, integers, and values
+/// already within `dp` are left byte-for-byte unchanged, so display formatting
+/// like `"438.400"` is preserved. `dp` is a floor: callers pass 6 to keep at
+/// least six decimal places.
+pub(crate) fn round_decimals(value: &mut serde_json::Value, dp: u32) {
+    match value {
+        serde_json::Value::Object(map) => {
+            for v in map.values_mut() {
+                round_decimals(v, dp);
+            }
+        }
+        serde_json::Value::Array(arr) => {
+            for v in arr.iter_mut() {
+                round_decimals(v, dp);
+            }
+        }
+        serde_json::Value::String(s) => {
+            let frac = match s.rsplit_once('.') {
+                Some((_, frac)) => frac.len(),
+                None => return,
+            };
+            if frac > dp as usize
+                && let Ok(d) = s.parse::<rust_decimal::Decimal>()
+            {
+                *s = d.round_dp(dp).to_string();
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Recursively strip non-significant trailing zeros from every plain decimal
+/// string in `value` (e.g. `"459962879.0000"` → `"459962879"`, `"4.50"` →
+/// `"4.5"`, `"0.0000"` → `"0"`).
+///
+/// This is lossless — it never rounds, only removes zeros that carry no value —
+/// so unlike [`round_decimals`] it is safe to apply blindly. Only a bare decimal
+/// (optional sign, digits, one `.`, digits) is touched; dates (`"2026.09.09"`),
+/// versions and ids are left alone. For passthrough tools whose upstream pads
+/// integer counts with a fake fractional part (e.g. share-count deltas stored as
+/// `"123.0000"`).
+pub(crate) fn strip_trailing_zeros(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(map) => {
+            for v in map.values_mut() {
+                strip_trailing_zeros(v);
+            }
+        }
+        serde_json::Value::Array(arr) => {
+            for v in arr.iter_mut() {
+                strip_trailing_zeros(v);
+            }
+        }
+        serde_json::Value::String(s) => {
+            if let Some(trimmed) = trimmed_decimal(s) {
+                *s = trimmed;
+            }
+        }
+        _ => {}
+    }
+}
+
+/// If `s` is a plain decimal string with trailing zeros in its fractional part,
+/// return the trimmed form; otherwise `None`. Requires exactly one `.` with
+/// digits on both sides, so multi-dot strings (dates, versions) are ignored.
+fn trimmed_decimal(s: &str) -> Option<String> {
+    let body = s.strip_prefix('-').unwrap_or(s);
+    let (int_part, frac_part) = body.split_once('.')?;
+    let is_digits = |p: &str| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit());
+    if !is_digits(int_part) || !is_digits(frac_part) || !frac_part.ends_with('0') {
+        return None;
+    }
+    let trimmed_frac = frac_part.trim_end_matches('0');
+    let sign = if s.starts_with('-') { "-" } else { "" };
+    Some(if trimmed_frac.is_empty() {
+        format!("{sign}{int_part}")
+    } else {
+        format!("{sign}{int_part}.{trimmed_frac}")
+    })
+}
+
+/// Rewrite `[st]TYPE/MARKET/CODE#Readable[/st]` cashtag markup to just
+/// `Readable` (the text after `#`, or the inner text when there is no `#`).
+/// Community posts wrap every ticker mention in this markup, which is pure
+/// noise to a model reading the prose.
+fn strip_cashtags(input: &str) -> String {
+    if !input.contains("[st]") {
+        return input.to_string();
+    }
+    let mut out = String::with_capacity(input.len());
+    let mut rest = input;
+    while let Some(start) = rest.find("[st]") {
+        out.push_str(&rest[..start]);
+        let after = &rest[start + "[st]".len()..];
+        match after.find("[/st]") {
+            Some(end) => {
+                let inner = &after[..end];
+                let readable = inner.rsplit_once('#').map_or(inner, |(_, r)| r);
+                out.push_str(readable);
+                rest = &after[end + "[/st]".len()..];
+            }
+            None => {
+                out.push_str(&rest[start..]);
+                return out;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Apply [`strip_cashtags`] to every `field`-keyed string in `value`,
+/// recursively (through nested objects and arrays).
+pub(crate) fn strip_cashtags_in_field(value: &mut serde_json::Value, field: &str) {
+    match value {
+        serde_json::Value::Object(map) => {
+            for (k, v) in map.iter_mut() {
+                if k == field
+                    && let serde_json::Value::String(s) = v
+                {
+                    *s = strip_cashtags(s);
+                } else {
+                    strip_cashtags_in_field(v, field);
+                }
+            }
+        }
+        serde_json::Value::Array(arr) => {
+            for v in arr.iter_mut() {
+                strip_cashtags_in_field(v, field);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Recursively drop entries whose (snake_case) key is in `keys` from every
+/// object in `value`, at any depth and through arrays.
+///
+/// For passthrough tools that echo upstream fields with no analytic value:
+/// duplicates (`code` == `symbol` without suffix), derivable fields
+/// (`market`), constant flags (`delay`), and display assets (`icon`). Keys
+/// must be given in the post-transform snake_case form.
+pub(crate) fn drop_keys(value: &mut serde_json::Value, keys: &[&str]) {
+    match value {
+        serde_json::Value::Object(map) => {
+            map.retain(|k, _| !keys.contains(&k.as_str()));
+            for v in map.values_mut() {
+                drop_keys(v, keys);
+            }
+        }
+        serde_json::Value::Array(arr) => {
+            for v in arr.iter_mut() {
+                drop_keys(v, keys);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Return `true` iff `s` matches the `<PREFIX>/<MARKET>/<CODE>` counter_id
 /// pattern used internally by Longbridge (e.g. `ST/US/AAPL`, `ETF/HK/2800`,
 /// `IX/HK/HSI`, `OP/US/AAPL270115C300000`). Used to distinguish dynamic map
@@ -260,6 +474,147 @@ mod tests {
         assert_eq!(to_snake_case("createdAt"), "created_at");
         assert_eq!(to_snake_case("counterIds"), "counter_ids");
         assert_eq!(to_snake_case("already_snake"), "already_snake");
+    }
+
+    #[test]
+    fn strip_nulls_drops_null_keys_recursively() {
+        let mut v = serde_json::json!({
+            "pe": "22.5",
+            "pb": null,
+            "nested": {"a": 1, "b": null},
+            "rows": [{"x": 1, "y": null}, {"x": null}]
+        });
+        strip_nulls(&mut v);
+        assert_eq!(
+            v,
+            serde_json::json!({
+                "pe": "22.5",
+                "nested": {"a": 1},
+                "rows": [{"x": 1}, {}]
+            })
+        );
+    }
+
+    #[test]
+    fn strip_nulls_keeps_non_null_and_empty() {
+        // Empty string / empty array / zero are NOT null — they stay.
+        let mut v = serde_json::json!({"s": "", "arr": [], "n": 0, "gone": null});
+        strip_nulls(&mut v);
+        assert_eq!(v, serde_json::json!({"s": "", "arr": [], "n": 0}));
+    }
+
+    #[test]
+    fn strip_empty_strings_drops_only_empty_string_keys() {
+        let mut v = serde_json::json!({
+            "fr_revenue": {"value": "416161000000", "yoy": "6.43", "est_value": "",
+                           "est_yoy": "", "cmp": "", "cmp_desc": ""},
+            "kept": "x",
+            "arr": [{"a": "", "b": "1"}],
+            "empty_arr": [],
+            "empty_obj": {},
+            "zero": 0,
+            "nul": null
+        });
+        strip_empty_strings(&mut v);
+        assert_eq!(
+            v,
+            serde_json::json!({
+                "fr_revenue": {"value": "416161000000", "yoy": "6.43"},
+                "kept": "x",
+                "arr": [{"b": "1"}],
+                "empty_arr": [],
+                "empty_obj": {},
+                "zero": 0,
+                "nul": null
+            }),
+            "only empty-string values are dropped, recursively; null, empty array/object, and 0 stay"
+        );
+    }
+
+    #[test]
+    fn round_decimals_caps_precision_at_six() {
+        let mut v = serde_json::json!({
+            "leverage": "11.50005084745763",
+            "premium": "0.23161592505854794",
+            "price": "438.400",
+            "symbol": "700.HK",
+            "date": "2026-09-10",
+            "ts": "1789007822"
+        });
+        round_decimals(&mut v, 6);
+        assert_eq!(v["leverage"], "11.500051");
+        assert_eq!(v["premium"], "0.231616");
+        assert_eq!(v["price"], "438.400", "already <=6 dp: untouched");
+        assert_eq!(v["symbol"], "700.HK", "non-numeric: untouched");
+        assert_eq!(v["date"], "2026-09-10", "date: untouched");
+        assert_eq!(v["ts"], "1789007822", "integer: untouched");
+    }
+
+    #[test]
+    fn strip_trailing_zeros_is_lossless_and_skips_non_decimals() {
+        let mut v = serde_json::json!({
+            "shares": {"value": "459962879", "chg_1": "123.0000", "chg_5": "-45.0000"},
+            "ratio": "0.0505",
+            "padded": "4.50",
+            "zero": "0.0000",
+            "date": "2026.09.09",
+            "iso": "2026-09-10",
+            "symbol": "700.HK",
+            "int": "42"
+        });
+        strip_trailing_zeros(&mut v);
+        assert_eq!(v["shares"]["value"], "459962879", "integer untouched");
+        assert_eq!(v["shares"]["chg_1"], "123", "fake .0000 stripped");
+        assert_eq!(v["shares"]["chg_5"], "-45", "negative fake .0000 stripped");
+        assert_eq!(v["ratio"], "0.0505", "significant digits kept");
+        assert_eq!(v["padded"], "4.5", "trailing zero stripped");
+        assert_eq!(v["zero"], "0", "0.0000 becomes 0");
+        assert_eq!(v["date"], "2026.09.09", "multi-dot date untouched");
+        assert_eq!(v["iso"], "2026-09-10", "iso date untouched");
+        assert_eq!(v["symbol"], "700.HK", "ticker untouched");
+        assert_eq!(v["int"], "42", "plain integer untouched");
+    }
+
+    #[test]
+    fn strip_cashtags_in_field_keeps_readable_ticker() {
+        let mut v = serde_json::json!({
+            "items": [
+                {"description": "[st]ST/HK/700#TENCENT.HK[/st] CFO said prepaid 50bn"},
+                {"description": "no markup here"},
+                {"description": "[st]ST/US/BABA#Alibaba.US[/st][st]ST/HK/700#TENCENT.HK[/st] two tags"}
+            ]
+        });
+        strip_cashtags_in_field(&mut v, "description");
+        assert_eq!(
+            v["items"][0]["description"],
+            "TENCENT.HK CFO said prepaid 50bn"
+        );
+        assert_eq!(v["items"][1]["description"], "no markup here");
+        assert_eq!(
+            v["items"][2]["description"],
+            "Alibaba.USTENCENT.HK two tags"
+        );
+    }
+
+    #[test]
+    fn drop_keys_removes_named_keys_recursively() {
+        let mut v = serde_json::json!({
+            "items": [
+                {"symbol": "9988.HK", "code": "09988", "market": "HK", "chg": "0.01"},
+                {"symbol": "700.HK", "code": "00700", "market": "HK", "chg": "0.02"}
+            ],
+            "market": "HK"
+        });
+        drop_keys(&mut v, &["code", "market"]);
+        assert_eq!(
+            v,
+            serde_json::json!({
+                "items": [
+                    {"symbol": "9988.HK", "chg": "0.01"},
+                    {"symbol": "700.HK", "chg": "0.02"}
+                ]
+            })
+        );
     }
 
     #[test]

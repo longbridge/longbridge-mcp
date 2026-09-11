@@ -9,7 +9,9 @@ use rmcp::serde::Deserialize;
 use crate::counter::symbol_to_counter_id;
 use crate::error::Error;
 use crate::tools::output;
-use crate::tools::support::http_client::{http_get_tool, http_get_tool_unix};
+use crate::tools::support::http_client::{
+    http_get_tool, http_get_tool_unix, http_get_tool_unix_dropping,
+};
 use crate::tools::support::parse;
 use crate::tools::support::tolerant::{
     tolerant_bool, tolerant_i64, tolerant_option_usize, tolerant_option_vec_i32,
@@ -275,6 +277,11 @@ pub async fn static_info(
             results.push(serde_json::to_value(&entry).map_err(Error::Serialize)?);
         }
     }
+    // eps/eps_ttm/bps/dividend_yield arrive with ~16 fractional digits of bogus
+    // precision (e.g. eps "27.3458639853059994"); cap at 6 dp. Integer share
+    // counts and non-numeric fields are left untouched.
+    let mut results = serde_json::Value::Array(results);
+    crate::serialize::round_decimals(&mut results, 6);
     tool_json(&results)
 }
 
@@ -335,6 +342,9 @@ pub async fn quote(
     })?;
     let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;
     normalize_extended_sessions(&mut value);
+    // Non-US symbols carry `pre_market_quote`/`post_market_quote`/
+    // `overnight_quote` as `null`; drop those (and any other absent optional).
+    crate::serialize::strip_nulls(&mut value);
     tool_json(&value)
 }
 
@@ -359,7 +369,10 @@ pub async fn warrant_quote(
         mctx.evict_quote_context();
         Error::longbridge(e)
     })?;
-    tool_json(&result)
+    // Cap warrant analytics precision at 6 dp (same as warrant_list).
+    let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;
+    crate::serialize::round_decimals(&mut value, 6);
+    tool_json(&value)
 }
 
 pub async fn depth(
@@ -392,7 +405,10 @@ pub async fn participants(mctx: &crate::tools::McpContext) -> Result<CallToolRes
         mctx.evict_quote_context();
         Error::longbridge(e)
     })?;
-    tool_json(&result)
+    // `name_hk` is the Traditional-script twin of `name_cn` on every broker row.
+    let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;
+    crate::serialize::drop_keys(&mut value, &["name_hk"]);
+    tool_json(&value)
 }
 
 pub async fn trades(
@@ -673,7 +689,12 @@ pub async fn history_market_temperature(
             mctx.evict_quote_context();
             Error::longbridge(e)
         })?;
-    tool_json(&result)
+    // The history series is numeric only: `description` (the point-in-time label
+    // populated by `market_temperature`) is empty on every row here — verified
+    // across markets and years. Drop it.
+    let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;
+    crate::serialize::drop_keys(&mut value, &["description"]);
+    tool_json(&value)
 }
 
 pub async fn watchlist(mctx: &crate::tools::McpContext) -> Result<CallToolResult, McpError> {
@@ -682,7 +703,11 @@ pub async fn watchlist(mctx: &crate::tools::McpContext) -> Result<CallToolResult
         mctx.evict_quote_context();
         Error::longbridge(e)
     })?;
-    tool_json(&result)
+    // `market` on every security is derivable from the symbol suffix (and is
+    // "Unknown" for crypto).
+    let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;
+    crate::serialize::drop_keys(&mut value, &["market"]);
+    tool_json(&value)
 }
 
 pub async fn filings(
@@ -703,7 +728,10 @@ pub async fn warrant_issuers(mctx: &crate::tools::McpContext) -> Result<CallTool
         mctx.evict_quote_context();
         Error::longbridge(e)
     })?;
-    tool_json(&result)
+    // `name_hk` is the Traditional-script twin of `name_cn` on every issuer row.
+    let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;
+    crate::serialize::drop_keys(&mut value, &["name_hk"]);
+    tool_json(&value)
 }
 
 pub async fn warrant_list(
@@ -767,7 +795,12 @@ pub async fn warrant_list(
             mctx.evict_quote_context();
             Error::longbridge(e)
         })?;
-    tool_json(&result)
+    // Warrant analytics (premium, implied_volatility, delta, effective_leverage,
+    // leverage_ratio, balance_point, change_rate) serialize at ~17 significant
+    // digits; cap fractional precision at 6 across all 700+ rows.
+    let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;
+    crate::serialize::round_decimals(&mut value, 6);
+    tool_json(&value)
 }
 
 /// Default calc indexes when the caller omits `indexes`: common quote fields
@@ -820,7 +853,12 @@ pub async fn calc_indexes(
         }
     }
 
-    tool_json(&result)
+    // `SecurityCalcIndex` is a wide struct: every one of its ~40 index fields
+    // the caller did not request serializes as an explicit `null`. Drop those
+    // so a per-symbol array doesn't carry ~38 dead `"x": null` pairs per row.
+    let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;
+    crate::serialize::strip_nulls(&mut value);
+    tool_json(&value)
 }
 
 pub async fn create_watchlist_group(
@@ -1053,11 +1091,13 @@ pub async fn option_volume_daily(
         ("line_num", line_num.as_str()),
         ("direction", "1"),
     ];
-    http_get_tool_unix(
+    // `underlying_symbol` on every row == the queried `symbol`.
+    http_get_tool_unix_dropping(
         &client,
         "/v1/quote/option-volume-stats/daily",
         &params,
         &["stats.*.timestamp"],
+        &["underlying_symbol"],
     )
     .await
 }
