@@ -106,7 +106,14 @@ pub async fn ipo_listed(
     let hk = http_get_tool(&client, "/v1/ipo/listed", &params).await?;
     let us = http_get_tool(&client, "/v1/us/ipo/listed", &params).await?;
     let combined = format!(r#"{{"hk":{},"us":{}}}"#, get_json(&hk), get_json(&us));
-    Ok(make_result(combined))
+    // Each entry echoes `market` (already implied by the hk/us grouping key) and
+    // an `icon` display URL; drop both.
+    let Ok(mut value) = serde_json::from_str::<serde_json::Value>(&combined) else {
+        return Ok(make_result(combined));
+    };
+    crate::serialize::drop_keys(&mut value, &["market", "icon"]);
+    let json = serde_json::to_string(&value).unwrap_or(combined);
+    Ok(make_result(json))
 }
 
 /// Show IPO detail: profile + timeline + eligibility for a symbol.

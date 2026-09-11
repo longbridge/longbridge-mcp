@@ -372,8 +372,14 @@ pub async fn industry_rank(
         .send()
         .await
         .map_err(|e| Error::longbridge(e.into()))?;
-    let data: serde_json::Value =
+    let mut data: serde_json::Value =
         serde_json::from_str(&raw).map_err(crate::error::Error::Serialize)?;
+    // The response wraps the real rows in a group element whose own
+    // counter_id/symbol/name/chg are blank, and each row carries value_name/
+    // value_data/prev_close that are empty unless a value-column indicator (e.g.
+    // 市值) was requested. Drop the empty-string fields; they are re-added
+    // automatically when an indicator actually populates them.
+    crate::serialize::strip_empty_strings(&mut data);
     let out = serde_json::to_string(&data).map_err(crate::error::Error::Serialize)?;
     let structured = serde_json::from_str::<serde_json::Value>(&out).ok();
     let mut res = rmcp::model::CallToolResult::success(vec![rmcp::model::Content::text(out)]);
