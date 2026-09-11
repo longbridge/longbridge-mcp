@@ -935,12 +935,26 @@ pub async fn business_segments_history(
     if !cate.is_empty() {
         params.push(("cate", cate.as_str()));
     }
-    http_get_tool(
+    let raw = http_get_tool(
         &client,
         "/v1/quote/fundamentals/business-segments/history",
         &params,
     )
-    .await
+    .await?;
+    let json = raw
+        .content
+        .first()
+        .and_then(|c| c.as_text())
+        .map(|t| t.text.clone())
+        .unwrap_or_default();
+    let mut value: serde_json::Value =
+        serde_json::from_str(&json).map_err(crate::error::Error::Serialize)?;
+    // Every `yoy` growth figure carries ~14 fractional digits (e.g.
+    // "-32.48841750583911"); cap at 6 dp. The first period has no prior year, so
+    // its `yoy` is an empty string — drop those.
+    crate::serialize::round_decimals(&mut value, 6);
+    crate::serialize::strip_empty_strings(&mut value);
+    crate::tools::tool_json(&value)
 }
 
 pub async fn institutional_views(
