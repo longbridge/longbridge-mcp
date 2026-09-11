@@ -151,7 +151,7 @@
     },
     "history_executions": {
       "title": "歷史成交",
-      "description": "查詢指定日期區間內的歷史成交記錄，返回 executions[]{order_id, symbol, side, quantity, price, trade_done_at}",
+      "description": "查詢指定日期區間內的全部成交記錄，按成交時間（trade_done_at）篩選並自動翻頁返回完整結果（不受每頁 1000 條截斷），trade_id 為穩定去重鍵。返回 executions[]{order_id, trade_id, symbol, side, quantity, price, trade_done_at}",
       "properties": {
         "symbol": "按證券篩選（可選）",
         "start_at": "起始時間（RFC3339 時間格式）",
@@ -179,7 +179,7 @@
     },
     "today_executions": {
       "title": "當日成交",
-      "description": "查詢當日成交（filled），返回 executions[]{order_id, symbol, side, quantity, price, trade_done_at}。可按 symbol 或 order_id 篩選",
+      "description": "查詢當日成交（filled），返回 executions[]{order_id, trade_id, symbol, side, quantity, price, trade_done_at}。可按 symbol 或 order_id 篩選",
       "properties": {
         "symbol": "按證券篩選，例如 `\"700.HK\"`",
         "order_id": "按指定委託單號篩選"
