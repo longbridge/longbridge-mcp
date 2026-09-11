@@ -60,15 +60,25 @@ pub async fn financial_report(
     if !report_type.is_empty() {
         params.push(("report", report_type.as_str()));
     }
+    let raw = http_get_tool(&client, "/v1/quote/financial-reports", &params).await?;
+    let json = raw
+        .content
+        .first()
+        .and_then(|c| c.as_text())
+        .map(|t| t.text.clone())
+        .unwrap_or_default();
+    let mut value: serde_json::Value =
+        serde_json::from_str(&json).map_err(crate::error::Error::Serialize)?;
     // Per-indicator app scaffolding: `entry` (tips/entries with light_icon/
     // dark_icon/router nav URLs) and the constant `periods` nav array.
-    http_get_tool_dropping(
-        &client,
-        "/v1/quote/financial-reports",
-        &params,
-        &["entry", "periods"],
-    )
-    .await
+    crate::serialize::drop_keys(&mut value, &["entry", "periods"]);
+    // `yoy` growth figures carry ~14 fractional digits (e.g.
+    // "19.04333000476588"); cap at 6 dp.
+    crate::serialize::round_decimals(&mut value, 6);
+    // Ratio-only metrics have an empty `yoy`, and each account carries empty
+    // short_title/tip/industry_ranking/ranking_code/ratio display fields.
+    crate::serialize::strip_empty_strings(&mut value);
+    crate::tools::tool_json(&value)
 }
 
 /// Pull one half of `institution_rating`'s response out of a sub-request,
@@ -568,15 +578,26 @@ pub async fn operating(
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
     let cid = symbol_to_counter_id(&p.symbol);
-    // `keywords` is always empty and `web_url` is a derivable community link;
-    // the nested `financial.*` label fields are empty on every row.
-    http_get_tool_dropping(
+    // `keywords` is always empty and `web_url` is a derivable community link.
+    let raw = http_get_tool_dropping(
         &client,
         "/v1/quote/operatings",
         &[("counter_id", cid.as_str())],
         &["keywords", "web_url"],
     )
-    .await
+    .await?;
+    let json = raw
+        .content
+        .first()
+        .and_then(|c| c.as_text())
+        .map(|t| t.text.clone())
+        .unwrap_or_default();
+    let mut value: serde_json::Value =
+        serde_json::from_str(&json).map_err(crate::error::Error::Serialize)?;
+    // Each report's nested `financial` block carries empty symbol/name/region/
+    // code/report/report_txt label fields; drop them.
+    crate::serialize::strip_empty_strings(&mut value);
+    crate::tools::tool_json(&value)
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
