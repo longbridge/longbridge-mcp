@@ -8,7 +8,7 @@ use rmcp::serde::{Deserialize, Serialize};
 
 use crate::counter::{index_symbol_to_counter_id, is_etf, symbol_to_counter_id};
 use crate::error::Error;
-use crate::serialize::convert_unix_paths;
+use crate::serialize::{convert_unix_paths, transform_json};
 use crate::tools::support::http_client::{
     http_get_tool, http_get_tool_dropping, http_get_tool_trimming_zeros, http_get_tool_unix,
     http_get_tool_unix_dropping,
@@ -182,21 +182,70 @@ pub async fn ah_premium(
     .await
 }
 
+/// Hoist the per-bar prior-close fields (`apreclose`, `hpreclose`) out of the
+/// `klines` array to the top level.
+///
+/// These are the A-share and H-share *previous* closing prices: fixed for the
+/// whole session by definition, so upstream repeats the identical value on every
+/// one of the ~240 minute bars. Lifting them to a single top-level copy is
+/// lossless and keeps a stable shape (always hoisted). The FX `currency_rate` is
+/// deliberately left per-bar — unlike a prior close it can move intraday.
+fn hoist_intraday_prev_closes(value: &mut serde_json::Value) {
+    let first = value
+        .get("klines")
+        .and_then(serde_json::Value::as_array)
+        .and_then(|k| k.first());
+    let Some(first) = first else {
+        return;
+    };
+    let apreclose = first.get("apreclose").cloned();
+    let hpreclose = first.get("hpreclose").cloned();
+    if apreclose.is_none() && hpreclose.is_none() {
+        return;
+    }
+    if let Some(bars) = value
+        .get_mut("klines")
+        .and_then(serde_json::Value::as_array_mut)
+    {
+        for bar in bars.iter_mut() {
+            if let Some(obj) = bar.as_object_mut() {
+                obj.remove("apreclose");
+                obj.remove("hpreclose");
+            }
+        }
+    }
+    if let Some(obj) = value.as_object_mut() {
+        if let Some(v) = apreclose {
+            obj.insert("apreclose".to_owned(), v);
+        }
+        if let Some(v) = hpreclose {
+            obj.insert("hpreclose".to_owned(), v);
+        }
+    }
+}
+
 pub async fn ah_premium_intraday(
     mctx: &crate::tools::McpContext,
     p: SymbolParam,
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
     let cid = symbol_to_counter_id(&p.symbol);
+    let resp: String = client
+        .request(Method::GET, "/v1/quote/ahpremium/timeshares")
+        .query_params(vec![("counter_id", cid.as_str()), ("days", "1")])
+        .response::<String>()
+        .send()
+        .await
+        .map_err(|e| Error::longbridge(e.into()))?;
+    let transformed = transform_json(resp.as_bytes()).map_err(Error::Serialize)?;
+    let mut value: serde_json::Value =
+        serde_json::from_str(&transformed).map_err(Error::Serialize)?;
+    convert_unix_paths(&mut value, &["klines.*.timestamp"]);
     // `price_spread` is empty on every intraday minute bar.
-    http_get_tool_unix_dropping(
-        &client,
-        "/v1/quote/ahpremium/timeshares",
-        &[("counter_id", cid.as_str()), ("days", "1")],
-        &["klines.*.timestamp"],
-        &["price_spread"],
-    )
-    .await
+    crate::serialize::drop_keys(&mut value, &["price_spread"]);
+    hoist_intraday_prev_closes(&mut value);
+    let json = serde_json::to_string(&value).map_err(Error::Serialize)?;
+    Ok(crate::tools::tool_result(json))
 }
 
 pub async fn trade_stats(
@@ -638,7 +687,56 @@ pub async fn rank_list(
 
 #[cfg(test)]
 mod tests {
-    use super::trade_status_label;
+    use super::{hoist_intraday_prev_closes, trade_status_label};
+
+    #[test]
+    fn hoist_intraday_prev_closes_lifts_prior_closes_and_keeps_live_fields() {
+        let mut v = serde_json::json!({
+            "klines": [
+                {"aprice": "55.160", "apreclose": "52.890", "hprice": "53.750",
+                 "hpreclose": "56.250", "currency_rate": "0.855300",
+                 "ahpremium_rate": "-0.166563", "timestamp": "2026-09-11T01:30:00Z"},
+                {"aprice": "54.810", "apreclose": "52.890", "hprice": "53.550",
+                 "hpreclose": "56.250", "currency_rate": "0.855300",
+                 "ahpremium_rate": "-0.164362", "timestamp": "2026-09-11T01:31:00Z"}
+            ]
+        });
+        hoist_intraday_prev_closes(&mut v);
+
+        // Prior closes are lifted once to the top level.
+        assert_eq!(v["apreclose"], "52.890", "A-share prior close is hoisted");
+        assert_eq!(v["hpreclose"], "56.250", "H-share prior close is hoisted");
+        // …and removed from every bar.
+        for bar in v["klines"].as_array().expect("klines is an array") {
+            assert!(
+                bar.get("apreclose").is_none(),
+                "per-bar apreclose is dropped"
+            );
+            assert!(
+                bar.get("hpreclose").is_none(),
+                "per-bar hpreclose is dropped"
+            );
+            // Live per-bar fields stay put — including currency_rate.
+            assert!(bar.get("aprice").is_some(), "live aprice is kept");
+            assert!(bar.get("hprice").is_some(), "live hprice is kept");
+            assert!(
+                bar.get("currency_rate").is_some(),
+                "currency_rate stays per-bar (it can move intraday)"
+            );
+            assert!(bar.get("ahpremium_rate").is_some(), "premium rate is kept");
+        }
+    }
+
+    #[test]
+    fn hoist_intraday_prev_closes_tolerates_empty_klines() {
+        let mut v = serde_json::json!({ "klines": [] });
+        hoist_intraday_prev_closes(&mut v);
+        assert_eq!(
+            v,
+            serde_json::json!({ "klines": [] }),
+            "empty input is unchanged"
+        );
+    }
 
     #[test]
     fn trade_status_label_matches_openapi_status() {
