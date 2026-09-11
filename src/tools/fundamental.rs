@@ -937,13 +937,27 @@ pub async fn business_segments(
     let cid = symbol_to_counter_id(&p.symbol);
     // `bus_ids`/`reg_ids` re-list the per-row segment ids; `report` (e.g. "qf")
     // duplicates the human-readable `report_txt`.
-    http_get_tool_dropping(
+    let raw = http_get_tool_dropping(
         &client,
         "/v1/quote/fundamentals/business-segments",
         &[("counter_id", cid.as_str())],
         &["bus_ids", "reg_ids", "report"],
     )
-    .await
+    .await?;
+    let json = raw
+        .content
+        .first()
+        .and_then(|c| c.as_text())
+        .map(|t| t.text.clone())
+        .unwrap_or_default();
+    let mut value: serde_json::Value =
+        serde_json::from_str(&json).map_err(crate::error::Error::Serialize)?;
+    // Per-segment `yoy` carries ~14 fractional digits (e.g. "1.52573570177189");
+    // cap at 6 dp. The current period may have no prior-year base, leaving an
+    // empty top-level `yoy` — drop it.
+    crate::serialize::round_decimals(&mut value, 6);
+    crate::serialize::strip_empty_strings(&mut value);
+    crate::tools::tool_json(&value)
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
