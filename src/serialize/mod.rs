@@ -104,6 +104,11 @@ pub(crate) fn strip_empty_strings(value: &mut serde_json::Value) {
 /// already within `dp` are left byte-for-byte unchanged, so display formatting
 /// like `"438.400"` is preserved. `dp` is a floor: callers pass 6 to keep at
 /// least six decimal places.
+///
+/// The rounded result is `normalize()`d so it carries no trailing zeros
+/// (`"35.30000001"` → `"35.3"`, not `"35.300000"`); `round_dp` alone fixes the
+/// scale to exactly `dp` and would otherwise re-introduce padding. `normalize()`
+/// never emits scientific notation for these magnitudes.
 pub(crate) fn round_decimals(value: &mut serde_json::Value, dp: u32) {
     match value {
         serde_json::Value::Object(map) => {
@@ -124,7 +129,7 @@ pub(crate) fn round_decimals(value: &mut serde_json::Value, dp: u32) {
             if frac > dp as usize
                 && let Ok(d) = s.parse::<rust_decimal::Decimal>()
             {
-                *s = d.round_dp(dp).to_string();
+                *s = d.round_dp(dp).normalize().to_string();
             }
         }
         _ => {}
@@ -618,6 +623,27 @@ mod tests {
         assert_eq!(v["symbol"], "700.HK", "non-numeric: untouched");
         assert_eq!(v["date"], "2026-09-10", "date: untouched");
         assert_eq!(v["ts"], "1789007822", "integer: untouched");
+    }
+
+    #[test]
+    fn round_decimals_result_has_no_trailing_zero_padding() {
+        // A >6dp value that rounds down to trailing zeros must not come back
+        // padded to exactly 6 places ("35.300000") — round_dp fixes the scale,
+        // normalize() removes the padding. Lossless.
+        let mut v = serde_json::json!({
+            "a": "35.30000001",
+            "b": "100.0000005",
+            "c": "5000000000.0000001",
+            "d": "0.086310904872"
+        });
+        round_decimals(&mut v, 6);
+        assert_eq!(v["a"], "35.3");
+        assert_eq!(v["b"], "100");
+        assert_eq!(
+            v["c"], "5000000000",
+            "no scientific notation for large magnitudes"
+        );
+        assert_eq!(v["d"], "0.086311", "genuine 6-digit value keeps its digits");
     }
 
     #[test]
