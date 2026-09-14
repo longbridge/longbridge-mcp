@@ -99,7 +99,23 @@ pub async fn ipo_subscriptions(
 /// Show the IPO calendar (all upcoming and recent IPOs).
 pub async fn ipo_calendar(mctx: &crate::tools::McpContext) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
-    http_get_tool_unix(&client, "/v1/ipo/calendar", &[], &["timestamp"]).await
+    // Besides the top-level `timestamp`, every per-IPO milestone date
+    // (subscription window, allotment, dark-pool, listing) arrives as a raw
+    // unix-seconds number a model cannot interpret; convert them to RFC3339.
+    http_get_tool_unix(
+        &client,
+        "/v1/ipo/calendar",
+        &[],
+        &[
+            "timestamp",
+            "list.*.sub_date",
+            "list.*.sub_end_date",
+            "list.*.result_date",
+            "list.*.mart_date",
+            "list.*.ipo_date",
+        ],
+    )
+    .await
 }
 
 /// List recently listed IPO stocks (HK and US).

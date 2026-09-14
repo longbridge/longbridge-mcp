@@ -280,7 +280,16 @@ pub async fn anomaly(
         cid = symbol_to_counter_id(sym);
         params.push(("counter_id", cid.as_str()));
     }
-    http_get_tool(&client, "/v1/quote/changes", &params).await
+    // `alert_time` arrives as a raw unix-seconds string (e.g. "1789105515"),
+    // which a model cannot interpret; convert it to RFC3339 like every other
+    // timestamp field.
+    http_get_tool_unix(
+        &client,
+        "/v1/quote/changes",
+        &params,
+        &["changes.*.alert_time"],
+    )
+    .await
 }
 
 pub async fn constituent(
