@@ -426,7 +426,9 @@ pub async fn trades(
         mctx.evict_quote_context();
         Error::longbridge(e)
     })?;
-    tool_json(&result)
+    // Trade prices come padded to a fixed decimal width ("431.000"); strip the
+    // non-significant trailing zeros (lossless). Up to 1000 trades per call.
+    price_series_result(&result)
 }
 
 /// Serialize an SDK market-data value (candlesticks/intraday/depth) and strip
