@@ -423,6 +423,22 @@ pub async fn trades(
     tool_json(&result)
 }
 
+/// Serialize an SDK price series (candlesticks/intraday) and strip the fixed
+/// decimal padding upstream applies to `turnover` (e.g. `"…343.500"`) and OHLC
+/// prices (e.g. `"428.400"`). Lossless — [`crate::serialize::strip_trailing_zeros`]
+/// only removes non-significant zeros — and worthwhile because these are among
+/// the highest-volume responses (up to 1000 candles).
+fn price_series_result<T>(result: &T) -> Result<CallToolResult, McpError>
+where
+    T: serde::Serialize,
+{
+    let json = crate::serialize::to_tool_json(result).map_err(Error::Serialize)?;
+    let mut value: serde_json::Value = serde_json::from_str(&json).map_err(Error::Serialize)?;
+    crate::serialize::strip_trailing_zeros(&mut value);
+    let out = serde_json::to_string(&value).map_err(Error::Serialize)?;
+    Ok(crate::tools::tool_result(out))
+}
+
 pub async fn intraday(
     mctx: &crate::tools::McpContext,
     p: IntradayParam,
@@ -436,7 +452,7 @@ pub async fn intraday(
         mctx.evict_quote_context();
         Error::longbridge(e)
     })?;
-    tool_json(&result)
+    price_series_result(&result)
 }
 
 /// Upstream's own "symbol count out of limit" business code — seen firing
@@ -491,7 +507,7 @@ pub async fn candlesticks(
         mctx.evict_quote_context();
         Error::longbridge(*e)
     })?;
-    tool_json(&result)
+    price_series_result(&result)
 }
 
 pub async fn history_candlesticks_by_offset(
@@ -523,7 +539,7 @@ pub async fn history_candlesticks_by_offset(
         mctx.evict_quote_context();
         Error::longbridge(*e)
     })?;
-    tool_json(&result)
+    price_series_result(&result)
 }
 
 pub async fn history_candlesticks_by_date(
@@ -549,7 +565,7 @@ pub async fn history_candlesticks_by_date(
             mctx.evict_quote_context();
             Error::longbridge(e)
         })?;
-    tool_json(&result)
+    price_series_result(&result)
 }
 
 pub async fn trading_days(
