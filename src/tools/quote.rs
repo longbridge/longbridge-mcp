@@ -345,6 +345,10 @@ pub async fn quote(
     // Non-US symbols carry `pre_market_quote`/`post_market_quote`/
     // `overnight_quote` as `null`; drop those (and any other absent optional).
     crate::serialize::strip_nulls(&mut value);
+    // Prices and turnover come padded to a fixed decimal width ("432.000",
+    // "…550.800"), on the main quote and every extended-session block; strip
+    // the non-significant trailing zeros (lossless).
+    crate::serialize::strip_trailing_zeros(&mut value);
     tool_json(&value)
 }
 
@@ -384,7 +388,9 @@ pub async fn depth(
         mctx.evict_quote_context();
         Error::longbridge(e)
     })?;
-    tool_json(&result)
+    // Order-book prices come padded to a fixed decimal width ("432.200"); strip
+    // the non-significant trailing zeros (lossless).
+    price_series_result(&result)
 }
 
 pub async fn brokers(
@@ -423,11 +429,13 @@ pub async fn trades(
     tool_json(&result)
 }
 
-/// Serialize an SDK price series (candlesticks/intraday) and strip the fixed
-/// decimal padding upstream applies to `turnover` (e.g. `"…343.500"`) and OHLC
-/// prices (e.g. `"428.400"`). Lossless — [`crate::serialize::strip_trailing_zeros`]
-/// only removes non-significant zeros — and worthwhile because these are among
-/// the highest-volume responses (up to 1000 candles).
+/// Serialize an SDK market-data value (candlesticks/intraday/depth) and strip
+/// the fixed decimal padding upstream applies to prices (e.g. `"428.400"`) and
+/// `turnover` (e.g. `"…343.500"`). Lossless —
+/// [`crate::serialize::strip_trailing_zeros`] only removes non-significant zeros
+/// — and worthwhile because these are among the highest-volume responses.
+/// Object-rooted results (depth) keep their `structuredContent` via
+/// [`crate::tools::tool_result`]; array-rooted ones leave it unset.
 fn price_series_result<T>(result: &T) -> Result<CallToolResult, McpError>
 where
     T: serde::Serialize,
