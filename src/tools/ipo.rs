@@ -85,7 +85,15 @@ pub async fn ipo_subscriptions(
     let hk = http_get_tool(&client, "/v1/ipo/subscriptions", &[]).await?;
     let us = http_get_tool(&client, "/v1/us/ipo/subscriptions", &[]).await?;
     let combined = format!(r#"{{"hk":{},"us":{}}}"#, get_json(&hk), get_json(&us));
-    Ok(make_result(combined))
+    // Each entry carries an `icon` display URL and empty stock_desc/order_method/
+    // declaration strings; drop them.
+    let Ok(mut value) = serde_json::from_str::<serde_json::Value>(&combined) else {
+        return Ok(make_result(combined));
+    };
+    crate::serialize::drop_keys(&mut value, &["icon"]);
+    crate::serialize::strip_empty_strings(&mut value);
+    let json = serde_json::to_string(&value).unwrap_or(combined);
+    Ok(make_result(json))
 }
 
 /// Show the IPO calendar (all upcoming and recent IPOs).
