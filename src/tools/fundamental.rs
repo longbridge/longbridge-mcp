@@ -381,7 +381,7 @@ pub async fn valuation(
     }
     let client = mctx.create_http_client();
     let cid = symbol_to_counter_id(&p.symbol);
-    http_get_tool_unix(
+    let raw = http_get_tool_unix(
         &client,
         "/v1/quote/valuation",
         &[
@@ -391,7 +391,18 @@ pub async fn valuation(
         ],
         &["metrics.pe.list.*.timestamp"],
     )
-    .await
+    .await?;
+    let json = raw
+        .content
+        .first()
+        .and_then(|c| c.as_text())
+        .map(|t| t.text.clone())
+        .unwrap_or_default();
+    let mut value: serde_json::Value =
+        serde_json::from_str(&json).map_err(crate::error::Error::Serialize)?;
+    // The `desc` summary wraps emphasised numbers in `<strong>` markup.
+    crate::serialize::strip_html_tags_in_field(&mut value, "desc");
+    crate::tools::tool_json(&value)
 }
 
 pub async fn valuation_history(
@@ -429,9 +440,11 @@ pub async fn valuation_history(
         serde_json::from_str(&json).map_err(crate::error::Error::Serialize)?;
     // The `stocks` map's market_cap figures are padded to four decimals (e.g.
     // "135261759885.5400"); strip the trailing zeros (lossless). The `peers`
-    // rows carry empty `ticker`/`growth` strings; drop them.
+    // rows carry empty `ticker`/`growth` strings; drop them. The `desc`
+    // summaries wrap emphasised numbers in `<strong>` markup; strip it.
     crate::serialize::strip_trailing_zeros(&mut value);
     crate::serialize::strip_empty_strings(&mut value);
+    crate::serialize::strip_html_tags_in_field(&mut value, "desc");
     crate::tools::tool_json(&value)
 }
 

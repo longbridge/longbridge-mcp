@@ -235,6 +235,61 @@ pub(crate) fn strip_cashtags_in_field(value: &mut serde_json::Value, field: &str
     }
 }
 
+/// Remove simple HTML tags (`<strong>`, `</strong>`, `<br>`, …) from `input`,
+/// keeping the enclosed text. Some upstream summary fields wrap emphasised
+/// numbers in `<strong>…</strong>`, which is pure display markup to a model
+/// reading the prose. A `<` with no matching `>` is left as-is so ordinary
+/// less-than text survives.
+fn strip_html_tags(input: &str) -> String {
+    if !input.contains('<') {
+        return input.to_string();
+    }
+    let mut out = String::with_capacity(input.len());
+    let mut rest = input;
+    while let Some(start) = rest.find('<') {
+        match rest[start..].find('>') {
+            // Only treat `<…>` as a tag when the content looks like one (starts
+            // with a letter or `/`), so math like `a < b` is preserved.
+            Some(end)
+                if rest[start + 1..].starts_with(|c: char| c.is_ascii_alphabetic() || c == '/') =>
+            {
+                out.push_str(&rest[..start]);
+                rest = &rest[start + end + 1..];
+            }
+            _ => {
+                out.push_str(&rest[..=start]);
+                rest = &rest[start + 1..];
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Apply [`strip_html_tags`] to every `field`-keyed string in `value`,
+/// recursively (through nested objects and arrays).
+pub(crate) fn strip_html_tags_in_field(value: &mut serde_json::Value, field: &str) {
+    match value {
+        serde_json::Value::Object(map) => {
+            for (k, v) in map.iter_mut() {
+                if k == field
+                    && let serde_json::Value::String(s) = v
+                {
+                    *s = strip_html_tags(s);
+                } else {
+                    strip_html_tags_in_field(v, field);
+                }
+            }
+        }
+        serde_json::Value::Array(arr) => {
+            for v in arr.iter_mut() {
+                strip_html_tags_in_field(v, field);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Recursively drop entries whose (snake_case) key is in `keys` from every
 /// object in `value`, at any depth and through arrays.
 ///
@@ -594,6 +649,26 @@ mod tests {
             v["items"][2]["description"],
             "Alibaba.USTENCENT.HK two tags"
         );
+    }
+
+    #[test]
+    fn strip_html_tags_in_field_removes_markup_keeps_text_and_math() {
+        let mut v = serde_json::json!({
+            "metrics": {"pe": {"desc": "当前市盈率 <strong>14.38</strong>，<strong>低于</strong>合理区间"}},
+            "note": "plain",
+            "math": "buy if a < b and c > d"
+        });
+        strip_html_tags_in_field(&mut v, "desc");
+        assert_eq!(
+            v["metrics"]["pe"]["desc"], "当前市盈率 14.38，低于合理区间",
+            "<strong> markup is removed, enclosed text kept"
+        );
+        assert_eq!(v["note"], "plain", "non-desc fields untouched");
+        // A field named `desc` with real less-than math would keep it, since the
+        // char after `<` is a space, not a tag name:
+        let mut m = serde_json::json!({"desc": "a < b and c > d"});
+        strip_html_tags_in_field(&mut m, "desc");
+        assert_eq!(m["desc"], "a < b and c > d", "non-tag < is preserved");
     }
 
     #[test]
