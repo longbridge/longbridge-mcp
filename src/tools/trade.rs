@@ -355,7 +355,11 @@ pub async fn account_balance(
         .account_balance(p.currency.as_deref())
         .await
         .map_err(Error::longbridge)?;
-    tool_json(&result)
+    // Cash/margin amounts are padded to two decimals ("123000.00", "0.00");
+    // strip the trailing zeros (lossless).
+    let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;
+    crate::serialize::strip_trailing_zeros(&mut value);
+    tool_json(&value)
 }
 
 pub async fn stock_positions(mctx: &crate::tools::McpContext) -> Result<CallToolResult, McpError> {
@@ -386,13 +390,19 @@ pub async fn stock_positions(mctx: &crate::tools::McpContext) -> Result<CallTool
             }
         }
     }
+    // `cost_price` is padded to a fixed decimal width ("41.430"); strip the
+    // trailing zeros (lossless).
+    crate::serialize::strip_trailing_zeros(&mut value);
     tool_json(&value)
 }
 
 pub async fn fund_positions(mctx: &crate::tools::McpContext) -> Result<CallToolResult, McpError> {
     let (ctx, _) = TradeContext::new(mctx.create_config());
     let result = ctx.fund_positions(None).await.map_err(Error::longbridge)?;
-    tool_json(&result)
+    // Cost/NAV amounts are padded to a fixed decimal width; strip trailing zeros.
+    let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;
+    crate::serialize::strip_trailing_zeros(&mut value);
+    tool_json(&value)
 }
 
 pub async fn margin_ratio(
