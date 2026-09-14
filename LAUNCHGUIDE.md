@@ -11,10 +11,7 @@ The server is hosted at `https://mcp.longbridge.com` (streamable-http), stateles
 ## Setup Requirements
 No environment variables or API keys required for the hosted endpoint. Authentication is handled by an OAuth 2.1 flow that the MCP client kicks off automatically the first time a tool is invoked — the user logs in to their Longbridge account in the browser and grants access. No tokens to copy/paste, no secrets to configure.
 
-For **self-hosting** (optional):
-- `LONGBRIDGE_HTTP_URL` (optional, default `https://openapi.longbridge.com`): Longbridge OpenAPI base URL — used for OAuth metadata discovery.
-- `LONGBRIDGE_QUOTE_WS_URL` (optional, default `wss://openapi-quote.longbridge.com/v2`): quote WebSocket endpoint.
-- `LONGBRIDGE_TRADE_WS_URL` (optional, default `wss://openapi-trade.longbridge.com/v2`): trade WebSocket endpoint.
+For **self-hosting**: no environment variables are needed. Upstream endpoints are fixed in the binary — `https://openapi.longbridge.com` plus the `openapi-quote` / `openapi-trade` WebSocket endpoints — and cannot be overridden by environment variables. The `--canary` flag switches them to Longbridge's canary environment (`*.longbridge.xyz`), which is internal and not usable with production credentials.
 
 ## Category
 Finance

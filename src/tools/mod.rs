@@ -73,6 +73,14 @@ where
             if let Err(err) = &result {
                 let code = err.code.0;
                 let elapsed_ms = (duration * 1000.0) as u64;
+                // Same task-local `record_tool_call` labels the metric with, so
+                // failures can be sliced by originating client in logs too (the
+                // "error_code drill-down by client" half of the telemetry). It
+                // also doubles as a propagation check: if this reads `unknown`
+                // in prod, the metric's `client` label is `unknown` as well.
+                let client = crate::metrics::CURRENT_CLIENT
+                    .try_with(|c| *c)
+                    .unwrap_or("unknown");
                 // `tool` name alone isn't unique on a hosted, multi-tenant
                 // server — two concurrent calls to the same tool can each
                 // fail and interleave their log lines. `call_id` is the only
@@ -104,7 +112,14 @@ where
                 // pre-bound to a local, so it's only evaluated when the
                 // target is actually enabled.
                 if routine {
-                    tracing::info!(tool = name, call_id, elapsed_ms, code, "tool call rejected");
+                    tracing::info!(
+                        tool = name,
+                        client,
+                        call_id,
+                        elapsed_ms,
+                        code,
+                        "tool call rejected"
+                    );
                     tracing::info!(
                         target: "longbridge_mcp::tools::error_detail",
                         tool = name,
@@ -114,7 +129,14 @@ where
                         "tool call error detail"
                     );
                 } else {
-                    tracing::warn!(tool = name, call_id, elapsed_ms, code, "tool call failed");
+                    tracing::warn!(
+                        tool = name,
+                        client,
+                        call_id,
+                        elapsed_ms,
+                        code,
+                        "tool call failed"
+                    );
                     tracing::warn!(
                         target: "longbridge_mcp::tools::error_detail",
                         tool = name,
@@ -439,6 +461,7 @@ mod dca;
 mod fundamental;
 mod grid;
 mod ipo;
+mod jq;
 mod macrodata;
 mod market;
 mod output;
@@ -552,9 +575,8 @@ const TERMINAL_OBJECT_ROOTED: &[&str] = &["depth", "capital_distribution"];
 pub struct Longbridge;
 
 pub(crate) fn tool_result(json: String) -> CallToolResult {
-    // MCP spec §tool-result: a tool that declares an `outputSchema` MUST
-    // return `structuredContent`. We populate it for every response so the
-    // invariant holds regardless of which tools gain a schema in the future.
+    // Keep object responses available to clients as structured content.
+    // Optional jq projection replaces both representations together.
     let structured = serde_json::from_str::<serde_json::Value>(&json)
         .ok()
         .filter(serde_json::Value::is_object);
@@ -582,38 +604,6 @@ pub struct McpContext {
     pub extra_headers: Vec<(String, String)>,
 }
 
-/// Global-gateway endpoints, pinned for US-data-center tokens.
-///
-/// # Which access point can serve which data center
-///
-/// Every Longbridge credential carries its data center as a prefix: `us_…` for
-/// the US data center, `ap_…` (or unprefixed) for Asia-Pacific. That prefix
-/// decides which access point can serve it:
-///
-/// | Data center | `.com` | `.cn` |
-/// |-------------|--------|-------|
-/// | `us`        | yes — the only usable access point | no |
-/// | `ap`        | yes    | yes   |
-///
-/// `.cn` has no path to the US data center. This is a hard constraint, not a
-/// latency or preference question.
-///
-/// # Why this is pinned
-///
-/// Left unset, the SDK picks an access point by geolocation at request time,
-/// which resolves to `.cn` on a China Mainland network. A US token sent to `.cn`
-/// still authenticates — the WebSocket connects and basic calls such as
-/// `static_info` succeed — but every market-data request comes back
-/// `301604 no quote access`, because `.cn` cannot source US-account quotes. The
-/// failure reads like a missing permission and is not one, so pin the endpoints
-/// rather than letting geolocation decide.
-///
-/// AP tokens are deliberately left to geolocation: both access points serve
-/// them, so the nearer one is the right choice.
-const US_HTTP_URL: &str = "https://openapi.longbridge.com";
-const US_QUOTE_WS_URL: &str = "wss://openapi-quote.longbridge.com/v2";
-const US_TRADE_WS_URL: &str = "wss://openapi-trade.longbridge.com/v2";
-
 /// Server-side beacon endpoint. Quote operations flow over the WebSocket quote
 /// channel and never reach the HTTP access log; a request to this fake path lets
 /// the server record (and count) that a WS-backed quote tool ran. The path only
@@ -632,17 +622,6 @@ pub(crate) async fn send_quote_cmd(client: &longbridge::httpclient::HttpClient) 
         .await;
 }
 
-/// Serializes tests that mutate the process-global `LONGBRIDGE_HTTP_URL` env var
-/// to redirect the SDK base URL at a local capture server. Multiple such tests
-/// run concurrently in one binary and would otherwise clobber each other's URL.
-///
-/// `tokio::sync::Mutex` is used so the guard can be held across `.await` points
-/// without blocking the executor thread (needed by authenticate.rs's test, which
-/// must keep the env var set for the duration of an async call).
-#[cfg(test)]
-pub(crate) static HTTP_URL_ENV_LOCK: std::sync::LazyLock<tokio::sync::Mutex<()>> =
-    std::sync::LazyLock::new(|| tokio::sync::Mutex::new(()));
-
 impl McpContext {
     /// This server's own identity as an RFC 9110 product token.
     const SELF_USER_AGENT: &'static str = concat!("longbridge-mcp/", env!("CARGO_PKG_VERSION"));
@@ -660,16 +639,11 @@ impl McpContext {
         }
     }
 
-    /// Whether this request's token belongs to the US data center and so needs
-    /// the global gateway pinned instead of geotest-selected endpoints.
+    /// Build an SDK `Config` for this request.
     ///
-    /// `LONGBRIDGE_HTTP_URL` takes precedence when set, so tests and local mock
-    /// servers can still redirect the SDK.
-    fn pin_us_endpoints(&self) -> bool {
-        std::env::var("LONGBRIDGE_HTTP_URL").is_err()
-            && longbridge::DcRegion::from_credential(&self.token) == longbridge::DcRegion::Us
-    }
-
+    /// All three upstream URLs are set explicitly from [`crate::endpoints`], so
+    /// the SDK neither reads them from the environment nor geolocates an access
+    /// point — see that module for why the endpoints are pinned.
     pub fn create_config(&self) -> Arc<longbridge::Config> {
         let mut config =
             longbridge::Config::from_oauth(longbridge::oauth::OAuth::from_token(&self.token))
@@ -677,13 +651,10 @@ impl McpContext {
                 .enable_overnight()
                 // Identify MCP-originated requests on the Context path (REST and
                 // WebSocket upgrades), mirroring how longbridge-cli tags itself.
-                .header("user-agent", self.user_agent());
-        if self.pin_us_endpoints() {
-            config = config
-                .http_url(US_HTTP_URL)
-                .quote_ws_url(US_QUOTE_WS_URL)
-                .trade_ws_url(US_TRADE_WS_URL);
-        }
+                .header("user-agent", self.user_agent())
+                .http_url(crate::endpoints::http_url())
+                .quote_ws_url(crate::endpoints::quote_ws_url())
+                .trade_ws_url(crate::endpoints::trade_ws_url());
         if let Some(ref lang) = self.language {
             let lb_lang = if lang.contains("zh-CN") || lang.contains("zh-Hans") {
                 longbridge::Language::ZH_CN
@@ -702,15 +673,14 @@ impl McpContext {
         Arc::new(config)
     }
 
+    /// Build an SDK `HttpClient` for this request. The base URL is pinned the
+    /// same way as in [`McpContext::create_config`], so REST calls can never
+    /// drift to a different access point than the WebSocket.
     pub fn create_http_client(&self) -> longbridge::httpclient::HttpClient {
-        let mut http_config = longbridge::httpclient::HttpClientConfig::from_oauth(
+        let http_config = longbridge::httpclient::HttpClientConfig::from_oauth(
             longbridge::oauth::OAuth::from_token(&self.token),
-        );
-        // Same US pinning as `create_config`, so REST calls do not drift to the
-        // CN node while the WebSocket is pinned to the global one.
-        if self.pin_us_endpoints() {
-            http_config = http_config.http_url(US_HTTP_URL);
-        }
+        )
+        .http_url(crate::endpoints::http_url());
         let mut client = longbridge::httpclient::HttpClient::new(http_config);
         // NOTE: This is very important for passing headers to upstream Longbridge services.
         // Do not remove this unless you have a good reason and know exactly which headers to forward instead.
@@ -1017,6 +987,19 @@ fn extract_context(ctx: &RequestContext<RoleServer>) -> Result<McpContext, McpEr
     })
 }
 
+/// Classify the originating client from the request's `User-Agent`, for the
+/// `CURRENT_CLIENT` metric/log label. Unlike [`extract_context`] this never
+/// fails (a request with no parts or no UA is simply `"unknown"`), so it can
+/// run on every `call_tool`, including token-less `authenticate` calls.
+fn client_bucket_from_context(ctx: &RequestContext<RoleServer>) -> &'static str {
+    let user_agent = ctx
+        .extensions
+        .get::<axum::http::request::Parts>()
+        .and_then(|parts| parts.headers.get("user-agent"))
+        .and_then(|value| value.to_str().ok());
+    crate::metrics::classify_client(user_agent)
+}
+
 /// Returns all registered MCP tools with full schema metadata, sorted by name.
 ///
 /// This is used for documentation resources where verbose field descriptions
@@ -1024,12 +1007,37 @@ fn extract_context(ctx: &RequestContext<RoleServer>) -> Result<McpContext, McpEr
 fn all_tools_full_cached() -> &'static [rmcp::model::Tool] {
     static TOOLS: std::sync::OnceLock<Vec<rmcp::model::Tool>> = std::sync::OnceLock::new();
     TOOLS.get_or_init(|| {
+        // Descriptions and schema docs are literals naming
+        // `endpoints::STATIC_CONNECT_PAGE`; retarget them here, the one place
+        // every descriptor passes through, so a canary process does not send
+        // users to the production connect page. `None` in production, where
+        // there is nothing to rewrite. The matching rewrite for the translated
+        // descriptions lives in `crate::auth::build_locales_node`.
+        let connect_page = crate::endpoints::connect_page_url();
+        let retarget =
+            (connect_page != crate::endpoints::STATIC_CONNECT_PAGE).then_some(connect_page);
         cached_router()
             .list_all()
             .into_iter()
             .map(|mut tool| {
                 let mut schema = serde_json::Value::Object((*tool.input_schema).clone());
                 strip_null_from_type_arrays(&mut schema);
+                if let Some(connect_page) = retarget {
+                    replace_in_json_strings(
+                        &mut schema,
+                        crate::endpoints::STATIC_CONNECT_PAGE,
+                        connect_page,
+                    );
+                    if let Some(description) = &tool.description
+                        && description.contains(crate::endpoints::STATIC_CONNECT_PAGE)
+                    {
+                        tool.description = Some(
+                            description
+                                .replace(crate::endpoints::STATIC_CONNECT_PAGE, connect_page)
+                                .into(),
+                        );
+                    }
+                }
                 if let serde_json::Value::Object(obj) = schema {
                     tool.input_schema = std::sync::Arc::new(obj);
                 }
@@ -1053,8 +1061,8 @@ fn all_tools_cached() -> &'static [rmcp::model::Tool] {
             .iter()
             .cloned()
             .map(|mut tool| {
-                compact_output_schema_for_tool_list(&mut tool);
                 compact_tool_description_for_tool_list(&mut tool);
+                jq::describe(&mut tool);
                 tool
             })
             .collect()
@@ -1275,7 +1283,6 @@ const TOOL_ENDPOINTS: &[(&str, u8)] = &[
     ("grid_detail", 0),
     ("grid_list", 0),
     ("grid_list_by_ids", 0),
-    ("grid_questionnaire", 0),
     ("grid_replace", 0),
     ("grid_restart", 0),
     ("grid_submit", 0),
@@ -1340,8 +1347,8 @@ pub fn v2_list_tools() -> Vec<rmcp::model::Tool> {
 
 /// Returns the tool router, built once and cached for the lifetime of the process.
 ///
-/// Shared by `ServerHandler::call_tool` (dispatch) and `ServerHandler::get_tool`
-/// (task-support validation, called by rmcp on every `CallToolRequest`).
+/// Used for dispatch and as the source of the cached public tool descriptors.
+/// `get_tool` returns those public descriptors, including the common _jq input.
 fn cached_router() -> &'static rmcp::handler::server::router::tool::ToolRouter<Longbridge> {
     use rmcp::handler::server::router::tool::ToolRouter;
     static ROUTER: std::sync::OnceLock<ToolRouter<Longbridge>> = std::sync::OnceLock::new();
@@ -1350,6 +1357,31 @@ fn cached_router() -> &'static rmcp::handler::server::router::tool::ToolRouter<L
 
 /// Recursively remove `"null"` from JSON Schema `type` arrays.
 /// When the array is left with a single element it is unwrapped to a plain string.
+/// Replace every occurrence of `from` with `to` in all strings of a JSON value.
+/// Used to retarget URLs baked into static tool metadata (see
+/// [`all_tools_full_cached`]); descriptions live both at the top level of a
+/// schema and nested under `properties`, so the walk has to be recursive.
+fn replace_in_json_strings(value: &mut serde_json::Value, from: &str, to: &str) {
+    match value {
+        serde_json::Value::String(text) => {
+            if text.contains(from) {
+                *text = text.replace(from, to);
+            }
+        }
+        serde_json::Value::Object(map) => {
+            for v in map.values_mut() {
+                replace_in_json_strings(v, from, to);
+            }
+        }
+        serde_json::Value::Array(arr) => {
+            for v in arr.iter_mut() {
+                replace_in_json_strings(v, from, to);
+            }
+        }
+        _ => {}
+    }
+}
+
 fn strip_null_from_type_arrays(value: &mut serde_json::Value) {
     match value {
         serde_json::Value::Object(map) => {
@@ -1375,54 +1407,6 @@ fn strip_null_from_type_arrays(value: &mut serde_json::Value) {
             }
         }
         _ => {}
-    }
-}
-
-/// Recursively remove documentation-only JSON Schema keys from tool descriptors.
-/// Validation keywords stay in `tools/list`; verbose descriptions remain
-/// available through `lb://tools/{tool}/output-schema` resources.
-fn strip_schema_documentation_keys(value: &mut serde_json::Value) {
-    match value {
-        serde_json::Value::Object(map) => {
-            map.remove("$schema");
-            map.remove("title");
-            map.remove("description");
-            for (key, v) in map.iter_mut() {
-                // The values of these keywords are maps keyed by *names*
-                // (property / definition names), not schema objects — a
-                // property legitimately named "title" or "description" must
-                // not be stripped. Recurse into each named child schema
-                // directly instead.
-                if matches!(
-                    key.as_str(),
-                    "properties" | "patternProperties" | "$defs" | "definitions"
-                ) && let serde_json::Value::Object(children) = v
-                {
-                    for child in children.values_mut() {
-                        strip_schema_documentation_keys(child);
-                    }
-                    continue;
-                }
-                strip_schema_documentation_keys(v);
-            }
-        }
-        serde_json::Value::Array(arr) => {
-            for v in arr.iter_mut() {
-                strip_schema_documentation_keys(v);
-            }
-        }
-        _ => {}
-    }
-}
-
-fn compact_output_schema_for_tool_list(tool: &mut rmcp::model::Tool) {
-    let Some(schema) = tool.output_schema.as_ref() else {
-        return;
-    };
-    let mut schema = serde_json::Value::Object(schema.as_ref().clone());
-    strip_schema_documentation_keys(&mut schema);
-    if let serde_json::Value::Object(obj) = schema {
-        tool.output_schema = Some(std::sync::Arc::new(obj));
     }
 }
 
@@ -1546,7 +1530,7 @@ fn output_schema_resources() -> Vec<Resource> {
             let mut raw = RawResource::new(uri, format!("{}.output_schema", tool.name))
                 .with_title(format!("{title} Output Schema"))
                 .with_description(format!(
-                    "Full JSON Schema output contract for the `{}` tool.",
+                    "Full JSON Schema for the `{}` tool before optional jq filtering.",
                     tool.name
                 ))
                 .with_mime_type(OUTPUT_SCHEMA_RESOURCE_MIME);
@@ -2446,7 +2430,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get today's trade executions (fills). Returns executions[]{order_id, symbol, side, quantity, price, trade_done_at}. Pass symbol or order_id to filter."
+        description = "Get today's trade executions (fills). Returns executions[]{order_id, trade_id, symbol, side, quantity, price, trade_done_at}. Pass symbol or order_id to filter."
     )]
     async fn today_executions(
         &self,
@@ -2492,7 +2476,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get historical trade executions between dates. Returns executions[]{order_id, symbol, side, quantity, price, trade_done_at}. start_at/end_at in RFC3339."
+        description = "Get every trade execution (fill) in a date range, filtered by execution time (trade_done_at) and auto-paginated to return the complete set (never truncated at the 1000-per-page cap). Returns executions[]{order_id, trade_id, symbol, side, quantity, price, trade_done_at}; trade_id is the stable dedupe key. start_at/end_at in RFC3339."
     )]
     async fn history_executions(
         &self,
@@ -4112,7 +4096,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::grid::GridSubmitResponse>(),
-        description = "Submit a grid trading order. DRY RUN unless execute is the confirmation_code from its own dry run: call once without execute, show the preview, then re-call quoting the code only after the user confirms. A live grid keeps trading on its own. Requires symbol, settlement_currency, and the grid rule: base/upper/lower price, trigger_price_type (1=spread, 2=percent) with the matching spread/percent up/down, trigger_quantity, upper/lower_limit_quantity, time_in_force (0=Day, 1=GTC, 6=GTD), grid_order_type_up/down (GMO/GLO/GTG), and boundary events (1=ignore, 2=close-at-last). Prices/quantities are decimal strings. Requires the one-time grid_questionnaire consent."
+        description = "Submit a grid trading order. DRY RUN unless execute is the confirmation_code from its own dry run: call once without execute, show the preview, then re-call quoting the code only after the user confirms. A live grid keeps trading on its own. Requires symbol, settlement_currency, and the grid rule: base/upper/lower price, trigger_price_type (1=spread, 2=percent) with the matching spread/percent up/down, trigger_quantity, upper/lower_limit_quantity, time_in_force (0=Day, 1=GTC, 6=GTD), grid_order_type_up/down (GMO/GLO/GTG), and boundary events (1=ignore, 2=close-at-last). Prices/quantities are decimal strings."
     )]
     async fn grid_submit(
         &self,
@@ -4214,29 +4198,6 @@ impl Longbridge {
         let mctx = extract_context(&ctx)?;
         measured_tool_call("grid_restart", format!("{p:?}"), || {
             grid::grid_restart(&mctx, p)
-        })
-        .await
-    }
-
-    /// Submit the grid strategy risk-disclosure questionnaire.
-    #[tool(
-        title = "Grid Strategy Consent",
-        annotations(
-            read_only_hint = false,
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = true
-        ),
-        description = "Record the one-time grid strategy risk-disclosure consent required before submitting grid orders. Takes no parameters."
-    )]
-    async fn grid_questionnaire(
-        &self,
-        ctx: RequestContext<RoleServer>,
-        Parameters(p): Parameters<grid::GridQuestionnaireParam>,
-    ) -> Result<CallToolResult, McpError> {
-        let mctx = extract_context(&ctx)?;
-        measured_tool_call("grid_questionnaire", format!("{p:?}"), || {
-            grid::grid_questionnaire(&mctx, p)
         })
         .await
     }
@@ -5360,9 +5321,8 @@ impl ServerHandler for Longbridge {
 
     /// `initialize`, with endpoint-aware `instructions`.
     ///
-    /// Main endpoint: byte-for-byte the macro default (`get_info`), so the
-    /// pre-feature `initialize` response is unchanged. Unauthenticated
-    /// `/agent` sessions instead get instructions that explicitly frame the
+    /// Each endpoint gets shared response-filtering guidance. Unauthenticated
+    /// `/agent` sessions also get instructions that explicitly frame the
     /// endpoint as a temporary authorization channel, so AI clients do not
     /// mistake `<host>/agent` for the Longbridge MCP service address itself.
     async fn initialize(
@@ -5400,6 +5360,13 @@ impl ServerHandler for Longbridge {
                 }
             });
         }
+        // Shared guidance belongs in initialize once, after endpoint-specific
+        // instructions are selected, rather than in every tool's input schema.
+        info.instructions = Some(format!(
+            "{}\n\n{}",
+            info.instructions.as_deref().unwrap_or_default(),
+            jq::INSTRUCTIONS
+        ));
         Ok(info)
     }
 
@@ -5418,7 +5385,10 @@ impl ServerHandler for Longbridge {
     ///   self-authorize. After `authenticate` succeeds and the client starts
     ///   sending the returned token, the next `tools/list` returns the full set.
     fn get_tool(&self, name: &str) -> Option<rmcp::model::Tool> {
-        cached_router().get(name).cloned()
+        all_tools_cached()
+            .iter()
+            .find(|tool| tool.name == name)
+            .cloned()
     }
 
     async fn call_tool(
@@ -5460,8 +5430,21 @@ impl ServerHandler for Longbridge {
                 ));
             }
         }
-        let tcc = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
-        cached_router().call(tcc).await
+        // Classify the originating client here — NOT in the HTTP middleware. In
+        // stateless mode rmcp runs the service (and therefore every `#[tool]`
+        // method and its `measured_tool_call`/`record_tool_call`) on a task it
+        // `tokio::spawn`s, which does not inherit task-locals set by the axum
+        // layer. `call_tool` is the innermost funnel that still runs on that
+        // same spawned task, so a `CURRENT_CLIENT` scope set here is visible to
+        // `record_tool_call`; one set in the middleware would not be.
+        let client = client_bucket_from_context(&context);
+        jq::call(request, |request| async move {
+            let tcc = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
+            crate::metrics::CURRENT_CLIENT
+                .scope(client, cached_router().call(tcc))
+                .await
+        })
+        .await
     }
 
     async fn list_tools(
@@ -5512,37 +5495,6 @@ impl ServerHandler for Longbridge {
 
 #[cfg(test)]
 mod tests {
-    use super::strip_schema_documentation_keys;
-
-    #[test]
-    fn schema_compactor_keeps_properties_named_title_or_description() {
-        // "title"/"description" are documentation keywords on a *schema*
-        // object, but inside a `properties` map they are property *names* —
-        // stripping them there deletes real fields (news_detail's headline
-        // fields) from the advertised outputSchema.
-        let mut schema = serde_json::json!({
-            "title": "NewsDetailResponse",
-            "description": "doc",
-            "type": "object",
-            "properties": {
-                "title": { "type": "string", "description": "Title." },
-                "description": { "type": "string", "description": "Excerpt." },
-                "body": { "type": "string", "description": "Markdown." }
-            }
-        });
-        strip_schema_documentation_keys(&mut schema);
-        let props = schema["properties"].as_object().unwrap();
-        assert!(props.contains_key("title"), "property name must survive");
-        assert!(
-            props.contains_key("description"),
-            "property name must survive"
-        );
-        // Schema-level annotations are stripped, including on child schemas.
-        assert!(schema.get("title").is_none());
-        assert!(schema.get("description").is_none());
-        assert!(props["body"].get("description").is_none());
-    }
-
     use axum::http::{HeaderMap, HeaderName, HeaderValue};
 
     use super::collect_headers;
@@ -5720,16 +5672,10 @@ mod tests {
             extra_headers: Vec::new(),
         };
         // Build the client with the SDK base URL redirected at the local server.
-        // Serialized against other env-mutating tests; the guard is released
-        // before the await so it is never held across a suspension point.
-        let client = {
-            let _env_guard = super::HTTP_URL_ENV_LOCK.lock().await;
-            // SAFETY: guarded by HTTP_URL_ENV_LOCK; set before build, cleared after.
-            unsafe { std::env::set_var("LONGBRIDGE_HTTP_URL", format!("http://{addr}")) };
-            let client = mctx.create_http_client();
-            unsafe { std::env::remove_var("LONGBRIDGE_HTTP_URL") };
-            client
-        };
+        // The override only has to cover construction: `HttpClientConfig`
+        // snapshots the base URL, so the later send needs no scope.
+        let client = crate::endpoints::UPSTREAM_OVERRIDE
+            .sync_scope(format!("http://{addr}"), || mctx.create_http_client());
         let _ = client
             .request(reqwest::Method::GET, "/v1/ping")
             .response::<String>()
@@ -5959,7 +5905,7 @@ mod tests {
         // schema must impose no required fields — every field optional and no
         // `deny_unknown_fields` — so BOTH the generic and the US variant conform.
         // Otherwise the US structuredContent would violate the declared schema.
-        let tools = crate::tools::list_tools();
+        let tools = super::all_tools_full_cached();
         for name in ["dividend", "consensus", "valuation", "company"] {
             let tool = tools
                 .iter()
@@ -6003,7 +5949,7 @@ mod tests {
 
 #[cfg(test)]
 mod quote_cmd_tests {
-    use super::{CURRENT_TOOL, HTTP_URL_ENV_LOCK, McpContext, QUOTE_CMD_PATH, send_quote_cmd};
+    use super::{CURRENT_TOOL, McpContext, QUOTE_CMD_PATH, send_quote_cmd};
     use std::time::Duration;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -6056,15 +6002,11 @@ mod quote_cmd_tests {
 
         // Build the client inside a `CURRENT_TOOL` scope (as `measured_tool_call`
         // does for real tool calls), with the SDK base URL redirected at the
-        // local server. `sync_scope` keeps the locked region free of any await.
-        let client = {
-            let _env_guard = HTTP_URL_ENV_LOCK.lock().await;
-            // SAFETY: guarded by HTTP_URL_ENV_LOCK; set before build, cleared after.
-            unsafe { std::env::set_var("LONGBRIDGE_HTTP_URL", format!("http://127.0.0.1:{port}")) };
-            let client = CURRENT_TOOL.sync_scope("depth", || mctx.create_http_client());
-            unsafe { std::env::remove_var("LONGBRIDGE_HTTP_URL") };
-            client
-        };
+        // local server.
+        let client = crate::endpoints::UPSTREAM_OVERRIDE
+            .sync_scope(format!("http://127.0.0.1:{port}"), || {
+                CURRENT_TOOL.sync_scope("depth", || mctx.create_http_client())
+            });
 
         send_quote_cmd(&client).await;
 
@@ -6152,6 +6094,49 @@ mod quote_cmd_tests {
         );
     }
 
+    /// Guard: upstream URLs come from `crate::endpoints` alone. The SDK would
+    /// happily pick them up from the environment (or a `.env` file) if any code
+    /// here read them back, which would reintroduce exactly the ambiguity that
+    /// module exists to remove. Structural rather than behavioral on purpose —
+    /// asserting it by setting the variables would need `unsafe` env mutation,
+    /// which the crate forbids.
+    #[test]
+    fn upstream_urls_are_never_read_from_the_environment() {
+        // Assembled from parts so this test does not match its own source.
+        const PREFIXES: &[&str] = &["LONGBRIDGE", "LONGPORT"];
+        const SUFFIXES: &[&str] = &["HTTP_URL", "QUOTE_WS_URL", "TRADE_WS_URL", "REGION"];
+        let forbidden: Vec<String> = PREFIXES
+            .iter()
+            .flat_map(|prefix| {
+                SUFFIXES
+                    .iter()
+                    .map(move |suffix| format!("{prefix}_{suffix}"))
+            })
+            .collect();
+        let src_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        // endpoints.rs names them in its module docs, as the variables it
+        // deliberately does not consult.
+        let allowed = src_dir.join("endpoints.rs");
+        let mut offenders = Vec::new();
+        for file in rs_files(&src_dir) {
+            if file == allowed {
+                continue;
+            }
+            let src = std::fs::read_to_string(&file).unwrap();
+            for (i, line) in src.lines().enumerate() {
+                if let Some(name) = forbidden.iter().find(|name| line.contains(name.as_str())) {
+                    offenders.push(format!("{}:{} ({name})", file.display(), i + 1));
+                }
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "upstream endpoint selection must come from `crate::endpoints`, not \
+             the environment. Remove these references:\n{}",
+            offenders.join("\n")
+        );
+    }
+
     fn schema_contains_key(value: &serde_json::Value, key: &str) -> bool {
         match value {
             serde_json::Value::Object(map) => {
@@ -6163,29 +6148,6 @@ mod quote_cmd_tests {
     }
 
     #[test]
-    fn tool_list_output_schemas_are_compact_validation_contracts() {
-        let depth = super::list_tools()
-            .into_iter()
-            .find(|tool| tool.name == "depth")
-            .expect("depth tool must be registered");
-        let output_schema = depth
-            .output_schema
-            .expect("depth tool must keep an outputSchema in tools/list");
-        let output_schema = serde_json::Value::Object(output_schema.as_ref().clone());
-
-        assert!(
-            output_schema.get("properties").is_some(),
-            "compact outputSchema must keep validation structure"
-        );
-        for stripped_key in ["$schema", "title", "description"] {
-            assert!(
-                !schema_contains_key(&output_schema, stripped_key),
-                "`{stripped_key}` should move out of the tools/list outputSchema"
-            );
-        }
-    }
-
-    #[test]
     fn tool_list_output_schema_tools_omit_redundant_return_field_lists() {
         let screener_search = super::list_tools()
             .into_iter()
@@ -6193,7 +6155,7 @@ mod quote_cmd_tests {
             .expect("screener_search tool must be registered");
 
         assert!(
-            screener_search.output_schema.is_some(),
+            super::output_schema_map().contains_key("screener_search"),
             "fixture must cover a typed-output tool"
         );
         assert!(
@@ -6222,8 +6184,8 @@ mod quote_cmd_tests {
             assert_eq!(annotations.destructive_hint, Some(false));
             assert_eq!(annotations.open_world_hint, Some(true));
             assert!(
-                tool.output_schema.is_some(),
-                "{name} must declare an outputSchema"
+                super::output_schema_map().contains_key(name),
+                "{name} must provide an unfiltered output schema resource"
             );
         }
     }
@@ -6256,8 +6218,8 @@ mod quote_cmd_tests {
             assert_eq!(annotations.destructive_hint, Some(false));
             assert_eq!(annotations.open_world_hint, Some(true));
             assert!(
-                tool.output_schema.is_some(),
-                "{name} must declare an outputSchema"
+                super::output_schema_map().contains_key(name),
+                "{name} must provide an unfiltered output schema resource"
             );
         }
     }
@@ -6266,7 +6228,7 @@ mod quote_cmd_tests {
     fn tool_metadata_lint_keeps_typed_output_descriptions_compact() {
         let offenders: Vec<String> = super::list_tools()
             .into_iter()
-            .filter(|tool| tool.output_schema.is_some())
+            .filter(|tool| super::output_schema_map().contains_key(tool.name.as_ref()))
             .filter_map(|tool| {
                 let description = tool.description.as_deref().unwrap_or_default();
                 let lower = description.to_ascii_lowercase();
@@ -7126,6 +7088,42 @@ mod tool_error_tests {
         let map = super::output_schema_map();
         for name in super::TERMINAL_OBJECT_ROOTED {
             assert!(map.contains_key(*name), "schema map missing {name}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod jq_catalog_tests {
+    use super::*;
+
+    #[test]
+    fn jq_is_optional_on_every_public_tool_and_lookup() {
+        for tool in list_tools() {
+            assert_eq!(
+                tool.input_schema["properties"]["_jq"]["type"], "string",
+                "{}",
+                tool.name
+            );
+            assert!(
+                !tool
+                    .input_schema
+                    .get("required")
+                    .and_then(serde_json::Value::as_array)
+                    .is_some_and(|fields| fields.iter().any(|field| field == "_jq"))
+            );
+            assert!(
+                tool.output_schema.is_none(),
+                "{} cannot constrain arbitrary jq output",
+                tool.name
+            );
+            assert!(
+                tool.input_schema["properties"]["_jq"]
+                    .get("description")
+                    .is_none()
+            );
+            let lookup = Longbridge.get_tool(&tool.name).unwrap();
+            assert_eq!(lookup.input_schema, tool.input_schema);
+            assert!(lookup.output_schema.is_none());
         }
     }
 }

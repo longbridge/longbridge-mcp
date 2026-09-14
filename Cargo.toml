@@ -1,6 +1,6 @@
 [package]
 name = "longbridge-mcp"
-version = "0.10.5"
+version = "0.10.6"
 edition = "2024"
 
 [dependencies]
@@ -48,3 +48,8 @@ serde-transcode = "1.1"
 anyhow = "1"
 rustls = { version = "0.23", features = ["ring"] }
 sha2 = "0.10"
+
+# Embedded jq-compatible response filtering (no external jq executable).
+jaq-core = "3.1"
+jaq-std = "3.0"
+jaq-json = { version = "2.0", features = ["serde"] }

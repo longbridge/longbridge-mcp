@@ -129,7 +129,13 @@ fn transform_topic_item(item: &serde_json::Value) -> serde_json::Value {
 
 fn make_result(value: serde_json::Value) -> CallToolResult {
     let json = serde_json::to_string(&value).unwrap_or_default();
-    let structured = serde_json::from_str::<serde_json::Value>(&json).ok();
+    // MCP requires `structuredContent` to be an object; array- or scalar-rooted
+    // responses (news_search / topic_search return arrays) must leave it unset,
+    // or clients reject the result with a schema-validation error. Mirrors
+    // `support::http_client::success_with_structured`.
+    let structured = serde_json::from_str::<serde_json::Value>(&json)
+        .ok()
+        .filter(serde_json::Value::is_object);
     let mut result = CallToolResult::success(vec![rmcp::model::Content::text(json)]);
     result.structured_content = structured;
     result
@@ -221,5 +227,29 @@ mod tests {
         });
         let transformed = transform_news_item(&item);
         assert_eq!(transformed["excerpt"].as_str().unwrap(), "short");
+    }
+
+    /// MCP requires `structuredContent` to be an object. `news_search` /
+    /// `topic_search` return arrays, so the result must leave
+    /// `structured_content` unset — otherwise clients reject the response with a
+    /// schema-validation error ("expected record, received array").
+    #[test]
+    fn array_result_leaves_structured_content_unset() {
+        let arr = super::make_result(serde_json::Value::Array(vec![
+            serde_json::json!({"id": "1"}),
+        ]));
+        assert!(
+            arr.structured_content.is_none(),
+            "array-rooted result must not populate structuredContent"
+        );
+    }
+
+    #[test]
+    fn object_result_sets_structured_content() {
+        let obj = super::make_result(serde_json::json!({"news_list": []}));
+        assert!(
+            obj.structured_content.is_some(),
+            "object-rooted result should populate structuredContent"
+        );
     }
 }

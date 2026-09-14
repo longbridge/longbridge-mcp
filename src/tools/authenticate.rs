@@ -37,30 +37,16 @@ use crate::tools::tool_result;
 /// The page where a user generates a one-time authorization code to paste to
 /// the AI. Referenced in the tool description and in error hints so the AI can
 /// self-heal by directing the user here.
-pub const CONNECT_PAGE_URL: &str = "https://open.longbridge.com/connect";
-
-/// `/connect` page URL matching the deployment region: a `.cn` deployment
-/// (detected via `LONGBRIDGE_HTTP_URL` pointing at openapi.longbridge.cn)
-/// should send users to open.longbridge.cn instead of the global site.
 pub fn connect_page_url() -> &'static str {
-    if oauth_base_url().contains("longbridge.cn") {
-        "https://open.longbridge.cn/connect"
-    } else {
-        CONNECT_PAGE_URL
-    }
+    crate::endpoints::connect_page_url()
 }
 
 /// `redirect_uri` the authorization code is bound to. The connect page issues
 /// the code against `{open_url}/connect/done`, so the token exchange must send
-/// the exact same value. Region-aware (mirrors `connect_page_url`): a `.cn`
-/// deployment binds to open.longbridge.cn, everything else to open.longbridge.com.
-/// Must stay in sync with the web `getAgentRedirectUri()` and the CLI.
+/// the exact same value. Must stay in sync with the web `getAgentRedirectUri()`
+/// and the CLI.
 fn agent_redirect_uri() -> &'static str {
-    if oauth_base_url().contains("longbridge.cn") {
-        "https://open.longbridge.cn/connect/done"
-    } else {
-        "https://open.longbridge.com/connect/done"
-    }
+    crate::endpoints::agent_redirect_uri()
 }
 
 /// Parameters for the `authenticate` tool.
@@ -93,16 +79,6 @@ struct TokenErrorResponse {
     error: Option<String>,
     #[serde(default)]
     error_description: Option<String>,
-}
-
-/// Base OAuth URL (no trailing slash), honoring `LONGBRIDGE_HTTP_URL` so tests
-/// and non-prod deployments can redirect the exchange. Mirrors
-/// `auth::metadata::longbridge_oauth_url`.
-fn oauth_base_url() -> String {
-    std::env::var("LONGBRIDGE_HTTP_URL")
-        .unwrap_or_else(|_| "https://openapi.longbridge.com".to_string())
-        .trim_end_matches('/')
-        .to_string()
 }
 
 fn self_heal_hint() -> String {
@@ -215,7 +191,7 @@ pub async fn authenticate(
 }
 
 async fn exchange_code(code: &str, client_id: &str) -> Result<TokenResponse, McpError> {
-    let url = format!("{}/oauth2/token", oauth_base_url());
+    let url = format!("{}/oauth2/token", crate::endpoints::oauth_url());
 
     let form = [
         ("grant_type", "authorization_code"),
@@ -333,10 +309,29 @@ mod tests {
         .await
         .expect_err("empty code must be rejected");
         assert!(
-            err.message.contains(CONNECT_PAGE_URL),
+            err.message.contains(crate::endpoints::connect_page_url()),
             "got: {}",
             err.message
         );
+    }
+
+    /// The token exchange sends `agent_redirect_uri` verbatim and it must
+    /// byte-match what the connect page bound the code to, so the two URLs have
+    /// to stay on the same origin in every environment — a one-sided edit would
+    /// surface only as `invalid_grant` at exchange time.
+    #[test]
+    fn connect_page_and_redirect_uri_share_an_origin() {
+        for env in [
+            crate::endpoints::Environment::Production,
+            crate::endpoints::Environment::Canary,
+        ] {
+            let connect = env.connect_page_url();
+            assert_eq!(
+                env.agent_redirect_uri(),
+                format!("{connect}/done"),
+                "redirect_uri must be the connect page's /done for {env:?}"
+            );
+        }
     }
 
     #[tokio::test]
@@ -371,23 +366,20 @@ mod tests {
             bs58::encode(v).into_string()
         };
 
-        // Serialized against other tests that mutate LONGBRIDGE_HTTP_URL. The
-        // guard is intentionally held across the .await: oauth_base_url() is
-        // called inside authenticate() and must see the redirected URL for the
-        // entire async call. tokio::sync::Mutex is used precisely so the guard
-        // can be held across suspension points without blocking the executor.
-        let err = {
-            let _env_guard = crate::tools::HTTP_URL_ENV_LOCK.lock().await;
-            // SAFETY: guarded by HTTP_URL_ENV_LOCK; set before call, cleared after.
-            unsafe { std::env::set_var("LONGBRIDGE_HTTP_URL", format!("http://{addr}")) };
-            let result = authenticate(false, AuthenticateParam { auth_code: packed }).await;
-            unsafe { std::env::remove_var("LONGBRIDGE_HTTP_URL") };
-            result
-        }
-        .expect_err("expired code must fail");
+        // The override wraps the whole call: the OAuth base URL is read deep
+        // inside `authenticate`, after several suspension points, and a
+        // task-local scope stays visible there. Being task-scoped rather than
+        // process-global, it needs no serialization against other tests.
+        let err = crate::endpoints::UPSTREAM_OVERRIDE
+            .scope(
+                format!("http://{addr}"),
+                authenticate(false, AuthenticateParam { auth_code: packed }),
+            )
+            .await
+            .expect_err("expired code must fail");
 
         assert!(
-            err.message.contains(CONNECT_PAGE_URL),
+            err.message.contains(crate::endpoints::connect_page_url()),
             "got: {}",
             err.message
         );
