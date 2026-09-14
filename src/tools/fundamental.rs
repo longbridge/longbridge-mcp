@@ -404,7 +404,7 @@ pub async fn valuation_history(
     // `stocks`), `layouts` (distribution-histogram buckets), `aichat_data`
     // (chatbot routing), per-metric `circle`/`part` (plot coords), and
     // `ai_summary` (a dup of `overview.metrics.*.desc`).
-    http_get_tool_unix_dropping(
+    let raw = http_get_tool_unix_dropping(
         &client,
         "/v1/quote/valuation/detail",
         &[("counter_id", cid.as_str())],
@@ -418,7 +418,21 @@ pub async fn valuation_history(
             "ai_summary",
         ],
     )
-    .await
+    .await?;
+    let json = raw
+        .content
+        .first()
+        .and_then(|c| c.as_text())
+        .map(|t| t.text.clone())
+        .unwrap_or_default();
+    let mut value: serde_json::Value =
+        serde_json::from_str(&json).map_err(crate::error::Error::Serialize)?;
+    // The `stocks` map's market_cap figures are padded to four decimals (e.g.
+    // "135261759885.5400"); strip the trailing zeros (lossless). The `peers`
+    // rows carry empty `ticker`/`growth` strings; drop them.
+    crate::serialize::strip_trailing_zeros(&mut value);
+    crate::serialize::strip_empty_strings(&mut value);
+    crate::tools::tool_json(&value)
 }
 
 pub async fn industry_valuation(
