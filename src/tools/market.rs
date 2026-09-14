@@ -254,13 +254,25 @@ pub async fn trade_stats(
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
     let cid = symbol_to_counter_id(&p.symbol);
-    http_get_tool_unix(
+    let raw = http_get_tool_unix(
         &client,
         "/v1/quote/trades-statistics",
         &[("counter_id", cid.as_str())],
         &["statistics.timestamp", "statistics.trade_date.*"],
     )
-    .await
+    .await?;
+    let json = raw
+        .content
+        .first()
+        .and_then(|c| c.as_text())
+        .map(|t| t.text.clone())
+        .unwrap_or_default();
+    let mut value: serde_json::Value = serde_json::from_str(&json).map_err(Error::Serialize)?;
+    // Each price-level `price` (and statistics avgprice/preclose) is padded to a
+    // fixed decimal width ("435.400"); strip the trailing zeros (lossless). The
+    // RFC3339 trade_date strings are not plain decimals and are left untouched.
+    crate::serialize::strip_trailing_zeros(&mut value);
+    tool_json(&value)
 }
 
 pub async fn anomaly(
