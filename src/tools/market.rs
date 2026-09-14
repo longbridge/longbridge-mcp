@@ -482,6 +482,9 @@ fn normalize_short_trades(
         }
     }
 
+    // HK `balance` is an integer HKD amount padded to two decimals (e.g.
+    // "1532490080.00"); strip the trailing zeros (lossless).
+    crate::serialize::strip_trailing_zeros(&mut d);
     let Ok(json) = serde_json::to_string(&d) else {
         return result;
     };
