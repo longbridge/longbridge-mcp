@@ -394,14 +394,24 @@ pub(crate) fn datetime_str_to_rfc3339(s: &str) -> Option<String> {
         .ok()
 }
 
+/// Plausible unix-seconds range: 2000-01-01..2100-01-01 UTC. Numbers outside it
+/// are treated as *not* a timestamp — this filters out sentinels (`0`,
+/// `-62135596800`), `yyyymmdd` integers (e.g. `20260812`, far below the range),
+/// counts, and ids.
+const UNIX_SECONDS_MIN: i64 = 946_684_800;
+const UNIX_SECONDS_MAX: i64 = 4_102_444_800;
+
+/// `Some(n)` when `n` is within the plausible unix-seconds range, else `None`.
+fn unix_seconds_in_range(n: i64) -> Option<i64> {
+    (UNIX_SECONDS_MIN..=UNIX_SECONDS_MAX)
+        .contains(&n)
+        .then_some(n)
+}
+
 /// Parse a string as a plausible unix-seconds timestamp. Returns `None` for
-/// non-numeric input, or numbers outside 2000-01-01..2100-01-01 UTC (which
-/// filters out sentinel values like `"0"`, `"-62135596800"`, counts, ids).
+/// non-numeric input, or numbers outside the plausible range.
 pub(crate) fn try_parse_unix_string(s: &str) -> Option<i64> {
-    const MIN: i64 = 946_684_800; // 2000-01-01T00:00:00Z
-    const MAX: i64 = 4_102_444_800; // 2100-01-01T00:00:00Z
-    let n: i64 = s.trim().parse().ok()?;
-    (MIN..=MAX).contains(&n).then_some(n)
+    unix_seconds_in_range(s.trim().parse().ok()?)
 }
 
 /// Walk a JSON value and convert unix-seconds strings at the given paths to
@@ -416,10 +426,12 @@ pub(crate) fn try_parse_unix_string(s: &str) -> Option<i64> {
 /// `statistics.trade_date`; `"plans.*.next_trd_date"` converts `next_trd_date`
 /// inside every element of the `plans` array.
 ///
-/// Only strings that parse as unix seconds inside [2000-01-01, 2100-01-01] are
-/// transformed; non-numeric strings and out-of-range sentinels (`"0"`,
-/// `"-62135596800"`) are left untouched so the caller's "no value" semantics
-/// survive.
+/// Both string and numeric unix-seconds values inside [2000-01-01, 2100-01-01]
+/// are transformed to an RFC3339 string; non-numeric strings and out-of-range
+/// sentinels (`"0"`, `0`, `-62135596800`, `yyyymmdd` ints) are left untouched so
+/// the caller's "no value" semantics survive. Handling numbers matters for
+/// passthrough JSON where the upstream sends the timestamp unquoted (e.g.
+/// `"sub_date": 1789056000`).
 pub fn convert_unix_paths(value: &mut serde_json::Value, paths: &[&str]) {
     for path in paths {
         let segments: Vec<&str> = path.split('.').collect();
@@ -429,9 +441,12 @@ pub fn convert_unix_paths(value: &mut serde_json::Value, paths: &[&str]) {
 
 fn walk_convert(value: &mut serde_json::Value, segments: &[&str]) {
     if segments.is_empty() {
-        if let serde_json::Value::String(s) = value
-            && let Some(ts) = try_parse_unix_string(s)
-        {
+        let ts = match &*value {
+            serde_json::Value::String(s) => try_parse_unix_string(s),
+            serde_json::Value::Number(n) => n.as_i64().and_then(unix_seconds_in_range),
+            _ => None,
+        };
+        if let Some(ts) = ts {
             *value = serde_json::Value::String(timestamp_to_rfc3339(ts));
         }
         return;
@@ -944,6 +959,34 @@ mod tests {
         convert_unix_paths(&mut v, &["end_date", "edited_at"]);
         assert_eq!(v["end_date"], "0");
         assert_eq!(v["edited_at"], "-62135596800");
+    }
+
+    #[test]
+    fn convert_unix_paths_converts_numeric_values() {
+        // Passthrough JSON sends the timestamp unquoted (a JSON number), e.g.
+        // ipo_calendar's list[].sub_date. It must convert like a string does.
+        let mut v: serde_json::Value = serde_json::from_str(
+            r#"{"timestamp":1789108648,"list":[{"sub_date":1789056000,"ipo_date":0,"ymd":20260812}]}"#,
+        )
+        .unwrap();
+        convert_unix_paths(
+            &mut v,
+            &[
+                "timestamp",
+                "list.*.sub_date",
+                "list.*.ipo_date",
+                "list.*.ymd",
+            ],
+        );
+        assert_eq!(
+            v["timestamp"], "2026-09-11T06:37:28Z",
+            "numeric unix converted"
+        );
+        assert_eq!(v["list"][0]["sub_date"], "2026-09-10T16:00:00Z");
+        // 0 is a sentinel (out of range) — left as the number 0, not 1970.
+        assert_eq!(v["list"][0]["ipo_date"], 0);
+        // A yyyymmdd integer is far below the unix range — left untouched.
+        assert_eq!(v["list"][0]["ymd"], 20260812);
     }
 
     #[test]
