@@ -458,6 +458,7 @@ pub async fn today_orders(
             }
         }
         crate::serialize::strip_nulls(&mut value);
+        crate::serialize::strip_trailing_zeros(&mut value);
         return tool_json(&value);
     }
     let mut opts = GetTodayOrdersOptions::new();
@@ -473,8 +474,10 @@ pub async fn today_orders(
     let result = ctx.today_orders(opts).await.map_err(Error::longbridge)?;
     // Plain market/limit orders leave the ~9 conditional-order fields
     // (trigger_*, trailing_*, monitor_price, limit_*) as null — drop them.
+    // Prices/amounts come padded to a fixed decimal width; strip trailing zeros.
     let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;
     crate::serialize::strip_nulls(&mut value);
+    crate::serialize::strip_trailing_zeros(&mut value);
     tool_json(&value)
 }
 
@@ -495,6 +498,7 @@ pub async fn order_detail(
         if let Some(obj) = value.as_object_mut() {
             crate::tools::support::us_normalize::drop_empty(obj);
         }
+        crate::serialize::strip_trailing_zeros(&mut value);
         return tool_json(&value);
     }
     let mut opts = GetOrderDetailOptions::new(p.order_id);
@@ -502,7 +506,10 @@ pub async fn order_detail(
         opts = opts.is_attached();
     }
     let result = ctx.order_detail(opts).await.map_err(Error::longbridge)?;
-    tool_json(&result)
+    // Prices/amounts come padded to a fixed decimal width; strip trailing zeros.
+    let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;
+    crate::serialize::strip_trailing_zeros(&mut value);
+    tool_json(&value)
 }
 
 pub async fn cancel_order(
@@ -583,7 +590,11 @@ pub async fn today_executions(
             v
         })
         .collect();
-    tool_json(&result)
+    // Execution prices/amounts come padded to a fixed decimal width; strip
+    // trailing zeros (lossless).
+    let mut value = serde_json::Value::Array(result);
+    crate::serialize::strip_trailing_zeros(&mut value);
+    tool_json(&value)
 }
 
 pub async fn history_orders(
@@ -616,6 +627,7 @@ pub async fn history_orders(
             }
         }
         crate::serialize::strip_nulls(&mut value);
+        crate::serialize::strip_trailing_zeros(&mut value);
         return tool_json(&value);
     }
     let mut opts = longbridge::trade::GetHistoryOrdersOptions::new()
@@ -627,6 +639,7 @@ pub async fn history_orders(
     let result = ctx.history_orders(opts).await.map_err(Error::longbridge)?;
     let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;
     crate::serialize::strip_nulls(&mut value);
+    crate::serialize::strip_trailing_zeros(&mut value);
     tool_json(&value)
 }
 
@@ -673,7 +686,11 @@ pub async fn history_executions(
             v
         })
         .collect();
-    tool_json(&result)
+    // Execution prices/amounts come padded to a fixed decimal width; strip
+    // trailing zeros (lossless).
+    let mut value = serde_json::Value::Array(result);
+    crate::serialize::strip_trailing_zeros(&mut value);
+    tool_json(&value)
 }
 
 pub async fn cash_flow(
