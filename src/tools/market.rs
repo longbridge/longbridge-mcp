@@ -10,8 +10,8 @@ use crate::counter::{index_symbol_to_counter_id, is_etf, symbol_to_counter_id};
 use crate::error::Error;
 use crate::serialize::{convert_unix_paths, transform_json};
 use crate::tools::support::http_client::{
-    http_get_tool, http_get_tool_dropping, http_get_tool_dropping_empties,
-    http_get_tool_trimming_zeros, http_get_tool_unix, http_get_tool_unix_dropping,
+    http_get_tool, http_get_tool_dropping, http_get_tool_trimming_zeros, http_get_tool_unix,
+    http_get_tool_unix_dropping,
 };
 use crate::tools::tool_json;
 
@@ -684,24 +684,60 @@ pub async fn rank_list(
         .or_else(|| p.market.as_deref().map(|m| m.to_uppercase()))
         .unwrap_or_else(|| "US".to_string());
     let size = p.size.unwrap_or(20).to_string();
-    // Per-row upstream fields with no analytic value: `code` (== symbol without
-    // suffix), `market` (single-market query, derivable), the session flags
-    // (`delay`, `is_pre_post`, `extend_state`), the editorial `intro` blurb, and
-    // the `article` object. The pre/post-market price & change (`pre_post_price`,
-    // `pre_post_chg`, `extend_price`, `extend_chg`) are NOT dropped — they are
-    // the after-hours quote/move a "top movers now" query needs during an
-    // extended session; `_empties` trims their blank regular-hours form instead.
-    http_get_tool_dropping_empties(
-        &client,
-        "/v1/quote/market/rank/list",
-        &[
+    let raw: String = client
+        .request(Method::GET, "/v1/quote/market/rank/list")
+        .query_params(vec![
             ("key", key.as_str()),
             ("delay_bmp", "false"),
             ("need_article", need_article.as_str()),
             ("market", key_market.as_str()),
             ("size", size.as_str()),
-        ],
-        &[
+        ])
+        .response::<String>()
+        .send()
+        .await
+        .map_err(|e| Error::longbridge(e.into()))?;
+    let json = transform_json(raw.as_bytes()).map_err(Error::Serialize)?;
+    let mut value: serde_json::Value = serde_json::from_str(&json).map_err(Error::Serialize)?;
+    trim_rank_list_rows(&mut value);
+    tool_json(&value)
+}
+
+/// Trim each `rank_list` row: gate the extended-session price/change on their
+/// flags, then drop the fields with no analytic value.
+///
+/// `pre_post_price`/`pre_post_chg` are the pre/post-market quote & move, valid
+/// only while `is_pre_post` is set (== 1 during an extended session); likewise
+/// `extend_price`/`extend_chg` with `extend_state`. Outside those sessions the
+/// fields hold a stale/placeholder value, so they are dropped per-row rather
+/// than surfacing a misleading number (in particular a bare `"0"`). `code`
+/// (== symbol without suffix), `market` (single-market query), `delay`, the
+/// flags themselves, the editorial `intro`, and the `article` object carry
+/// nothing analytic and are always dropped.
+fn trim_rank_list_rows(value: &mut serde_json::Value) {
+    fn active(obj: &serde_json::Map<String, serde_json::Value>, flag: &str) -> bool {
+        obj.get(flag)
+            .is_some_and(|v| v.as_i64().is_some_and(|n| n != 0) || v.as_bool() == Some(true))
+    }
+    let Some(rows) = value
+        .get_mut("lists")
+        .and_then(serde_json::Value::as_array_mut)
+    else {
+        return;
+    };
+    for row in rows.iter_mut() {
+        let Some(obj) = row.as_object_mut() else {
+            continue;
+        };
+        if !active(obj, "is_pre_post") {
+            obj.remove("pre_post_price");
+            obj.remove("pre_post_chg");
+        }
+        if !active(obj, "extend_state") {
+            obj.remove("extend_price");
+            obj.remove("extend_chg");
+        }
+        for k in [
             "code",
             "market",
             "delay",
@@ -709,14 +745,65 @@ pub async fn rank_list(
             "extend_state",
             "article",
             "intro",
-        ],
-    )
-    .await
+        ] {
+            obj.remove(k);
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{hoist_intraday_prev_closes, trade_status_label};
+
+    #[test]
+    fn trim_rank_list_gates_extended_prices_on_their_flags() {
+        let mut v = serde_json::json!({"lists": [
+            // Extended session active (flags == 1): the after-hours quote is kept.
+            {"symbol": "NVDA.US", "last_done": "210.960", "is_pre_post": 1,
+             "pre_post_price": "212.417", "pre_post_chg": "0.0069",
+             "extend_state": 1, "extend_price": "212.417", "extend_chg": "0.0069",
+             "code": "NVDA", "market": "US", "delay": false, "intro": "chip", "article": null},
+            // Regular hours (flags == 0): the stale extended fields are dropped,
+            // so a bare "0" can never be surfaced as an after-hours price.
+            {"symbol": "AAPL.US", "last_done": "333.080", "is_pre_post": 0,
+             "pre_post_price": "0", "pre_post_chg": "0",
+             "extend_state": 0, "extend_price": "0", "extend_chg": "0"}
+        ]});
+        super::trim_rank_list_rows(&mut v);
+
+        let a = &v["lists"][0];
+        assert_eq!(
+            a["pre_post_price"], "212.417",
+            "active session keeps pre_post_price"
+        );
+        assert_eq!(
+            a["extend_price"], "212.417",
+            "active session keeps extend_price"
+        );
+        assert_eq!(a["last_done"], "210.960", "core fields kept");
+        for k in [
+            "code",
+            "market",
+            "delay",
+            "is_pre_post",
+            "extend_state",
+            "article",
+            "intro",
+        ] {
+            assert!(a.get(k).is_none(), "{k} must be dropped");
+        }
+
+        let b = &v["lists"][1];
+        assert!(
+            b.get("pre_post_price").is_none(),
+            "inactive session drops pre_post_price (no misleading 0)"
+        );
+        assert!(
+            b.get("extend_price").is_none(),
+            "inactive session drops extend_price"
+        );
+        assert_eq!(b["last_done"], "333.080", "core fields kept");
+    }
 
     #[test]
     fn hoist_intraday_prev_closes_lifts_prior_closes_and_keeps_live_fields() {

@@ -83,34 +83,6 @@ pub async fn http_get_tool_dropping(
     Ok(success_with_structured(json))
 }
 
-/// Like `http_get_tool_dropping`, but also strips empty-string fields after the
-/// key drop. Use for tools whose fields are only populated in some sessions —
-/// e.g. `rank_list`'s pre/post-market price and change: the field survives when
-/// the extended session populates it, and its empty regular-hours form is
-/// trimmed instead of being dropped outright (which would lose the after-hours
-/// quote entirely).
-pub async fn http_get_tool_dropping_empties(
-    client: &HttpClient,
-    path: &str,
-    params: &[(&str, &str)],
-    drop: &[&str],
-) -> Result<CallToolResult, McpError> {
-    let params: Vec<(&str, &str)> = params.to_vec();
-    let resp: String = client
-        .request(Method::GET, path)
-        .query_params(params)
-        .response::<String>()
-        .send()
-        .await
-        .map_err(|e| Error::longbridge(e.into()))?;
-    let json = transform_json(resp.as_bytes()).map_err(Error::Serialize)?;
-    let mut value: serde_json::Value = serde_json::from_str(&json).map_err(Error::Serialize)?;
-    crate::serialize::drop_keys(&mut value, drop);
-    crate::serialize::strip_empty_strings(&mut value);
-    let json = serde_json::to_string(&value).map_err(Error::Serialize)?;
-    Ok(success_with_structured(json))
-}
-
 /// Combines `http_get_tool_unix` (unix-seconds → RFC3339 at `unix_paths`) with
 /// `drop` key removal, for passthrough tools that need both.
 pub async fn http_get_tool_unix_dropping(
