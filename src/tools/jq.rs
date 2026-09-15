@@ -101,11 +101,16 @@ where
     if result.is_error == Some(true) || is_error_envelope(&result) {
         return Ok(result);
     }
-    // Bound wall-clock: `MAX_RESULTS`/`MAX_OUTPUT_BYTES` only fire *between*
-    // output values, so a filter that builds one huge or non-terminating
-    // aggregate (e.g. `[range(0;1e9)]`, `[repeat(1)]`) would otherwise spin
-    // indefinitely. The timeout returns a bounded, actionable error to the
-    // caller; jq over an already-fetched payload is otherwise near-instant.
+    // Bound the *caller-visible* latency: `MAX_RESULTS`/`MAX_OUTPUT_BYTES` only
+    // fire between output values, so a filter that spins without emitting (e.g.
+    // `while(true; .)`) or builds one huge/non-terminating aggregate (e.g.
+    // `[range(0;1e9)]`, `[repeat(1)]`) would otherwise hang the request. The
+    // timeout returns a bounded, actionable error instead. Caveat: a dropped
+    // `spawn_blocking` handle does not abort the blocking task, so a hostile
+    // aggregate keeps running (and can OOM) on a detached thread until it
+    // finishes -- jaq exposes no fuel/step limit to cap that from here. The
+    // input is the already-fetched (bounded) tool response, so the only
+    // unbounded vector is generative builtins, not caller-supplied data.
     let worker = tokio::task::spawn_blocking(move || apply(filter, result));
     let filtered = tokio::time::timeout(FILTER_TIMEOUT, worker).await;
     Ok(match filtered {

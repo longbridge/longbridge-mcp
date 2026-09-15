@@ -199,16 +199,23 @@ pub(crate) fn drop_keys(value: &mut serde_json::Value, keys: &[&str]) {
 ///
 /// The backend echoes both forms for backward compatibility, but an AI caller
 /// only needs the symbol form; keeping both is redundant noise. The drop is
-/// guarded: when a `counter_id` appears *without* a sibling `symbol`, it is the
-/// object's only identifier and is kept, so an endpoint that has not yet
-/// started emitting `symbol` is never left without an id.
+/// guarded on the sibling's *value*, not just its presence: `counter_id` is
+/// removed only when `symbol` is a non-empty string (and `counter_ids` only
+/// when `symbols` is a non-empty array). A `counter_id` sitting next to a
+/// null/empty/absent `symbol` is the object's only usable identifier and is
+/// kept, so an endpoint that has not yet started emitting a real `symbol` is
+/// never left without an id.
 pub(crate) fn drop_redundant_counter_ids(value: &mut serde_json::Value) {
     match value {
         serde_json::Value::Object(map) => {
-            if map.contains_key("symbol") {
+            let symbol_usable =
+                matches!(map.get("symbol"), Some(serde_json::Value::String(s)) if !s.is_empty());
+            if symbol_usable {
                 map.remove("counter_id");
             }
-            if map.contains_key("symbols") {
+            let symbols_usable =
+                matches!(map.get("symbols"), Some(serde_json::Value::Array(a)) if !a.is_empty());
+            if symbols_usable {
                 map.remove("counter_ids");
             }
             for v in map.values_mut() {
@@ -401,6 +408,18 @@ mod tests {
             only,
             serde_json::json!({"counter_id": "ST/HK/700", "name": "腾讯"})
         );
+
+        // A present-but-unusable symbol (null / empty / empty array) must NOT
+        // trigger the drop -- counter_id is still the only usable identifier.
+        for unusable in [
+            serde_json::json!({"symbol": null, "counter_id": "ST/HK/700"}),
+            serde_json::json!({"symbol": "", "counter_id": "ST/HK/700"}),
+            serde_json::json!({"symbols": [], "counter_ids": ["ST/US/AAPL"]}),
+        ] {
+            let mut v = unusable.clone();
+            drop_redundant_counter_ids(&mut v);
+            assert_eq!(v, unusable, "unusable symbol must not drop counter_id");
+        }
     }
 
     #[test]
