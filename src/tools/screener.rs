@@ -464,22 +464,26 @@ fn postprocess_search_results(json: String) -> String {
                 let Some(key) = key else {
                     continue;
                 };
-                let name = obj.remove("name");
-                let unit = obj.remove("unit");
-                // Record this key's labels once. A null or empty-string label
-                // carries nothing, so it is not stored.
-                if !legend.contains_key(&key) {
-                    let is_empty = |v: &serde_json::Value| {
-                        v.is_null() || v.as_str().is_some_and(str::is_empty)
-                    };
-                    let mut meta = serde_json::Map::new();
-                    if let Some(name) = name.filter(|v| !is_empty(v)) {
-                        meta.insert("name".to_string(), name);
+                let is_empty =
+                    |v: &serde_json::Value| v.is_null() || v.as_str().is_some_and(str::is_empty);
+                let name = obj.remove("name").filter(|v| !is_empty(v));
+                let unit = obj.remove("unit").filter(|v| !is_empty(v));
+                // Fill each label from the first NON-empty occurrence across
+                // rows. Labels are stable per key upstream, but a blank first row
+                // must not permanently shadow a later real label (and a key with
+                // no label anywhere gets no legend entry at all).
+                if name.is_some() || unit.is_some() {
+                    let meta = legend
+                        .entry(key.clone())
+                        .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
+                    if let Some(meta) = meta.as_object_mut() {
+                        if let Some(name) = name {
+                            meta.entry("name").or_insert(name);
+                        }
+                        if let Some(unit) = unit {
+                            meta.entry("unit").or_insert(unit);
+                        }
                     }
-                    if let Some(unit) = unit.filter(|v| !is_empty(v)) {
-                        meta.insert("unit".to_string(), unit);
-                    }
-                    legend.insert(key.clone(), serde_json::Value::Object(meta));
                 }
                 obj.insert("key".to_string(), serde_json::Value::String(key));
             }

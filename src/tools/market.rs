@@ -10,8 +10,8 @@ use crate::counter::{index_symbol_to_counter_id, is_etf, symbol_to_counter_id};
 use crate::error::Error;
 use crate::serialize::{convert_unix_paths, transform_json};
 use crate::tools::support::http_client::{
-    http_get_tool, http_get_tool_dropping, http_get_tool_trimming_zeros, http_get_tool_unix,
-    http_get_tool_unix_dropping,
+    http_get_tool, http_get_tool_dropping, http_get_tool_dropping_empties,
+    http_get_tool_trimming_zeros, http_get_tool_unix, http_get_tool_unix_dropping,
 };
 use crate::tools::tool_json;
 
@@ -685,10 +685,13 @@ pub async fn rank_list(
         .unwrap_or_else(|| "US".to_string());
     let size = p.size.unwrap_or(20).to_string();
     // Per-row upstream fields with no analytic value: `code` (== symbol without
-    // suffix), `market` (single-market query, derivable), constant/empty flags
-    // (`delay`, `is_pre_post`, `pre_post_*`, `extend_*`), the editorial `intro`
-    // blurb, and the `article` object.
-    http_get_tool_dropping(
+    // suffix), `market` (single-market query, derivable), the session flags
+    // (`delay`, `is_pre_post`, `extend_state`), the editorial `intro` blurb, and
+    // the `article` object. The pre/post-market price & change (`pre_post_price`,
+    // `pre_post_chg`, `extend_price`, `extend_chg`) are NOT dropped — they are
+    // the after-hours quote/move a "top movers now" query needs during an
+    // extended session; `_empties` trims their blank regular-hours form instead.
+    http_get_tool_dropping_empties(
         &client,
         "/v1/quote/market/rank/list",
         &[
@@ -703,11 +706,7 @@ pub async fn rank_list(
             "market",
             "delay",
             "is_pre_post",
-            "pre_post_price",
-            "pre_post_chg",
             "extend_state",
-            "extend_price",
-            "extend_chg",
             "article",
             "intro",
         ],

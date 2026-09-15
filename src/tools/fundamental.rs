@@ -168,24 +168,16 @@ pub async fn institution_rating(
 
 /// Trim an institution_rating_detail response.
 ///
-/// - `target.list[].date` duplicates the day of that row's `timestamp`, so it is
-///   dropped. `evaluate.list[].date` is kept — those rows carry no `timestamp`,
-///   so their `date` is the only time key.
+/// - `target.list[].date` is kept: it is the *local* rating date, while the
+///   row's `timestamp` is UTC — they differ by a calendar day for HK/CN/JP rows
+///   (e.g. `timestamp` 2026-09-04T16:00:00Z is the 2026-09-05 local date), so
+///   the date is NOT reliably derivable from the timestamp without the exchange
+///   timezone.
 /// - The `avg_target`/`min_target`/`max_target` prices arrive with up to ~21
 ///   fractional digits, and `target.prediction_accuracy` with ~18; capping the
 ///   whole document at 6 dp removes that bogus precision (clean prices like the
 ///   3 dp `price` and the 4 dp `data_percent` are left untouched).
 fn trim_institution_rating_detail(value: &mut serde_json::Value) {
-    if let Some(rows) = value
-        .pointer_mut("/target/list")
-        .and_then(serde_json::Value::as_array_mut)
-    {
-        for row in rows.iter_mut() {
-            if let Some(obj) = row.as_object_mut() {
-                obj.remove("date");
-            }
-        }
-    }
     crate::serialize::round_decimals(value, 6);
 }
 
@@ -305,17 +297,27 @@ fn hoist_consensus_legend(value: &mut serde_json::Value) {
             let Some(dobj) = detail.as_object_mut() else {
                 continue;
             };
-            if let Some(key) = dobj.get("key").and_then(|v| v.as_str()).map(str::to_owned)
-                && !legend.contains_key(&key)
-            {
-                let mut entry = serde_json::Map::new();
-                if let Some(name) = dobj.get("name").cloned() {
-                    entry.insert("name".to_string(), name);
+            if let Some(key) = dobj.get("key").and_then(|v| v.as_str()).map(str::to_owned) {
+                let is_empty =
+                    |v: &serde_json::Value| v.is_null() || v.as_str().is_some_and(str::is_empty);
+                // Fill from the first NON-empty occurrence across periods; an
+                // empty label must not be stored (it would shadow a later real
+                // one and leave the metric name-less).
+                let name = dobj.get("name").cloned().filter(|v| !is_empty(v));
+                let desc = dobj.get("description").cloned().filter(|v| !is_empty(v));
+                if name.is_some() || desc.is_some() {
+                    let entry = legend
+                        .entry(key)
+                        .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
+                    if let Some(entry) = entry.as_object_mut() {
+                        if let Some(name) = name {
+                            entry.entry("name").or_insert(name);
+                        }
+                        if let Some(desc) = desc {
+                            entry.entry("description").or_insert(desc);
+                        }
+                    }
                 }
-                if let Some(desc) = dobj.get("description").cloned() {
-                    entry.insert("description".to_string(), desc);
-                }
-                legend.insert(key, serde_json::Value::Object(entry));
             }
             dobj.remove("name");
             dobj.remove("description");
@@ -1278,7 +1280,7 @@ mod tests {
     use rmcp::model::Content;
 
     #[test]
-    fn trim_institution_rating_detail_drops_target_date_and_rounds() {
+    fn trim_institution_rating_detail_keeps_target_date_and_rounds() {
         let mut v = serde_json::json!({
             "ccy_symbol": "HK$",
             "evaluate": {"list": [
@@ -1298,8 +1300,13 @@ mod tests {
         super::trim_institution_rating_detail(&mut v);
 
         let trow = &v["target"]["list"][0];
-        // Derivable target-row date is dropped; the timestamp remains the time key.
-        assert!(trow.get("date").is_none(), "target.list date is dropped");
+        // The local rating date is KEPT: it is NOT derivable from the UTC
+        // timestamp — here 2026-09-04T16:00:00Z (UTC) is the 2026-09-05 local
+        // (UTC+8) date, a one-calendar-day difference.
+        assert_eq!(
+            trow["date"], "2026/09/05",
+            "local target.list date is preserved (differs from the UTC timestamp's day)"
+        );
         assert_eq!(
             trow["timestamp"], "2026-09-04T16:00:00Z",
             "timestamp is kept"

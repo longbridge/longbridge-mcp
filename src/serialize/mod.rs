@@ -129,7 +129,14 @@ pub(crate) fn round_decimals(value: &mut serde_json::Value, dp: u32) {
             if frac > dp as usize
                 && let Ok(d) = s.parse::<rust_decimal::Decimal>()
             {
-                *s = d.round_dp(dp).normalize().to_string();
+                let rounded = d.round_dp(dp).normalize();
+                // Never collapse a genuine nonzero value to "0": a tiny ratio /
+                // premium / low-priced quote (e.g. "0.00000012") rounded to 6 dp
+                // would become "0", which a consumer reads as "none / zero" — a
+                // different fact. Keep the original string in that case.
+                if d.is_zero() || !rounded.is_zero() {
+                    *s = rounded.to_string();
+                }
             }
         }
         _ => {}
@@ -604,6 +611,24 @@ mod tests {
             }),
             "only empty-string values are dropped, recursively; null, empty array/object, and 0 stay"
         );
+    }
+
+    #[test]
+    fn round_decimals_keeps_tiny_nonzero_instead_of_collapsing_to_zero() {
+        let mut v = serde_json::json!({
+            "tiny_premium": "0.00000012",       // < 5e-7: would round to 0
+            "small_ratio": "0.00000234",        // ~1e-6: rounds but stays nonzero
+            "true_zero": "0.0000000",           // genuinely zero
+            "normal": "1.23456789",             // normal round
+        });
+        round_decimals(&mut v, 6);
+        assert_eq!(
+            v["tiny_premium"], "0.00000012",
+            "a nonzero value that would round to 0 must be kept as-is, not collapsed"
+        );
+        assert_eq!(v["small_ratio"], "0.000002", "rounds but stays nonzero");
+        assert_eq!(v["true_zero"], "0", "a genuine zero still normalizes to 0");
+        assert_eq!(v["normal"], "1.234568", "normal value rounds to 6 dp");
     }
 
     #[test]
