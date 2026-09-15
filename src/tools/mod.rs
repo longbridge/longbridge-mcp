@@ -433,6 +433,13 @@ fn recoverable_of(err: &McpError) -> &'static str {
     "none"
 }
 
+/// True when `err` is a rate-limit / too-frequent condition the caller can
+/// resolve by waiting and retrying (i.e. `recoverable_of(err) == "backoff"`).
+/// Exposed for tools that want to do their own short in-function retry.
+pub(crate) fn is_backoff(err: &McpError) -> bool {
+    recoverable_of(err) == "backoff"
+}
+
 /// True only for the known *terminal* quote conditions that return
 /// `isError:false` with a schema-valid empty result: 301604 (no quote access)
 /// and 301603 (no quotes). Deliberately narrow — a bare "no access" needle is
