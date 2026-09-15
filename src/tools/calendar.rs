@@ -207,6 +207,28 @@ pub async fn finance_calendar(
     let mut value: serde_json::Value =
         serde_json::from_str(&transformed).map_err(Error::Serialize)?;
     convert_unix_paths(&mut value, &["list.*.infos.*.datetime"]);
+    // Drop always-empty (chart_uid, financial_market_time), constant
+    // (source_type=0), and display-only (icon URL, widget_short_display_date, the
+    // empty data_kv `key`) fields from each event. These names collide with
+    // neither the outer grouping `date` nor any field we keep. Verified across
+    // both the dividend and report categories: `date_type` ("盘前"/"盘后") and
+    // `live` (earnings-call object) carry real data in report events, so they
+    // are deliberately NOT dropped.
+    let mut drop: Vec<&str> = vec![
+        "chart_uid",
+        "financial_market_time",
+        "source_type",
+        "icon",
+        "widget_short_display_date",
+        "key",
+    ];
+    // `star` is a constant 0 for report/dividend, but for `macrodata` it is the
+    // 1–3 event-importance rank (CPI / NFP / rate decisions) that a consumer
+    // filters on — keep it there.
+    if category != "macrodata" {
+        drop.push("star");
+    }
+    crate::serialize::drop_keys(&mut value, &drop);
     if let Some(reason) = partial_reason {
         value["partial"] = serde_json::Value::Bool(true);
         value["partial_reason"] = serde_json::Value::String(reason);
