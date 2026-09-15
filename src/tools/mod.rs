@@ -175,6 +175,9 @@ where
 fn tool_error(name: &str, err: &McpError) -> CallToolResult {
     let message = upstream_message_of(err).unwrap_or_else(|| err.message.as_ref());
     if is_terminal_none(err) {
+        // Count the degraded condition (tools that return the error to
+        // `measured_tool_call` land here instead of calling `terminal_none_ok`).
+        crate::metrics::record_terminal_degraded(name, openapi_error_code_of(err));
         let envelope = serde_json::json!({
             "error_code": openapi_error_code_of(err),
             "message": message,
@@ -441,13 +444,24 @@ pub(crate) fn is_backoff(err: &McpError) -> bool {
 }
 
 /// True only for the known *terminal* quote conditions that return
-/// `isError:false` with a schema-valid empty result: 301604 (no quote access)
-/// and 301603 (no quotes). Deliberately narrow — a bare "no access" needle is
-/// omitted so a 403 permission error can't be mistaken for a terminal quote
-/// condition.
+/// `isError:false` with a schema-valid empty result: 301604 (no quote access),
+/// 301603 (no quotes), and 301607 *with `limit:0`* (the account has zero
+/// history-candlestick quota). Deliberately narrow — a bare "no access" needle
+/// is omitted so a 403 permission error can't be mistaken for a terminal quote
+/// condition, and the `limit:0` guard keeps the *other* 301607 ("too many
+/// symbols", `limit`>0) as `fix_params` + count-boundary retry, not terminal.
 fn is_terminal_none(err: &McpError) -> bool {
     let code = openapi_error_code_of(err);
     let msg = err.message.to_lowercase();
+    // Zero-quota history candlestick: 301607 whose message reports `limit:0`.
+    // (Integers carry no leading zeros, so `limit:0` never matches `limit:10`
+    // etc.) Checked on both the display text and the clean upstream message.
+    if code == Some(301_607)
+        && (msg.contains("limit:0")
+            || upstream_message_of(err).is_some_and(|m| m.to_lowercase().contains("limit:0")))
+    {
+        return true;
+    }
     matches_error_class(
         code,
         &msg,
@@ -470,10 +484,13 @@ fn is_terminal_none(err: &McpError) -> bool {
 /// fields must match that path. The tools that call this are array-rooted with
 /// no `output_schema` (never in `TERMINAL_OBJECT_ROOTED`), so no
 /// `structured_content` is attached.
-pub(crate) fn terminal_none_ok(err: &McpError) -> Option<CallToolResult> {
+pub(crate) fn terminal_none_ok(name: &str, err: &McpError) -> Option<CallToolResult> {
     if !is_terminal_none(err) {
         return None;
     }
+    // Observability: the error rate deliberately won't show these, so count them
+    // separately — each one is still a user who got no data.
+    crate::metrics::record_terminal_degraded(name, openapi_error_code_of(err));
     let message = upstream_message_of(err).unwrap_or_else(|| err.message.as_ref());
     let envelope = serde_json::json!({
         "error_code": openapi_error_code_of(err),
@@ -6580,7 +6597,7 @@ mod tool_error_tests {
             "WsResponseErrorDetail { code: 301604, msg: \"no quote access\" }".to_string(),
             Some(serde_json::json!({ "openapi_error_code": 301604 })),
         );
-        let ok = super::terminal_none_ok(&terminal).expect("301604 must degrade to Ok");
+        let ok = super::terminal_none_ok("option_quote", &terminal).expect("301604 must degrade");
         assert_ne!(
             ok.is_error,
             Some(true),
@@ -6590,6 +6607,30 @@ mod tool_error_tests {
         assert_eq!(v["error_code"], 301604);
         assert_eq!(v["recoverable"], "none");
 
+        // 301607 with a zero history-candlestick quota (limit:0) is also terminal.
+        let zero_quota = McpError::internal_error(
+            "history candlestick symbol count out of limit, requested:0/limit:0".to_string(),
+            Some(serde_json::json!({
+                "openapi_error_code": 301607,
+                "upstream_message": "history candlestick symbol count out of limit, requested:0/limit:0"
+            })),
+        );
+        assert!(
+            super::terminal_none_ok("history_candlesticks_by_date", &zero_quota).is_some(),
+            "301607 with limit:0 (no history quota) must degrade to Ok"
+        );
+
+        // But 301607 with a non-zero limit ("too many symbols") is NOT terminal —
+        // it is fix_params + count-boundary retry, and must still propagate.
+        let too_many = McpError::internal_error(
+            "WsResponseErrorDetail { code: 301607, msg: \"requested:200/limit:100\" }".to_string(),
+            Some(serde_json::json!({ "openapi_error_code": 301607 })),
+        );
+        assert!(
+            super::terminal_none_ok("history_candlesticks_by_offset", &too_many).is_none(),
+            "301607 with limit>0 must stay a real error, not be swallowed"
+        );
+
         // A reauth error (401103) is not terminal → None; the caller must
         // propagate it as `Err` (so it stays a real, counted error).
         let reauth = McpError::internal_error(
@@ -6597,7 +6638,7 @@ mod tool_error_tests {
             Some(serde_json::json!({ "openapi_error_code": 401103 })),
         );
         assert!(
-            super::terminal_none_ok(&reauth).is_none(),
+            super::terminal_none_ok("stock_positions", &reauth).is_none(),
             "non-terminal errors must not be swallowed into an Ok"
         );
     }

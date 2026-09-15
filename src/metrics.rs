@@ -137,6 +137,36 @@ static OAUTH_REVOKE_TOTAL: LazyLock<IntCounterVec> = LazyLock::new(|| {
     counter
 });
 
+static TOOL_TERMINAL_DEGRADED_TOTAL: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    let counter = IntCounterVec::new(
+        Opts::new(
+            "mcp_tool_terminal_degraded_total",
+            "Tool calls that returned a terminal no-access/no-data placeholder \
+             (isError:false success) instead of an error. NOT counted in \
+             mcp_tool_call_errors_total, but each one is still a real \
+             permission/quota/no-data gap — watch this to see conditions the \
+             error rate no longer surfaces.",
+        ),
+        &["tool_name", "code", "client"],
+    )
+    .unwrap();
+    REGISTRY.register(Box::new(counter.clone())).unwrap();
+    counter
+});
+
+/// Record a tool call that resolved to a terminal degraded result (e.g. 301604
+/// no quote access, 301607 with zero history quota). These are deliberately not
+/// counted as errors so `mcp_tool_call_errors_total` reflects actionable
+/// failures — but they still mean a user got no data, so they get their own
+/// counter for observability. `code` is the upstream `openapi_error_code`.
+pub fn record_terminal_degraded(tool_name: &str, code: Option<i64>) {
+    let client = CURRENT_CLIENT.try_with(|c| *c).unwrap_or("unknown");
+    let code = code.map_or_else(|| "unknown".to_string(), |c| c.to_string());
+    TOOL_TERMINAL_DEGRADED_TOTAL
+        .with_label_values(&[tool_name, &code, client])
+        .inc();
+}
+
 pub fn record_tool_call(tool_name: &str, duration_secs: f64, is_error: bool) {
     let client = CURRENT_CLIENT.try_with(|c| *c).unwrap_or("unknown");
     TOOL_CALLS_TOTAL

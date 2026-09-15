@@ -348,7 +348,7 @@ pub async fn option_quote(
         Err(e) => {
             mctx.evict_quote_context();
             let err: McpError = Error::longbridge(e).into();
-            if let Some(ok) = crate::tools::terminal_none_ok(&err) {
+            if let Some(ok) = crate::tools::terminal_none_ok("option_quote", &err) {
                 return Ok(ok);
             }
             return Err(err);
@@ -515,7 +515,8 @@ pub async fn history_candlesticks_by_offset(
         Err(e) => {
             mctx.evict_quote_context();
             let err: McpError = Error::longbridge(*e).into();
-            if let Some(ok) = crate::tools::terminal_none_ok(&err) {
+            if let Some(ok) = crate::tools::terminal_none_ok("history_candlesticks_by_offset", &err)
+            {
                 return Ok(ok);
             }
             return Err(err);
@@ -548,7 +549,7 @@ pub async fn history_candlesticks_by_date(
         Err(e) => {
             mctx.evict_quote_context();
             let err: McpError = Error::longbridge(e).into();
-            if let Some(ok) = crate::tools::terminal_none_ok(&err) {
+            if let Some(ok) = crate::tools::terminal_none_ok("history_candlesticks_by_date", &err) {
                 return Ok(ok);
             }
             return Err(err);
