@@ -454,7 +454,15 @@ where
     Fut: std::future::Future<Output = Result<T, longbridge::Error>>,
 {
     match call(count).await {
-        Err(e) if count > 1 && e.openapi_error_code() == Some(CANDLESTICK_COUNT_OUT_OF_LIMIT) => {
+        // Retry the count-boundary case (limit>0), but NOT the zero-quota case
+        // (`limit:0`): retrying with count-1 can't conjure a quota the account
+        // doesn't have, so it would just burn a second upstream call before the
+        // terminal degrade. `is_terminal_none` handles limit:0 downstream.
+        Err(e)
+            if count > 1
+                && e.openapi_error_code() == Some(CANDLESTICK_COUNT_OUT_OF_LIMIT)
+                && !e.to_string().to_lowercase().contains("limit:0") =>
+        {
             call(count - 1).await.map_err(Box::new)
         }
         result => result.map_err(Box::new),

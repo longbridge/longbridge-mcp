@@ -327,6 +327,20 @@ fn error_hint(err: &McpError) -> Option<&'static str> {
              the relevant market data package.",
         );
     }
+    // Zero-quota history candlestick (301607 with `limit:0`) is a missing
+    // entitlement, not an oversized request — the "use fewer symbols" hint below
+    // would be actively misleading, so handle it first. (Matches the terminal
+    // branch in `is_terminal_none`.)
+    if code == Some(301_607)
+        && (msg.contains("limit:0")
+            || upstream_message_of(err).is_some_and(|m| m.to_lowercase().contains("limit:0")))
+    {
+        return Some(
+            "Hint: this account has no history-candlestick quota (limit:0). The empty result is a \
+             permission/subscription gap, not an oversized request — reducing the number of \
+             symbols will NOT help. Tell the user their account lacks history market-data access.",
+        );
+    }
     if matches_error_class(
         code,
         &msg,
@@ -7147,6 +7161,31 @@ mod tool_error_tests {
         assert!(
             hint.contains("fewer") || hint.contains("reduce"),
             "got: {hint}"
+        );
+    }
+
+    #[test]
+    fn zero_history_quota_hint_does_not_tell_caller_to_reduce_symbols() {
+        // 301607 with limit:0 is a missing entitlement, not an oversized request.
+        // Its hint must NOT tell the model to retry with fewer symbols — that
+        // would pair a "reduce symbols" hint with the "no access" terminal note
+        // and mislead the client.
+        let err = McpError::internal_error(
+            "history candlestick symbol count out of limit, requested:0/limit:0".to_string(),
+            Some(serde_json::json!({
+                "openapi_error_code": 301607,
+                "upstream_message":
+                    "history candlestick symbol count out of limit, requested:0/limit:0"
+            })),
+        );
+        let hint = error_hint(&err).expect("expected a 301607 limit:0 hint");
+        assert!(
+            !hint.to_lowercase().contains("fewer"),
+            "zero-quota hint must not say 'fewer symbols', got: {hint}"
+        );
+        assert!(
+            hint.contains("quota") || hint.contains("access"),
+            "zero-quota hint should name the missing quota/access, got: {hint}"
         );
     }
 
