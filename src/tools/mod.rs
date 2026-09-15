@@ -5426,12 +5426,12 @@ impl ServerHandler for Longbridge {
             ));
         }
         // DC-region execution gate, independent of the /v1/v2 restricted-endpoint
-        // check above: on the main (`/mcp`) and authenticated `/agent` endpoints,
-        // a tool hidden from `tools/list` for this account's region must also be
-        // un-callable by name, or the listing filter is merely cosmetic.
-        if restricted_version(&context).is_none()
-            && let Ok(mctx) = extract_context(&context)
-        {
+        // check above: on every authenticated endpoint — main (`/mcp`), `/agent`,
+        // and the restricted `/v2` directory endpoint — a tool hidden from
+        // `tools/list` for this account's region must also be un-callable by name,
+        // or the listing filter is merely cosmetic. Token-less endpoints have no
+        // context, so `extract_context` fails and the gate is skipped.
+        if let Ok(mctx) = extract_context(&context) {
             let region = mctx.dc_region().await;
             if is_hidden_for_dc_region(request.name.as_ref(), region) {
                 return Err(McpError::invalid_request(
@@ -5469,12 +5469,15 @@ impl ServerHandler for Longbridge {
         // the clone cost (Arc ref-bumps + String title copies), not filter work.
         let tools = if is_agent_endpoint(&context) && !is_authenticated(&context) {
             tools_agent_endpoint().to_vec()
-        } else if let Some(version) = restricted_version(&context) {
-            match version {
-                RestrictedVersion::V2 => tools_v2_endpoint().to_vec(),
-            }
         } else {
-            let mut tools = tools_main_endpoint().to_vec();
+            // Both the main (`/mcp`) and restricted (`/v2`) slices are region-
+            // filtered: a US-DC-only tool must not be advertised to an AP account
+            // (and vice versa) on ANY authenticated endpoint, including the public
+            // directory endpoint, or it is offered only to fail upstream.
+            let mut tools = match restricted_version(&context) {
+                Some(RestrictedVersion::V2) => tools_v2_endpoint().to_vec(),
+                None => tools_main_endpoint().to_vec(),
+            };
             if let Ok(mctx) = extract_context(&context) {
                 let region = mctx.dc_region().await;
                 tools.retain(|t| !is_hidden_for_dc_region(t.name.as_ref(), region));
@@ -5875,6 +5878,37 @@ mod tests {
                 .all(|n| !super::AP_ONLY_TOOLS.contains(n)),
             "US_ONLY_TOOLS and AP_ONLY_TOOLS must be disjoint"
         );
+    }
+
+    #[test]
+    fn v2_endpoint_region_filtering_hides_us_only_tools_for_ap() {
+        use longbridge::DcRegion;
+
+        // `list_tools` now applies the same region retain to the /v2 slice as to
+        // the main slice. Guards against the /v2 directory endpoint regressing to
+        // advertise US-DC-only tools (e.g. financial_report_key_metrics) to AP
+        // accounts, which then 100%-fail upstream.
+        let in_v2 = |name: &str| {
+            super::tools_v2_endpoint()
+                .iter()
+                .any(|t| t.name.as_ref() == name)
+        };
+
+        // At least one US-only tool is v2-public, so the /v2 retain is load-bearing.
+        assert!(
+            super::US_ONLY_TOOLS.iter().any(|n| in_v2(n)),
+            "expected a US-only tool to be v2-public (e.g. financial_report_key_metrics)"
+        );
+        for name in super::US_ONLY_TOOLS.iter().filter(|n| in_v2(n)) {
+            assert!(
+                super::is_hidden_for_dc_region(name, DcRegion::Ap),
+                "US-only tool `{name}` on /v2 must be hidden for AP accounts"
+            );
+            assert!(
+                !super::is_hidden_for_dc_region(name, DcRegion::Us),
+                "US-only tool `{name}` on /v2 must stay visible for US accounts"
+            );
+        }
     }
 
     #[test]
