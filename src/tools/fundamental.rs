@@ -705,7 +705,8 @@ pub async fn institutional_views(
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct IndustryPeersParam {
-    /// BK counter_id from `industry_rank`, e.g. "BK/US/IN00258".
+    /// Industry symbol from `industry_rank`, e.g. "IN00258.US". The BK
+    /// counter_id form ("BK/US/IN00258") is also accepted.
     pub symbol: String,
 }
 
@@ -723,10 +724,10 @@ pub async fn industry_peers(
             .map(|(_, m)| m.to_uppercase())
             .unwrap_or_else(|| "US".to_string())
     };
-    // `industry_rank` returns BK counter_ids (`BK/US/IN00258`), which is what
-    // this endpoint wants. Also accept the `IN00258.US` spelling, which older
-    // clients may still hold, and map it back. Ordinary security symbols go
-    // through untouched.
+    // `industry_rank` now returns the industry `symbol` (`IN00258.US`); this
+    // upstream endpoint wants the BK counter_id form, so map the symbol back.
+    // The BK spelling (`BK/US/IN00258`) is still accepted for backward
+    // compatibility. Ordinary security symbols go through untouched.
     let industry = if p.symbol.contains('/') {
         p.symbol.clone()
     } else if let Some((code, market)) = p.symbol.rsplit_once('.')
@@ -736,7 +737,7 @@ pub async fn industry_peers(
     } else {
         p.symbol.clone()
     };
-    http_get_tool(
+    let result = http_get_tool(
         &client,
         "/v1/quote/industries/peers",
         &[
@@ -746,7 +747,26 @@ pub async fn industry_peers(
             ("symbol", industry.as_str()),
         ],
     )
-    .await
+    .await?;
+    // Drop any `counter_id`/`leading_counter_id` the response echoes (the
+    // `symbol` form is kept), so the tool is symbol-based end to end.
+    let json = result
+        .content
+        .first()
+        .and_then(|c| c.as_text())
+        .map(|t| t.text.clone())
+        .unwrap_or_default();
+    let Ok(mut value) = serde_json::from_str::<serde_json::Value>(&json) else {
+        return Ok(result);
+    };
+    crate::serialize::drop_keys(&mut value, &["counter_id", "leading_counter_id"]);
+    let out = serde_json::to_string(&value).map_err(crate::error::Error::Serialize)?;
+    let structured = serde_json::from_str::<serde_json::Value>(&out)
+        .ok()
+        .filter(serde_json::Value::is_object);
+    let mut res = rmcp::model::CallToolResult::success(vec![rmcp::model::Content::text(out)]);
+    res.structured_content = structured;
+    Ok(res)
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]

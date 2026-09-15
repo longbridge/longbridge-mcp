@@ -1104,10 +1104,10 @@ pub struct IndustryPeersNode {
     /// Node name.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
-    /// Node identifier, a BK counter_id such as `"BK/US/IN00258"`. Pass it
+    /// Node identifier, an industry symbol such as `"IN00258.US"`. Pass it
     /// back to `industry_peers` to walk into the sub-sector.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub counter_id: Option<String>,
+    pub symbol: Option<String>,
     /// Number of stocks in this sub-sector.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stock_num: Option<i64>,

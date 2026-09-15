@@ -287,9 +287,9 @@ pub async fn industry_rank(
     if !limit.is_empty() {
         params.push(("limit", limit.as_str()));
     }
-    // Use the raw HTTP response so the BK counter_ids (`BK/US/IN00258`) reach
-    // the caller in the exact form `industry_peers` expects, untouched by
-    // `transform_json`'s snake_case pass.
+    // Use the raw HTTP response so the industry `symbol` (`IN00258.US`) and the
+    // leading stock's fields reach the caller untouched by `transform_json`'s
+    // snake_case pass.
     use reqwest::Method;
     let raw: String = client
         .request(Method::GET, "/v1/quote/industry/rank")
@@ -298,8 +298,14 @@ pub async fn industry_rank(
         .send()
         .await
         .map_err(|e| Error::longbridge(e.into()))?;
-    let data: serde_json::Value =
+    let mut data: serde_json::Value =
         serde_json::from_str(&raw).map_err(crate::error::Error::Serialize)?;
+    // Each row carries the industry `counter_id` (`BK/HK/IN20351`) alongside the
+    // equivalent `symbol` (`IN20351.HK`), and the leading stock's
+    // `leading_counter_id` (`ST/HK/2672`) alongside `leading_ticker`. Drop the
+    // counter_id forms so the response is symbol-based; pass the industry
+    // `symbol` to `industry_peers`.
+    crate::serialize::drop_keys(&mut data, &["counter_id", "leading_counter_id"]);
     let out = serde_json::to_string(&data).map_err(crate::error::Error::Serialize)?;
     let structured = serde_json::from_str::<serde_json::Value>(&out).ok();
     let mut res = rmcp::model::CallToolResult::success(vec![rmcp::model::Content::text(out)]);

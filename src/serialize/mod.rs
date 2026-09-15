@@ -170,6 +170,29 @@ fn walk_convert(value: &mut serde_json::Value, segments: &[&str]) {
     }
 }
 
+/// Recursively remove entries whose (snake_case) key is in `keys` from every
+/// object in `value`, at any depth and through arrays.
+///
+/// Used to drop redundant fields a passthrough response echoes — e.g. an
+/// industry `counter_id` when the object already carries the equivalent
+/// `symbol`. Keys must be given in the post-transform snake_case form.
+pub(crate) fn drop_keys(value: &mut serde_json::Value, keys: &[&str]) {
+    match value {
+        serde_json::Value::Object(map) => {
+            map.retain(|k, _| !keys.contains(&k.as_str()));
+            for v in map.values_mut() {
+                drop_keys(v, keys);
+            }
+        }
+        serde_json::Value::Array(arr) => {
+            for v in arr.iter_mut() {
+                drop_keys(v, keys);
+            }
+        }
+        _ => {}
+    }
+}
+
 #[derive(Clone, Copy, PartialEq)]
 pub(crate) enum FieldKind {
     Normal,
