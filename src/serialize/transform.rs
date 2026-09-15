@@ -3,11 +3,9 @@ use serde::ser::{
     SerializeTuple, SerializeTupleStruct, SerializeTupleVariant, Serializer,
 };
 
-use crate::counter::counter_id_to_symbol;
-use crate::serialize::counter_id::{CounterIdValue, CounterIdsValue};
 use crate::serialize::timestamp::TimestampValue;
 use crate::serialize::{
-    FieldKind, Transformed, classify_field, delegate_simple, key_to_string, looks_like_counter_id,
+    FieldKind, Transformed, classify_field, delegate_simple, is_field_name, key_to_string,
     output_key, to_snake_case,
 };
 
@@ -218,14 +216,12 @@ impl<M: SerializeMap> SerializeMap for TransformMap<M> {
 
     fn serialize_key<T: Serialize + ?Sized>(&mut self, key: &T) -> Result<(), Self::Error> {
         let raw = key_to_string(key).map_err(ser::Error::custom)?;
-        // If the key itself is a counter_id value (e.g. `ST/US/AAPL`),
-        // convert it to a symbol and skip snake_case conversion, which would
-        // otherwise insert underscores before each uppercase letter and mangle
-        // the key into `s_t/_u_s/_a_a_p_l`.
-        if looks_like_counter_id(&raw) {
+        // Some endpoints key a map by the security itself (e.g. the `symbols`
+        // map, keyed `AAPL.US`). Such a key is data, not a field name: pass it
+        // through, since snake_case would mangle it into `a_a_p_l._u_s`.
+        if !is_field_name(&raw) {
             self.current_kind = FieldKind::Normal;
-            let symbol = counter_id_to_symbol(&raw);
-            return self.inner.serialize_key(&symbol);
+            return self.inner.serialize_key(&raw);
         }
         let snake = to_snake_case(&raw);
         let kind = classify_field(&snake);
@@ -241,8 +237,6 @@ impl<M: SerializeMap> SerializeMap for TransformMap<M> {
                 self.inner.serialize_value(&None::<()>)
             }
             FieldKind::Timestamp => self.inner.serialize_value(&TimestampValue { value }),
-            FieldKind::CounterId => self.inner.serialize_value(&CounterIdValue { value }),
-            FieldKind::CounterIds => self.inner.serialize_value(&CounterIdsValue { value }),
             FieldKind::Normal => self.inner.serialize_value(&Transformed { value }),
         }
     }
@@ -272,8 +266,6 @@ impl<M: SerializeMap> SerializeStruct for TransformStructAsMap<M> {
         match kind {
             FieldKind::Nullified => self.inner.serialize_value(&None::<()>),
             FieldKind::Timestamp => self.inner.serialize_value(&TimestampValue { value }),
-            FieldKind::CounterId => self.inner.serialize_value(&CounterIdValue { value }),
-            FieldKind::CounterIds => self.inner.serialize_value(&CounterIdsValue { value }),
             FieldKind::Normal => self.inner.serialize_value(&Transformed { value }),
         }
     }

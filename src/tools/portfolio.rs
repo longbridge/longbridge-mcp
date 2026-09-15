@@ -3,7 +3,6 @@ use rmcp::model::{CallToolResult, Content};
 use rmcp::schemars::JsonSchema;
 use rmcp::serde::Deserialize;
 
-use crate::counter::symbol_to_counter_id;
 use crate::error::Error;
 use crate::serialize::convert_unix_paths;
 use crate::tools::support::http_client::{http_get_tool, http_get_tool_unix};
@@ -19,7 +18,7 @@ pub struct ProfitAnalysisParam {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ProfitAnalysisDetailParam {
-    /// Security symbol, e.g. "700.HK"
+    /// Security symbol, e.g. "700.HK". Use the canonical form — a padded code like "00700.HK" returns an empty record, not an error.
     pub symbol: String,
     /// Start date (yyyy-mm-dd). Must be paired with `end`; passing only one returns empty results.
     pub start: Option<String>,
@@ -131,7 +130,6 @@ pub async fn profit_analysis_detail(
     p: ProfitAnalysisDetailParam,
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
-    let cid = symbol_to_counter_id(&p.symbol);
 
     let start_ts = p
         .start
@@ -147,7 +145,7 @@ pub async fn profit_analysis_detail(
     let start_str = start_ts.map(|v| v.to_string());
     let end_str = end_ts.map(|v| v.to_string());
 
-    let mut params: Vec<(&str, &str)> = vec![("counter_id", cid.as_str())];
+    let mut params: Vec<(&str, &str)> = vec![("symbol", p.symbol.as_str())];
     if let Some(ref s) = start_str {
         params.push(("start", s.as_str()));
     }

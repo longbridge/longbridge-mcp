@@ -2,7 +2,7 @@
 //! shape is a stable JSON object.
 //!
 //! Mirrors the shape produced by [`crate::tools::tool_json`] (and the HTTP
-//! passthrough path) after the standard snake_case + RFC3339 + counter_id
+//! passthrough path) after the standard snake_case + RFC3339
 //! transforms run against the upstream SDK / API response.
 //!
 //! Only tools whose response root is a JSON **object** appear here. The MCP

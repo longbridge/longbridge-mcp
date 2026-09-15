@@ -12,9 +12,15 @@ use rmcp::{
 use serde_json::Value;
 
 type Filter = jaq_core::Filter<data::JustLut<Val>>;
-pub(super) const INSTRUCTIONS: &str = "All tools accept optional `_jq`, a filter expression using jq CLI syntax, e.g. .data | map({symbol}). Omit it for the full JSON response.";
+pub(super) const INSTRUCTIONS: &str = "All tools accept optional `_jq`, a filter expression using jq CLI syntax applied to the response, e.g. .data | map({symbol}); one output is returned as-is, several as a JSON array. Omit it for the full JSON response.";
+
+/// Per-tool schema description for the injected `_jq` property, so a client
+/// inspecting a single tool's schema learns the contract without depending on
+/// the server-level `instructions` (which many clients drop).
+const JQ_PROPERTY_DESCRIPTION: &str = "Optional jq filter (jaq syntax) applied to this tool's JSON response before it is returned; it never changes the upstream request. One output is returned as-is, several as a JSON array, none as []. Module imports and the `env`/`debug`/`stderr` builtins are unavailable. Example: .data | map({symbol}). Omit for the full response.";
 const MAX_RESULTS: usize = 10_000;
 const MAX_OUTPUT_BYTES: usize = 8 * 1024 * 1024;
+const FILTER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 pub(super) fn describe(tool: &mut Tool) {
     let schema = std::sync::Arc::make_mut(&mut tool.input_schema);
@@ -23,7 +29,10 @@ pub(super) fn describe(tool: &mut Tool) {
         .or_insert_with(|| serde_json::json!({}))
         .as_object_mut()
         .expect("tool properties must be an object")
-        .insert("_jq".into(), serde_json::json!({"type": "string"}));
+        .insert(
+            "_jq".into(),
+            serde_json::json!({"type": "string", "description": JQ_PROPERTY_DESCRIPTION}),
+        );
     // A jq projection may return any JSON value. A fixed object schema would
     // reject valid filtered results. Full unfiltered schemas remain resources.
     tool.output_schema = None;
@@ -92,11 +101,25 @@ where
     if result.is_error == Some(true) || is_error_envelope(&result) {
         return Ok(result);
     }
-    let filtered = tokio::task::spawn_blocking(move || apply(filter, result)).await;
+    // Bound the *caller-visible* latency: `MAX_RESULTS`/`MAX_OUTPUT_BYTES` only
+    // fire between output values, so a filter that spins without emitting (e.g.
+    // `while(true; .)`) or builds one huge/non-terminating aggregate (e.g.
+    // `[range(0;1e9)]`, `[repeat(1)]`) would otherwise hang the request. The
+    // timeout returns a bounded, actionable error instead. Caveat: a dropped
+    // `spawn_blocking` handle does not abort the blocking task, so a hostile
+    // aggregate keeps running (and can OOM) on a detached thread until it
+    // finishes -- jaq exposes no fuel/step limit to cap that from here. The
+    // input is the already-fetched (bounded) tool response, so the only
+    // unbounded vector is generative builtins, not caller-supplied data.
+    let worker = tokio::task::spawn_blocking(move || apply(filter, result));
+    let filtered = tokio::time::timeout(FILTER_TIMEOUT, worker).await;
     Ok(match filtered {
-        Ok(Ok(result)) => result,
-        Ok(Err(message)) => filter_error(&message),
-        Err(_) => filter_error("filter worker failed"),
+        Ok(Ok(Ok(result))) => result,
+        Ok(Ok(Err(message))) => filter_error(&message),
+        Ok(Err(_)) => filter_error("filter worker failed"),
+        Err(_) => filter_error(
+            "filter timed out after 5s; narrow the _jq expression (avoid unbounded ranges or repeats)",
+        ),
     })
 }
 

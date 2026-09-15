@@ -466,10 +466,8 @@ pub async fn screener_indicators(
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
     let mut params: Vec<(&str, &str)> = vec![];
-    let cid;
     if let Some(ref sym) = p.symbol {
-        cid = crate::counter::symbol_to_counter_id(sym);
-        params.push(("counter_id", cid.as_str()));
+        params.push(("symbol", sym.as_str()));
     }
     let result = http_get_tool(&client, "/v1/quote/ai/screener/indicators", &params).await?;
     Ok(strip_filter_prefix_from_indicators(result))

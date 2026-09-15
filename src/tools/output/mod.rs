@@ -1,6 +1,6 @@
 //! Typed output schemas for tools whose post-transform JSON shape is known
 //! statically. Mirrors the shape produced by [`tool_json`] after the standard
-//! snake_case + RFC3339 + counter_id transforms run against the upstream SDK
+//! snake_case + RFC3339 transforms run against the upstream SDK
 //! response.
 //!
 //! Each struct here is referenced from `#[tool(output_schema = ...)]` on the
@@ -269,8 +269,7 @@ pub struct AttachedOrderDetailResponse {
     pub order_id: String,
     /// Leg type: `PROFIT_TAKER`, `STOP_LOSS` or `BRACKET`.
     pub attached_type_display: String,
-    /// Security symbol, e.g. "700.HK" — the API's `counter_id`, which this
-    /// server renames and converts like every other counter ID.
+    /// Security symbol, e.g. "700.HK".
     pub symbol: String,
     /// Order status.
     pub status: String,
@@ -315,6 +314,14 @@ pub struct AttachedOrderDetailResponse {
     pub force_only_rth: Option<String>,
     /// Order tag (e.g. `Normal`, `LongTerm`).
     pub tag: String,
+}
+
+/// Returned by `submit_order` / `submit_multileg_order`.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct OrderIdResponse {
+    /// The newly-created order ID. Pass this to `cancel_order` /
+    /// `replace_order` / `order_detail`.
+    pub order_id: String,
 }
 
 /// Returned by `order_detail`. Single order with full lifecycle metadata.

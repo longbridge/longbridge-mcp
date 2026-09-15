@@ -3,7 +3,6 @@ use rmcp::model::CallToolResult;
 use rmcp::schemars::JsonSchema;
 use rmcp::serde::Deserialize;
 
-use crate::counter::symbol_to_counter_id;
 use crate::tools::support::http_client::{http_get_tool, http_get_tool_unix};
 
 fn make_result(json: String) -> CallToolResult {
@@ -105,20 +104,19 @@ pub async fn ipo_detail(
     p: IpoDetailParam,
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
-    let cid = symbol_to_counter_id(&p.symbol);
     let market = p.market.unwrap_or_else(|| {
         p.symbol
             .rsplit_once('.')
             .map_or("HK", |(_, m)| m)
             .to_string()
     });
-    let profile_params = [("counter_id", cid.as_str())];
+    let profile_params = [("symbol", p.symbol.as_str())];
     let timeline_params = [
-        ("counter_id", cid.as_str()),
+        ("symbol", p.symbol.as_str()),
         ("market", market.as_str()),
         ("flag", "0"),
     ];
-    let eligibility_params = [("counter_id", cid.as_str())];
+    let eligibility_params = [("symbol", p.symbol.as_str())];
     let profile = http_get_tool(&client, "/v1/ipo/profile", &profile_params).await?;
     let timeline = http_get_tool(&client, "/v1/ipo/timeline", &timeline_params).await?;
     let eligibility = http_get_tool(&client, "/v1/ipo/eligibility", &eligibility_params).await?;
@@ -139,10 +137,10 @@ pub async fn ipo_orders(
     let client = mctx.create_http_client();
     let page_str = p.page.unwrap_or(1).to_string();
     let size_str = p.size.unwrap_or(20).to_string();
-    let cid = p.symbol.as_deref().map(symbol_to_counter_id);
+
     let mut active_params: Vec<(&str, &str)> = Vec::new();
-    if let Some(ref c) = cid {
-        active_params.push(("counter_id", c.as_str()));
+    if let Some(ref sym) = p.symbol {
+        active_params.push(("symbol", sym.as_str()));
     }
     let mut hist_params: Vec<(&str, &str)> =
         vec![("page", page_str.as_str()), ("limit", size_str.as_str())];

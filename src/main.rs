@@ -5,7 +5,6 @@
 #![forbid(unsafe_code)]
 
 mod auth;
-mod counter;
 mod endpoints;
 mod error;
 mod logging;
