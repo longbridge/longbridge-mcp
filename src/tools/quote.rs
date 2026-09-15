@@ -343,10 +343,17 @@ pub async fn option_quote(
     p: OptionSymbolsParam,
 ) -> Result<CallToolResult, McpError> {
     let ctx = mctx.get_quote_context().await;
-    let result = ctx.option_quote(p.symbols).await.map_err(|e| {
-        mctx.evict_quote_context();
-        Error::longbridge(e)
-    })?;
+    let result = match ctx.option_quote(p.symbols).await {
+        Ok(v) => v,
+        Err(e) => {
+            mctx.evict_quote_context();
+            let err: McpError = Error::longbridge(e).into();
+            if let Some(ok) = crate::tools::terminal_none_ok(&err) {
+                return Ok(ok);
+            }
+            return Err(err);
+        }
+    };
     tool_json(&result)
 }
 
@@ -491,7 +498,7 @@ pub async fn history_candlesticks_by_offset(
         None => None,
     };
     let ctx = mctx.get_quote_context().await;
-    let result = with_candlestick_count_boundary_retry(p.count, |count| {
+    let outcome = with_candlestick_count_boundary_retry(p.count, |count| {
         ctx.history_candlesticks_by_offset(
             p.symbol.clone(),
             period,
@@ -502,11 +509,18 @@ pub async fn history_candlesticks_by_offset(
             sessions,
         )
     })
-    .await
-    .map_err(|e| {
-        mctx.evict_quote_context();
-        Error::longbridge(*e)
-    })?;
+    .await;
+    let result = match outcome {
+        Ok(v) => v,
+        Err(e) => {
+            mctx.evict_quote_context();
+            let err: McpError = Error::longbridge(*e).into();
+            if let Some(ok) = crate::tools::terminal_none_ok(&err) {
+                return Ok(ok);
+            }
+            return Err(err);
+        }
+    };
     tool_json(&result)
 }
 
@@ -526,13 +540,20 @@ pub async fn history_candlesticks_by_date(
         None => None,
     };
     let ctx = mctx.get_quote_context().await;
-    let result = ctx
+    let result = match ctx
         .history_candlesticks_by_date(p.symbol, period, adjust, start, end, sessions)
         .await
-        .map_err(|e| {
+    {
+        Ok(v) => v,
+        Err(e) => {
             mctx.evict_quote_context();
-            Error::longbridge(e)
-        })?;
+            let err: McpError = Error::longbridge(e).into();
+            if let Some(ok) = crate::tools::terminal_none_ok(&err) {
+                return Ok(ok);
+            }
+            return Err(err);
+        }
+    };
     tool_json(&result)
 }
 

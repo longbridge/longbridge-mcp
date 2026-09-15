@@ -452,6 +452,37 @@ fn is_terminal_none(err: &McpError) -> bool {
     )
 }
 
+/// For the quote-family tools: when `err` is a terminal no-access/no-data quote
+/// condition (301604/301603), return the SAME degraded `isError:false` result
+/// `tool_error` produces — but as an `Ok` the tool itself returns, so the call
+/// is NOT counted as an error by `measured_tool_call` (which keys off the inner
+/// `Result::is_err()`, before `tool_error` runs). Returns `None` for every other
+/// error, which the caller must propagate as `Err` unchanged.
+///
+/// Kept in sync with `tool_error`'s terminal branch: the `note`/`recoverable`
+/// fields must match that path. The tools that call this are array-rooted with
+/// no `output_schema` (never in `TERMINAL_OBJECT_ROOTED`), so no
+/// `structured_content` is attached.
+pub(crate) fn terminal_none_ok(err: &McpError) -> Option<CallToolResult> {
+    if !is_terminal_none(err) {
+        return None;
+    }
+    let message = upstream_message_of(err).unwrap_or_else(|| err.message.as_ref());
+    let envelope = serde_json::json!({
+        "error_code": openapi_error_code_of(err),
+        "message": message,
+        "recoverable": "none",
+        "hint": error_hint(err),
+        "note": "These fields are EMPTY because access was denied or no data exists — NOT \
+                 because the values are zero. This is a permission/no-data placeholder, not a \
+                 real quote. Tell the user they lack the required market-data access (or that \
+                 no data exists); do not present the empty values as real.",
+    });
+    Some(CallToolResult::success(vec![Content::text(
+        envelope.to_string(),
+    )]))
+}
+
 mod alert;
 mod atm;
 mod authenticate;
@@ -6498,6 +6529,36 @@ mod tool_error_tests {
         );
         let v: serde_json::Value = serde_json::from_str(&text_of(&result)).unwrap();
         assert_eq!(v["error_code"], 301603);
+    }
+
+    #[test]
+    fn terminal_none_ok_degrades_terminal_but_propagates_others() {
+        // 301604 (no quote access) is terminal → Some(isError:false), so a tool
+        // returning it via `Ok(terminal_none_ok(..))` is NOT counted as an error.
+        let terminal = McpError::internal_error(
+            "WsResponseErrorDetail { code: 301604, msg: \"no quote access\" }".to_string(),
+            Some(serde_json::json!({ "openapi_error_code": 301604 })),
+        );
+        let ok = super::terminal_none_ok(&terminal).expect("301604 must degrade to Ok");
+        assert_ne!(
+            ok.is_error,
+            Some(true),
+            "terminal degraded result must be a success"
+        );
+        let v: serde_json::Value = serde_json::from_str(&text_of(&ok)).unwrap();
+        assert_eq!(v["error_code"], 301604);
+        assert_eq!(v["recoverable"], "none");
+
+        // A reauth error (401103) is not terminal → None; the caller must
+        // propagate it as `Err` (so it stays a real, counted error).
+        let reauth = McpError::internal_error(
+            "token is expired".to_string(),
+            Some(serde_json::json!({ "openapi_error_code": 401103 })),
+        );
+        assert!(
+            super::terminal_none_ok(&reauth).is_none(),
+            "non-terminal errors must not be swallowed into an Ok"
+        );
     }
 
     #[test]
