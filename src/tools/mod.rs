@@ -7117,9 +7117,11 @@ mod jq_catalog_tests {
                 tool.name
             );
             assert!(
-                tool.input_schema["properties"]["_jq"]
-                    .get("description")
-                    .is_none()
+                tool.input_schema["properties"]["_jq"]["description"]
+                    .as_str()
+                    .is_some_and(|d| d.contains("jq")),
+                "{} _jq must carry a self-contained description",
+                tool.name
             );
             let lookup = Longbridge.get_tool(&tool.name).unwrap();
             assert_eq!(lookup.input_schema, tool.input_schema);

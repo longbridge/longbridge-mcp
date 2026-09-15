@@ -193,6 +193,37 @@ pub(crate) fn drop_keys(value: &mut serde_json::Value, keys: &[&str]) {
     }
 }
 
+/// Recursively remove a `counter_id` / `counter_ids` entry from any object that
+/// also carries the equivalent `symbol` / `symbols`, at any depth and through
+/// arrays.
+///
+/// The backend echoes both forms for backward compatibility, but an AI caller
+/// only needs the symbol form; keeping both is redundant noise. The drop is
+/// guarded: when a `counter_id` appears *without* a sibling `symbol`, it is the
+/// object's only identifier and is kept, so an endpoint that has not yet
+/// started emitting `symbol` is never left without an id.
+pub(crate) fn drop_redundant_counter_ids(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(map) => {
+            if map.contains_key("symbol") {
+                map.remove("counter_id");
+            }
+            if map.contains_key("symbols") {
+                map.remove("counter_ids");
+            }
+            for v in map.values_mut() {
+                drop_redundant_counter_ids(v);
+            }
+        }
+        serde_json::Value::Array(arr) => {
+            for v in arr.iter_mut() {
+                drop_redundant_counter_ids(v);
+            }
+        }
+        _ => {}
+    }
+}
+
 #[derive(Clone, Copy, PartialEq)]
 pub(crate) enum FieldKind {
     Normal,
@@ -341,6 +372,35 @@ mod tests {
         assert!(!is_field_name("ST/US/AAPL"));
         assert!(!is_field_name(".DJI.US"));
         assert!(!is_field_name(""));
+    }
+
+    #[test]
+    fn drop_redundant_counter_ids_only_drops_when_symbol_is_present() {
+        // Both forms present at any depth / through arrays -> counter_id dropped.
+        let mut both = serde_json::json!({
+            "rows": [
+                {"counter_id": "ST/HK/700", "symbol": "700.HK", "name": "腾讯"},
+                {"counter_ids": ["ST/US/AAPL"], "symbols": ["AAPL.US"]}
+            ]
+        });
+        drop_redundant_counter_ids(&mut both);
+        assert_eq!(
+            both,
+            serde_json::json!({
+                "rows": [
+                    {"symbol": "700.HK", "name": "腾讯"},
+                    {"symbols": ["AAPL.US"]}
+                ]
+            })
+        );
+
+        // counter_id alone (no symbol sibling) is the only id -> kept.
+        let mut only = serde_json::json!({"counter_id": "ST/HK/700", "name": "腾讯"});
+        drop_redundant_counter_ids(&mut only);
+        assert_eq!(
+            only,
+            serde_json::json!({"counter_id": "ST/HK/700", "name": "腾讯"})
+        );
     }
 
     #[test]
