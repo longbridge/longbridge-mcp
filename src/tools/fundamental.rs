@@ -724,19 +724,10 @@ pub async fn industry_peers(
             .map(|(_, m)| m.to_uppercase())
             .unwrap_or_else(|| "US".to_string())
     };
-    // `industry_rank` now returns the industry `symbol` (`IN00258.US`); this
-    // upstream endpoint wants the BK counter_id form, so map the symbol back.
-    // The BK spelling (`BK/US/IN00258`) is still accepted for backward
-    // compatibility. Ordinary security symbols go through untouched.
-    let industry = if p.symbol.contains('/') {
-        p.symbol.clone()
-    } else if let Some((code, market)) = p.symbol.rsplit_once('.')
-        && code.to_uppercase().starts_with("IN")
-    {
-        format!("BK/{}/{}", market.to_uppercase(), code.to_uppercase())
-    } else {
-        p.symbol.clone()
-    };
+    // `industry_rank` returns the industry `symbol` (`IN00258.US`), which this
+    // upstream endpoint now accepts directly, so the symbol is passed straight
+    // through. The legacy BK counter_id form (`BK/US/IN00258`) is still accepted
+    // and forwarded untouched for older callers.
     let result = http_get_tool(
         &client,
         "/v1/quote/industries/peers",
@@ -744,7 +735,7 @@ pub async fn industry_peers(
             ("type", "1"),
             ("market", mkt.as_str()),
             ("industry_id", ""),
-            ("symbol", industry.as_str()),
+            ("symbol", p.symbol.as_str()),
         ],
     )
     .await?;
