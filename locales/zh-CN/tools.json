@@ -1240,7 +1240,7 @@
     },
     "industry_rank": {
       "title": "行业排行榜",
-      "description": "按市场（US/HK/CN/SG）和指标排列行业。indicator：0=领涨 1=今日走势 2=人气 3=市值 4=营收 5=营收增长率 6=净利润 7=净利润增长率。sort_type：0=单级 1=多层。返回 items[]{counter_id（如 BK/US/IN00258）, name, chg, lists[]}，counter_id 可直接传入 industry_peers",
+      "description": "按市场（US/HK/CN/SG）和指标排列行业。indicator：0=领涨 1=今日走势 2=人气 3=市值 4=营收 5=营收增长率 6=净利润 7=净利润增长率。sort_type：0=单级 1=多层。返回 items[]{symbol（如 IN00258.US）, name, chg, lists[]}，可将某行的 symbol 直接传入 industry_peers",
       "properties": {
         "market": "市场代码：US、HK、CN、SG",
         "indicator": "排列指标：0=领涨、1=今日走势、2=人气、3=市值、4=营收、5=营收增长率、6=净利润、7=净利润增长率",
@@ -1249,9 +1249,9 @@
     },
     "industry_peers": {
       "title": "行业同业分组树",
-      "description": "获取行业分组的层级同业树，接受来自 industry_rank 的 BK counter_id（如 BK/US/IN00258），返回 chain{name, counter_id, stock_num, chg, ytd_chg, next[...]} 和 top{name, market}",
+      "description": "获取行业分组的层级同业树，接受来自 industry_rank 的行业 symbol（如 IN00258.US），返回 chain{name, symbol, stock_num, chg, ytd_chg, next[...]} 和 top{name, market}",
       "properties": {
-        "symbol": "来自 industry_rank 的 BK counter_id，例如 `\"BK/US/IN00258\"`"
+        "symbol": "来自 industry_rank 的行业 symbol，例如 `\"IN00258.US\"`；也接受 BK counter_id 形式（`\"BK/US/IN00258\"`）"
       }
     },
     "financial_report_snapshot": {

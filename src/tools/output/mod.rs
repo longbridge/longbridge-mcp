@@ -269,8 +269,7 @@ pub struct AttachedOrderDetailResponse {
     pub order_id: String,
     /// Leg type: `PROFIT_TAKER`, `STOP_LOSS` or `BRACKET`.
     pub attached_type_display: String,
-    /// Security symbol, e.g. "700.HK" — the API's `counter_id`, which this
-    /// server renames and converts like every other counter ID.
+    /// Security symbol, e.g. "700.HK".
     pub symbol: String,
     /// Order status.
     pub status: String,
