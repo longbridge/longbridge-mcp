@@ -6,7 +6,9 @@ use rmcp::serde::Deserialize;
 use crate::counter::symbol_to_counter_id;
 use crate::error::Error;
 use crate::serialize::convert_unix_paths;
-use crate::tools::support::http_client::{http_get_tool, http_get_tool_unix};
+use crate::tools::support::http_client::{
+    http_get_tool, http_get_tool_dropping, http_get_tool_unix,
+};
 use crate::tools::tool_json;
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -42,7 +44,16 @@ fn date_to_unix(s: &str, end_of_day: bool) -> Result<i64, McpError> {
 
 pub async fn exchange_rate(mctx: &crate::tools::McpContext) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
-    http_get_tool(&client, "/v1/asset/exchange_rates", &[]).await
+    // Longbridge's asset FX feed is a single mid-reference rate: `bid_rate` and
+    // `offer_rate` always equal `average_rate` (verified across all supported
+    // currencies), so they carry no spread information. Keep only `average_rate`.
+    http_get_tool_dropping(
+        &client,
+        "/v1/asset/exchange_rates",
+        &[],
+        &["bid_rate", "offer_rate"],
+    )
+    .await
 }
 
 pub async fn profit_analysis(
