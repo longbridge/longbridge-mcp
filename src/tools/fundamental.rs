@@ -5,7 +5,10 @@ use rmcp::serde::Deserialize;
 
 use crate::counter::{counter_id_to_symbol, symbol_to_counter_id};
 use crate::serialize::convert_unix_paths;
-use crate::tools::support::http_client::{http_get_tool, http_get_tool_unix};
+use crate::tools::support::http_client::{
+    http_get_tool, http_get_tool_dropping, http_get_tool_rounding, http_get_tool_unix,
+    http_get_tool_unix_dropping, http_get_tool_unix_rounding,
+};
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct SymbolParam {
@@ -57,7 +60,25 @@ pub async fn financial_report(
     if !report_type.is_empty() {
         params.push(("report", report_type.as_str()));
     }
-    http_get_tool(&client, "/v1/quote/financial-reports", &params).await
+    let raw = http_get_tool(&client, "/v1/quote/financial-reports", &params).await?;
+    let json = raw
+        .content
+        .first()
+        .and_then(|c| c.as_text())
+        .map(|t| t.text.clone())
+        .unwrap_or_default();
+    let mut value: serde_json::Value =
+        serde_json::from_str(&json).map_err(crate::error::Error::Serialize)?;
+    // Per-indicator app scaffolding: `entry` (tips/entries with light_icon/
+    // dark_icon/router nav URLs) and the constant `periods` nav array.
+    crate::serialize::drop_keys(&mut value, &["entry", "periods"]);
+    // `yoy` growth figures carry ~14 fractional digits (e.g.
+    // "19.04333000476588"); cap at 6 dp.
+    crate::serialize::round_decimals(&mut value, 6);
+    // Ratio-only metrics have an empty `yoy`, and each account carries empty
+    // short_title/tip/industry_ranking/ranking_code/ratio display fields.
+    crate::serialize::strip_empty_strings(&mut value);
+    crate::tools::tool_json(&value)
 }
 
 /// Pull one half of `institution_rating`'s response out of a sub-request,
@@ -95,6 +116,18 @@ async fn get_with_backoff(
             http_get_tool(client, path, params).await
         }
         other => other,
+    }
+}
+
+/// `instratings.evaluate` re-encodes `analyst.evaluate`'s rating counts with
+/// renamed keys (strong_buy=buy, buy=over) and strictly less detail (no
+/// `total`/`no_opinion`/dates), so it is a lossy duplicate — drop it. Keep the
+/// rest of `instratings` (recommend/target/change are unique). `ccy_symbol` is
+/// a display glyph.
+fn trim_institution_rating(value: &mut serde_json::Value) {
+    if let Some(inst) = value.get_mut("instratings").and_then(|v| v.as_object_mut()) {
+        inst.remove("evaluate");
+        inst.remove("ccy_symbol");
     }
 }
 
@@ -148,8 +181,24 @@ pub async fn institution_rating(
             "analyst.target.end_date",
         ],
     );
+    trim_institution_rating(&mut value);
     let out = serde_json::to_string(&value).map_err(crate::error::Error::Serialize)?;
     Ok(crate::tools::tool_result(out))
+}
+
+/// Trim an institution_rating_detail response.
+///
+/// - `target.list[].date` is kept: it is the *local* rating date, while the
+///   row's `timestamp` is UTC — they differ by a calendar day for HK/CN/JP rows
+///   (e.g. `timestamp` 2026-09-04T16:00:00Z is the 2026-09-05 local date), so
+///   the date is NOT reliably derivable from the timestamp without the exchange
+///   timezone.
+/// - The `avg_target`/`min_target`/`max_target` prices arrive with up to ~21
+///   fractional digits, and `target.prediction_accuracy` with ~18; capping the
+///   whole document at 6 dp removes that bogus precision (clean prices like the
+///   3 dp `price` and the 4 dp `data_percent` are left untouched).
+fn trim_institution_rating_detail(value: &mut serde_json::Value) {
+    crate::serialize::round_decimals(value, 6);
 }
 
 pub async fn institution_rating_detail(
@@ -158,13 +207,23 @@ pub async fn institution_rating_detail(
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
     let cid = symbol_to_counter_id(&p.symbol);
-    http_get_tool_unix(
+    let raw = http_get_tool_unix(
         &client,
         "/v1/quote/institution-ratings/detail",
         &[("counter_id", cid.as_str())],
         &["target.list.*.timestamp"],
     )
-    .await
+    .await?;
+    let json = raw
+        .content
+        .first()
+        .and_then(|c| c.as_text())
+        .map(|t| t.text.clone())
+        .unwrap_or_default();
+    let mut value: serde_json::Value =
+        serde_json::from_str(&json).map_err(crate::error::Error::Serialize)?;
+    trim_institution_rating_detail(&mut value);
+    crate::tools::tool_json(&value)
 }
 
 pub async fn dividend(
@@ -194,10 +253,14 @@ pub async fn dividend(
     }
     let client = mctx.create_http_client();
     let cid = symbol_to_counter_id(&p.symbol);
-    http_get_tool(
+    // Each row's `symbol` echoes the queried security, and `dividend_summary` is
+    // an always-empty `{title:"", desc:""}` object (verified across HK and US
+    // histories back to the 1980s).
+    http_get_tool_dropping(
         &client,
         "/v1/quote/dividends",
         &[("counter_id", cid.as_str())],
+        &["symbol", "dividend_summary"],
     )
     .await
 }
@@ -208,10 +271,12 @@ pub async fn dividend_detail(
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
     let cid = symbol_to_counter_id(&p.symbol);
-    http_get_tool(
+    // Each row's `symbol` is empty (the query already fixes the security).
+    http_get_tool_dropping(
         &client,
         "/v1/quote/dividends/details",
         &[("counter_id", cid.as_str())],
+        &["symbol"],
     )
     .await
 }
@@ -229,6 +294,57 @@ pub async fn forecast_eps(
         &["items.*.forecast_start_date", "items.*.forecast_end_date"],
     )
     .await
+}
+
+/// Hoist the per-metric `name`/`description` (identical across every period) out
+/// of `list[].details[]` into a single top-level `legend` keyed by `key`, and
+/// drop empty-string fields (unreleased periods carry empty
+/// actual/comp_value/comp_desc/comp). Restructures the non-US consensus shape
+/// `{list:[{..., details:[{key,name,description,actual,estimate,...}]}]}`.
+fn hoist_consensus_legend(value: &mut serde_json::Value) {
+    let Some(obj) = value.as_object_mut() else {
+        return;
+    };
+    let Some(list) = obj.get_mut("list").and_then(|v| v.as_array_mut()) else {
+        return;
+    };
+    let mut legend = serde_json::Map::new();
+    for period in list.iter_mut() {
+        let Some(details) = period.get_mut("details").and_then(|v| v.as_array_mut()) else {
+            continue;
+        };
+        for detail in details.iter_mut() {
+            let Some(dobj) = detail.as_object_mut() else {
+                continue;
+            };
+            if let Some(key) = dobj.get("key").and_then(|v| v.as_str()).map(str::to_owned) {
+                let is_empty =
+                    |v: &serde_json::Value| v.is_null() || v.as_str().is_some_and(str::is_empty);
+                // Fill from the first NON-empty occurrence across periods; an
+                // empty label must not be stored (it would shadow a later real
+                // one and leave the metric name-less).
+                let name = dobj.get("name").cloned().filter(|v| !is_empty(v));
+                let desc = dobj.get("description").cloned().filter(|v| !is_empty(v));
+                if name.is_some() || desc.is_some() {
+                    let entry = legend
+                        .entry(key)
+                        .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
+                    if let Some(entry) = entry.as_object_mut() {
+                        if let Some(name) = name {
+                            entry.entry("name").or_insert(name);
+                        }
+                        if let Some(desc) = desc {
+                            entry.entry("description").or_insert(desc);
+                        }
+                    }
+                }
+            }
+            dobj.remove("name");
+            dobj.remove("description");
+            dobj.retain(|_, v| !matches!(v, serde_json::Value::String(s) if s.is_empty()));
+        }
+    }
+    obj.insert("legend".to_string(), serde_json::Value::Object(legend));
 }
 
 pub async fn consensus(
@@ -253,12 +369,22 @@ pub async fn consensus(
     }
     let client = mctx.create_http_client();
     let cid = symbol_to_counter_id(&p.symbol);
-    http_get_tool(
+    let raw = http_get_tool(
         &client,
         "/v1/quote/financial-consensus-detail",
         &[("counter_id", cid.as_str())],
     )
-    .await
+    .await?;
+    let json = raw
+        .content
+        .first()
+        .and_then(|c| c.as_text())
+        .map(|t| t.text.clone())
+        .unwrap_or_default();
+    let mut value: serde_json::Value =
+        serde_json::from_str(&json).map_err(crate::error::Error::Serialize)?;
+    hoist_consensus_legend(&mut value);
+    crate::tools::tool_json(&value)
 }
 
 pub async fn valuation(
@@ -277,7 +403,7 @@ pub async fn valuation(
     }
     let client = mctx.create_http_client();
     let cid = symbol_to_counter_id(&p.symbol);
-    http_get_tool_unix(
+    let raw = http_get_tool_unix(
         &client,
         "/v1/quote/valuation",
         &[
@@ -287,7 +413,18 @@ pub async fn valuation(
         ],
         &["metrics.pe.list.*.timestamp"],
     )
-    .await
+    .await?;
+    let json = raw
+        .content
+        .first()
+        .and_then(|c| c.as_text())
+        .map(|t| t.text.clone())
+        .unwrap_or_default();
+    let mut value: serde_json::Value =
+        serde_json::from_str(&json).map_err(crate::error::Error::Serialize)?;
+    // The `desc` summary wraps emphasised numbers in `<strong>` markup.
+    crate::serialize::strip_html_tags_in_field(&mut value, "desc");
+    crate::tools::tool_json(&value)
 }
 
 pub async fn valuation_history(
@@ -296,13 +433,41 @@ pub async fn valuation_history(
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
     let cid = symbol_to_counter_id(&p.symbol);
-    http_get_tool_unix(
+    // ~90% of this response is chart scaffolding: `symbols` (a re-keyed dup of
+    // `stocks`), `layouts` (distribution-histogram buckets), `aichat_data`
+    // (chatbot routing), per-metric `circle`/`part` (plot coords), and
+    // `ai_summary` (a dup of `overview.metrics.*.desc`).
+    let raw = http_get_tool_unix_dropping(
         &client,
         "/v1/quote/valuation/detail",
         &[("counter_id", cid.as_str())],
         &["history.metrics.pe.list.*.timestamp"],
+        &[
+            "symbols",
+            "layouts",
+            "aichat_data",
+            "circle",
+            "part",
+            "ai_summary",
+        ],
     )
-    .await
+    .await?;
+    let json = raw
+        .content
+        .first()
+        .and_then(|c| c.as_text())
+        .map(|t| t.text.clone())
+        .unwrap_or_default();
+    let mut value: serde_json::Value =
+        serde_json::from_str(&json).map_err(crate::error::Error::Serialize)?;
+    // The `stocks` map's market_cap figures are padded to four decimals (e.g.
+    // "135261759885.5400"); strip the trailing zeros (lossless). The `peers`
+    // rows carry empty `ticker`/`growth` strings; drop them. The `desc`
+    // summaries wrap emphasised numbers in `<strong>` markup; strip it.
+    crate::serialize::strip_trailing_zeros(&mut value);
+    crate::serialize::strip_empty_strings(&mut value);
+    crate::serialize::strip_html_tags_in_field(&mut value, "desc");
+    crate::tools::tool_json(&value)
 }
 
 pub async fn industry_valuation(
@@ -311,11 +476,15 @@ pub async fn industry_valuation(
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
     let cid = symbol_to_counter_id(&p.symbol);
-    http_get_tool_unix(
+    // Valuation ratios and per-share figures arrive with up to ~22 fractional
+    // digits of bogus precision (e.g. bps "145.6260066297869181464524"), on both
+    // the top-level metrics and every `history` row; cap at 6 dp.
+    http_get_tool_unix_rounding(
         &client,
         "/v1/quote/industry-valuation-comparison",
         &[("counter_id", cid.as_str())],
         &["list.*.history.*.date"],
+        6,
     )
     .await
 }
@@ -326,10 +495,13 @@ pub async fn industry_valuation_dist(
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
     let cid = symbol_to_counter_id(&p.symbol);
-    http_get_tool(
+    // Every pe/pb/ps bound arrives with ~16-19 fractional digits of bogus
+    // precision (e.g. "4.7548672033913246"); cap at 6 dp.
+    http_get_tool_rounding(
         &client,
         "/v1/quote/industry-valuation-distribution",
         &[("counter_id", cid.as_str())],
+        6,
     )
     .await
 }
@@ -362,10 +534,14 @@ pub async fn executive(
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
     let cid = symbol_to_counter_id(&p.symbol);
-    http_get_tool(
+    // `name_zhcn` and `name_en` are unpopulated duplicates of the localized
+    // `name` (upstream echoes the same value into all three — the `_zhcn` field
+    // carries the romanized name, not 中文), and `photo` is a display image URL.
+    http_get_tool_dropping(
         &client,
         "/v1/quote/company-professionals",
         &[("counter_ids", cid.as_str())],
+        &["name_zhcn", "name_en", "photo"],
     )
     .await
 }
@@ -376,10 +552,13 @@ pub async fn shareholder(
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
     let cid = symbol_to_counter_id(&p.symbol);
-    http_get_tool(
+    // `shareholder_id` is a constant "0" (no drill-down; use shareholder_top),
+    // and `institution_type` is empty on every row.
+    http_get_tool_dropping(
         &client,
         "/v1/quote/shareholders",
         &[("counter_id", cid.as_str()), ("position", "detail")],
+        &["shareholder_id", "institution_type"],
     )
     .await
 }
@@ -390,10 +569,13 @@ pub async fn fund_holder(
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
     let cid = symbol_to_counter_id(&p.symbol);
-    http_get_tool(
+    // `code` is just `symbol` without its market suffix (e.g. "159983.SZ" →
+    // "159983"), derivable and redundant.
+    http_get_tool_dropping(
         &client,
         "/v1/quote/fund-holders",
         &[("counter_id", cid.as_str())],
+        &["code"],
     )
     .await
 }
@@ -404,7 +586,10 @@ pub async fn corp_action(
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
     let cid = symbol_to_counter_id(&p.symbol);
-    http_get_tool(
+    // `date_str` is `date` reformatted ("20260812" → "08.12"), `date_zone` is a
+    // constant display label ("北京时间"), `security` is null on every row, and
+    // `icon` (inside `live`) is a constant replay-badge image URL.
+    http_get_tool_dropping(
         &client,
         "/v1/quote/company-act",
         &[
@@ -412,6 +597,7 @@ pub async fn corp_action(
             ("req_type", "1"),
             ("version", "3"),
         ],
+        &["date_str", "date_zone", "security", "icon"],
     )
     .await
 }
@@ -422,10 +608,15 @@ pub async fn invest_relation(
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
     let cid = symbol_to_counter_id(&p.symbol);
-    http_get_tool(
+    // `company_name_zhcn` and `company_name_en` are unpopulated duplicates of
+    // the localized `company_name` (upstream echoes the same display name into
+    // all three — the `_en` field carries Chinese too), and `company_id` is a
+    // constant "0" placeholder.
+    http_get_tool_dropping(
         &client,
         "/v1/quote/invest-relations",
         &[("counter_id", cid.as_str()), ("count", "0")],
+        &["company_id", "company_name_zhcn", "company_name_en"],
     )
     .await
 }
@@ -436,12 +627,26 @@ pub async fn operating(
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
     let cid = symbol_to_counter_id(&p.symbol);
-    http_get_tool(
+    // `keywords` is always empty and `web_url` is a derivable community link.
+    let raw = http_get_tool_dropping(
         &client,
         "/v1/quote/operatings",
         &[("counter_id", cid.as_str())],
+        &["keywords", "web_url"],
     )
-    .await
+    .await?;
+    let json = raw
+        .content
+        .first()
+        .and_then(|c| c.as_text())
+        .map(|t| t.text.clone())
+        .unwrap_or_default();
+    let mut value: serde_json::Value =
+        serde_json::from_str(&json).map_err(crate::error::Error::Serialize)?;
+    // Each report's nested `financial` block carries empty symbol/name/region/
+    // code/report/report_txt label fields; drop them.
+    crate::serialize::strip_empty_strings(&mut value);
+    crate::tools::tool_json(&value)
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -515,7 +720,7 @@ pub async fn financial_statement(
     let cid = symbol_to_counter_id(&p.symbol);
     let kind = p.kind.unwrap_or_else(|| "ALL".to_string()).to_uppercase();
     let report = p.report.unwrap_or_else(|| "af".to_string()).to_lowercase();
-    http_get_tool(
+    let raw = http_get_tool(
         &client,
         "/v1/quote/financials/statements",
         &[
@@ -524,7 +729,25 @@ pub async fn financial_statement(
             ("report", report.as_str()),
         ],
     )
-    .await
+    .await?;
+    let json = raw
+        .content
+        .first()
+        .and_then(|c| c.as_text())
+        .map(|t| t.text.clone())
+        .unwrap_or_default();
+    let mut value: serde_json::Value =
+        serde_json::from_str(&json).map_err(crate::error::Error::Serialize)?;
+    // Per statement-line render metadata with no analytic value: `value_type`
+    // (constant "bignumber") and `display_order` (the array is already ordered).
+    crate::serialize::drop_keys(&mut value, &["value_type", "display_order"]);
+    // Line values carry ~8 sub-unit decimals and `yoy` ~16 (e.g. value
+    // "821650052055.36005741", yoy "0.1496252509936191"); cap at 6 dp.
+    crate::serialize::round_decimals(&mut value, 6);
+    // Section-header rows (收入/成本/费用 …) and lines with no prior-year base
+    // carry empty value/yoy/field strings; drop them.
+    crate::serialize::strip_empty_strings(&mut value);
+    crate::tools::tool_json(&value)
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -610,7 +833,8 @@ pub async fn valuation_rank(
     if let Some(ref e) = p.end {
         params.push(("end_date", e.as_str()));
     }
-    http_get_tool_unix(
+    // Every pe/pb/ps/dvd row carries `total` == the top-level `max_num`.
+    http_get_tool_unix_dropping(
         &client,
         "/v1/quote/valuation/rank",
         &params,
@@ -620,23 +844,86 @@ pub async fn valuation_rank(
             "ps.*.timestamp",
             "dvd.*.timestamp",
         ],
+        &["total"],
     )
     .await
 }
 
 /// Get institution rating history (target price + evaluate history) for a security.
+/// The rating-distribution signature of one `evaluate_history` row (everything
+/// except the date range), used to collapse consecutive unchanged rows.
+fn eval_signature(o: &serde_json::Map<String, serde_json::Value>) -> Vec<serde_json::Value> {
+    ["buy", "over", "hold", "under", "sell", "no_opinion"]
+        .iter()
+        .map(|k| o.get(*k).cloned().unwrap_or(serde_json::Value::Null))
+        .collect()
+}
+
+/// Collapse runs of consecutive `evaluate_history` rows with an identical rating
+/// distribution into one row spanning `start_date`..`end_date`, drop the
+/// derivable `total`, and round `target_history` prices to 6 dp. The raw history
+/// carries one row per change *event date* even when the distribution is
+/// unchanged (hundreds of near-duplicate daily rows).
+fn dedup_rating_history(value: &mut serde_json::Value) {
+    let Some(obj) = value.as_object_mut() else {
+        return;
+    };
+    if let Some(hist) = obj
+        .get_mut("evaluate_history")
+        .and_then(|v| v.as_array_mut())
+    {
+        let mut merged: Vec<serde_json::Value> = Vec::with_capacity(hist.len());
+        for row in hist.drain(..) {
+            let same_as_prev = merged
+                .last()
+                .and_then(|l| l.as_object())
+                .zip(row.as_object())
+                .is_some_and(|(l, r)| eval_signature(l) == eval_signature(r));
+            if same_as_prev {
+                if let (Some(end), Some(last)) = (
+                    row.get("end_date").cloned(),
+                    merged.last_mut().and_then(|l| l.as_object_mut()),
+                ) {
+                    last.insert("end_date".to_string(), end);
+                }
+            } else {
+                merged.push(row);
+            }
+        }
+        for row in merged.iter_mut() {
+            if let Some(o) = row.as_object_mut() {
+                o.remove("total");
+            }
+        }
+        *hist = merged;
+    }
+    if let Some(tgt) = obj.get_mut("target_history") {
+        crate::serialize::round_decimals(tgt, 6);
+    }
+}
+
 pub async fn institution_rating_history(
     mctx: &crate::tools::McpContext,
     p: SymbolParam,
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
     let cid = symbol_to_counter_id(&p.symbol);
-    http_get_tool(
+    let raw = http_get_tool(
         &client,
         "/v1/quote/ratings/history",
         &[("counter_id", cid.as_str())],
     )
-    .await
+    .await?;
+    let json = raw
+        .content
+        .first()
+        .and_then(|c| c.as_text())
+        .map(|t| t.text.clone())
+        .unwrap_or_default();
+    let mut value: serde_json::Value =
+        serde_json::from_str(&json).map_err(crate::error::Error::Serialize)?;
+    dedup_rating_history(&mut value);
+    crate::tools::tool_json(&value)
 }
 
 /// Get institution rating industry rank for a security (peers ranked by analyst ratings).
@@ -697,12 +984,29 @@ pub async fn business_segments(
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
     let cid = symbol_to_counter_id(&p.symbol);
-    http_get_tool(
+    // `bus_ids`/`reg_ids` re-list the per-row segment ids; `report` (e.g. "qf")
+    // duplicates the human-readable `report_txt`.
+    let raw = http_get_tool_dropping(
         &client,
         "/v1/quote/fundamentals/business-segments",
         &[("counter_id", cid.as_str())],
+        &["bus_ids", "reg_ids", "report"],
     )
-    .await
+    .await?;
+    let json = raw
+        .content
+        .first()
+        .and_then(|c| c.as_text())
+        .map(|t| t.text.clone())
+        .unwrap_or_default();
+    let mut value: serde_json::Value =
+        serde_json::from_str(&json).map_err(crate::error::Error::Serialize)?;
+    // Per-segment `yoy` carries ~14 fractional digits (e.g. "1.52573570177189");
+    // cap at 6 dp. The current period may have no prior-year base, leaving an
+    // empty top-level `yoy` — drop it.
+    crate::serialize::round_decimals(&mut value, 6);
+    crate::serialize::strip_empty_strings(&mut value);
+    crate::tools::tool_json(&value)
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -730,12 +1034,26 @@ pub async fn business_segments_history(
     if !cate.is_empty() {
         params.push(("cate", cate.as_str()));
     }
-    http_get_tool(
+    let raw = http_get_tool(
         &client,
         "/v1/quote/fundamentals/business-segments/history",
         &params,
     )
-    .await
+    .await?;
+    let json = raw
+        .content
+        .first()
+        .and_then(|c| c.as_text())
+        .map(|t| t.text.clone())
+        .unwrap_or_default();
+    let mut value: serde_json::Value =
+        serde_json::from_str(&json).map_err(crate::error::Error::Serialize)?;
+    // Every `yoy` growth figure carries ~14 fractional digits (e.g.
+    // "-32.48841750583911"); cap at 6 dp. The first period has no prior year, so
+    // its `yoy` is an empty string — drop those.
+    crate::serialize::round_decimals(&mut value, 6);
+    crate::serialize::strip_empty_strings(&mut value);
+    crate::tools::tool_json(&value)
 }
 
 pub async fn institutional_views(
@@ -744,11 +1062,14 @@ pub async fn institutional_views(
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
     let cid = symbol_to_counter_id(&p.symbol);
-    http_get_tool_unix(
+    // The `tlist` price series arrives with ~19 fractional digits of bogus
+    // precision (e.g. "803.3032108278430037073"); cap it at 6 dp.
+    http_get_tool_unix_rounding(
         &client,
         "/v1/quote/ratings/institutional",
         &[("counter_id", cid.as_str())],
         &["elist.*.date"],
+        6,
     )
     .await
 }
@@ -787,7 +1108,9 @@ pub async fn industry_peers(
     } else {
         symbol_to_counter_id(&p.symbol)
     };
-    http_get_tool(
+    // Per-node `market` (constant), `parent_code` (== parent node's code in the
+    // tree), and `level` (== nesting depth) are all derivable from structure.
+    http_get_tool_dropping(
         &client,
         "/v1/quote/industries/peers",
         &[
@@ -796,6 +1119,7 @@ pub async fn industry_peers(
             ("industry_id", ""),
             ("counter_id", cid.as_str()),
         ],
+        &["market", "parent_code", "level"],
     )
     .await
 }
@@ -831,7 +1155,22 @@ pub async fn financial_report_snapshot(
     if !period.is_empty() {
         params.push(("fiscal_period", period.as_str()));
     }
-    http_get_tool(&client, "/v1/quote/financials/earnings-snapshot", &params).await
+    let raw = http_get_tool(&client, "/v1/quote/financials/earnings-snapshot", &params).await?;
+    let json = raw
+        .content
+        .first()
+        .and_then(|c| c.as_text())
+        .map(|t| t.text.clone())
+        .unwrap_or_default();
+    let mut value: serde_json::Value =
+        serde_json::from_str(&json).map_err(crate::error::Error::Serialize)?;
+    // The `fr_*` financial-ratio objects always carry blank est_value/est_yoy/
+    // cmp/cmp_desc columns (those only apply to the `fo_*` forecast rows); drop
+    // the empty strings. Every figure is also padded to four fractional digits
+    // (e.g. "416161000000.0000"); strip the non-significant zeros (lossless).
+    crate::serialize::strip_empty_strings(&mut value);
+    crate::serialize::strip_trailing_zeros(&mut value);
+    crate::tools::tool_json(&value)
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -840,18 +1179,50 @@ pub struct ShareholderTopParam {
     pub symbol: String,
 }
 
+/// Drop the per-holder `period` (== the enclosing `info[].period` on every row)
+/// and the always-empty `title`, without touching the segment-level `period`
+/// label. NB: the leading "最新" segment is kept — it shares the newest quarter's
+/// share counts but recomputes `percent_shares_*` against current shares
+/// outstanding, so it is not a duplicate.
+fn trim_shareholder_top(value: &mut serde_json::Value) {
+    let Some(info) = value.get_mut("info").and_then(|v| v.as_array_mut()) else {
+        return;
+    };
+    for seg in info.iter_mut() {
+        let Some(holders) = seg.get_mut("share_holders").and_then(|v| v.as_array_mut()) else {
+            continue;
+        };
+        for holder in holders.iter_mut() {
+            if let Some(o) = holder.as_object_mut() {
+                o.remove("period");
+                o.remove("title");
+            }
+        }
+    }
+}
+
 pub async fn shareholder_top(
     mctx: &crate::tools::McpContext,
     p: ShareholderTopParam,
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
     let cid = symbol_to_counter_id(&p.symbol);
-    http_get_tool(
+    let raw = http_get_tool(
         &client,
         "/v1/quote/shareholders/top",
         &[("counter_id", cid.as_str())],
     )
-    .await
+    .await?;
+    let json = raw
+        .content
+        .first()
+        .and_then(|c| c.as_text())
+        .map(|t| t.text.clone())
+        .unwrap_or_default();
+    let mut value: serde_json::Value =
+        serde_json::from_str(&json).map_err(crate::error::Error::Serialize)?;
+    trim_shareholder_top(&mut value);
+    crate::tools::tool_json(&value)
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -909,11 +1280,15 @@ pub async fn valuation_comparison(
         comp_json = serde_json::to_string(&cids).unwrap_or_default();
         params.push(("comparison_counter_ids", comp_json.as_str()));
     }
-    http_get_tool_unix(
+    // Valuation ratios arrive with ~16-19 fractional digits of bogus precision
+    // (e.g. pe "41.0867665494152307"), both on the top-level metrics and across
+    // every `history` row; cap at 6 dp.
+    http_get_tool_unix_rounding(
         &client,
         "/v1/quote/compare/valuation",
         &params,
         &["list.*.history.*.date"],
+        6,
     )
     .await
 }
@@ -923,6 +1298,169 @@ mod tests {
     use super::rating_part;
     use rmcp::ErrorData as McpError;
     use rmcp::model::Content;
+
+    #[test]
+    fn trim_institution_rating_detail_keeps_target_date_and_rounds() {
+        let mut v = serde_json::json!({
+            "ccy_symbol": "HK$",
+            "evaluate": {"list": [
+                {"strong_buy": 30, "buy": 10, "hold": 2, "sell": 0, "under": 1, "date": "2026/09/04"}
+            ]},
+            "target": {
+                "updated_at": "2026 年 9 月 11 日",
+                "prediction_accuracy": "53.756097560975609756",
+                "data_percent": "0.9934",
+                "list": [
+                    {"timestamp": "2026-09-04T16:00:00Z", "date": "2026/09/05", "price": "425.600",
+                     "meet": true, "avg_target": "652.784671964390839056078",
+                     "min_target": "352.1344841539118652849", "max_target": "856.6001736100176178146"}
+                ]
+            }
+        });
+        super::trim_institution_rating_detail(&mut v);
+
+        let trow = &v["target"]["list"][0];
+        // The local rating date is KEPT: it is NOT derivable from the UTC
+        // timestamp — here 2026-09-04T16:00:00Z (UTC) is the 2026-09-05 local
+        // (UTC+8) date, a one-calendar-day difference.
+        assert_eq!(
+            trow["date"], "2026/09/05",
+            "local target.list date is preserved (differs from the UTC timestamp's day)"
+        );
+        assert_eq!(
+            trow["timestamp"], "2026-09-04T16:00:00Z",
+            "timestamp is kept"
+        );
+        // Bogus target precision is capped at 6 dp; clean price is untouched.
+        assert_eq!(trow["avg_target"], "652.784672");
+        assert_eq!(trow["min_target"], "352.134484");
+        assert_eq!(trow["max_target"], "856.600174");
+        assert_eq!(trow["price"], "425.600", "clean 3dp price untouched");
+        assert_eq!(trow["meet"], true, "boolean kept");
+        assert_eq!(
+            v["target"]["prediction_accuracy"], "53.756098",
+            "18dp accuracy rounded"
+        );
+        assert_eq!(v["target"]["data_percent"], "0.9934", "4dp untouched");
+        // evaluate.list keeps its date — it is the only time key there.
+        assert_eq!(
+            v["evaluate"]["list"][0]["date"], "2026/09/04",
+            "evaluate.list date is preserved"
+        );
+        assert_eq!(v["ccy_symbol"], "HK$", "currency symbol kept");
+    }
+
+    #[test]
+    fn trim_institution_rating_drops_redundant_instratings_evaluate() {
+        let mut v = serde_json::json!({
+            "analyst": {"evaluate": {"buy": 19, "over": 6, "hold": 14, "under": 2, "sell": 3, "total": 45, "no_opinion": 1}},
+            "instratings": {"recommend": "buy", "target": "324.4", "change": "2.87", "ccy_symbol": "$",
+                            "evaluate": {"strong_buy": 19, "buy": 6, "hold": 14, "sell": 3, "under": 2, "date": ""}}
+        });
+        super::trim_institution_rating(&mut v);
+        // redundant dup block + display glyph gone
+        assert!(v["instratings"].get("evaluate").is_none());
+        assert!(v["instratings"].get("ccy_symbol").is_none());
+        // unique instratings fields kept
+        assert_eq!(v["instratings"]["recommend"], "buy");
+        assert_eq!(v["instratings"]["target"], "324.4");
+        // the authoritative analyst.evaluate untouched
+        assert_eq!(v["analyst"]["evaluate"]["buy"], 19);
+        assert_eq!(v["analyst"]["evaluate"]["no_opinion"], 1);
+    }
+
+    #[test]
+    fn trim_shareholder_top_drops_holder_period_and_title_keeps_segment() {
+        let mut v = serde_json::json!({
+            "periods": ["最新", "Q2 2026"],
+            "info": [
+                {"period": "最新", "share_holders": [
+                    {"object_id": "1", "name": "BlackRock", "title": "", "shares_held": "100",
+                     "percent_shares_held": "7.97%", "period": "最新"}
+                ]},
+                {"period": "Q2 2026", "share_holders": [
+                    {"object_id": "1", "name": "BlackRock", "title": "", "shares_held": "100",
+                     "percent_shares_held": "7.95%", "period": "Q2 2026"}
+                ]}
+            ]
+        });
+        super::trim_shareholder_top(&mut v);
+        // segment-level period label kept; both "最新" and "Q2 2026" segments kept
+        assert_eq!(v["info"][0]["period"], "最新");
+        assert_eq!(v["info"][1]["period"], "Q2 2026");
+        // per-holder redundant period + empty title dropped
+        let h = &v["info"][0]["share_holders"][0];
+        assert!(h.get("period").is_none() && h.get("title").is_none());
+        // the differing percent (the reason we keep 最新) is preserved
+        assert_eq!(
+            v["info"][0]["share_holders"][0]["percent_shares_held"],
+            "7.97%"
+        );
+        assert_eq!(
+            v["info"][1]["share_holders"][0]["percent_shares_held"],
+            "7.95%"
+        );
+        assert_eq!(h["object_id"], "1");
+    }
+
+    #[test]
+    fn dedup_rating_history_collapses_unchanged_runs() {
+        let mut v = serde_json::json!({
+            "evaluate_history": [
+                {"buy":"17","over":"6","hold":"0","under":"1","sell":"0","no_opinion":"0","total":"24","start_date":"100","end_date":"200"},
+                {"buy":"17","over":"6","hold":"0","under":"1","sell":"0","no_opinion":"0","total":"24","start_date":"200","end_date":"300"},
+                {"buy":"18","over":"5","hold":"0","under":"1","sell":"0","no_opinion":"0","total":"24","start_date":"300","end_date":"400"}
+            ],
+            "target_history": [
+                {"timestamp":"1","close":"136.1","high_target_price":"217.2819933602771364252","low_target_price":"118.96"}
+            ]
+        });
+        super::dedup_rating_history(&mut v);
+        let hist = v["evaluate_history"].as_array().unwrap();
+        assert_eq!(hist.len(), 2, "two identical rows collapse to one");
+        assert_eq!(hist[0]["start_date"], "100");
+        assert_eq!(
+            hist[0]["end_date"], "300",
+            "end_date extended to the run's last"
+        );
+        assert!(hist[0].get("total").is_none(), "derivable total dropped");
+        assert_eq!(hist[1]["start_date"], "300");
+        assert_eq!(
+            v["target_history"][0]["high_target_price"], "217.281993",
+            "price rounded to 6 dp"
+        );
+    }
+
+    #[test]
+    fn hoist_consensus_legend_dedups_name_desc_and_drops_empties() {
+        let mut v = serde_json::json!({
+            "list": [
+                {"period_text": "Q2 2026", "details": [
+                    {"key": "revenue", "name": "营业收入", "description": "主营业务收入。",
+                     "actual": "236", "estimate": "233", "comp_desc": "超出预期", "is_released": true}
+                ]},
+                {"period_text": "Q1 2027", "details": [
+                    {"key": "revenue", "name": "营业收入", "description": "主营业务收入。",
+                     "actual": "", "estimate": "249", "comp_desc": "", "is_released": false}
+                ]}
+            ],
+            "currency": "HKD"
+        });
+        super::hoist_consensus_legend(&mut v);
+        // legend carries name/description once
+        assert_eq!(v["legend"]["revenue"]["name"], "营业收入");
+        assert_eq!(v["legend"]["revenue"]["description"], "主营业务收入。");
+        // per-period rows no longer carry name/description
+        let released = &v["list"][0]["details"][0];
+        assert!(released.get("name").is_none() && released.get("description").is_none());
+        assert_eq!(released["actual"], "236");
+        assert_eq!(released["comp_desc"], "超出预期");
+        // unreleased row: empty-string fields dropped, estimate kept
+        let unreleased = &v["list"][1]["details"][0];
+        assert!(unreleased.get("actual").is_none() && unreleased.get("comp_desc").is_none());
+        assert_eq!(unreleased["estimate"], "249");
+        assert_eq!(unreleased["is_released"], false);
+    }
 
     #[test]
     fn rating_part_returns_the_payload_and_no_warning_on_success() {

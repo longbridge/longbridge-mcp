@@ -9,7 +9,9 @@ use rmcp::serde::Deserialize;
 use crate::counter::symbol_to_counter_id;
 use crate::error::Error;
 use crate::tools::output;
-use crate::tools::support::http_client::{http_get_tool, http_get_tool_unix};
+use crate::tools::support::http_client::{
+    http_get_tool, http_get_tool_unix, http_get_tool_unix_dropping,
+};
 use crate::tools::support::parse;
 use crate::tools::support::tolerant::{
     tolerant_bool, tolerant_i64, tolerant_option_usize, tolerant_option_vec_i32,
@@ -275,6 +277,11 @@ pub async fn static_info(
             results.push(serde_json::to_value(&entry).map_err(Error::Serialize)?);
         }
     }
+    // eps/eps_ttm/bps/dividend_yield arrive with ~16 fractional digits of bogus
+    // precision (e.g. eps "27.3458639853059994"); cap at 6 dp. Integer share
+    // counts and non-numeric fields are left untouched.
+    let mut results = serde_json::Value::Array(results);
+    crate::serialize::round_decimals(&mut results, 6);
     tool_json(&results)
 }
 
@@ -335,6 +342,13 @@ pub async fn quote(
     })?;
     let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;
     normalize_extended_sessions(&mut value);
+    // Non-US symbols carry `pre_market_quote`/`post_market_quote`/
+    // `overnight_quote` as `null`; drop those (and any other absent optional).
+    crate::serialize::strip_nulls(&mut value);
+    // Prices and turnover come padded to a fixed decimal width ("432.000",
+    // "…550.800"), on the main quote and every extended-session block; strip
+    // the non-significant trailing zeros (lossless).
+    crate::serialize::strip_trailing_zeros(&mut value);
     tool_json(&value)
 }
 
@@ -366,7 +380,10 @@ pub async fn warrant_quote(
         mctx.evict_quote_context();
         Error::longbridge(e)
     })?;
-    tool_json(&result)
+    // Cap warrant analytics precision at 6 dp (same as warrant_list).
+    let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;
+    crate::serialize::round_decimals(&mut value, 6);
+    tool_json(&value)
 }
 
 pub async fn depth(
@@ -378,7 +395,9 @@ pub async fn depth(
         mctx.evict_quote_context();
         Error::longbridge(e)
     })?;
-    tool_json(&result)
+    // Order-book prices come padded to a fixed decimal width ("432.200"); strip
+    // the non-significant trailing zeros (lossless).
+    price_series_result(&result)
 }
 
 pub async fn brokers(
@@ -399,7 +418,10 @@ pub async fn participants(mctx: &crate::tools::McpContext) -> Result<CallToolRes
         mctx.evict_quote_context();
         Error::longbridge(e)
     })?;
-    tool_json(&result)
+    // `name_hk` is the Traditional-script twin of `name_cn` on every broker row.
+    let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;
+    crate::serialize::drop_keys(&mut value, &["name_hk"]);
+    tool_json(&value)
 }
 
 pub async fn trades(
@@ -411,7 +433,27 @@ pub async fn trades(
         mctx.evict_quote_context();
         Error::longbridge(e)
     })?;
-    tool_json(&result)
+    // Trade prices come padded to a fixed decimal width ("431.000"); strip the
+    // non-significant trailing zeros (lossless). Up to 1000 trades per call.
+    price_series_result(&result)
+}
+
+/// Serialize an SDK market-data value (candlesticks/intraday/depth) and strip
+/// the fixed decimal padding upstream applies to prices (e.g. `"428.400"`) and
+/// `turnover` (e.g. `"…343.500"`). Lossless —
+/// [`crate::serialize::strip_trailing_zeros`] only removes non-significant zeros
+/// — and worthwhile because these are among the highest-volume responses.
+/// Object-rooted results (depth) keep their `structuredContent` via
+/// [`crate::tools::tool_result`]; array-rooted ones leave it unset.
+fn price_series_result<T>(result: &T) -> Result<CallToolResult, McpError>
+where
+    T: serde::Serialize,
+{
+    let json = crate::serialize::to_tool_json(result).map_err(Error::Serialize)?;
+    let mut value: serde_json::Value = serde_json::from_str(&json).map_err(Error::Serialize)?;
+    crate::serialize::strip_trailing_zeros(&mut value);
+    let out = serde_json::to_string(&value).map_err(Error::Serialize)?;
+    Ok(crate::tools::tool_result(out))
 }
 
 pub async fn intraday(
@@ -427,7 +469,7 @@ pub async fn intraday(
         mctx.evict_quote_context();
         Error::longbridge(e)
     })?;
-    tool_json(&result)
+    price_series_result(&result)
 }
 
 /// Upstream's own "symbol count out of limit" business code — seen firing
@@ -490,7 +532,7 @@ pub async fn candlesticks(
         mctx.evict_quote_context();
         Error::longbridge(*e)
     })?;
-    tool_json(&result)
+    price_series_result(&result)
 }
 
 pub async fn history_candlesticks_by_offset(
@@ -530,7 +572,7 @@ pub async fn history_candlesticks_by_offset(
             return Err(err);
         }
     };
-    tool_json(&result)
+    price_series_result(&result)
 }
 
 pub async fn history_candlesticks_by_date(
@@ -563,7 +605,7 @@ pub async fn history_candlesticks_by_date(
             return Err(err);
         }
     };
-    tool_json(&result)
+    price_series_result(&result)
 }
 
 pub async fn trading_days(
@@ -703,7 +745,12 @@ pub async fn history_market_temperature(
             mctx.evict_quote_context();
             Error::longbridge(e)
         })?;
-    tool_json(&result)
+    // The history series is numeric only: `description` (the point-in-time label
+    // populated by `market_temperature`) is empty on every row here — verified
+    // across markets and years. Drop it.
+    let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;
+    crate::serialize::drop_keys(&mut value, &["description"]);
+    tool_json(&value)
 }
 
 pub async fn watchlist(mctx: &crate::tools::McpContext) -> Result<CallToolResult, McpError> {
@@ -712,7 +759,11 @@ pub async fn watchlist(mctx: &crate::tools::McpContext) -> Result<CallToolResult
         mctx.evict_quote_context();
         Error::longbridge(e)
     })?;
-    tool_json(&result)
+    // `market` on every security is derivable from the symbol suffix (and is
+    // "Unknown" for crypto).
+    let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;
+    crate::serialize::drop_keys(&mut value, &["market"]);
+    tool_json(&value)
 }
 
 pub async fn filings(
@@ -733,7 +784,10 @@ pub async fn warrant_issuers(mctx: &crate::tools::McpContext) -> Result<CallTool
         mctx.evict_quote_context();
         Error::longbridge(e)
     })?;
-    tool_json(&result)
+    // `name_hk` is the Traditional-script twin of `name_cn` on every issuer row.
+    let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;
+    crate::serialize::drop_keys(&mut value, &["name_hk"]);
+    tool_json(&value)
 }
 
 pub async fn warrant_list(
@@ -797,7 +851,12 @@ pub async fn warrant_list(
             mctx.evict_quote_context();
             Error::longbridge(e)
         })?;
-    tool_json(&result)
+    // Warrant analytics (premium, implied_volatility, delta, effective_leverage,
+    // leverage_ratio, balance_point, change_rate) serialize at ~17 significant
+    // digits; cap fractional precision at 6 across all 700+ rows.
+    let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;
+    crate::serialize::round_decimals(&mut value, 6);
+    tool_json(&value)
 }
 
 /// Default calc indexes when the caller omits `indexes`: common quote fields
@@ -850,7 +909,12 @@ pub async fn calc_indexes(
         }
     }
 
-    tool_json(&result)
+    // `SecurityCalcIndex` is a wide struct: every one of its ~40 index fields
+    // the caller did not request serializes as an explicit `null`. Drop those
+    // so a per-symbol array doesn't carry ~38 dead `"x": null` pairs per row.
+    let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;
+    crate::serialize::strip_nulls(&mut value);
+    tool_json(&value)
 }
 
 pub async fn create_watchlist_group(
@@ -1083,11 +1147,13 @@ pub async fn option_volume_daily(
         ("line_num", line_num.as_str()),
         ("direction", "1"),
     ];
-    http_get_tool_unix(
+    // `underlying_symbol` on every row == the queried `symbol`.
+    http_get_tool_unix_dropping(
         &client,
         "/v1/quote/option-volume-stats/daily",
         &params,
         &["stats.*.timestamp"],
+        &["underlying_symbol"],
     )
     .await
 }

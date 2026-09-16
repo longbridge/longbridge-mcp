@@ -58,6 +58,137 @@ pub async fn http_get_tool(
     result_from_raw_json(&resp)
 }
 
+/// Same as `http_get_tool`, but after the standard transform runs, the given
+/// (snake_case) `drop` keys are removed from every object in the response at any
+/// depth. For passthrough tools that echo upstream fields with no analytic
+/// value (duplicate `code`, derivable `market`, constant flags, display URLs).
+pub async fn http_get_tool_dropping(
+    client: &HttpClient,
+    path: &str,
+    params: &[(&str, &str)],
+    drop: &[&str],
+) -> Result<CallToolResult, McpError> {
+    let params: Vec<(&str, &str)> = params.to_vec();
+    let resp: String = client
+        .request(Method::GET, path)
+        .query_params(params)
+        .response::<String>()
+        .send()
+        .await
+        .map_err(|e| Error::longbridge(e.into()))?;
+    let json = transform_json(resp.as_bytes()).map_err(Error::Serialize)?;
+    let mut value: serde_json::Value = serde_json::from_str(&json).map_err(Error::Serialize)?;
+    crate::serialize::drop_keys(&mut value, drop);
+    let json = serde_json::to_string(&value).map_err(Error::Serialize)?;
+    Ok(success_with_structured(json))
+}
+
+/// Combines `http_get_tool_unix` (unix-seconds → RFC3339 at `unix_paths`) with
+/// `drop` key removal, for passthrough tools that need both.
+pub async fn http_get_tool_unix_dropping(
+    client: &HttpClient,
+    path: &str,
+    params: &[(&str, &str)],
+    unix_paths: &[&str],
+    drop: &[&str],
+) -> Result<CallToolResult, McpError> {
+    let params: Vec<(&str, &str)> = params.to_vec();
+    let resp: String = client
+        .request(Method::GET, path)
+        .query_params(params)
+        .response::<String>()
+        .send()
+        .await
+        .map_err(|e| Error::longbridge(e.into()))?;
+    let transformed = transform_json(resp.as_bytes()).map_err(Error::Serialize)?;
+    let mut value: serde_json::Value =
+        serde_json::from_str(&transformed).map_err(Error::Serialize)?;
+    convert_unix_paths(&mut value, unix_paths);
+    crate::serialize::drop_keys(&mut value, drop);
+    let json = serde_json::to_string(&value).map_err(Error::Serialize)?;
+    Ok(success_with_structured(json))
+}
+
+/// Same as `http_get_tool`, but after the standard transform runs, every string
+/// number in the response with more than `dp` fractional digits is rounded to
+/// `dp` places. For passthrough tools whose upstream emits absurd precision
+/// (e.g. 16-19 fractional digits on valuation ratios) that no consumer needs.
+pub async fn http_get_tool_rounding(
+    client: &HttpClient,
+    path: &str,
+    params: &[(&str, &str)],
+    dp: u32,
+) -> Result<CallToolResult, McpError> {
+    let params: Vec<(&str, &str)> = params.to_vec();
+    let resp: String = client
+        .request(Method::GET, path)
+        .query_params(params)
+        .response::<String>()
+        .send()
+        .await
+        .map_err(|e| Error::longbridge(e.into()))?;
+    let transformed = transform_json(resp.as_bytes()).map_err(Error::Serialize)?;
+    let mut value: serde_json::Value =
+        serde_json::from_str(&transformed).map_err(Error::Serialize)?;
+    crate::serialize::round_decimals(&mut value, dp);
+    let json = serde_json::to_string(&value).map_err(Error::Serialize)?;
+    Ok(success_with_structured(json))
+}
+
+/// Same as `http_get_tool`, but after the standard transform runs, every plain
+/// decimal string has its non-significant trailing zeros stripped (lossless).
+/// For passthrough tools whose upstream pads integer counts with a fake
+/// fractional part (e.g. share-count deltas stored as `"123.0000"`).
+pub async fn http_get_tool_trimming_zeros(
+    client: &HttpClient,
+    path: &str,
+    params: &[(&str, &str)],
+) -> Result<CallToolResult, McpError> {
+    let params: Vec<(&str, &str)> = params.to_vec();
+    let resp: String = client
+        .request(Method::GET, path)
+        .query_params(params)
+        .response::<String>()
+        .send()
+        .await
+        .map_err(|e| Error::longbridge(e.into()))?;
+    let transformed = transform_json(resp.as_bytes()).map_err(Error::Serialize)?;
+    let mut value: serde_json::Value =
+        serde_json::from_str(&transformed).map_err(Error::Serialize)?;
+    crate::serialize::strip_trailing_zeros(&mut value);
+    let json = serde_json::to_string(&value).map_err(Error::Serialize)?;
+    Ok(success_with_structured(json))
+}
+
+/// Combines `http_get_tool_unix` (unix-seconds → RFC3339 at `unix_paths`) with
+/// decimal-precision capping: every string number in the response with more
+/// than `dp` fractional digits is rounded to `dp` places. For passthrough tools
+/// whose upstream emits absurd precision (e.g. 19-decimal prices) that no
+/// consumer needs.
+pub async fn http_get_tool_unix_rounding(
+    client: &HttpClient,
+    path: &str,
+    params: &[(&str, &str)],
+    unix_paths: &[&str],
+    dp: u32,
+) -> Result<CallToolResult, McpError> {
+    let params: Vec<(&str, &str)> = params.to_vec();
+    let resp: String = client
+        .request(Method::GET, path)
+        .query_params(params)
+        .response::<String>()
+        .send()
+        .await
+        .map_err(|e| Error::longbridge(e.into()))?;
+    let transformed = transform_json(resp.as_bytes()).map_err(Error::Serialize)?;
+    let mut value: serde_json::Value =
+        serde_json::from_str(&transformed).map_err(Error::Serialize)?;
+    convert_unix_paths(&mut value, unix_paths);
+    crate::serialize::round_decimals(&mut value, dp);
+    let json = serde_json::to_string(&value).map_err(Error::Serialize)?;
+    Ok(success_with_structured(json))
+}
+
 /// Same as `http_get_tool`, but after the standard transform runs, the
 /// specified `unix_paths` are walked and any unix-seconds strings found are
 /// converted to RFC3339 in place. Use this for tools whose upstream returns
@@ -95,11 +226,14 @@ pub async fn http_post_tool(
     result_from_raw_json(&resp)
 }
 
-pub async fn http_post_tool_unix(
+/// POST passthrough with unix conversion at `unix_paths` and `drop` key
+/// removal.
+pub async fn http_post_tool_unix_dropping(
     client: &HttpClient,
     path: &str,
     body: serde_json::Value,
     unix_paths: &[&str],
+    drop: &[&str],
 ) -> Result<CallToolResult, McpError> {
     let resp: String = client
         .request(Method::POST, path)
@@ -108,7 +242,13 @@ pub async fn http_post_tool_unix(
         .send()
         .await
         .map_err(|e| Error::longbridge(e.into()))?;
-    result_from_raw_json_with_unix_paths(&resp, unix_paths)
+    let transformed = transform_json(resp.as_bytes()).map_err(Error::Serialize)?;
+    let mut value: serde_json::Value =
+        serde_json::from_str(&transformed).map_err(Error::Serialize)?;
+    convert_unix_paths(&mut value, unix_paths);
+    crate::serialize::drop_keys(&mut value, drop);
+    let json = serde_json::to_string(&value).map_err(Error::Serialize)?;
+    Ok(success_with_structured(json))
 }
 
 pub async fn http_delete_tool(
