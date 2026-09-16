@@ -175,6 +175,9 @@ where
 fn tool_error(name: &str, err: &McpError) -> CallToolResult {
     let message = upstream_message_of(err).unwrap_or_else(|| err.message.as_ref());
     if is_terminal_none(err) {
+        // Count the degraded condition (tools that return the error to
+        // `measured_tool_call` land here instead of calling `terminal_none_ok`).
+        crate::metrics::record_terminal_degraded(name, openapi_error_code_of(err));
         let envelope = serde_json::json!({
             "error_code": openapi_error_code_of(err),
             "message": message,
@@ -324,6 +327,20 @@ fn error_hint(err: &McpError) -> Option<&'static str> {
              the relevant market data package.",
         );
     }
+    // Zero-quota history candlestick (301607 with `limit:0`) is a missing
+    // entitlement, not an oversized request — the "use fewer symbols" hint below
+    // would be actively misleading, so handle it first. (Matches the terminal
+    // branch in `is_terminal_none`.)
+    if code == Some(301_607)
+        && (msg.contains("limit:0")
+            || upstream_message_of(err).is_some_and(|m| m.to_lowercase().contains("limit:0")))
+    {
+        return Some(
+            "Hint: this account has no history-candlestick quota (limit:0). The empty result is a \
+             permission/subscription gap, not an oversized request — reducing the number of \
+             symbols will NOT help. Tell the user their account lacks history market-data access.",
+        );
+    }
     if matches_error_class(
         code,
         &msg,
@@ -433,14 +450,32 @@ fn recoverable_of(err: &McpError) -> &'static str {
     "none"
 }
 
+/// True when `err` is a rate-limit / too-frequent condition the caller can
+/// resolve by waiting and retrying (i.e. `recoverable_of(err) == "backoff"`).
+/// Exposed for tools that want to do their own short in-function retry.
+pub(crate) fn is_backoff(err: &McpError) -> bool {
+    recoverable_of(err) == "backoff"
+}
+
 /// True only for the known *terminal* quote conditions that return
-/// `isError:false` with a schema-valid empty result: 301604 (no quote access)
-/// and 301603 (no quotes). Deliberately narrow — a bare "no access" needle is
-/// omitted so a 403 permission error can't be mistaken for a terminal quote
-/// condition.
+/// `isError:false` with a schema-valid empty result: 301604 (no quote access),
+/// 301603 (no quotes), and 301607 *with `limit:0`* (the account has zero
+/// history-candlestick quota). Deliberately narrow — a bare "no access" needle
+/// is omitted so a 403 permission error can't be mistaken for a terminal quote
+/// condition, and the `limit:0` guard keeps the *other* 301607 ("too many
+/// symbols", `limit`>0) as `fix_params` + count-boundary retry, not terminal.
 fn is_terminal_none(err: &McpError) -> bool {
     let code = openapi_error_code_of(err);
     let msg = err.message.to_lowercase();
+    // Zero-quota history candlestick: 301607 whose message reports `limit:0`.
+    // (Integers carry no leading zeros, so `limit:0` never matches `limit:10`
+    // etc.) Checked on both the display text and the clean upstream message.
+    if code == Some(301_607)
+        && (msg.contains("limit:0")
+            || upstream_message_of(err).is_some_and(|m| m.to_lowercase().contains("limit:0")))
+    {
+        return true;
+    }
     matches_error_class(
         code,
         &msg,
@@ -450,6 +485,40 @@ fn is_terminal_none(err: &McpError) -> bool {
             numeric: &["301604", "301603"],
         },
     )
+}
+
+/// For the quote-family tools: when `err` is a terminal no-access/no-data quote
+/// condition (301604/301603), return the SAME degraded `isError:false` result
+/// `tool_error` produces — but as an `Ok` the tool itself returns, so the call
+/// is NOT counted as an error by `measured_tool_call` (which keys off the inner
+/// `Result::is_err()`, before `tool_error` runs). Returns `None` for every other
+/// error, which the caller must propagate as `Err` unchanged.
+///
+/// Kept in sync with `tool_error`'s terminal branch: the `note`/`recoverable`
+/// fields must match that path. The tools that call this are array-rooted with
+/// no `output_schema` (never in `TERMINAL_OBJECT_ROOTED`), so no
+/// `structured_content` is attached.
+pub(crate) fn terminal_none_ok(name: &str, err: &McpError) -> Option<CallToolResult> {
+    if !is_terminal_none(err) {
+        return None;
+    }
+    // Observability: the error rate deliberately won't show these, so count them
+    // separately — each one is still a user who got no data.
+    crate::metrics::record_terminal_degraded(name, openapi_error_code_of(err));
+    let message = upstream_message_of(err).unwrap_or_else(|| err.message.as_ref());
+    let envelope = serde_json::json!({
+        "error_code": openapi_error_code_of(err),
+        "message": message,
+        "recoverable": "none",
+        "hint": error_hint(err),
+        "note": "These fields are EMPTY because access was denied or no data exists — NOT \
+                 because the values are zero. This is a permission/no-data placeholder, not a \
+                 real quote. Tell the user they lack the required market-data access (or that \
+                 no data exists); do not present the empty values as real.",
+    });
+    Some(CallToolResult::success(vec![Content::text(
+        envelope.to_string(),
+    )]))
 }
 
 mod alert;
@@ -5388,12 +5457,12 @@ impl ServerHandler for Longbridge {
             ));
         }
         // DC-region execution gate, independent of the /v1/v2 restricted-endpoint
-        // check above: on the main (`/mcp`) and authenticated `/agent` endpoints,
-        // a tool hidden from `tools/list` for this account's region must also be
-        // un-callable by name, or the listing filter is merely cosmetic.
-        if restricted_version(&context).is_none()
-            && let Ok(mctx) = extract_context(&context)
-        {
+        // check above: on every authenticated endpoint — main (`/mcp`), `/agent`,
+        // and the restricted `/v2` directory endpoint — a tool hidden from
+        // `tools/list` for this account's region must also be un-callable by name,
+        // or the listing filter is merely cosmetic. Token-less endpoints have no
+        // context, so `extract_context` fails and the gate is skipped.
+        if let Ok(mctx) = extract_context(&context) {
             let region = mctx.dc_region().await;
             if is_hidden_for_dc_region(request.name.as_ref(), region) {
                 return Err(McpError::invalid_request(
@@ -5431,12 +5500,15 @@ impl ServerHandler for Longbridge {
         // the clone cost (Arc ref-bumps + String title copies), not filter work.
         let tools = if is_agent_endpoint(&context) && !is_authenticated(&context) {
             tools_agent_endpoint().to_vec()
-        } else if let Some(version) = restricted_version(&context) {
-            match version {
-                RestrictedVersion::V2 => tools_v2_endpoint().to_vec(),
-            }
         } else {
-            let mut tools = tools_main_endpoint().to_vec();
+            // Both the main (`/mcp`) and restricted (`/v2`) slices are region-
+            // filtered: a US-DC-only tool must not be advertised to an AP account
+            // (and vice versa) on ANY authenticated endpoint, including the public
+            // directory endpoint, or it is offered only to fail upstream.
+            let mut tools = match restricted_version(&context) {
+                Some(RestrictedVersion::V2) => tools_v2_endpoint().to_vec(),
+                None => tools_main_endpoint().to_vec(),
+            };
             if let Ok(mctx) = extract_context(&context) {
                 let region = mctx.dc_region().await;
                 tools.retain(|t| !is_hidden_for_dc_region(t.name.as_ref(), region));
@@ -5837,6 +5909,37 @@ mod tests {
                 .all(|n| !super::AP_ONLY_TOOLS.contains(n)),
             "US_ONLY_TOOLS and AP_ONLY_TOOLS must be disjoint"
         );
+    }
+
+    #[test]
+    fn v2_endpoint_region_filtering_hides_us_only_tools_for_ap() {
+        use longbridge::DcRegion;
+
+        // `list_tools` now applies the same region retain to the /v2 slice as to
+        // the main slice. Guards against the /v2 directory endpoint regressing to
+        // advertise US-DC-only tools (e.g. financial_report_key_metrics) to AP
+        // accounts, which then 100%-fail upstream.
+        let in_v2 = |name: &str| {
+            super::tools_v2_endpoint()
+                .iter()
+                .any(|t| t.name.as_ref() == name)
+        };
+
+        // At least one US-only tool is v2-public, so the /v2 retain is load-bearing.
+        assert!(
+            super::US_ONLY_TOOLS.iter().any(|n| in_v2(n)),
+            "expected a US-only tool to be v2-public (e.g. financial_report_key_metrics)"
+        );
+        for name in super::US_ONLY_TOOLS.iter().filter(|n| in_v2(n)) {
+            assert!(
+                super::is_hidden_for_dc_region(name, DcRegion::Ap),
+                "US-only tool `{name}` on /v2 must be hidden for AP accounts"
+            );
+            assert!(
+                !super::is_hidden_for_dc_region(name, DcRegion::Us),
+                "US-only tool `{name}` on /v2 must stay visible for US accounts"
+            );
+        }
     }
 
     #[test]
@@ -6501,6 +6604,60 @@ mod tool_error_tests {
     }
 
     #[test]
+    fn terminal_none_ok_degrades_terminal_but_propagates_others() {
+        // 301604 (no quote access) is terminal → Some(isError:false), so a tool
+        // returning it via `Ok(terminal_none_ok(..))` is NOT counted as an error.
+        let terminal = McpError::internal_error(
+            "WsResponseErrorDetail { code: 301604, msg: \"no quote access\" }".to_string(),
+            Some(serde_json::json!({ "openapi_error_code": 301604 })),
+        );
+        let ok = super::terminal_none_ok("option_quote", &terminal).expect("301604 must degrade");
+        assert_ne!(
+            ok.is_error,
+            Some(true),
+            "terminal degraded result must be a success"
+        );
+        let v: serde_json::Value = serde_json::from_str(&text_of(&ok)).unwrap();
+        assert_eq!(v["error_code"], 301604);
+        assert_eq!(v["recoverable"], "none");
+
+        // 301607 with a zero history-candlestick quota (limit:0) is also terminal.
+        let zero_quota = McpError::internal_error(
+            "history candlestick symbol count out of limit, requested:0/limit:0".to_string(),
+            Some(serde_json::json!({
+                "openapi_error_code": 301607,
+                "upstream_message": "history candlestick symbol count out of limit, requested:0/limit:0"
+            })),
+        );
+        assert!(
+            super::terminal_none_ok("history_candlesticks_by_date", &zero_quota).is_some(),
+            "301607 with limit:0 (no history quota) must degrade to Ok"
+        );
+
+        // But 301607 with a non-zero limit ("too many symbols") is NOT terminal —
+        // it is fix_params + count-boundary retry, and must still propagate.
+        let too_many = McpError::internal_error(
+            "WsResponseErrorDetail { code: 301607, msg: \"requested:200/limit:100\" }".to_string(),
+            Some(serde_json::json!({ "openapi_error_code": 301607 })),
+        );
+        assert!(
+            super::terminal_none_ok("history_candlesticks_by_offset", &too_many).is_none(),
+            "301607 with limit>0 must stay a real error, not be swallowed"
+        );
+
+        // A reauth error (401103) is not terminal → None; the caller must
+        // propagate it as `Err` (so it stays a real, counted error).
+        let reauth = McpError::internal_error(
+            "token is expired".to_string(),
+            Some(serde_json::json!({ "openapi_error_code": 401103 })),
+        );
+        assert!(
+            super::terminal_none_ok("stock_positions", &reauth).is_none(),
+            "non-terminal errors must not be swallowed into an Ok"
+        );
+    }
+
+    #[test]
     fn every_schema_backed_terminal_instance_matches_its_schema() {
         let err = McpError::internal_error(
             "WsResponseErrorDetail { code: 301604, msg: \"no quote access\" }".to_string(),
@@ -7004,6 +7161,31 @@ mod tool_error_tests {
         assert!(
             hint.contains("fewer") || hint.contains("reduce"),
             "got: {hint}"
+        );
+    }
+
+    #[test]
+    fn zero_history_quota_hint_does_not_tell_caller_to_reduce_symbols() {
+        // 301607 with limit:0 is a missing entitlement, not an oversized request.
+        // Its hint must NOT tell the model to retry with fewer symbols — that
+        // would pair a "reduce symbols" hint with the "no access" terminal note
+        // and mislead the client.
+        let err = McpError::internal_error(
+            "history candlestick symbol count out of limit, requested:0/limit:0".to_string(),
+            Some(serde_json::json!({
+                "openapi_error_code": 301607,
+                "upstream_message":
+                    "history candlestick symbol count out of limit, requested:0/limit:0"
+            })),
+        );
+        let hint = error_hint(&err).expect("expected a 301607 limit:0 hint");
+        assert!(
+            !hint.to_lowercase().contains("fewer"),
+            "zero-quota hint must not say 'fewer symbols', got: {hint}"
+        );
+        assert!(
+            hint.contains("quota") || hint.contains("access"),
+            "zero-quota hint should name the missing quota/access, got: {hint}"
         );
     }
 

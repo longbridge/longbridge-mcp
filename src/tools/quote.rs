@@ -357,10 +357,17 @@ pub async fn option_quote(
     p: OptionSymbolsParam,
 ) -> Result<CallToolResult, McpError> {
     let ctx = mctx.get_quote_context().await;
-    let result = ctx.option_quote(p.symbols).await.map_err(|e| {
-        mctx.evict_quote_context();
-        Error::longbridge(e)
-    })?;
+    let result = match ctx.option_quote(p.symbols).await {
+        Ok(v) => v,
+        Err(e) => {
+            mctx.evict_quote_context();
+            let err: McpError = Error::longbridge(e).into();
+            if let Some(ok) = crate::tools::terminal_none_ok("option_quote", &err) {
+                return Ok(ok);
+            }
+            return Err(err);
+        }
+    };
     tool_json(&result)
 }
 
@@ -489,7 +496,15 @@ where
     Fut: std::future::Future<Output = Result<T, longbridge::Error>>,
 {
     match call(count).await {
-        Err(e) if count > 1 && e.openapi_error_code() == Some(CANDLESTICK_COUNT_OUT_OF_LIMIT) => {
+        // Retry the count-boundary case (limit>0), but NOT the zero-quota case
+        // (`limit:0`): retrying with count-1 can't conjure a quota the account
+        // doesn't have, so it would just burn a second upstream call before the
+        // terminal degrade. `is_terminal_none` handles limit:0 downstream.
+        Err(e)
+            if count > 1
+                && e.openapi_error_code() == Some(CANDLESTICK_COUNT_OUT_OF_LIMIT)
+                && !e.to_string().to_lowercase().contains("limit:0") =>
+        {
             call(count - 1).await.map_err(Box::new)
         }
         result => result.map_err(Box::new),
@@ -533,7 +548,7 @@ pub async fn history_candlesticks_by_offset(
         None => None,
     };
     let ctx = mctx.get_quote_context().await;
-    let result = with_candlestick_count_boundary_retry(p.count, |count| {
+    let outcome = with_candlestick_count_boundary_retry(p.count, |count| {
         ctx.history_candlesticks_by_offset(
             p.symbol.clone(),
             period,
@@ -544,11 +559,19 @@ pub async fn history_candlesticks_by_offset(
             sessions,
         )
     })
-    .await
-    .map_err(|e| {
-        mctx.evict_quote_context();
-        Error::longbridge(*e)
-    })?;
+    .await;
+    let result = match outcome {
+        Ok(v) => v,
+        Err(e) => {
+            mctx.evict_quote_context();
+            let err: McpError = Error::longbridge(*e).into();
+            if let Some(ok) = crate::tools::terminal_none_ok("history_candlesticks_by_offset", &err)
+            {
+                return Ok(ok);
+            }
+            return Err(err);
+        }
+    };
     price_series_result(&result)
 }
 
@@ -568,13 +591,20 @@ pub async fn history_candlesticks_by_date(
         None => None,
     };
     let ctx = mctx.get_quote_context().await;
-    let result = ctx
+    let result = match ctx
         .history_candlesticks_by_date(p.symbol, period, adjust, start, end, sessions)
         .await
-        .map_err(|e| {
+    {
+        Ok(v) => v,
+        Err(e) => {
             mctx.evict_quote_context();
-            Error::longbridge(e)
-        })?;
+            let err: McpError = Error::longbridge(e).into();
+            if let Some(ok) = crate::tools::terminal_none_ok("history_candlesticks_by_date", &err) {
+                return Ok(ok);
+            }
+            return Err(err);
+        }
+    };
     price_series_result(&result)
 }
 

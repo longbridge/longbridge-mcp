@@ -101,6 +101,24 @@ fn rating_part(label: &str, result: Result<CallToolResult, McpError>) -> (String
     }
 }
 
+/// The two institution-rating endpoints share a `counter_id` and, fired
+/// concurrently, can both trip the upstream per-second rate limit ("1S 区间调用
+/// 上限"). On a backoff-class error, wait once and retry so a transient limit
+/// doesn't fail the whole call. Any other error is returned unchanged.
+async fn get_with_backoff(
+    client: &longbridge::httpclient::HttpClient,
+    path: &str,
+    params: &[(&str, &str)],
+) -> Result<CallToolResult, McpError> {
+    match http_get_tool(client, path, params).await {
+        Err(e) if crate::tools::is_backoff(&e) => {
+            tokio::time::sleep(std::time::Duration::from_millis(700)).await;
+            http_get_tool(client, path, params).await
+        }
+        other => other,
+    }
+}
+
 /// `instratings.evaluate` re-encodes `analyst.evaluate`'s rating counts with
 /// renamed keys (strong_buy=buy, buy=over) and strictly less detail (no
 /// `total`/`no_opinion`/dates), so it is a lossy duplicate — drop it. Keep the
@@ -123,9 +141,11 @@ pub async fn institution_rating(
 
     // Two independent upstream calls. Run them concurrently, and let one
     // failure degrade the response instead of discarding the half that worked.
+    // Each retries once on a rate-limit (they share a counter_id and can both
+    // trip the per-second limit when fired together).
     let (analyst, instratings) = tokio::join!(
-        http_get_tool(&client, "/v1/quote/institution-rating-latest", &params),
-        http_get_tool(&client, "/v1/quote/institution-ratings", &params),
+        get_with_backoff(&client, "/v1/quote/institution-rating-latest", &params),
+        get_with_backoff(&client, "/v1/quote/institution-ratings", &params),
     );
 
     // Nothing to report if neither half came back — surface the first cause.
