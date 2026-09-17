@@ -6304,14 +6304,13 @@ mod quote_cmd_tests {
     }
 
     /// Guard: this crate reads only a small, deliberate allowlist of upstream
-    /// env vars; everything else (the quote/trade WS URLs, and the `LONGPORT_`
-    /// region alias) must be resolved by the SDK, not read back here, or the
-    /// per-host ambiguity would creep back in. The allowlist is the HTTP
-    /// override in both spellings the SDK honours (`LONGBRIDGE_HTTP_URL` /
-    /// `LONGPORT_HTTP_URL`), which `McpContext::pin_upstream` consults so a
-    /// regional `-hk`/`-us` cluster keeps its own upstream; plus
-    /// `LONGBRIDGE_REGION`, the startup environment selector read once in
-    /// `main::load_config` (`cn` selects the mainland environment). Structural
+    /// env vars; the quote/trade WS URLs must be resolved by the SDK, not read
+    /// back here, or the per-host ambiguity would creep back in. The allowlist
+    /// (both `LONGBRIDGE_`/`LONGPORT_` spellings, matching the SDK's own
+    /// resolution) is `HTTP_URL` — the override `McpContext::pin_upstream`
+    /// consults so a regional `-hk`/`-us` cluster keeps its own upstream — and
+    /// `REGION`, the startup environment selector read once in
+    /// `main::region_env` (`cn` selects the mainland environment). Structural
     /// rather than behavioral on purpose — asserting it by setting the variables
     /// would need `unsafe` env mutation, which the crate forbids.
     #[test]
@@ -6323,11 +6322,14 @@ mod quote_cmd_tests {
             .iter()
             .flat_map(|prefix| {
                 SUFFIXES.iter().filter_map(move |suffix| {
-                    let name = format!("{prefix}_{suffix}");
-                    // Allowlist: both HTTP_URL spellings (the override), and
-                    // LONGBRIDGE_REGION (the startup environment selector).
-                    let allowed = *suffix == "HTTP_URL" || name == "LONGBRIDGE_REGION";
-                    if allowed { None } else { Some(name) }
+                    // Allowlist (see doc above): the HTTP override and the REGION
+                    // selector, in both spellings the SDK honours.
+                    let allowed = *suffix == "HTTP_URL" || *suffix == "REGION";
+                    if allowed {
+                        None
+                    } else {
+                        Some(format!("{prefix}_{suffix}"))
+                    }
                 })
             })
             .collect();
