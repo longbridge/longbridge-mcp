@@ -10,18 +10,29 @@
 //! talks to different hosts depending on where it runs and what happens to be
 //! in the environment.
 //!
-//! This module removes that ambiguity: the environment is chosen once at
-//! startup ([`init`], from `--canary` / the config file) and every upstream URL
-//! is set explicitly on the SDK afterwards, so no environment variable and no
-//! geolocation probe can influence it.
+//! This module pins those URLs to fixed literals per [`Environment`], chosen
+//! once at startup ([`init`], from `--canary` / the config file) and read back
+//! via [`current`]. The module itself reads no environment variable and runs no
+//! geolocation probe.
 //!
-//! # `.cn` is deliberately absent
+//! It does not, however, *always* win. Only canary is pinned unconditionally.
+//! For the default (non-canary) environment the caller (`McpContext::pin_upstream`
+//! in `crate::tools`) pins these URLs only for a `us_` credential on a host with
+//! no configured upstream, and otherwise leaves the SDK's own env/geolocation
+//! resolution in place. That is deliberate: it is how the dedicated mainland
+//! deployment reaches `*.longbridge.cn` through its configured
+//! `LONGBRIDGE_HTTP_URL`, without a dedicated flag.
 //!
-//! Mainland acceleration through `openapi.longbridge.cn` is not used. `.cn` has
-//! no path to the US data center, so a `us_`-prefixed credential sent there
-//! authenticates but fails every market-data request with
-//! `301604 no quote access` — a failure that reads like a missing permission
-//! and is not one. `.com` serves both data centers, so it is the only host.
+//! # `.cn` and the global deployment
+//!
+//! The global `.com` deployment must never be pointed at
+//! `openapi.longbridge.cn`: `.cn` has no path to the US data center, so a
+//! `us_`-prefixed credential sent there authenticates but fails every
+//! market-data request with `301604 no quote access` — a failure that reads
+//! like a missing permission and is not one. `.com` serves both data centers,
+//! so it is the only host for the global deployment. The mainland deployment is
+//! the exception: it serves only `cn`/`ap` credentials and is configured (via
+//! its environment) to talk to `*.longbridge.cn`.
 //!
 //! Host selection and data-center routing are two independent things: which
 //! data center serves a request is decided by the `x-dc-region` header, which
@@ -30,11 +41,12 @@
 //!
 //! # Scope
 //!
-//! Everything this server sends upstream, plus the OAuth URLs it advertises and
-//! the connect page it points users at, follows [`current`]. Static tool
-//! metadata cannot: it is made of literals. Those name
-//! [`STATIC_CONNECT_PAGE`] and are retargeted once at startup — which is why
-//! [`init`] must run before the first `tools/list`.
+//! The OAuth URLs this server advertises and the connect page it points users
+//! at always follow [`current`]. The upstream REST/WS URLs follow it only when
+//! `McpContext::pin_upstream` pins them (see above); otherwise the SDK resolves
+//! them. Static tool metadata cannot follow it dynamically: it is made of
+//! literals. Those name [`STATIC_CONNECT_PAGE`] and are retargeted once at
+//! startup — which is why [`init`] must run before the first `tools/list`.
 
 use std::sync::OnceLock;
 

@@ -730,7 +730,7 @@ impl McpContext {
             && longbridge::DcRegion::from_credential(&self.token) == longbridge::DcRegion::Us
     }
 
-    /// Build an SDK `Config` for this request. See [`Self::pin_upstream`] for
+    /// Build an SDK `Config` for this request. See `pin_upstream` for
     /// when the three upstream URLs are pinned versus left to the SDK.
     pub fn create_config(&self) -> Arc<longbridge::Config> {
         let mut config =
@@ -765,7 +765,7 @@ impl McpContext {
     }
 
     /// Build an SDK `HttpClient` for this request. The base URL follows the same
-    /// rule as [`McpContext::create_config`] ([`Self::pin_upstream`]), so REST
+    /// rule as [`McpContext::create_config`] (`pin_upstream`), so REST
     /// calls can never drift to a different access point than the WebSocket.
     pub fn create_http_client(&self) -> longbridge::httpclient::HttpClient {
         let mut http_config = longbridge::httpclient::HttpClientConfig::from_oauth(
@@ -5696,9 +5696,16 @@ mod tests {
     /// End-to-end: the client produced by `create_http_client` must put the
     /// synthesized `User-Agent` (client UA + our token) on the wire as the
     /// primary value. A minimal TCP server captures the real request headers;
-    /// the SDK base URL is redirected to it via the `HTTP_URL` env var.
+    /// the SDK base URL is redirected to it via `UPSTREAM_OVERRIDE` (which only
+    /// takes effect on the pinned path, hence the `us_` token below).
     #[tokio::test]
     async fn upstream_request_carries_synthesized_user_agent() {
+        // The `us_` token pins the upstream so `UPSTREAM_OVERRIDE` can redirect
+        // it. A shell that exports the HTTP override would leave the token
+        // unpinned, so skip rather than fire at a real host.
+        if std::env::var(["LONGBRIDGE", "HTTP_URL"].join("_")).is_ok() {
+            return;
+        }
         use std::io::{Read, Write};
         use std::net::TcpListener;
         use std::sync::{Arc, Mutex};
@@ -6128,6 +6135,12 @@ mod quote_cmd_tests {
     /// to `GET /v1/quote/cmd` against a local server — no HTTP mocking.
     #[tokio::test]
     async fn upstream_request_carries_x_mcp_tool_and_user_agent() {
+        // The `us_` token pins the upstream so `UPSTREAM_OVERRIDE` can redirect
+        // it; a shell that exports the HTTP override would leave it unpinned, so
+        // skip rather than fire at a real host.
+        if std::env::var(["LONGBRIDGE", "HTTP_URL"].join("_")).is_ok() {
+            return;
+        }
         let (port, rx) = spawn_capture_server().await;
 
         let mctx = McpContext {
