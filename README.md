@@ -194,7 +194,7 @@ The mainland-China environment (`*.longbridge.cn`) is not a flag: it is auto-sel
 
 Canary uses the `-global` gateway, not `openapi.longbridge.xyz`: only the former is CloudFront-fronted and performs `x-dc-region` data-center routing, which this server depends on to serve `us_`- and `ap_`-prefixed credentials from one process.
 
-**Canary and mainland** pin all of the above explicitly, so their `LONGBRIDGE_*`/`LONGPORT_*` URL vars, geolocation probe, and `.env` are inert (the environment is chosen once at startup — for mainland, from `LONGBRIDGE_REGION`). **Production** pins the global `.com` gateway only for `us_` credentials that have no `LONGBRIDGE_HTTP_URL`/`LONGPORT_HTTP_URL` override; a regional `.com` cluster (e.g. `openapi-hk` / `openapi-us`) that sets one keeps its own upstream, and other credentials fall to the SDK's own resolution. Which data center serves a request is independent of the host: it is decided by the `x-dc-region` header the SDK derives from the credential's `us_` / `ap_` prefix.
+Canary and mainland pin every URL above at startup; production defers to the SDK's own resolution except that a `us_` credential with no upstream override is pinned to the global `.com` gateway. See [`src/endpoints.rs`](src/endpoints.rs) for the exact selection rules.
 
 Advanced environment variables — most deployments never touch these; they exist for SDK debugging and edge/global-entry deployments.
 
