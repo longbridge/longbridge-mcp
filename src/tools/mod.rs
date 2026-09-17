@@ -708,11 +708,30 @@ impl McpContext {
         }
     }
 
-    /// Build an SDK `Config` for this request.
+    /// Whether this request's upstream must be pinned to [`crate::endpoints`]
+    /// rather than left to the SDK's own resolution.
     ///
-    /// All three upstream URLs are set explicitly from [`crate::endpoints`], so
-    /// the SDK neither reads them from the environment nor geolocates an access
-    /// point — see that module for why the endpoints are pinned.
+    /// Canary is always pinned (nothing in the environment may influence it).
+    /// Otherwise the upstream is pinned to the global `.com` gateway only for a
+    /// `us_` credential *and* only when the deployment configured no explicit
+    /// upstream — a safety net for an unconfigured host. When either condition
+    /// is absent the SDK keeps its own resolution: it reads the deployment's
+    /// configured upstream, so each regional cluster reaches its own host
+    /// (`openapi.longbridge.cn`, `openapi-hk.longbridge.com`,
+    /// `openapi-us.longbridge.com`) without a dedicated flag. This restores the
+    /// behaviour that predated the unconditional pinning.
+    fn pin_upstream(&self) -> bool {
+        if crate::endpoints::current() == crate::endpoints::Environment::Canary {
+            return true;
+        }
+        // A deployment-configured upstream wins even for `us_` credentials, so a
+        // regional cluster (`.cn` / `-hk` / `-us`) is never overridden.
+        std::env::var("LONGBRIDGE_HTTP_URL").is_err()
+            && longbridge::DcRegion::from_credential(&self.token) == longbridge::DcRegion::Us
+    }
+
+    /// Build an SDK `Config` for this request. See [`Self::pin_upstream`] for
+    /// when the three upstream URLs are pinned versus left to the SDK.
     pub fn create_config(&self) -> Arc<longbridge::Config> {
         let mut config =
             longbridge::Config::from_oauth(longbridge::oauth::OAuth::from_token(&self.token))
@@ -720,10 +739,13 @@ impl McpContext {
                 .enable_overnight()
                 // Identify MCP-originated requests on the Context path (REST and
                 // WebSocket upgrades), mirroring how longbridge-cli tags itself.
-                .header("user-agent", self.user_agent())
+                .header("user-agent", self.user_agent());
+        if self.pin_upstream() {
+            config = config
                 .http_url(crate::endpoints::http_url())
                 .quote_ws_url(crate::endpoints::quote_ws_url())
                 .trade_ws_url(crate::endpoints::trade_ws_url());
+        }
         if let Some(ref lang) = self.language {
             let lb_lang = if lang.contains("zh-CN") || lang.contains("zh-Hans") {
                 longbridge::Language::ZH_CN
@@ -742,14 +764,16 @@ impl McpContext {
         Arc::new(config)
     }
 
-    /// Build an SDK `HttpClient` for this request. The base URL is pinned the
-    /// same way as in [`McpContext::create_config`], so REST calls can never
-    /// drift to a different access point than the WebSocket.
+    /// Build an SDK `HttpClient` for this request. The base URL follows the same
+    /// rule as [`McpContext::create_config`] ([`Self::pin_upstream`]), so REST
+    /// calls can never drift to a different access point than the WebSocket.
     pub fn create_http_client(&self) -> longbridge::httpclient::HttpClient {
-        let http_config = longbridge::httpclient::HttpClientConfig::from_oauth(
+        let mut http_config = longbridge::httpclient::HttpClientConfig::from_oauth(
             longbridge::oauth::OAuth::from_token(&self.token),
-        )
-        .http_url(crate::endpoints::http_url());
+        );
+        if self.pin_upstream() {
+            http_config = http_config.http_url(crate::endpoints::http_url());
+        }
         let mut client = longbridge::httpclient::HttpClient::new(http_config);
         // NOTE: This is very important for passing headers to upstream Longbridge services.
         // Do not remove this unless you have a good reason and know exactly which headers to forward instead.
@@ -5713,7 +5737,11 @@ mod tests {
         });
 
         let mctx = super::McpContext {
-            token: "dummy-token".to_string(),
+            // `us_` prefix makes DcRegion::Us, so the upstream is pinned to
+            // `endpoints::http_url()` — which the UPSTREAM_OVERRIDE below then
+            // redirects to the local echo server. A region-less token would be
+            // left to the SDK's own resolution and skip the override.
+            token: "us_dummy-token".to_string(),
             language: None,
             client_user_agent: Some("claude-code/2.1.89 (cli)".to_string()),
             extra_headers: Vec::new(),
@@ -5738,6 +5766,38 @@ mod tests {
             ua.starts_with("claude-code/2.1.89 (cli) longbridge-mcp/"),
             "unexpected upstream User-Agent: {ua}"
         );
+    }
+
+    /// Outside canary (the test default is production), `ap_`/mainland
+    /// credentials are always left to the SDK so a regional cluster keeps its own
+    /// upstream; `us_` credentials are pinned only as a safety net, when the
+    /// deployment configured no `HTTP_URL` override. This is the regression guard
+    /// for the mainland connection-refused incident.
+    #[test]
+    fn pin_upstream_only_for_us_credentials_without_a_configured_upstream() {
+        let ctx = |token: &str| super::McpContext {
+            token: token.to_string(),
+            language: None,
+            client_user_agent: None,
+            extra_headers: Vec::new(),
+        };
+        // Mainland/ap credentials defer to the SDK's upstream regardless of any
+        // configured override — this is what lets the CN cluster reach `.cn`.
+        assert!(
+            !ctx("ap_token").pin_upstream(),
+            "mainland/ap credentials must be left to the SDK's own upstream"
+        );
+        // The us_ safety net only fires when no upstream override is configured.
+        // A deployment-configured HTTP override (every prod cluster sets one)
+        // must suppress it so `-hk`/`-us`/`.cn` hosts are honoured. Guarded so a
+        // developer shell that exports the override does not fail the assertion.
+        let http_url_var = ["LONGBRIDGE", "HTTP_URL"].join("_");
+        if std::env::var(&http_url_var).is_err() {
+            assert!(
+                ctx("us_token").pin_upstream(),
+                "us_ credentials pin to the global gateway when no upstream is configured"
+            );
+        }
     }
 
     #[test]
@@ -6071,7 +6131,9 @@ mod quote_cmd_tests {
         let (port, rx) = spawn_capture_server().await;
 
         let mctx = McpContext {
-            token: "test-token".to_string(),
+            // `us_` prefix pins the upstream to `endpoints::http_url()`, which the
+            // UPSTREAM_OVERRIDE below redirects to the local capture server.
+            token: "us_test-token".to_string(),
             language: None,
             client_user_agent: Some("claude-test/1.0 (cli)".to_string()),
             extra_headers: Vec::new(),
@@ -6171,12 +6233,14 @@ mod quote_cmd_tests {
         );
     }
 
-    /// Guard: upstream URLs come from `crate::endpoints` alone. The SDK would
-    /// happily pick them up from the environment (or a `.env` file) if any code
-    /// here read them back, which would reintroduce exactly the ambiguity that
-    /// module exists to remove. Structural rather than behavioral on purpose —
-    /// asserting it by setting the variables would need `unsafe` env mutation,
-    /// which the crate forbids.
+    /// Guard: this crate reads no upstream URL from the environment except the
+    /// one [`McpContext::pin_upstream`] deliberately consults — the `HTTP_URL`
+    /// override that lets a regional cluster (`.cn` / `-hk` / `-us`) keep its own
+    /// upstream. Everything else (the quote/trade WS URLs, the region, and every
+    /// `LONGPORT_` alias) must be resolved by the SDK, not read back here, or the
+    /// per-host ambiguity would creep back in. Structural rather than behavioral
+    /// on purpose — asserting it by setting the variables would need `unsafe` env
+    /// mutation, which the crate forbids.
     #[test]
     fn upstream_urls_are_never_read_from_the_environment() {
         // Assembled from parts so this test does not match its own source.
@@ -6185,9 +6249,15 @@ mod quote_cmd_tests {
         let forbidden: Vec<String> = PREFIXES
             .iter()
             .flat_map(|prefix| {
-                SUFFIXES
-                    .iter()
-                    .map(move |suffix| format!("{prefix}_{suffix}"))
+                SUFFIXES.iter().filter_map(move |suffix| {
+                    // The sole allowed read: the base HTTP override, consulted by
+                    // `pin_upstream` to yield to a deployment-configured upstream.
+                    if *prefix == "LONGBRIDGE" && *suffix == "HTTP_URL" {
+                        None
+                    } else {
+                        Some(format!("{prefix}_{suffix}"))
+                    }
+                })
             })
             .collect();
         let src_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
