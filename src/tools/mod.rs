@@ -708,26 +708,53 @@ impl McpContext {
         }
     }
 
-    /// Whether this request's upstream must be pinned to [`crate::endpoints`]
-    /// rather than left to the SDK's own resolution.
+    /// Whether the deployment configured an explicit upstream HTTP host, via
+    /// either name the SDK honours: `LONGBRIDGE_HTTP_URL` or the legacy
+    /// `LONGPORT_HTTP_URL` alias (the SDK's `env_var` tries the former then the
+    /// latter). An empty or non-UTF8 value counts as unset — it is not a usable
+    /// host, and pinning the global gateway is safer than deferring to a broken
+    /// override. The SDK also reads a `.env` file, but that is a dev-only
+    /// convenience not present in the deployments this decision protects.
+    fn http_url_override_configured() -> bool {
+        ["LONGBRIDGE_HTTP_URL", "LONGPORT_HTTP_URL"]
+            .iter()
+            .filter_map(|name| std::env::var(name).ok())
+            .any(|value| !value.is_empty())
+    }
+
+    /// Pure pin decision, split out so it can be unit-tested without mutating
+    /// the process environment (which the crate forbids via `unsafe`).
     ///
-    /// Canary is always pinned (nothing in the environment may influence it).
-    /// Otherwise the upstream is pinned to the global `.com` gateway only for a
-    /// `us_` credential *and* only when the deployment configured no explicit
-    /// upstream — a safety net for an unconfigured host. When either condition
-    /// is absent the SDK keeps its own resolution: it reads the deployment's
-    /// configured upstream, so each regional cluster reaches its own host
-    /// (`openapi.longbridge.cn`, `openapi-hk.longbridge.com`,
-    /// `openapi-us.longbridge.com`) without a dedicated flag. This restores the
-    /// behaviour that predated the unconditional pinning.
+    /// `pinned_env` is true for canary and mainland — dedicated environments
+    /// pinned unconditionally (nothing in the environment may influence them),
+    /// so both REST and WS share the pinned host. Otherwise (production) pin
+    /// only a `us_` credential that has no configured upstream — the safety net
+    /// for the global gateway. A configured upstream (a regional `-hk` / `-us`
+    /// cluster) always wins, and a non-`us_` credential is always left to the
+    /// SDK.
+    fn should_pin(pinned_env: bool, override_configured: bool, is_us: bool) -> bool {
+        pinned_env || (!override_configured && is_us)
+    }
+
+    /// Whether this request's upstream must be pinned to [`crate::endpoints`]
+    /// rather than left to the SDK's own env/geolocation resolution.
+    ///
+    /// Canary and mainland pin all three URLs together (deterministic, no
+    /// drift). On production, when this declines to pin, the SDK resolves each
+    /// URL independently — a deployment that configures only some of them can
+    /// split REST and WS across hosts, so a regional cluster should configure
+    /// them consistently (or set `LONGBRIDGE_REGION`, which also selects the
+    /// pinned mainland environment).
     fn pin_upstream(&self) -> bool {
-        if crate::endpoints::current() == crate::endpoints::Environment::Canary {
-            return true;
-        }
-        // A deployment-configured upstream wins even for `us_` credentials, so a
-        // regional cluster (`.cn` / `-hk` / `-us`) is never overridden.
-        std::env::var("LONGBRIDGE_HTTP_URL").is_err()
-            && longbridge::DcRegion::from_credential(&self.token) == longbridge::DcRegion::Us
+        let pinned_env = matches!(
+            crate::endpoints::current(),
+            crate::endpoints::Environment::Canary | crate::endpoints::Environment::Mainland
+        );
+        Self::should_pin(
+            pinned_env,
+            Self::http_url_override_configured(),
+            longbridge::DcRegion::from_credential(&self.token) == longbridge::DcRegion::Us,
+        )
     }
 
     /// Build an SDK `Config` for this request. See `pin_upstream` for
@@ -765,8 +792,10 @@ impl McpContext {
     }
 
     /// Build an SDK `HttpClient` for this request. The base URL follows the same
-    /// rule as [`McpContext::create_config`] (`pin_upstream`), so REST
-    /// calls can never drift to a different access point than the WebSocket.
+    /// rule as [`McpContext::create_config`] (`pin_upstream`): when pinned, REST
+    /// and the WebSocket share the pinned host. When not pinned, both are left to
+    /// the SDK, which resolves REST and each WS URL independently — so they only
+    /// stay co-located if the deployment configures its upstreams consistently.
     pub fn create_http_client(&self) -> longbridge::httpclient::HttpClient {
         let mut http_config = longbridge::httpclient::HttpClientConfig::from_oauth(
             longbridge::oauth::OAuth::from_token(&self.token),
@@ -5701,9 +5730,13 @@ mod tests {
     #[tokio::test]
     async fn upstream_request_carries_synthesized_user_agent() {
         // The `us_` token pins the upstream so `UPSTREAM_OVERRIDE` can redirect
-        // it. A shell that exports the HTTP override would leave the token
-        // unpinned, so skip rather than fire at a real host.
-        if std::env::var(["LONGBRIDGE", "HTTP_URL"].join("_")).is_ok() {
+        // it. A shell that exports an HTTP override would leave the token
+        // unpinned, so skip (visibly) rather than fire at a real host.
+        if super::McpContext::http_url_override_configured() {
+            eprintln!(
+                "skipping upstream_request_carries_synthesized_user_agent: an HTTP upstream \
+                 override is set, which unpins the us_ path"
+            );
             return;
         }
         use std::io::{Read, Write};
@@ -5775,36 +5808,56 @@ mod tests {
         );
     }
 
-    /// Outside canary (the test default is production), `ap_`/mainland
-    /// credentials are always left to the SDK so a regional cluster keeps its own
-    /// upstream; `us_` credentials are pinned only as a safety net, when the
-    /// deployment configured no `HTTP_URL` override. This is the regression guard
-    /// for the mainland connection-refused incident.
+    /// The pin decision, exhaustively. This is the regression guard for the
+    /// mainland connection-refused incident: it pins the SDK only for canary and
+    /// for an un-configured `us_` credential, and leaves every other case to the
+    /// SDK (which is how the mainland cluster reaches `.cn`). Tested through the
+    /// pure `should_pin` so it needs no `unsafe` env mutation and covers the
+    /// "configured upstream suppresses the us_ pin" branch that a live env cannot.
     #[test]
-    fn pin_upstream_only_for_us_credentials_without_a_configured_upstream() {
-        let ctx = |token: &str| super::McpContext {
-            token: token.to_string(),
+    fn should_pin_covers_every_case() {
+        use super::McpContext;
+        // (pinned_env, override_configured, is_us) -> pinned?
+        // `pinned_env` = canary or mainland (both pinned unconditionally).
+        let cases = [
+            // A pinned environment pins no matter what.
+            ((true, false, false), true),
+            ((true, true, false), true),
+            ((true, true, true), true),
+            // Production: only an un-configured us_ credential is pinned.
+            ((false, false, true), true),
+            // A configured upstream suppresses the us_ pin (regional host wins).
+            ((false, true, true), false),
+            // Non-us credentials on production are always left to the SDK.
+            ((false, false, false), false),
+            ((false, true, false), false),
+        ];
+        for ((pinned_env, override_configured, is_us), expected) in cases {
+            assert_eq!(
+                McpContext::should_pin(pinned_env, override_configured, is_us),
+                expected,
+                "should_pin(pinned_env={pinned_env}, override={override_configured}, us={is_us})"
+            );
+        }
+    }
+
+    /// End-to-end sanity through `pin_upstream`: on production (the test
+    /// default), an `ap_` credential is never pinned regardless of ambient env,
+    /// so a regional cluster's configured upstream is honoured. (In the mainland
+    /// environment the same credential *would* be pinned to `.cn`; that path is
+    /// covered by `should_pin_covers_every_case`'s `pinned_env` cases.)
+    #[test]
+    fn pin_upstream_defers_ap_credentials_on_production() {
+        let ctx = super::McpContext {
+            token: "ap_token".to_string(),
             language: None,
             client_user_agent: None,
             extra_headers: Vec::new(),
         };
-        // Mainland/ap credentials defer to the SDK's upstream regardless of any
-        // configured override — this is what lets the CN cluster reach `.cn`.
         assert!(
-            !ctx("ap_token").pin_upstream(),
-            "mainland/ap credentials must be left to the SDK's own upstream"
+            !ctx.pin_upstream(),
+            "ap credentials on production must be left to the SDK's own upstream"
         );
-        // The us_ safety net only fires when no upstream override is configured.
-        // A deployment-configured HTTP override (every prod cluster sets one)
-        // must suppress it so `-hk`/`-us`/`.cn` hosts are honoured. Guarded so a
-        // developer shell that exports the override does not fail the assertion.
-        let http_url_var = ["LONGBRIDGE", "HTTP_URL"].join("_");
-        if std::env::var(&http_url_var).is_err() {
-            assert!(
-                ctx("us_token").pin_upstream(),
-                "us_ credentials pin to the global gateway when no upstream is configured"
-            );
-        }
     }
 
     #[test]
@@ -6136,9 +6189,13 @@ mod quote_cmd_tests {
     #[tokio::test]
     async fn upstream_request_carries_x_mcp_tool_and_user_agent() {
         // The `us_` token pins the upstream so `UPSTREAM_OVERRIDE` can redirect
-        // it; a shell that exports the HTTP override would leave it unpinned, so
-        // skip rather than fire at a real host.
-        if std::env::var(["LONGBRIDGE", "HTTP_URL"].join("_")).is_ok() {
+        // it; a shell that exports an HTTP override would leave it unpinned, so
+        // skip (visibly) rather than fire at a real host.
+        if super::McpContext::http_url_override_configured() {
+            eprintln!(
+                "skipping upstream_request_carries_x_mcp_tool_and_user_agent: an HTTP upstream \
+                 override is set, which unpins the us_ path"
+            );
             return;
         }
         let (port, rx) = spawn_capture_server().await;
@@ -6246,14 +6303,17 @@ mod quote_cmd_tests {
         );
     }
 
-    /// Guard: this crate reads no upstream URL from the environment except the
-    /// one [`McpContext::pin_upstream`] deliberately consults — the `HTTP_URL`
-    /// override that lets a regional cluster (`.cn` / `-hk` / `-us`) keep its own
-    /// upstream. Everything else (the quote/trade WS URLs, the region, and every
-    /// `LONGPORT_` alias) must be resolved by the SDK, not read back here, or the
-    /// per-host ambiguity would creep back in. Structural rather than behavioral
-    /// on purpose — asserting it by setting the variables would need `unsafe` env
-    /// mutation, which the crate forbids.
+    /// Guard: this crate reads only a small, deliberate allowlist of upstream
+    /// env vars; everything else (the quote/trade WS URLs, and the `LONGPORT_`
+    /// region alias) must be resolved by the SDK, not read back here, or the
+    /// per-host ambiguity would creep back in. The allowlist is the HTTP
+    /// override in both spellings the SDK honours (`LONGBRIDGE_HTTP_URL` /
+    /// `LONGPORT_HTTP_URL`), which `McpContext::pin_upstream` consults so a
+    /// regional `-hk`/`-us` cluster keeps its own upstream; plus
+    /// `LONGBRIDGE_REGION`, the startup environment selector read once in
+    /// `main::load_config` (`cn` selects the mainland environment). Structural
+    /// rather than behavioral on purpose — asserting it by setting the variables
+    /// would need `unsafe` env mutation, which the crate forbids.
     #[test]
     fn upstream_urls_are_never_read_from_the_environment() {
         // Assembled from parts so this test does not match its own source.
@@ -6263,13 +6323,11 @@ mod quote_cmd_tests {
             .iter()
             .flat_map(|prefix| {
                 SUFFIXES.iter().filter_map(move |suffix| {
-                    // The sole allowed read: the base HTTP override, consulted by
-                    // `pin_upstream` to yield to a deployment-configured upstream.
-                    if *prefix == "LONGBRIDGE" && *suffix == "HTTP_URL" {
-                        None
-                    } else {
-                        Some(format!("{prefix}_{suffix}"))
-                    }
+                    let name = format!("{prefix}_{suffix}");
+                    // Allowlist: both HTTP_URL spellings (the override), and
+                    // LONGBRIDGE_REGION (the startup environment selector).
+                    let allowed = *suffix == "HTTP_URL" || name == "LONGBRIDGE_REGION";
+                    if allowed { None } else { Some(name) }
                 })
             })
             .collect();

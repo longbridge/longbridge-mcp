@@ -179,20 +179,22 @@ Config lives at `~/.longbridge/mcp/config.json` (override the directory with `LO
 | Log directory | `log_dir` | `--log-dir` | *(stderr)* | Directory for rolling log files |
 | TLS certificate | `tls_cert` | `--tls-cert` | *(none)* | PEM certificate file for HTTPS |
 | TLS private key | `tls_key` | `--tls-key` | *(none)* | PEM private key file for HTTPS |
-| Canary upstream | `canary` | `--canary` | `false` | Talk to the Longbridge canary environment (`*.longbridge.xyz`) instead of production. `--canary=false` forces production even when the config file enables it |
+| Canary upstream | `canary` | `--canary` | `false` | Talk to the Longbridge canary environment (`*.longbridge.xyz`). `--canary=false` forces production even when the config file enables it |
 
-**Upstream endpoints** are fixed by the mode, not by the environment:
+The mainland-China environment (`*.longbridge.cn`) is not a flag: it is auto-selected when `LONGBRIDGE_REGION=cn` is set (the same variable the SDK uses), so a mainland cluster needs no dedicated setting.
 
-| | Production (default) | Canary (`--canary`) |
-|---|---|---|
-| OpenAPI | `https://openapi.longbridge.com` | `https://openapi-global.longbridge.xyz` |
-| Quote WebSocket | `wss://openapi-quote.longbridge.com/v2` | `wss://openapi-global-quote.longbridge.xyz/v2` |
-| Trade WebSocket | `wss://openapi-trade.longbridge.com/v2` | `wss://openapi-global-trade.longbridge.xyz/v2` |
-| OAuth / connect page | `openapi.longbridge.com` / `open.longbridge.com` | `openapi-global.longbridge.xyz` / `open.longbridge.xyz` |
+**Upstream endpoints** are fixed by the selected environment:
+
+| | Production (default) | Canary (`--canary`) | Mainland (`LONGBRIDGE_REGION=cn`) |
+|---|---|---|---|
+| OpenAPI | `https://openapi.longbridge.com` | `https://openapi-global.longbridge.xyz` | `https://openapi.longbridge.cn` |
+| Quote WebSocket | `wss://openapi-quote.longbridge.com/v2` | `wss://openapi-global-quote.longbridge.xyz/v2` | `wss://openapi-quote.longbridge.cn/v2` |
+| Trade WebSocket | `wss://openapi-trade.longbridge.com/v2` | `wss://openapi-global-trade.longbridge.xyz/v2` | `wss://openapi-trade.longbridge.cn/v2` |
+| OAuth / connect page | `openapi.longbridge.com` / `open.longbridge.com` | `openapi-global.longbridge.xyz` / `open.longbridge.xyz` | `openapi.longbridge.cn` / `open.longbridge.cn` |
 
 Canary uses the `-global` gateway, not `openapi.longbridge.xyz`: only the former is CloudFront-fronted and performs `x-dc-region` data-center routing, which this server depends on to serve `us_`- and `ap_`-prefixed credentials from one process.
 
-All three are set explicitly on the SDK, so `LONGBRIDGE_HTTP_URL`, `LONGBRIDGE_QUOTE_WS_URL`, `LONGBRIDGE_TRADE_WS_URL`, their `LONGPORT_*` aliases, `LONGBRIDGE_REGION`, and a `.env` file are all inert — as is the SDK's geolocation probe, which means the `openapi.longbridge.cn` access point is never selected. Which data center serves a request is unaffected: that is decided by the `x-dc-region` header the SDK derives from the credential's `us_` / `ap_` prefix.
+**Canary and mainland** pin all of the above explicitly, so their `LONGBRIDGE_*`/`LONGPORT_*` URL vars, geolocation probe, and `.env` are inert (the environment is chosen once at startup — for mainland, from `LONGBRIDGE_REGION`). **Production** pins the global `.com` gateway only for `us_` credentials that have no `LONGBRIDGE_HTTP_URL`/`LONGPORT_HTTP_URL` override; a regional `.com` cluster (e.g. `openapi-hk` / `openapi-us`) that sets one keeps its own upstream, and other credentials fall to the SDK's own resolution. Which data center serves a request is independent of the host: it is decided by the `x-dc-region` header the SDK derives from the credential's `us_` / `ap_` prefix.
 
 Advanced environment variables — most deployments never touch these; they exist for SDK debugging and edge/global-entry deployments.
 

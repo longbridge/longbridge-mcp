@@ -240,7 +240,7 @@ Every tool call is wrapped with `measured_tool_call()` which records timing and 
 
 ## Configuration
 
-The server reads configuration from CLI arguments (highest priority), a JSON config file (`~/.longbridge/mcp/config.json`), and environment variables. Upstream endpoints are the exception: they are fixed at startup by the `canary` setting and set explicitly on the SDK, so no environment variable influences them and the SDK never geolocates an access point (`geotest.lbkrs.com` is not probed and `openapi.longbridge.cn` is never selected). Key settings:
+The server reads configuration from CLI arguments (highest priority), a JSON config file (`~/.longbridge/mcp/config.json`), and environment variables. The upstream environment is fixed once at startup: the `--canary` flag (or the config file) first, then `LONGBRIDGE_REGION=cn` auto-selects the mainland environment (there is no `--mainland` flag). Canary and mainland then pin every upstream URL (data plane and OAuth/connect plane) explicitly to their `.xyz`/`.cn` hosts, so no other environment variable and no geolocation probe influences them. Production pins the global `.com` gateway only for `us_` credentials with no `LONGBRIDGE_HTTP_URL`/`LONGPORT_HTTP_URL` override, and otherwise defers to the SDK's own resolution so a regional `.com` cluster (`openapi-hk`/`openapi-us`) keeps its configured host. Key settings:
 
 | Setting | Purpose |
 |---------|---------|
