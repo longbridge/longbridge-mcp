@@ -324,6 +324,7 @@ mod tests {
         for env in [
             crate::endpoints::Environment::Production,
             crate::endpoints::Environment::Canary,
+            crate::endpoints::Environment::Mainland,
         ] {
             let connect = env.connect_page_url();
             assert_eq!(

@@ -64,8 +64,9 @@ struct Cli {
     tls_key: Option<PathBuf>,
 
     /// Talk to the canary Longbridge environment (`*.longbridge.xyz`) instead
-    /// of production (`*.longbridge.com`). `--canary=false` forces production
-    /// even when the config file enables canary.
+    /// of production (`*.longbridge.com`). `--canary=false` disables canary even
+    /// when the config file enables it (the mainland environment is still
+    /// auto-selected from `LONGBRIDGE_REGION=cn` independently of this flag).
     #[arg(long, num_args = 0..=1, default_missing_value = "true")]
     canary: Option<bool>,
 
@@ -129,17 +130,37 @@ fn load_config() -> AppConfig {
         log_dir: cli.log_dir.or(file_config.log_dir),
         tls_cert,
         tls_key,
-        environment: resolve_environment(cli.canary, file_config.canary),
+        environment: resolve_environment(cli.canary, file_config.canary, region_env().as_deref()),
         stdio: cli.stdio,
     }
 }
 
-/// Pick the upstream environment from the CLI flag and the config file, CLI
-/// first. Both are `Option<bool>` so `--canary=false` can force production on a
-/// host whose config file enables canary.
-fn resolve_environment(cli: Option<bool>, file: Option<bool>) -> Environment {
-    if cli.or(file).unwrap_or(false) {
+/// The region-selector env value, mirroring the SDK's `is_cn()`:
+/// `LONGBRIDGE_REGION` first, then the `LONGPORT_REGION` alias. Read once at
+/// startup — the only environment variable that influences routing (see
+/// [`crate::endpoints`]). Consulting both names keeps this consistent with the
+/// SDK's own resolution, so a `cn` alias cannot select mainland for the SDK
+/// while leaving this process on production.
+fn region_env() -> Option<String> {
+    std::env::var("LONGBRIDGE_REGION")
+        .or_else(|_| std::env::var("LONGPORT_REGION"))
+        .ok()
+}
+
+/// Pick the upstream environment. `--canary` (CLI over config file) selects
+/// canary; otherwise `region == "cn"` selects the mainland environment, so a
+/// mainland cluster needs no dedicated flag; everything else is production.
+/// `--canary=false` turns canary off but does not by itself force production —
+/// the region selector still applies.
+fn resolve_environment(
+    cli_canary: Option<bool>,
+    file_canary: Option<bool>,
+    region: Option<&str>,
+) -> Environment {
+    if cli_canary.or(file_canary).unwrap_or(false) {
         Environment::Canary
+    } else if region.is_some_and(|r| r.trim().eq_ignore_ascii_case("cn")) {
+        Environment::Mainland
     } else {
         Environment::Production
     }
@@ -186,10 +207,14 @@ fn print_startup_banner(config: &AppConfig, tools: usize, v2_tools: usize) {
         crate::endpoints::http_url(),
         crate::endpoints::quote_ws_url()
     );
-    if config.environment == Environment::Canary {
-        eprintln!(
+    match config.environment {
+        Environment::Canary => eprintln!(
             "  {d}Mode{r}       {y}CANARY{r} {d}— upstream is the Longbridge canary environment, not production{r}"
-        );
+        ),
+        Environment::Mainland => eprintln!(
+            "  {d}Mode{r}       {y}MAINLAND{r} {d}— upstream is the mainland-China environment (*.longbridge.cn){r}"
+        ),
+        Environment::Production => {}
     }
     eprintln!();
     eprintln!("  {b}Endpoints{r}");
@@ -301,6 +326,7 @@ mod tests {
 
     #[test]
     fn canary_precedence_matrix() {
+        // (cli_canary, file_canary, expected) with no mainland flag / region.
         let cases = [
             (None, None, Environment::Production),
             (Some(true), None, Environment::Canary),
@@ -315,10 +341,49 @@ mod tests {
 
         for (cli, file, expected) in cases {
             assert_eq!(
-                resolve_environment(cli, file),
+                resolve_environment(cli, file, None),
                 expected,
-                "cli={cli:?} file={file:?}"
+                "canary cli={cli:?} file={file:?}"
             );
         }
+    }
+
+    #[test]
+    fn region_env_auto_selects_mainland() {
+        // With no canary flag, LONGBRIDGE_REGION=cn (case-insensitive) selects
+        // mainland — a mainland cluster needs no dedicated flag.
+        assert_eq!(
+            resolve_environment(None, None, Some("cn")),
+            Environment::Mainland
+        );
+        assert_eq!(
+            resolve_environment(None, None, Some("CN")),
+            Environment::Mainland
+        );
+        // Any other region (or none) stays production.
+        assert_eq!(
+            resolve_environment(None, None, Some("hk")),
+            Environment::Production
+        );
+        assert_eq!(
+            resolve_environment(None, None, None),
+            Environment::Production
+        );
+        // Surrounding whitespace (common in k8s configmaps / .env) is tolerated.
+        assert_eq!(
+            resolve_environment(None, None, Some("cn\n")),
+            Environment::Mainland
+        );
+        // `--canary` wins over the region auto-detect.
+        assert_eq!(
+            resolve_environment(Some(true), None, Some("cn")),
+            Environment::Canary
+        );
+        // `--canary=false` disables canary but does not suppress the region
+        // auto-detect: a mainland pod still resolves to mainland.
+        assert_eq!(
+            resolve_environment(Some(false), None, Some("cn")),
+            Environment::Mainland
+        );
     }
 }

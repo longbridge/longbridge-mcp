@@ -10,18 +10,36 @@
 //! talks to different hosts depending on where it runs and what happens to be
 //! in the environment.
 //!
-//! This module removes that ambiguity: the environment is chosen once at
-//! startup ([`init`], from `--canary` / the config file) and every upstream URL
-//! is set explicitly on the SDK afterwards, so no environment variable and no
-//! geolocation probe can influence it.
+//! This module pins those URLs to fixed literals per [`Environment`], chosen
+//! once at startup ([`init`]) and read back via [`current`]. The environment is
+//! selected by `main`'s config resolution: the `--canary` flag (or the config
+//! file) first, then `LONGBRIDGE_REGION=cn` auto-selects
+//! [`Environment::Mainland`]. That is the *only* environment variable that
+//! influences routing, it is read once at startup as an environment selector,
+//! and this module itself reads none and runs no geolocation probe.
 //!
-//! # `.cn` is deliberately absent
+//! - **Canary** and **Mainland** are pinned unconditionally: both the data
+//!   plane (REST/quote/trade) and the auth plane (OAuth/connect/redirect)
+//!   resolve to their `.xyz` / `.cn` hosts, deterministically, with no SDK
+//!   geolocation and no REST/WS drift.
+//! - **Production** is the exception. `McpContext::pin_upstream` (in
+//!   `crate::tools`) pins the upstream only for a `us_` credential on a host
+//!   with no configured upstream (a safety net for the global gateway);
+//!   otherwise it leaves the SDK's own env resolution in place, so a regional
+//!   `.com` cluster reaches its configured host (`openapi-hk` / `openapi-us`)
+//!   via `LONGBRIDGE_HTTP_URL`. The auth plane still follows [`current`] =
+//!   production `.com`.
 //!
-//! Mainland acceleration through `openapi.longbridge.cn` is not used. `.cn` has
-//! no path to the US data center, so a `us_`-prefixed credential sent there
-//! authenticates but fails every market-data request with
-//! `301604 no quote access` — a failure that reads like a missing permission
-//! and is not one. `.com` serves both data centers, so it is the only host.
+//! # `.cn` is for the mainland environment only
+//!
+//! The global `.com` deployment must never be pointed at
+//! `openapi.longbridge.cn`: `.cn` has no path to the US data center, so a
+//! `us_`-prefixed credential sent there authenticates but fails every
+//! market-data request with `301604 no quote access` — a failure that reads
+//! like a missing permission and is not one. `.com` serves both data centers,
+//! so it is the only host for the global deployment. [`Environment::Mainland`]
+//! is the exception: it is a dedicated deployment serving only `cn`/`ap`
+//! credentials and talks exclusively to `*.longbridge.cn` on both planes.
 //!
 //! Host selection and data-center routing are two independent things: which
 //! data center serves a request is decided by the `x-dc-region` header, which
@@ -30,11 +48,14 @@
 //!
 //! # Scope
 //!
-//! Everything this server sends upstream, plus the OAuth URLs it advertises and
-//! the connect page it points users at, follows [`current`]. Static tool
-//! metadata cannot: it is made of literals. Those name
-//! [`STATIC_CONNECT_PAGE`] and are retargeted once at startup — which is why
-//! [`init`] must run before the first `tools/list`.
+//! The OAuth URLs this server advertises and the connect page it points users
+//! at always follow [`current`] (so mainland authenticates against `.cn`). The
+//! upstream REST/WS URLs also follow it whenever `McpContext::pin_upstream`
+//! pins them (always for canary/mainland; for a us_ safety net on production);
+//! otherwise the SDK resolves them. Static tool metadata cannot follow it
+//! dynamically: it is made of literals. Those name [`STATIC_CONNECT_PAGE`] and
+//! are retargeted once at startup — which is why [`init`] must run before the
+//! first `tools/list`.
 
 use std::sync::OnceLock;
 
@@ -61,6 +82,11 @@ pub enum Environment {
     Production,
     /// Canary (`*.longbridge.xyz`).
     Canary,
+    /// Mainland China (`*.longbridge.cn`) — a dedicated deployment serving only
+    /// `cn`/`ap` credentials. Selected automatically when `LONGBRIDGE_REGION=cn`;
+    /// see [`crate::endpoints`] module docs. Both the data plane and the
+    /// OAuth/connect plane resolve to `.cn`.
+    Mainland,
 }
 
 impl Environment {
@@ -69,6 +95,7 @@ impl Environment {
         match self {
             Environment::Production => "https://openapi.longbridge.com",
             Environment::Canary => CANARY_GLOBAL_GATEWAY,
+            Environment::Mainland => "https://openapi.longbridge.cn",
         }
     }
 
@@ -77,6 +104,7 @@ impl Environment {
         match self {
             Environment::Production => "wss://openapi-quote.longbridge.com/v2",
             Environment::Canary => "wss://openapi-global-quote.longbridge.xyz/v2",
+            Environment::Mainland => "wss://openapi-quote.longbridge.cn/v2",
         }
     }
 
@@ -85,18 +113,20 @@ impl Environment {
         match self {
             Environment::Production => "wss://openapi-trade.longbridge.com/v2",
             Environment::Canary => "wss://openapi-global-trade.longbridge.xyz/v2",
+            Environment::Mainland => "wss://openapi-trade.longbridge.cn/v2",
         }
     }
 
     /// OAuth base URL: the authorization server advertised in the RFC 8414 /
     /// RFC 9728 metadata and the host the `authenticate` tool exchanges codes
-    /// against. The same host as [`Environment::http_url`] in both
-    /// environments, kept as its own method so the two can diverge without
+    /// against. The same host as [`Environment::http_url`] in every
+    /// environment, kept as its own method so the two can diverge without
     /// touching callers.
     pub fn oauth_url(self) -> &'static str {
         match self {
             Environment::Production => "https://openapi.longbridge.com",
             Environment::Canary => CANARY_GLOBAL_GATEWAY,
+            Environment::Mainland => "https://openapi.longbridge.cn",
         }
     }
 
@@ -105,6 +135,7 @@ impl Environment {
         match self {
             Environment::Production => STATIC_CONNECT_PAGE,
             Environment::Canary => "https://open.longbridge.xyz/connect",
+            Environment::Mainland => "https://open.longbridge.cn/connect",
         }
     }
 
@@ -115,6 +146,7 @@ impl Environment {
         match self {
             Environment::Production => "https://open.longbridge.com/connect/done",
             Environment::Canary => "https://open.longbridge.xyz/connect/done",
+            Environment::Mainland => "https://open.longbridge.cn/connect/done",
         }
     }
 
@@ -123,6 +155,7 @@ impl Environment {
         match self {
             Environment::Production => "production",
             Environment::Canary => "canary",
+            Environment::Mainland => "mainland",
         }
     }
 }
@@ -154,8 +187,9 @@ pub const STATIC_CONNECT_PAGE: &str = "https://open.longbridge.com/connect";
 /// An OAuth scope this server advertises in its RFC 8414 / RFC 9728 metadata.
 ///
 /// The authorization server identifies scopes by *numeric id* in the `scope`
-/// request parameter, and those ids are environment-specific: production uses
-/// `4/6/10/11` while canary uses `18/20/21/24` for the same four concepts
+/// request parameter, and those ids are environment-specific: production and
+/// mainland use `4/6/10/11` while canary uses `18/20/21/24` for the same four
+/// concepts
 /// (observed from dynamic client registration, which reports each
 /// environment's available set — `4 6 10 11 12` vs `18 20 21 24 25`). The
 /// stable identifier is the `key`, which is what the token endpoint echoes back
@@ -196,6 +230,13 @@ impl Scope {
             (Scope::AccountRead, Environment::Canary) => "20",
             (Scope::TradeRead, Environment::Canary) => "21",
             (Scope::TradeWrite, Environment::Canary) => "24",
+            // Mainland's authorization server (openapi.longbridge.cn) uses the
+            // same numeric ids as production (4/6/10/11), confirmed from its
+            // RFC 8414 metadata.
+            (Scope::Watchlist, Environment::Mainland) => "4",
+            (Scope::AccountRead, Environment::Mainland) => "6",
+            (Scope::TradeRead, Environment::Mainland) => "10",
+            (Scope::TradeWrite, Environment::Mainland) => "11",
         }
     }
 }
@@ -326,6 +367,15 @@ mod tests {
                 "https://open.longbridge.xyz/connect",
                 "https://open.longbridge.xyz/connect/done",
             ),
+            (
+                Environment::Mainland,
+                "https://openapi.longbridge.cn",
+                "wss://openapi-quote.longbridge.cn/v2",
+                "wss://openapi-trade.longbridge.cn/v2",
+                "https://openapi.longbridge.cn",
+                "https://open.longbridge.cn/connect",
+                "https://open.longbridge.cn/connect/done",
+            ),
         ];
 
         for (env, http, quote_ws, trade_ws, oauth, connect, redirect) in cases {
@@ -350,10 +400,15 @@ mod tests {
     /// arm, or vice versa.
     #[test]
     fn every_url_matches_its_environment_domain() {
-        for env in [Environment::Production, Environment::Canary] {
+        for env in [
+            Environment::Production,
+            Environment::Canary,
+            Environment::Mainland,
+        ] {
             let expected = match env {
                 Environment::Production => "longbridge.com",
                 Environment::Canary => "longbridge.xyz",
+                Environment::Mainland => "longbridge.cn",
             };
             for url in [
                 env.http_url(),
@@ -375,7 +430,11 @@ mod tests {
     /// trailing slash here would produce a double slash upstream.
     #[test]
     fn base_urls_have_no_trailing_slash() {
-        for env in [Environment::Production, Environment::Canary] {
+        for env in [
+            Environment::Production,
+            Environment::Canary,
+            Environment::Mainland,
+        ] {
             assert!(!env.http_url().ends_with('/'), "http_url for {env:?}");
             assert!(!env.oauth_url().ends_with('/'), "oauth_url for {env:?}");
         }
@@ -405,6 +464,14 @@ mod tests {
                 "production id for `{}` disagrees with data/scopes.json",
                 scope.key()
             );
+            // Mainland shares production's numeric ids, so the same catalogue
+            // pins it too.
+            assert_eq!(
+                scope.id(Environment::Mainland),
+                scope.id(Environment::Production),
+                "mainland id for `{}` must match production",
+                scope.key()
+            );
         }
     }
 
@@ -412,7 +479,11 @@ mod tests {
     /// the `/v2` set must never carry trade execution.
     #[test]
     fn scope_sets_are_well_formed() {
-        for env in [Environment::Production, Environment::Canary] {
+        for env in [
+            Environment::Production,
+            Environment::Canary,
+            Environment::Mainland,
+        ] {
             let ids: Vec<&str> = SCOPES.iter().map(|s| s.id(env)).collect();
             let mut unique = ids.clone();
             unique.sort_unstable();
