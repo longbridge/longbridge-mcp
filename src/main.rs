@@ -1,8 +1,12 @@
 #![recursion_limit = "256"]
+// Nothing in this crate needs `unsafe`. It is forbidden mainly to keep tests
+// from reaching for `std::env::set_var` to redirect upstream URLs — see
+// `crate::endpoints::UPSTREAM_OVERRIDE` for the supported way to do that.
+#![forbid(unsafe_code)]
 
 mod auth;
 mod context_pool;
-mod counter;
+mod endpoints;
 mod error;
 mod logging;
 mod metrics;
@@ -21,6 +25,8 @@ use clap::Parser;
 use serde::Deserialize;
 use tokio::net::TcpListener;
 
+use crate::endpoints::Environment;
+
 fn default_bind() -> SocketAddr {
     "127.0.0.1:8000".parse().unwrap()
 }
@@ -32,6 +38,7 @@ struct FileConfig {
     log_dir: Option<PathBuf>,
     tls_cert: Option<PathBuf>,
     tls_key: Option<PathBuf>,
+    canary: Option<bool>,
 }
 
 #[derive(Debug, Parser)]
@@ -57,6 +64,13 @@ struct Cli {
     #[arg(long)]
     tls_key: Option<PathBuf>,
 
+    /// Talk to the canary Longbridge environment (`*.longbridge.xyz`) instead
+    /// of production (`*.longbridge.com`). `--canary=false` disables canary even
+    /// when the config file enables it (the mainland environment is still
+    /// auto-selected from `LONGBRIDGE_REGION=cn` independently of this flag).
+    #[arg(long, num_args = 0..=1, default_missing_value = "true")]
+    canary: Option<bool>,
+
     /// Run as a stdio MCP server instead of HTTP.
     /// Exposes tools/list without authentication for directory scanners
     /// (e.g. Glama).  tools/call will return auth errors for upstream
@@ -72,6 +86,8 @@ pub struct AppConfig {
     pub log_dir: Option<PathBuf>,
     pub tls_cert: Option<PathBuf>,
     pub tls_key: Option<PathBuf>,
+    pub environment: Environment,
+    pub stdio: bool,
 }
 
 fn config_path() -> PathBuf {
@@ -115,6 +131,39 @@ fn load_config() -> AppConfig {
         log_dir: cli.log_dir.or(file_config.log_dir),
         tls_cert,
         tls_key,
+        environment: resolve_environment(cli.canary, file_config.canary, region_env().as_deref()),
+        stdio: cli.stdio,
+    }
+}
+
+/// The region-selector env value, mirroring the SDK's `is_cn()`:
+/// `LONGBRIDGE_REGION` first, then the `LONGPORT_REGION` alias. Read once at
+/// startup — the only environment variable that influences routing (see
+/// [`crate::endpoints`]). Consulting both names keeps this consistent with the
+/// SDK's own resolution, so a `cn` alias cannot select mainland for the SDK
+/// while leaving this process on production.
+fn region_env() -> Option<String> {
+    std::env::var("LONGBRIDGE_REGION")
+        .or_else(|_| std::env::var("LONGPORT_REGION"))
+        .ok()
+}
+
+/// Pick the upstream environment. `--canary` (CLI over config file) selects
+/// canary; otherwise `region == "cn"` selects the mainland environment, so a
+/// mainland cluster needs no dedicated flag; everything else is production.
+/// `--canary=false` turns canary off but does not by itself force production —
+/// the region selector still applies.
+fn resolve_environment(
+    cli_canary: Option<bool>,
+    file_canary: Option<bool>,
+    region: Option<&str>,
+) -> Environment {
+    if cli_canary.or(file_canary).unwrap_or(false) {
+        Environment::Canary
+    } else if region.is_some_and(|r| r.trim().eq_ignore_ascii_case("cn")) {
+        Environment::Mainland
+    } else {
+        Environment::Production
     }
 }
 
@@ -128,10 +177,10 @@ fn print_startup_banner(config: &AppConfig, tools: usize, v2_tools: usize) {
     use std::io::IsTerminal;
 
     let color = std::io::stderr().is_terminal();
-    let (b, d, c, r) = if color {
-        ("\x1b[1m", "\x1b[2m", "\x1b[36m", "\x1b[0m")
+    let (b, d, c, y, r) = if color {
+        ("\x1b[1m", "\x1b[2m", "\x1b[36m", "\x1b[33m", "\x1b[0m")
     } else {
-        ("", "", "", "")
+        ("", "", "", "", "")
     };
 
     let base = &config.base_url;
@@ -154,6 +203,20 @@ fn print_startup_banner(config: &AppConfig, tools: usize, v2_tools: usize) {
     eprintln!("  {d}Listening{r}  {scheme}://{}", config.bind);
     eprintln!("  {d}Base URL{r}   {base}");
     eprintln!("  {d}Logs{r}       {logs}");
+    eprintln!(
+        "  {d}Upstream{r}   {}  {d}{}{r}",
+        crate::endpoints::http_url(),
+        crate::endpoints::quote_ws_url()
+    );
+    match config.environment {
+        Environment::Canary => eprintln!(
+            "  {d}Mode{r}       {y}CANARY{r} {d}— upstream is the Longbridge canary environment, not production{r}"
+        ),
+        Environment::Mainland => eprintln!(
+            "  {d}Mode{r}       {y}MAINLAND{r} {d}— upstream is the mainland-China environment (*.longbridge.cn){r}"
+        ),
+        Environment::Production => {}
+    }
     eprintln!();
     eprintln!("  {b}Endpoints{r}");
     eprintln!(
@@ -190,11 +253,21 @@ async fn main() -> anyhow::Result<()> {
         .install_default()
         .expect("failed to install rustls crypto provider");
 
-    // stdio mode: serve via stdin/stdout for directory scanners like Glama.
-    // tools/list works without credentials; tools/call returns auth errors.
-    if std::env::args().any(|a| a == "--stdio") {
+    // Configuration is resolved before the transport branch so `--canary` and
+    // the config file apply to stdio mode too, and so the upstream endpoints
+    // are fixed before the first `list_tools()` bakes the tool descriptors.
+    let config = load_config();
+    if config.stdio {
         // In stdio mode stdout is the MCP transport; send all logs to stderr.
         crate::logging::init_stdio();
+    } else {
+        crate::logging::init(config.log_dir.as_deref());
+    }
+    crate::endpoints::init(config.environment);
+
+    // stdio mode: serve via stdin/stdout for directory scanners like Glama.
+    // tools/list works without credentials; tools/call returns auth errors.
+    if config.stdio {
         let tools = crate::tools::list_tools();
         // count includes all registered tools; authenticated clients on /mcp see one fewer
         // (the `authenticate` tool is only surfaced on the unauthenticated /agent endpoint).
@@ -209,9 +282,6 @@ async fn main() -> anyhow::Result<()> {
         }
         return Ok(());
     }
-
-    let config = load_config();
-    crate::logging::init(config.log_dir.as_deref());
 
     let app_state = Arc::new(crate::auth::AppState {
         base_url: config.base_url.clone(),
@@ -249,4 +319,72 @@ async fn main() -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn canary_precedence_matrix() {
+        // (cli_canary, file_canary, expected) with no mainland flag / region.
+        let cases = [
+            (None, None, Environment::Production),
+            (Some(true), None, Environment::Canary),
+            (None, Some(true), Environment::Canary),
+            (None, Some(false), Environment::Production),
+            // The CLI wins in both directions, which is why both sides are
+            // `Option<bool>`: `--canary=false` must be able to force production
+            // on a host whose config file enables canary.
+            (Some(false), Some(true), Environment::Production),
+            (Some(true), Some(false), Environment::Canary),
+        ];
+
+        for (cli, file, expected) in cases {
+            assert_eq!(
+                resolve_environment(cli, file, None),
+                expected,
+                "canary cli={cli:?} file={file:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn region_env_auto_selects_mainland() {
+        // With no canary flag, LONGBRIDGE_REGION=cn (case-insensitive) selects
+        // mainland — a mainland cluster needs no dedicated flag.
+        assert_eq!(
+            resolve_environment(None, None, Some("cn")),
+            Environment::Mainland
+        );
+        assert_eq!(
+            resolve_environment(None, None, Some("CN")),
+            Environment::Mainland
+        );
+        // Any other region (or none) stays production.
+        assert_eq!(
+            resolve_environment(None, None, Some("hk")),
+            Environment::Production
+        );
+        assert_eq!(
+            resolve_environment(None, None, None),
+            Environment::Production
+        );
+        // Surrounding whitespace (common in k8s configmaps / .env) is tolerated.
+        assert_eq!(
+            resolve_environment(None, None, Some("cn\n")),
+            Environment::Mainland
+        );
+        // `--canary` wins over the region auto-detect.
+        assert_eq!(
+            resolve_environment(Some(true), None, Some("cn")),
+            Environment::Canary
+        );
+        // `--canary=false` disables canary but does not suppress the region
+        // auto-detect: a mainland pod still resolves to mainland.
+        assert_eq!(
+            resolve_environment(Some(false), None, Some("cn")),
+            Environment::Mainland
+        );
+    }
 }

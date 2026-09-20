@@ -5,7 +5,6 @@
 //!
 //! - keys camelCase -> snake_case
 //! - fields ending `_at` / `OffsetDateTime` -> RFC3339 `String`
-//! - `counter_id` -> `symbol`, `counter_ids` -> `symbols` (value normalized to
 //!   `<CODE>.<MARKET>`); prefixed variants renamed in place
 //! - `aaid` / `account_channel` -> `null`
 //! - `Decimal` -> `String`
@@ -180,8 +179,8 @@ pub struct TopicCreateReplyResponse {
 }
 
 /// Returned by `alert_list`. The upstream price-alert payload, forwarded after
-/// the standard transform (note: upstream `counter_id` is renamed to `symbol`
-/// and `*_at` timestamps become RFC3339). Subset of the wire payload — only the
+/// the standard transform (`*_at` timestamps become RFC3339). Subset of the
+/// wire payload — only the
 /// documented fields are declared; all are optional.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct AlertListResponse {
@@ -193,7 +192,7 @@ pub struct AlertListResponse {
 /// A group of alert indicators configured for one security.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct AlertSymbolGroup {
-    /// Security symbol (upstream `counter_id`, normalized to `<CODE>.<MARKET>`).
+    /// Security symbol, e.g. `"AAPL.US"`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub symbol: Option<String>,
     /// Configured alert indicators for this symbol.
@@ -350,8 +349,8 @@ pub struct DcaStatsItem {
 }
 
 /// Returned by `dca_check`. DCA-eligibility result per queried symbol,
-/// forwarded after the standard transform (upstream `counter_ids` query →
-/// per-symbol items). Subset of the wire payload — only documented fields are
+/// forwarded after the standard transform (one item per queried symbol).
+/// Subset of the wire payload — only documented fields are
 /// declared; all optional.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct DcaCheckResponse {

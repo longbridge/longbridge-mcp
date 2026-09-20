@@ -26,3 +26,21 @@ impl Write for SharedBuffer {
         Ok(())
     }
 }
+
+/// Serializes every test that captures `tracing` output by installing a
+/// thread-local subscriber and calling `tracing::callsite::rebuild_interest_cache()`.
+///
+/// That interest cache is process-global: `rebuild_interest_cache()` recomputes
+/// every callsite's interest against the rebuilding thread's current subscriber
+/// and writes it to the shared cache. Two such tests running concurrently (the
+/// default under `cargo test`) therefore race — one can recompute a callsite the
+/// other is about to assert on, cache it as disabled, and silently swallow the
+/// event. The symptom is a log-capture test that passes alone but fails
+/// intermittently in the full suite.
+///
+/// Every capturing test across modules (`tools`, `auth`) takes this single lock,
+/// so at most one manipulates the global cache at a time. A `tokio::sync::Mutex`
+/// so it can be held across `.await` in the `#[tokio::test]` sites without
+/// tripping `clippy::await_holding_lock`.
+pub(crate) static LOG_CAPTURE_LOCK: std::sync::LazyLock<tokio::sync::Mutex<()>> =
+    std::sync::LazyLock::new(|| tokio::sync::Mutex::new(()));

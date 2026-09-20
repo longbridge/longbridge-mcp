@@ -12,11 +12,13 @@
 //!   raw JSON-RPC frames at TRACE.
 //!
 //! This crate's own code can too: `measured_tool_call` (`tools/mod.rs`) logs
-//! a tool failure's message text on `longbridge_mcp::tools::error_detail`.
-//! `src/error.rs` sanitizes the one known `longbridge` SDK error variant that
-//! embeds a raw upstream HTTP response body, but that target is capped here
-//! as well — a second line of defense for any error path the sanitizer
-//! doesn't cover, not a defense against dependencies alone.
+//! a failed call's input params (the caller's own `Debug`-formatted argument
+//! struct — a symbol, an order quantity, an auth code) and its resulting
+//! message text on `longbridge_mcp::tools::error_detail`. `src/error.rs`
+//! sanitizes the one known `longbridge` SDK error variant that embeds a raw
+//! upstream HTTP response body, but that target is capped here as well — a
+//! second line of defense for any error path the sanitizer doesn't cover,
+//! not a defense against dependencies alone.
 //!
 //! Those lines write customer account data and credentials to disk. Naming the
 //! quiet levels in a default `RUST_LOG` string is not enough, because setting

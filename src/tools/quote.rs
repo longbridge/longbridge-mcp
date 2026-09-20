@@ -1,15 +1,16 @@
 use longbridge::quote::{
-    RequestCreateWatchlistGroup, RequestUpdateWatchlistGroup, SecuritiesUpdateMode,
+    CalcIndex, RequestCreateWatchlistGroup, RequestUpdateWatchlistGroup, SecuritiesUpdateMode,
 };
 use rmcp::ErrorData as McpError;
 use rmcp::model::CallToolResult;
 use rmcp::schemars::JsonSchema;
 use rmcp::serde::Deserialize;
 
-use crate::counter::symbol_to_counter_id;
 use crate::error::Error;
 use crate::tools::output;
-use crate::tools::support::http_client::{http_get_tool, http_get_tool_unix};
+use crate::tools::support::http_client::{
+    http_get_tool, http_get_tool_unix, http_get_tool_unix_dropping,
+};
 use crate::tools::support::parse;
 use crate::tools::support::tolerant::{
     tolerant_bool, tolerant_i64, tolerant_option_usize, tolerant_option_vec_i32,
@@ -19,20 +20,30 @@ use crate::tools::tool_json;
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct SymbolsParam {
-    /// Security symbols, e.g. ["700.HK", "AAPL.US"]
+    /// Security symbols, e.g. ["700.HK", "AAPL.US"]. Use the canonical form — a padded code like "00700.HK" returns an empty record, not an error.
+    #[serde(deserialize_with = "tolerant_vec_string")]
+    pub symbols: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct OptionSymbolsParam {
+    /// Option contract symbols, e.g. ["AAPL230317P160000.US"]. These are NOT
+    /// plain stock symbols — get valid ones from `option_chain_info_by_date`'s
+    /// per-strike `call.symbol`/`put.symbol` fields (after listing expiry
+    /// dates with `option_chain_expiry_date_list`).
     #[serde(deserialize_with = "tolerant_vec_string")]
     pub symbols: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct SymbolParam {
-    /// Security symbol, e.g. "700.HK"
+    /// Security symbol, e.g. "700.HK". Use the canonical form — a padded code like "00700.HK" returns an empty record, not an error.
     pub symbol: String,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct IntradayParam {
-    /// Security symbol, e.g. "700.HK"
+    /// Security symbol, e.g. "700.HK". Use the canonical form — a padded code like "00700.HK" returns an empty record, not an error.
     pub symbol: String,
     /// Trade sessions to include: "intraday" (default, regular hours only) or "all" (include pre-market and post-market).
     pub trade_sessions: Option<String>,
@@ -40,7 +51,7 @@ pub struct IntradayParam {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct SymbolCountParam {
-    /// Security symbol, e.g. "700.HK"
+    /// Security symbol, e.g. "700.HK". Use the canonical form — a padded code like "00700.HK" returns an empty record, not an error.
     pub symbol: String,
     /// Maximum number of results (max 1000)
     #[serde(deserialize_with = "tolerant_usize")]
@@ -49,7 +60,7 @@ pub struct SymbolCountParam {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct CandlesticksParam {
-    /// Security symbol, e.g. "700.HK"
+    /// Security symbol, e.g. "700.HK". Use the canonical form — a padded code like "00700.HK" returns an empty record, not an error.
     pub symbol: String,
     /// Period: 1m, 5m, 15m, 30m, 60m, day, week, month, year (default: day)
     #[serde(default = "default_candlestick_period")]
@@ -82,7 +93,7 @@ fn default_trade_sessions() -> String {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct HistoryCandlesticksByOffsetParam {
-    /// Security symbol, e.g. "700.HK"
+    /// Security symbol, e.g. "700.HK". Use the canonical form — a padded code like "00700.HK" returns an empty record, not an error.
     pub symbol: String,
     /// Period: 1m, 5m, 15m, 30m, 60m, day, week, month, year (default: day)
     #[serde(default = "default_candlestick_period")]
@@ -108,7 +119,7 @@ pub struct HistoryCandlesticksByOffsetParam {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct HistoryCandlesticksByDateParam {
-    /// Security symbol, e.g. "700.HK"
+    /// Security symbol, e.g. "700.HK". Use the canonical form — a padded code like "00700.HK" returns an empty record, not an error.
     pub symbol: String,
     /// Period: 1m, 5m, 15m, 30m, 60m, day, week, month, year (default: day)
     #[serde(default = "default_candlestick_period")]
@@ -143,7 +154,7 @@ pub struct MarketDateRangeParam {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct SymbolDateParam {
-    /// Security symbol, e.g. "700.HK"
+    /// Security symbol, e.g. "700.HK". Use the canonical form — a padded code like "00700.HK" returns an empty record, not an error.
     pub symbol: String,
     /// Date (yyyy-mm-dd)
     pub date: String,
@@ -176,7 +187,7 @@ pub struct WarrantListParam {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct CalcIndexesParam {
-    /// Security symbols, e.g. ["700.HK", "AAPL.US"]
+    /// Security symbols, e.g. ["700.HK", "AAPL.US"]. Use the canonical form — a padded code like "00700.HK" returns an empty record, not an error.
     #[serde(deserialize_with = "tolerant_vec_string")]
     pub symbols: Vec<String>,
     /// Calc indexes (optional; defaults to LastDone, ChangeValue, ChangeRate, Volume, PeTtmRatio, PbRatio, DividendRatioTtm, TurnoverRate, TotalMarketValue): LastDone, ChangeValue, ChangeRate, Volume, Turnover, YtdChangeRate, TurnoverRate, TotalMarketValue, CapitalFlow, Amplitude, VolumeRatio, PeTtmRatio, PbRatio, DividendRatioTtm, FiveDayChangeRate, TenDayChangeRate, HalfYearChangeRate, FiveMinutesChangeRate, ExpiryDate, StrikePrice, UpperStrikePrice, LowerStrikePrice, OutstandingQty, OutstandingRatio, Premium, ItmOtm, ImpliedVolatility, WarrantDelta, CallPrice, ToCallPrice, EffectiveLeverage, LeverageRatio, ConversionRatio, BalancePoint, OpenInterest, Delta, Gamma, Theta, Vega, Rho
@@ -265,6 +276,11 @@ pub async fn static_info(
             results.push(serde_json::to_value(&entry).map_err(Error::Serialize)?);
         }
     }
+    // eps/eps_ttm/bps/dividend_yield arrive with ~16 fractional digits of bogus
+    // precision (e.g. eps "27.3458639853059994"); cap at 6 dp. Integer share
+    // counts and non-numeric fields are left untouched.
+    let mut results = serde_json::Value::Array(results);
+    crate::serialize::round_decimals(&mut results, 6);
     tool_json(&results)
 }
 
@@ -325,19 +341,79 @@ pub async fn quote(
     })?;
     let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;
     normalize_extended_sessions(&mut value);
+    // Non-US symbols carry `pre_market_quote`/`post_market_quote`/
+    // `overnight_quote` as `null`; drop those (and any other absent optional).
+    crate::serialize::strip_nulls(&mut value);
+    // Prices and turnover come padded to a fixed decimal width ("432.000",
+    // "…550.800"), on the main quote and every extended-session block; strip
+    // the non-significant trailing zeros (lossless).
+    crate::serialize::strip_trailing_zeros(&mut value);
     tool_json(&value)
 }
 
 pub async fn option_quote(
     mctx: &crate::tools::McpContext,
-    p: SymbolsParam,
+    p: OptionSymbolsParam,
 ) -> Result<CallToolResult, McpError> {
     let ctx = mctx.get_quote_context().await;
-    let result = ctx.option_quote(p.symbols).await.map_err(|e| {
-        mctx.evict_quote_context();
-        Error::longbridge(e)
-    })?;
-    tool_json(&result)
+    let result = match ctx.option_quote(p.symbols.clone()).await {
+        Ok(v) => v,
+        Err(e) => {
+            mctx.evict_quote_context();
+            let err: McpError = Error::longbridge(e).into();
+            if let Some(ok) = crate::tools::terminal_none_ok("option_quote", &err) {
+                return Ok(ok);
+            }
+            return Err(err);
+        }
+    };
+    let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;
+
+    // The `option_quote` interface does not carry the option Greeks — they come
+    // from the Calc Index interface. Fetch them for the same symbols and merge
+    // delta/gamma/theta/vega/rho into each quote (best-effort: a Greek lookup
+    // failure leaves the quotes unchanged).
+    let greek_indexes = vec![
+        CalcIndex::Delta,
+        CalcIndex::Gamma,
+        CalcIndex::Theta,
+        CalcIndex::Vega,
+        CalcIndex::Rho,
+    ];
+    if let Ok(mut greeks) = ctx.calc_indexes(p.symbols, greek_indexes).await {
+        let mut by_symbol: std::collections::HashMap<String, serde_json::Value> =
+            std::collections::HashMap::new();
+        for g in &mut greeks {
+            normalize_greeks(g);
+            by_symbol.insert(
+                g.symbol.clone(),
+                serde_json::json!({
+                    "delta": g.delta,
+                    "gamma": g.gamma,
+                    "theta": g.theta,
+                    "vega": g.vega,
+                    "rho": g.rho,
+                }),
+            );
+        }
+        if let Some(arr) = value.as_array_mut() {
+            for item in arr {
+                let sym = item
+                    .get("symbol")
+                    .and_then(|s| s.as_str())
+                    .map(String::from);
+                if let (Some(sym), Some(obj)) = (sym, item.as_object_mut())
+                    && let Some(g) = by_symbol.get(&sym).and_then(|v| v.as_object())
+                {
+                    for (k, v) in g {
+                        obj.insert(k.clone(), v.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    tool_json(&value)
 }
 
 pub async fn warrant_quote(
@@ -349,7 +425,10 @@ pub async fn warrant_quote(
         mctx.evict_quote_context();
         Error::longbridge(e)
     })?;
-    tool_json(&result)
+    // Cap warrant analytics precision at 6 dp (same as warrant_list).
+    let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;
+    crate::serialize::round_decimals(&mut value, 6);
+    tool_json(&value)
 }
 
 pub async fn depth(
@@ -361,7 +440,9 @@ pub async fn depth(
         mctx.evict_quote_context();
         Error::longbridge(e)
     })?;
-    tool_json(&result)
+    // Order-book prices come padded to a fixed decimal width ("432.200"); strip
+    // the non-significant trailing zeros (lossless).
+    price_series_result(&result)
 }
 
 pub async fn brokers(
@@ -382,7 +463,10 @@ pub async fn participants(mctx: &crate::tools::McpContext) -> Result<CallToolRes
         mctx.evict_quote_context();
         Error::longbridge(e)
     })?;
-    tool_json(&result)
+    // `name_hk` is the Traditional-script twin of `name_cn` on every broker row.
+    let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;
+    crate::serialize::drop_keys(&mut value, &["name_hk"]);
+    tool_json(&value)
 }
 
 pub async fn trades(
@@ -394,7 +478,27 @@ pub async fn trades(
         mctx.evict_quote_context();
         Error::longbridge(e)
     })?;
-    tool_json(&result)
+    // Trade prices come padded to a fixed decimal width ("431.000"); strip the
+    // non-significant trailing zeros (lossless). Up to 1000 trades per call.
+    price_series_result(&result)
+}
+
+/// Serialize an SDK market-data value (candlesticks/intraday/depth) and strip
+/// the fixed decimal padding upstream applies to prices (e.g. `"428.400"`) and
+/// `turnover` (e.g. `"…343.500"`). Lossless —
+/// [`crate::serialize::strip_trailing_zeros`] only removes non-significant zeros
+/// — and worthwhile because these are among the highest-volume responses.
+/// Object-rooted results (depth) keep their `structuredContent` via
+/// [`crate::tools::tool_result`]; array-rooted ones leave it unset.
+fn price_series_result<T>(result: &T) -> Result<CallToolResult, McpError>
+where
+    T: serde::Serialize,
+{
+    let json = crate::serialize::to_tool_json(result).map_err(Error::Serialize)?;
+    let mut value: serde_json::Value = serde_json::from_str(&json).map_err(Error::Serialize)?;
+    crate::serialize::strip_trailing_zeros(&mut value);
+    let out = serde_json::to_string(&value).map_err(Error::Serialize)?;
+    Ok(crate::tools::tool_result(out))
 }
 
 pub async fn intraday(
@@ -410,13 +514,53 @@ pub async fn intraday(
         mctx.evict_quote_context();
         Error::longbridge(e)
     })?;
-    tool_json(&result)
+    price_series_result(&result)
+}
+
+/// Upstream's own "symbol count out of limit" business code — seen firing
+/// even when the requested count exactly equals the reported limit (e.g.
+/// `requested:100/limit:100`), which means the true ceiling for some account
+/// tiers is exclusive. [`with_candlestick_count_boundary_retry`] retries once
+/// just under that boundary rather than surfacing the raw upstream error.
+const CANDLESTICK_COUNT_OUT_OF_LIMIT: i64 = 301607;
+
+fn validate_candlestick_count(count: usize) -> Result<(), McpError> {
+    if count == 0 {
+        return Err(McpError::invalid_params("count must be at least 1", None));
+    }
+    Ok(())
+}
+
+/// Retry once with `count - 1` when upstream rejects the exact requested
+/// count at an account's own quota boundary.
+async fn with_candlestick_count_boundary_retry<T, Fut>(
+    count: usize,
+    mut call: impl FnMut(usize) -> Fut,
+) -> Result<T, Box<longbridge::Error>>
+where
+    Fut: std::future::Future<Output = Result<T, longbridge::Error>>,
+{
+    match call(count).await {
+        // Retry the count-boundary case (limit>0), but NOT the zero-quota case
+        // (`limit:0`): retrying with count-1 can't conjure a quota the account
+        // doesn't have, so it would just burn a second upstream call before the
+        // terminal degrade. `is_terminal_none` handles limit:0 downstream.
+        Err(e)
+            if count > 1
+                && e.openapi_error_code() == Some(CANDLESTICK_COUNT_OUT_OF_LIMIT)
+                && !e.to_string().to_lowercase().contains("limit:0") =>
+        {
+            call(count - 1).await.map_err(Box::new)
+        }
+        result => result.map_err(Box::new),
+    }
 }
 
 pub async fn candlesticks(
     mctx: &crate::tools::McpContext,
     p: CandlesticksParam,
 ) -> Result<CallToolResult, McpError> {
+    validate_candlestick_count(p.count)?;
     let period = parse::parse_period(&p.period)?;
     let sessions = parse::parse_trade_sessions(&p.trade_sessions)?;
     let adjust = if p.forward_adjust {
@@ -425,20 +569,22 @@ pub async fn candlesticks(
         longbridge::quote::AdjustType::NoAdjust
     };
     let ctx = mctx.get_quote_context().await;
-    let result = ctx
-        .candlesticks(p.symbol, period, p.count, adjust, sessions)
-        .await
-        .map_err(|e| {
-            mctx.evict_quote_context();
-            Error::longbridge(e)
-        })?;
-    tool_json(&result)
+    let result = with_candlestick_count_boundary_retry(p.count, |count| {
+        ctx.candlesticks(p.symbol.clone(), period, count, adjust, sessions)
+    })
+    .await
+    .map_err(|e| {
+        mctx.evict_quote_context();
+        Error::longbridge(*e)
+    })?;
+    price_series_result(&result)
 }
 
 pub async fn history_candlesticks_by_offset(
     mctx: &crate::tools::McpContext,
     p: HistoryCandlesticksByOffsetParam,
 ) -> Result<CallToolResult, McpError> {
+    validate_candlestick_count(p.count)?;
     let period = parse::parse_period(&p.period)?;
     let adjust = parse::parse_adjust_type(p.forward_adjust);
     let sessions = parse::parse_trade_sessions(&p.trade_sessions)?;
@@ -447,16 +593,31 @@ pub async fn history_candlesticks_by_offset(
         None => None,
     };
     let ctx = mctx.get_quote_context().await;
-    let result = ctx
-        .history_candlesticks_by_offset(
-            p.symbol, period, adjust, p.forward, time, p.count, sessions,
+    let outcome = with_candlestick_count_boundary_retry(p.count, |count| {
+        ctx.history_candlesticks_by_offset(
+            p.symbol.clone(),
+            period,
+            adjust,
+            p.forward,
+            time,
+            count,
+            sessions,
         )
-        .await
-        .map_err(|e| {
+    })
+    .await;
+    let result = match outcome {
+        Ok(v) => v,
+        Err(e) => {
             mctx.evict_quote_context();
-            Error::longbridge(e)
-        })?;
-    tool_json(&result)
+            let err: McpError = Error::longbridge(*e).into();
+            if let Some(ok) = crate::tools::terminal_none_ok("history_candlesticks_by_offset", &err)
+            {
+                return Ok(ok);
+            }
+            return Err(err);
+        }
+    };
+    price_series_result(&result)
 }
 
 pub async fn history_candlesticks_by_date(
@@ -475,14 +636,21 @@ pub async fn history_candlesticks_by_date(
         None => None,
     };
     let ctx = mctx.get_quote_context().await;
-    let result = ctx
+    let result = match ctx
         .history_candlesticks_by_date(p.symbol, period, adjust, start, end, sessions)
         .await
-        .map_err(|e| {
+    {
+        Ok(v) => v,
+        Err(e) => {
             mctx.evict_quote_context();
-            Error::longbridge(e)
-        })?;
-    tool_json(&result)
+            let err: McpError = Error::longbridge(e).into();
+            if let Some(ok) = crate::tools::terminal_none_ok("history_candlesticks_by_date", &err) {
+                return Ok(ok);
+            }
+            return Err(err);
+        }
+    };
+    price_series_result(&result)
 }
 
 pub async fn trading_days(
@@ -559,6 +727,11 @@ pub async fn capital_distribution(
         mctx.evict_quote_context();
         Error::longbridge(e)
     })?;
+    // Symbols with no capital-flow data (indices, some ETFs) don't error —
+    // upstream responds with a zero-filled record stamped at the Unix epoch.
+    // A real trading day is never actually reported at that instant, so it's
+    // a reliable "no data" signal distinct from a genuine all-zero day.
+    let data_available = result.timestamp.unix_timestamp() != 0;
     let timestamp = result
         .timestamp
         .format(&time::format_description::well_known::Rfc3339)
@@ -575,6 +748,7 @@ pub async fn capital_distribution(
             medium: result.capital_out.medium.to_string(),
             small: result.capital_out.small.to_string(),
         },
+        data_available,
     };
     tool_json(&resp)
 }
@@ -616,7 +790,12 @@ pub async fn history_market_temperature(
             mctx.evict_quote_context();
             Error::longbridge(e)
         })?;
-    tool_json(&result)
+    // The history series is numeric only: `description` (the point-in-time label
+    // populated by `market_temperature`) is empty on every row here — verified
+    // across markets and years. Drop it.
+    let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;
+    crate::serialize::drop_keys(&mut value, &["description"]);
+    tool_json(&value)
 }
 
 pub async fn watchlist(mctx: &crate::tools::McpContext) -> Result<CallToolResult, McpError> {
@@ -625,7 +804,11 @@ pub async fn watchlist(mctx: &crate::tools::McpContext) -> Result<CallToolResult
         mctx.evict_quote_context();
         Error::longbridge(e)
     })?;
-    tool_json(&result)
+    // `market` on every security is derivable from the symbol suffix (and is
+    // "Unknown" for crypto).
+    let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;
+    crate::serialize::drop_keys(&mut value, &["market"]);
+    tool_json(&value)
 }
 
 pub async fn filings(
@@ -646,7 +829,10 @@ pub async fn warrant_issuers(mctx: &crate::tools::McpContext) -> Result<CallTool
         mctx.evict_quote_context();
         Error::longbridge(e)
     })?;
-    tool_json(&result)
+    // `name_hk` is the Traditional-script twin of `name_cn` on every issuer row.
+    let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;
+    crate::serialize::drop_keys(&mut value, &["name_hk"]);
+    tool_json(&value)
 }
 
 pub async fn warrant_list(
@@ -710,7 +896,12 @@ pub async fn warrant_list(
             mctx.evict_quote_context();
             Error::longbridge(e)
         })?;
-    tool_json(&result)
+    // Warrant analytics (premium, implied_volatility, delta, effective_leverage,
+    // leverage_ratio, balance_point, change_rate) serialize at ~17 significant
+    // digits; cap fractional precision at 6 across all 700+ rows.
+    let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;
+    crate::serialize::round_decimals(&mut value, 6);
+    tool_json(&value)
 }
 
 /// Default calc indexes when the caller omits `indexes`: common quote fields
@@ -747,23 +938,34 @@ pub async fn calc_indexes(
         Error::longbridge(e)
     })?;
 
-    // Normalize Greeks to match Longbridge app display values:
-    // - theta: API returns annualized value (×252), divide by 252 for per-trading-day
-    // - vega:  API returns per-1%-IV-change value scaled by 100, divide by 100
-    // - rho:   API returns per-1%-rate-change value scaled by 100, divide by 100
     for r in &mut result {
-        if let Some(v) = r.theta.as_mut() {
-            *v /= rust_decimal::Decimal::from(252u32);
-        }
-        if let Some(v) = r.vega.as_mut() {
-            *v /= rust_decimal::Decimal::ONE_HUNDRED;
-        }
-        if let Some(v) = r.rho.as_mut() {
-            *v /= rust_decimal::Decimal::ONE_HUNDRED;
-        }
+        normalize_greeks(r);
     }
 
-    tool_json(&result)
+    // `SecurityCalcIndex` is a wide struct: every one of its ~40 index fields
+    // the caller did not request serializes as an explicit `null`. Drop those
+    // so a per-symbol array doesn't carry ~38 dead `"x": null` pairs per row.
+    let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;
+    crate::serialize::strip_nulls(&mut value);
+    tool_json(&value)
+}
+
+/// Normalize the option Greeks on a calc-index row to the values the Longbridge
+/// app displays.
+///
+/// - `theta`: the API already returns a per-day value (the raw annualized value
+///   has been divided by 365 on the server), so it is used as-is.
+/// - `vega`:  the API returns the value scaled by 100 (per 1% IV change);
+///   divide by 100 for the per-unit value.
+/// - `rho`:   the API returns the value scaled by 100 (per 1% rate change);
+///   divide by 100 for the per-unit value.
+fn normalize_greeks(r: &mut longbridge::quote::SecurityCalcIndex) {
+    if let Some(v) = r.vega.as_mut() {
+        *v /= rust_decimal::Decimal::ONE_HUNDRED;
+    }
+    if let Some(v) = r.rho.as_mut() {
+        *v /= rust_decimal::Decimal::ONE_HUNDRED;
+    }
 }
 
 pub async fn create_watchlist_group(
@@ -878,7 +1080,6 @@ pub async fn short_positions(
     p: ShortPositionsParam,
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
-    let cid = symbol_to_counter_id(&p.symbol);
     let count = p.count.unwrap_or(20).clamp(1, 100);
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -887,7 +1088,7 @@ pub async fn short_positions(
         .to_string();
     let page_size = count.to_string();
     let params = [
-        ("counter_id", cid.as_str()),
+        ("symbol", p.symbol.as_str()),
         ("last_timestamp", now.as_str()),
         ("page_size", page_size.as_str()),
     ];
@@ -973,8 +1174,7 @@ pub async fn option_volume(
     p: OptionVolumeParam,
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
-    let cid = symbol_to_counter_id(&p.symbol);
-    let params = [("underlying_counter_id", cid.as_str())];
+    let params = [("symbol", p.symbol.as_str())];
     http_get_tool(&client, "/v1/quote/option-volume-stats", &params).await
 }
 
@@ -983,7 +1183,6 @@ pub async fn option_volume_daily(
     p: OptionVolumeDailyParam,
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
-    let cid = symbol_to_counter_id(&p.symbol);
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -991,16 +1190,18 @@ pub async fn option_volume_daily(
         .to_string();
     let line_num = p.count.unwrap_or(20).to_string();
     let params = [
-        ("counter_id", cid.as_str()),
+        ("symbol", p.symbol.as_str()),
         ("timestamp", now.as_str()),
         ("line_num", line_num.as_str()),
         ("direction", "1"),
     ];
-    http_get_tool_unix(
+    // `underlying_symbol` on every row == the queried `symbol`.
+    http_get_tool_unix_dropping(
         &client,
         "/v1/quote/option-volume-stats/daily",
         &params,
         &["stats.*.timestamp"],
+        &["underlying_symbol"],
     )
     .await
 }
@@ -1094,5 +1295,86 @@ mod tests {
         assert_eq!(p.trade_sessions, "intraday");
         assert!(p.forward_adjust);
         assert_eq!(p.start.as_deref(), Some("2026-01-01"));
+    }
+
+    fn count_out_of_limit_error() -> longbridge::Error {
+        longbridge::Error::WsClient(longbridge::wsclient::WsClientError::ResponseError {
+            status: 7,
+            detail: Some(longbridge::wsclient::WsResponseErrorDetail {
+                code: 301607,
+                msg: "history candlestick symbol count out of limit, requested:100/limit:100"
+                    .to_string(),
+            }),
+        })
+    }
+
+    #[test]
+    fn validate_candlestick_count_rejects_zero() {
+        assert!(
+            super::validate_candlestick_count(0).is_err(),
+            "count=0 must be rejected"
+        );
+        assert!(
+            super::validate_candlestick_count(1).is_ok(),
+            "count=1 is the minimum valid value"
+        );
+    }
+
+    #[tokio::test]
+    async fn boundary_retry_retries_once_at_the_reported_limit() {
+        let mut attempts = Vec::new();
+        let result = super::with_candlestick_count_boundary_retry(100, |count| {
+            attempts.push(count);
+            async move {
+                if count == 100 {
+                    Err(count_out_of_limit_error())
+                } else {
+                    Ok(count)
+                }
+            }
+        })
+        .await;
+        assert_eq!(attempts, vec![100, 99]);
+        assert_eq!(result.unwrap(), 99);
+    }
+
+    #[tokio::test]
+    async fn boundary_retry_does_not_retry_below_count_one() {
+        let mut attempts = Vec::new();
+        let result = super::with_candlestick_count_boundary_retry(1, |count| {
+            attempts.push(count);
+            async move { Err::<usize, _>(count_out_of_limit_error()) }
+        })
+        .await;
+        assert_eq!(attempts, vec![1]);
+        assert!(
+            result.is_err(),
+            "count=1 must not retry at count-1=0, so the error should propagate"
+        );
+    }
+
+    #[tokio::test]
+    async fn boundary_retry_does_not_retry_unrelated_errors() {
+        let mut attempts = Vec::new();
+        let result = super::with_candlestick_count_boundary_retry(100, |count| {
+            attempts.push(count);
+            async move {
+                Err::<usize, _>(longbridge::Error::WsClient(
+                    longbridge::wsclient::WsClientError::ResponseError {
+                        status: 7,
+                        detail: Some(longbridge::wsclient::WsResponseErrorDetail {
+                            code: 301600,
+                            msg: "invalid symbol".to_string(),
+                        }),
+                    },
+                ))
+            }
+        })
+        .await;
+        assert_eq!(attempts, vec![100]);
+        assert!(
+            result.is_err(),
+            "an unrelated error code (301600, not 301607) must not trigger a retry"
+        );
     }
 }

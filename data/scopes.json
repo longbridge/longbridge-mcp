@@ -194,12 +194,12 @@
         "dca_stop",
         "dca_update",
         "grid_cancel",
-        "grid_questionnaire",
         "grid_replace",
         "grid_restart",
         "grid_submit",
         "grid_suspend",
         "replace_order",
+        "submit_multileg_order",
         "submit_order"
       ]
     }

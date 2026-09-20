@@ -115,6 +115,18 @@ impl Scope {
         ))
     }
 
+    /// `buy 100 700.HK @ 400 + tp 450` — an extra clause folded into a scope
+    /// built by one of the constructors above.
+    ///
+    /// For what changes the order rather than how it is worded: the trigger
+    /// prices of an attached take-profit / stop-loss leg are read off the
+    /// preview like any other price, and a code confirmed for one pair must not
+    /// execute another. Adding no clause leaves the scope byte-identical, so a
+    /// plain order keeps the code it always had.
+    pub fn and(self, label: &str, value: &str) -> Self {
+        Self(format!("{} + {} {}", self.0, label, canonical(value)))
+    }
+
     /// `grid submit 100 700.HK @ 449` — a grid strategy.
     pub fn grid(action: &str, symbol: &str, quantity: &str, base_price: &str) -> Self {
         Self(format!(
@@ -255,7 +267,45 @@ mod tests {
             Scope::on_order("cancel", "700"),              // a different kind of action entirely
             Scope::replace("700", "100", "400"),
             Scope::grid("submit", "700.HK", "100", "400"),
+            // The baseline order, plus protective legs it did not have.
+            Scope::order("Buy", "700.HK", "100", "400").and("attached", "BRACKET"),
         ]
+    }
+
+    /// An attached take-profit / stop-loss leg is part of the order the user
+    /// approved: adding one, or moving its trigger, must cost the old code.
+    #[test]
+    fn attached_legs_belong_to_the_scope() {
+        let plain = Scope::order("Buy", "700.HK", "100", "400");
+        let bracket = Scope::order("Buy", "700.HK", "100", "400")
+            .and("attached", "BRACKET")
+            .and("tp", "450")
+            .and("sl", "380");
+        assert_eq!(
+            bracket.to_string(),
+            "buy 100 700.HK @ 400 + attached BRACKET + tp 450 + sl 380"
+        );
+        assert!(
+            bracket.verify(&plain.code()).is_err(),
+            "a bracket order must not inherit the plain order's code"
+        );
+        let moved_stop = Scope::order("Buy", "700.HK", "100", "400")
+            .and("attached", "BRACKET")
+            .and("tp", "450")
+            .and("sl", "300");
+        assert!(
+            moved_stop.verify(&bracket.code()).is_err(),
+            "moving the stop-loss must not keep the approved code"
+        );
+        // Same clause, written the way another call might write it.
+        let same = Scope::order("buy", "700.hk", "100.0", "400.00")
+            .and("attached", "bracket")
+            .and("tp", "450.0")
+            .and("sl", "380.000");
+        assert!(
+            same.verify(&bracket.code()).is_ok(),
+            "{same} must verify against {bracket}"
+        );
     }
 
     #[test]

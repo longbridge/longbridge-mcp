@@ -15,7 +15,7 @@
   <a href="https://longbridge.com"><img alt="Longbridge" src="https://img.shields.io/badge/brokerage-Longbridge-ffe000?labelColor=000"></a>
 </p>
 
-Official MCP server for the [Longbridge](https://longbridge.com) brokerage. **163 tools** across real-time quotes, options, order routing, fundamentals, analyst ratings, calendars, IPO, price alerts, DCA plans, grid trading, portfolio analytics and community sharelists — covering **US and HK markets**. Built with Rust using [rmcp](https://github.com/anthropics/rmcp) and [axum](https://github.com/tokio-rs/axum).
+Official MCP server for the [Longbridge](https://longbridge.com) brokerage. **164 tools** across real-time quotes, options, order routing, fundamentals, analyst ratings, calendars, IPO, price alerts, DCA plans, grid trading, portfolio analytics and community sharelists — covering **US and HK markets**. Built with Rust using [rmcp](https://github.com/anthropics/rmcp) and [axum](https://github.com/tokio-rs/axum).
 
 ---
 
@@ -38,12 +38,54 @@ Sign in once with your Longbridge account. Every request runs over the same host
 
 ## Highlights
 
-- **163 tools, one endpoint** — quotes, options, order routing, fundamentals, analyst research, screeners, IPO, alerts, DCA, grid trading and portfolio analytics across **US and HK markets**.
+- **164 tools, one endpoint** — quotes, options, order routing, fundamentals, analyst research, screeners, IPO, alerts, DCA, grid trading and portfolio analytics across **US and HK markets**.
 - **Stateless by design** — every request forwards its Bearer token straight to the Longbridge SDK. No sessions, no database, nothing stored server-side.
 - **OAuth 2.1, auto-discovered** — RFC 9728 protected-resource and RFC 8414 authorization-server metadata; clients complete the flow with no token to paste.
-- **Clean, typed responses** — snake_case fields, RFC 3339 timestamps, human-readable symbols, and typed `outputSchema` descriptors for compatible clients.
+- **Clean, typed responses** — snake_case fields, RFC 3339 timestamps, human-readable symbols, and typed response schemas available as MCP resources.
 
 Built in Rust with [rmcp](https://github.com/anthropics/rmcp) and [axum](https://github.com/tokio-rs/axum).
+
+## Filter tool responses with jq
+
+Every tool accepts an optional `_jq` string in its arguments. The expression runs
+on the complete returned JSON, after the normal response serialization. The `_jq`
+name is reserved for response filtering to avoid conflicts with business parameters.
+Usage guidance is sent once in the MCP `initialize` response's `instructions`;
+each tool schema declares only the optional parameter name and type.
+For example:
+
+```json
+{
+  "name": "quote",
+  "arguments": {
+    "symbols": ["AAPL.US", "MSFT.US"],
+    "_jq": "map({symbol, last_done})"
+  }
+}
+```
+
+Use `.data[:5]` to take the first five entries of a `data` array,
+`.data | map(select(.price > 10))` to select rows, or `{total: .total}` to
+project fields. Expressions use the embedded [jaq](https://github.com/01mf02/jaq)
+engine's jq-compatible syntax; no separate `jq` executable is needed.
+
+- Omit `_jq` (or pass `null`) to preserve the original response.
+- One output value is returned directly, multiple values as an array, and no
+  values as `[]`. Scalars and arrays are JSON text; objects also appear in
+  `structuredContent`, containing only the filtered fields.
+- Plain text responses are available as JSON strings. Multiple content blocks
+  without structured content are available as an array.
+- Tool errors and permission/no-data explanations remain unfiltered.
+- Empty, invalid, or non-string expressions are rejected before the tool runs.
+  If filtering fails at runtime, the response explicitly says the tool already
+  executed. Do not automatically retry writes such as placing an order.
+- Environment access, filesystem imports, and logging filters are unavailable.
+  Output is limited to 10,000 values and 8 MiB; exceeding a limit returns an
+  error rather than a partial result.
+
+Because filters can change the response shape, tools do not advertise a fixed
+`outputSchema`. Original typed schemas remain available through `resources/list`
+and `resources/read` at `lb://tools/{tool-name}/output-schema` for schema-backed tools.
 
 ## Connect your own client
 
@@ -80,7 +122,7 @@ On first use, the client reads the `WWW-Authenticate` challenge, fetches `/.well
 
 </details>
 
-## The 163 tools
+## The 164 tools
 
 Twenty categories spanning market data, trading, research and account management.
 
@@ -88,7 +130,7 @@ Twenty categories spanning market data, trading, research and account management
 |----------|-------|----------|
 | **Quote** | 32 | Real-time and historical quotes, candlesticks, depth, brokers, options, warrants, watchlists, capital flow, market temperature, short positions, option volume |
 | **Fundamental** | 33 | Financial statements/reports, business segments, institutional views, industry peers/valuation, dividends, EPS forecasts, valuations & valuation comparison, company info/executives, shareholders, corporate actions, operating metrics |
-| **Trade** | 14 | Order submission/cancellation/replacement, positions, balance, executions, cash flow, margin |
+| **Trade** | 15 | Order submission/cancellation/replacement, multi-leg option combination orders, positions, balance, executions, cash flow, margin |
 | **Market** | 15 | Market status, industry/top-mover rank, broker holdings, A/H premium, trade statistics, anomalies, short trades/margin, index constituents |
 | **DCA** | 9 | Dollar-cost averaging plan create/update/pause/resume/stop, execution history, statistics, support check |
 | **Grid** | 11 | Grid trading order submit/replace/cancel/suspend/restart, list/detail/trigger-history reads, per-symbol setup info, one-time strategy consent |
@@ -137,17 +179,30 @@ Config lives at `~/.longbridge/mcp/config.json` (override the directory with `LO
 | Log directory | `log_dir` | `--log-dir` | *(stderr)* | Directory for rolling log files |
 | TLS certificate | `tls_cert` | `--tls-cert` | *(none)* | PEM certificate file for HTTPS |
 | TLS private key | `tls_key` | `--tls-key` | *(none)* | PEM private key file for HTTPS |
+| Canary upstream | `canary` | `--canary` | `false` | Talk to the Longbridge canary environment (`*.longbridge.xyz`). `--canary=false` forces production even when the config file enables it |
 
-Advanced environment variables — most deployments never touch these; they exist for non-production Longbridge environments and SDK debugging.
+The mainland-China environment (`*.longbridge.cn`) is not a flag: it is auto-selected when `LONGBRIDGE_REGION=cn` is set (the same variable the SDK uses), so a mainland cluster needs no dedicated setting.
+
+**Upstream endpoints** are fixed by the selected environment:
+
+| | Production (default) | Canary (`--canary`) | Mainland (`LONGBRIDGE_REGION=cn`) |
+|---|---|---|---|
+| OpenAPI | `https://openapi.longbridge.com` | `https://openapi-global.longbridge.xyz` | `https://openapi.longbridge.cn` |
+| Quote WebSocket | `wss://openapi-quote.longbridge.com/v2` | `wss://openapi-global-quote.longbridge.xyz/v2` | `wss://openapi-quote.longbridge.cn/v2` |
+| Trade WebSocket | `wss://openapi-trade.longbridge.com/v2` | `wss://openapi-global-trade.longbridge.xyz/v2` | `wss://openapi-trade.longbridge.cn/v2` |
+| OAuth / connect page | `openapi.longbridge.com` / `open.longbridge.com` | `openapi-global.longbridge.xyz` / `open.longbridge.xyz` | `openapi.longbridge.cn` / `open.longbridge.cn` |
+
+Canary uses the `-global` gateway, not `openapi.longbridge.xyz`: only the former is CloudFront-fronted and performs `x-dc-region` data-center routing, which this server depends on to serve `us_`- and `ap_`-prefixed credentials from one process.
+
+Canary and mainland pin every URL above at startup; production defers to the SDK's own resolution except that a `us_` credential with no upstream override is pinned to the global `.com` gateway. See [`src/endpoints.rs`](src/endpoints.rs) for the exact selection rules.
+
+Advanced environment variables — most deployments never touch these; they exist for SDK debugging and edge/global-entry deployments.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `LONGBRIDGE_MCP_CONFIG_DIR` | `~/.longbridge/mcp` | Config file directory |
-| `LONGBRIDGE_HTTP_URL` | `https://openapi.longbridge.com` | Longbridge API base URL (also used for OAuth metadata) |
 | `LONGBRIDGE_PUBLIC_HOSTS` | *(none)* | Comma-separated hostnames accepted from the edge-injected `X-Host` header; matching requests echo that host in the 401 challenge / RFC 9728 metadata. Unset = `X-Host` ignored |
-| `LONGBRIDGE_GLOBAL_OAUTH_URL` | *(none)* | Authorization-server URL advertised to requests arriving via an allowlisted `X-Host` (global single-domain entry). Unset = fall back to `LONGBRIDGE_HTTP_URL` |
-| `LONGBRIDGE_QUOTE_WS_URL` | `wss://openapi-quote.longbridge.com/v2` | Quote WebSocket endpoint |
-| `LONGBRIDGE_TRADE_WS_URL` | `wss://openapi-trade.longbridge.com/v2` | Trade WebSocket endpoint |
+| `LONGBRIDGE_GLOBAL_OAUTH_URL` | *(none)* | Authorization-server URL advertised to requests arriving via an allowlisted `X-Host` (global single-domain entry). Unset = fall back to the mode's OpenAPI base URL |
 | `LONGBRIDGE_MCP_QUOTE_WS_IDLE_TTL_SECS` | `600` | Idle seconds before a cached quote WebSocket context is evicted |
 | `LONGBRIDGE_MCP_QUOTE_WS_MAX_CONTEXTS` | `1024` | Maximum cached quote WebSocket contexts per server process |
 | `LONGBRIDGE_MCP_LOG_PAYLOADS` | *(unset)* | `1` lifts the payload log caps (see below). Never set this in production |

@@ -27,7 +27,7 @@ Longbridge MCP Server is a Rust service with no durable session state that expos
 
 2. **Direct OAuth** — The server does not proxy OAuth. It publishes [RFC 9728](https://datatracker.ietf.org/doc/html/rfc9728) Protected Resource Metadata pointing MCP clients directly to Longbridge's OAuth authorization server.
 
-3. **Streaming JSON transformation** — Responses are transformed (snake_case, timestamp conversion, counter_id mapping) during serialization via a custom `serde::Serializer` wrapper, avoiding intermediate allocations.
+3. **Streaming JSON transformation** — Responses are transformed (snake_case, timestamp conversion) during serialization via a custom `serde::Serializer` wrapper, avoiding intermediate allocations.
 
 ## Request Lifecycle
 
@@ -40,7 +40,7 @@ Longbridge MCP Server is a Rust service with no durable session state that expos
 
 4. Tool handler:
    a. Extracts McpContext (token + Accept-Language) from request
-   b. Creates Config via OAuth::from_token(token)
+   b. Creates Config via OAuth::from_token(token), with the HTTP and both WebSocket URLs pinned from `endpoints`
    c. Reuses or creates a cached QuoteContext, or creates TradeContext / HttpClient as needed
    d. Calls the Longbridge SDK or HTTP API
    e. Serializes the response through TransformSerializer
@@ -56,9 +56,9 @@ Longbridge MCP Server is a Rust service with no durable session state that expos
 src/
 ├── main.rs                 Entry point, CLI/config, server startup
 ├── error.rs                Unified error type (thiserror)
-├── counter.rs              Symbol ↔ counter_id bidirectional conversion
 ├── metrics.rs              Prometheus metrics and /metrics handler
 ├── ws_pool.rs              Cached QuoteContext pool (idle TTL, capacity eviction)
+├── endpoints.rs            Upstream endpoint selection (production / canary)
 │
 ├── auth/
 │   ├── mod.rs              Router composition, AppState, MCP service wiring
@@ -69,14 +69,13 @@ src/
 ├── serialize/
 │   ├── mod.rs              Public API: to_tool_json(), transform_json()
 │   ├── transform.rs        TransformSerializer + compound type wrappers
-│   ├── timestamp.rs        TimestampSerializer (_at fields → RFC 3339)
-│   └── counter_id.rs       CounterIdSerializer (counter_id → symbol)
+│   └── timestamp.rs        TimestampSerializer (_at fields → RFC 3339)
 │
 └── tools/
     ├── mod.rs              McpContext, #[tool_router], forwarding layer, TOOL_ENDPOINTS
     ├── quote.rs            Quote tools (32)
     ├── fundamental.rs      Fundamental data tools (31)
-    ├── trade.rs            Trade tools (15)
+    ├── trade.rs            Trade tools (16)
     ├── market.rs           Market data tools (14)
     ├── dca.rs              Dollar-cost averaging tools (9)
     ├── sharelist.rs        Community sharelist tools (8)
@@ -156,14 +155,13 @@ This struct is the single point of extension for future per-request context (e.g
 
 ## JSON Response Transformation
 
-All tool responses pass through a custom `serde::Serializer` wrapper that performs three transformations in a single serialization pass:
+All tool responses pass through a custom `serde::Serializer` wrapper that performs its transformations in a single serialization pass:
 
 | Transformation | Example |
 |---------------|---------|
 | Field names → snake_case | `lastDone` → `last_done` |
 | `*_at` fields (i64) → RFC 3339 | `1700000000` → `2023-11-14T22:13:20Z` |
-| `counter_id` → `symbol` | `ST/US/TSLA` → `TSLA.US` |
-| `counter_ids` → `symbols` | `["ST/US/TSLA"]` → `["TSLA.US"]` |
+| Non-identifier map keys pass through | `{"AAPL.US": {…}}` stays `AAPL.US`, not `a_a_p_l._u_s` |
 
 Two entry points:
 
@@ -218,12 +216,14 @@ SDK tools create `QuoteContext`/`TradeContext`/`ContentContext`/`AssetContext`/`
 
 ## Symbol Mapping
 
-Longbridge HTTP APIs use an internal `counter_id` format (`ST/US/TSLA`, `ETF/US/SPY`, `IX/HK/HSI`). The MCP server converts between this and the user-facing symbol format (`TSLA.US`, `SPY.US`, `HSI.HK`):
+The server does not convert between symbols and Longbridge's internal `counter_id` format (`ST/US/TSLA`, `ETF/US/SPY`, `IX/HK/HSI`) in either direction:
 
-- **Request path**: `symbol_to_counter_id()` converts tool input parameters before HTTP calls
-- **Response path**: `TransformSerializer` automatically renames `counter_id` → `symbol` and converts values
+- **Request path**: tool input symbols (`TSLA.US`, `SPY.US`, `HSI.HK`) go upstream as the `symbol` (or `symbols`) parameter untouched; the backend resolves them itself. Callers are expected to pass the canonical form — the backend matches HK codes exactly, so a zero-padded `00700.HK` is not the same as `700.HK` and comes back as an empty record.
+- **Response path**: wherever the backend still returns a `counter_id`, it returns the matching `symbol` alongside it, so nothing needs rewriting. Renaming `counter_id` → `symbol` would in fact emit the key twice.
 
-ETF detection uses an embedded list of ~4,500 US ETF symbols compiled into the binary at build time.
+The one thing the transform still has to know about symbols is that they appear as **map keys** (e.g. `{"symbols": {"AAPL.US": {…}}}`). Those keys are data, not field names, so `serialize::is_field_name()` keeps them out of the snake_case pass.
+
+There is no local instrument-type table either, so nothing distinguishes an ETF from an index or a stock before the call. Where that mattered, the upstream answer decides instead: `constituent` asks for an ETF's asset allocation first and falls back to index constituents when the allocation comes back empty, and `dividend` always uses `company-dividends`, which covers ETFs too.
 
 ## Metrics
 
@@ -239,14 +239,14 @@ Every tool call is wrapped with `measured_tool_call()` which records timing and 
 
 ## Configuration
 
-The server reads configuration from CLI arguments (highest priority), a JSON config file (`~/.longbridge/mcp/config.json`), and environment variables. Key settings:
+The server reads configuration from CLI arguments (highest priority), a JSON config file (`~/.longbridge/mcp/config.json`), and environment variables. The upstream environment is fixed once at startup: the `--canary` flag (or the config file) first, then `LONGBRIDGE_REGION=cn` auto-selects the mainland environment (there is no `--mainland` flag). Canary and mainland then pin every upstream URL (data plane and OAuth/connect plane) explicitly to their `.xyz`/`.cn` hosts, so no other environment variable and no geolocation probe influences them. Production pins the global `.com` gateway only for `us_` credentials with no `LONGBRIDGE_HTTP_URL`/`LONGPORT_HTTP_URL` override, and otherwise defers to the SDK's own resolution so a regional `.com` cluster (`openapi-hk`/`openapi-us`) keeps its configured host. Key settings:
 
 | Setting | Purpose |
 |---------|---------|
 | `bind` | Listen address (default: `127.0.0.1:8000`) |
 | `base_url` | Public URL for OAuth metadata (**required for public deployments**) |
 | `tls_cert` / `tls_key` | Enable HTTPS with PEM certificate and key |
-| `LONGBRIDGE_HTTP_URL` | Override Longbridge API endpoint (env var) |
+| `canary` | Talk to the Longbridge canary environment (`*.longbridge.xyz`) instead of production (CLI flag `--canary`) |
 | `LONGBRIDGE_MCP_QUOTE_WS_IDLE_TTL_SECS` | Idle TTL for cached quote WebSocket contexts (default: 600) |
 | `LONGBRIDGE_MCP_QUOTE_WS_MAX_CONTEXTS` | Maximum cached quote WebSocket contexts per process (default: 1024) |
 
@@ -296,6 +296,12 @@ trace or exceed the trace-chain limit. ALB then returns HTTP 463 before the
 request reaches the OpenAPI application. `collect_headers` therefore treats
 `ALICLOUD-ALB-TRACE` as hop-specific and removes it at the MCP-to-OpenAPI
 boundary.
+
+Since endpoint selection was pinned (see Configuration), the server's upstream
+calls always go to `openapi.longbridge.com` or `openapi.longbridge.xyz`, so the
+second traversal described above no longer originates here. The
+`ALICLOUD-ALB-TRACE` filter is kept regardless: it is a one-line allowlist entry
+and the 463 failure mode would return the moment a CN upstream is reintroduced.
 
 The failure mode was verified against
 `openapi.longbridge.cn/v1/quote/market-status`: changing only an

@@ -1,6 +1,6 @@
 {
   "$schema": "../tools.schema.json",
-  "server_instructions": "長橋 MCP 服務 —— 提供市場數據、交易與金融分析工具。委託執行需要兩步確認：submit_order、cancel_order、replace_order 以及全部網格寫操作（grid_submit、grid_replace、grid_cancel、grid_suspend、grid_restart）在未回填確認碼時均為 DRY RUN（試執行），並會返回一個一次性 confirmation_code。請務必先不帶 execute 呼叫一次，把預覽展示給用戶，只有在用戶明確確認之後，才可再次呼叫並把該確認碼傳入 execute。",
+  "server_instructions": "長橋 MCP 服務 —— 提供市場數據、交易與金融分析工具。委託執行需要兩步確認：submit_order、cancel_order、replace_order 以及全部網格寫操作（grid_submit、grid_replace、grid_cancel、grid_suspend、grid_restart）在未回填確認碼時均為 DRY RUN（試執行），並會返回一個一次性 confirmation_code。請務必先不帶 execute 呼叫一次，把預覽展示給用戶，只有在用戶明確確認之後，才可再次呼叫並把該確認碼傳入 execute。 調用失敗時，工具會在結果內容裡返回帶 error_code 和 recoverable 欄位的 JSON 信封：reauth（重新鑑權後重試）、backoff（等待後重試）、fix_params（修正參數後重試）、none（不要重試，告知用戶）。",
   "tools": {
     "create_watchlist_group": {
       "title": "新建自選分組",
@@ -65,7 +65,7 @@
       "title": "保證金比率",
       "description": "查詢標的保證金比率，返回 {im_factor（初始保證金）, mm_factor（維持保證金）, fm_factor（強平保證金）}",
       "properties": {
-        "symbol": "證券代碼，例如 `\"700.HK\"`"
+        "symbol": "證券代碼，例如 `\"700.HK\"`。請用規範代碼，補零的代碼（如 \"00700.HK\"）會返回空記錄而非報錯"
       }
     },
     "profit_analysis": {
@@ -80,14 +80,14 @@
       "title": "盈虧分析明細",
       "description": "獲取指定標的詳細盈虧分析。start/end（yyyy-mm-dd）須成對傳入，只傳其中之一會返回空結果",
       "properties": {
-        "symbol": "證券代碼，例如 `\"700.HK\"`",
+        "symbol": "證券代碼，例如 `\"700.HK\"`。請用規範代碼，補零的代碼（如 \"00700.HK\"）會返回空記錄而非報錯",
         "start": "起始日期（`yyyy-mm-dd`）。必須與 `end` 成對傳入，只傳其一會返回空結果",
         "end": "結束日期（`yyyy-mm-dd`）。必須與 `start` 成對傳入，只傳其一會返回空結果"
       }
     },
     "profit_analysis_realized": {
       "title": "已實現盈虧分析（美股）",
-      "description": "獲取美股賬戶的已實現盈虧，按類別（股票/期權/加密貨幣）和週期拆分。僅限美股賬戶；港股/滬深/新加坡賬戶調用會返回 DcRegionRestricted 錯誤",
+      "description": "獲取美股賬戶的已實現盈虧，按類別（股票/期權/加密貨幣）和週期拆分。僅限美股賬戶；亞太賬戶調用會返回 DcRegionRestricted 錯誤",
       "properties": {
         "currency": "報告貨幣，例如 `\"USD\"`（默認 `\"USD\"`）。僅限美股賬戶",
         "category": "按類別篩選：`\"STOCK\"`、`\"OPTION\"`、`\"CRYPTO\"`，留空表示全部"
@@ -151,7 +151,7 @@
     },
     "history_executions": {
       "title": "歷史成交",
-      "description": "查詢指定日期區間內的歷史成交記錄，返回 executions[]{order_id, symbol, side, quantity, price, trade_done_at}",
+      "description": "查詢指定日期區間內的全部成交記錄，按成交時間（trade_done_at）篩選並自動翻頁返回完整結果（不受每頁 1000 條截斷），trade_id 為穩定去重鍵。返回 executions[]{order_id, trade_id, symbol, side, quantity, price, trade_done_at}",
       "properties": {
         "symbol": "按證券篩選（可選）",
         "start_at": "起始時間（RFC3339 時間格式）",
@@ -165,20 +165,21 @@
         "symbol": "按證券篩選（可選）",
         "start_at": "起始時間（RFC3339 時間格式）",
         "end_at": "結束時間（RFC3339 時間格式）",
-        "us_page": "僅限美股賬戶：頁碼（預設 1）",
-        "us_limit": "僅限美股賬戶：每頁數量（預設 20）"
+        "us_page": "僅限美股賬戶：頁碼（預設 1）。亞太賬戶忽略（區域由賬戶自動識別，無需傳入）",
+        "us_limit": "僅限美股賬戶：每頁數量（預設 20）。亞太賬戶忽略（區域由賬戶自動識別，無需傳入）"
       }
     },
     "order_detail": {
       "title": "委託詳情",
-      "description": "查詢單個委託詳情，返回 {order_id, symbol, status, side, order_type, quantity, price, executed_quantity, executed_price, submitted_at, time_in_force, msg}",
+      "description": "查詢單個委託詳情，返回 {order_id, symbol, status, side, order_type, quantity, price, executed_quantity, executed_price, submitted_at, time_in_force, msg, attached_orders[]}，其中 attached_orders[] 為該委託的止盈/止損附加單及其各自單號。要按附加單自身的單號查詢，設置 is_attached=true，此時返回該附加單本身，charge_detail 為 null。美股賬戶由獨立的美股委託詳情接口提供，其委託及附加單直接嵌套在 `order` 中返回。區域由賬戶自動識別",
       "properties": {
-        "order_id": "委託單號"
+        "order_id": "委託單號：母單單號，或（配合 is_attached=true）止盈/止損附加單單號",
+        "is_attached": "設為 true 表示 order_id 是止盈/止損附加單單號，返回該附加單本身（charge_detail 為 null）；查詢母單時省略或傳 false。美股賬戶下無效"
       }
     },
     "today_executions": {
       "title": "當日成交",
-      "description": "查詢當日成交（filled），返回 executions[]{order_id, symbol, side, quantity, price, trade_done_at}。可按 symbol 或 order_id 篩選",
+      "description": "查詢當日成交（filled），返回 executions[]{order_id, trade_id, symbol, side, quantity, price, trade_done_at}。可按 symbol 或 order_id 篩選",
       "properties": {
         "symbol": "按證券篩選，例如 `\"700.HK\"`",
         "order_id": "按指定委託單號篩選"
@@ -186,19 +187,22 @@
     },
     "today_orders": {
       "title": "當日委託",
-      "description": "查詢當日委託，返回 orders[]{order_id, symbol, side, order_type, status, quantity, price, submitted_at, executed_quantity, executed_price}。僅限美股賬戶：us_action（Buy/Sell）、us_page、us_limit 通過獨立的美股委託接口篩選/分頁",
+      "description": "查詢當日委託，返回 orders[]{order_id, symbol, side, order_type, status, quantity, price, submitted_at, executed_quantity, executed_price, attached_orders[]}，其中 attached_orders[] 為該委託的止盈/止損附加單。可用 symbol 按證券篩選，或用 order_id 查詢單筆委託；要按附加單自身的單號查詢，把該單號作為 order_id 並同時設置 is_attached=true，返回結果即為該附加單本身。is_attached 單獨使用無效；美股賬戶由獨立的美股委託接口提供，兩者在美股賬戶下均無效。僅限美股賬戶：us_action（Buy/Sell）、us_page、us_limit 通過獨立的美股委託接口篩選/分頁",
       "properties": {
         "symbol": "按證券篩選，例如 `\"700.HK\"`，省略則返回當日全部委託",
-        "us_action": "僅限美股賬戶：按方向篩選，`\"Buy\"` 或 `\"Sell\"`，留空表示全部",
-        "us_page": "僅限美股賬戶：頁碼（默認 1）",
-        "us_limit": "僅限美股賬戶：每頁數量（默認 20）"
+        "order_id": "按委託單號篩選：母單單號，或（配合 is_attached=true）止盈/止損附加單單號。美股賬戶下無效",
+        "is_attached": "僅在同時傳入 order_id 時有效：表示該 order_id 是止盈/止損附加單單號，返回結果即為該附加單本身。單獨使用無效，美股賬戶下同樣無效",
+        "us_action": "僅限美股賬戶：按方向篩選，`\"Buy\"` 或 `\"Sell\"`，留空表示全部。亞太賬戶忽略（區域由賬戶自動識別，無需傳入）",
+        "us_page": "僅限美股賬戶：頁碼（默認 1）。亞太賬戶忽略（區域由賬戶自動識別，無需傳入）",
+        "us_limit": "僅限美股賬戶：每頁數量（默認 20）。亞太賬戶忽略（區域由賬戶自動識別，無需傳入）"
       }
     },
     "cancel_order": {
       "title": "撤銷委託",
-      "description": "按 order_id 撤銷未成交的委託，成功返回 \"order cancelled\"；已成交或已撤銷則報錯。【必須兩步確認】未傳本次試執行返回的 confirmation_code 時，本工具為 DRY RUN（試執行）：只校驗並回顯委託內容，不會發往交易所。請先不帶 execute 呼叫一次，把返回的預覽完整展示給用戶，只有在用戶明確確認這筆委託之後，才可再次呼叫並把該確認碼傳入 execute。確認碼由訂單本身（代碼、方向、數量、價格）推導而來，只對這一筆完全相同的請求生效。絕不可自行決定回填確認碼，也不可在用戶首次提出請求的同一輪就回填。試執行還會回顯本次要撤銷的委託，便於用戶核對是否為目標訂單",
+      "description": "按 order_id 撤銷未成交的委託，成功返回 \"order cancelled\"；已成交或已撤銷則報錯。【必須兩步確認】未傳本次試執行返回的 confirmation_code 時，本工具為 DRY RUN（試執行）：只校驗並回顯委託內容，不會發往交易所。請先不帶 execute 呼叫一次，把返回的預覽完整展示給用戶，只有在用戶明確確認這筆委託之後，才可再次呼叫並把該確認碼傳入 execute。確認碼由訂單本身（代碼、方向、數量、價格）推導而來，只對這一筆完全相同的請求生效。絕不可自行決定回填確認碼，也不可在用戶首次提出請求的同一輪就回填。試執行還會回顯本次要撤銷的委託，便於用戶核對是否為目標訂單。設為 is_attached=true 可按附加單自身的 order_id 單獨撤銷某個止盈/止損附加單；撤銷母單則會連同其附加單一併撤銷",
       "properties": {
         "order_id": "委託單號",
+        "is_attached": "設為 true 表示按止盈/止損附加單自身的 order_id 撤銷該附加單，母單保持不變；省略或傳 false 表示撤銷母單（其附加單會一併撤銷）",
         "execute": "本次試執行返回的 confirmation_code。省略（預設）表示 DRY RUN：只校驗並回顯請求，同時返回一個三位確認碼，不會發往交易所。必須先不帶該參數呼叫一次，把預覽展示給用戶，待用戶明確確認後才可再次呼叫並回填該碼。確認碼由訂單本身（代碼、方向、數量、價格）推導而來，只對這一筆完全相同的請求生效——改動任何欄位即失效。不可自行決定回填。"
       }
     },
@@ -249,7 +253,7 @@
     },
     "replace_order": {
       "title": "修改委託",
-      "description": "修改未成交委託的數量、價格、觸發價或追蹤止損參數，成功返回 \"order replaced\"。【必須兩步確認】未傳本次試執行返回的 confirmation_code 時，本工具為 DRY RUN（試執行）：只校驗並回顯委託內容，不會發往交易所。請先不帶 execute 呼叫一次，把返回的預覽完整展示給用戶，只有在用戶明確確認這筆委託之後，才可再次呼叫並把該確認碼傳入 execute。確認碼由訂單本身（代碼、方向、數量、價格）推導而來，只對這一筆完全相同的請求生效。絕不可自行決定回填確認碼，也不可在用戶首次提出請求的同一輪就回填。試執行會同時回顯當前委託與本次擬修改的內容",
+      "description": "修改未成交委託的數量、價格、觸發價或追蹤止損參數，成功返回 \"order replaced\"。【必須兩步確認】未傳本次試執行返回的 confirmation_code 時，本工具為 DRY RUN（試執行）：只校驗並回顯委託內容，不會發往交易所。請先不帶 execute 呼叫一次，把返回的預覽完整展示給用戶，只有在用戶明確確認這筆委託之後，才可再次呼叫並把該確認碼傳入 execute。確認碼由訂單本身（代碼、方向、數量、價格）推導而來，只對這一筆完全相同的請求生效。絕不可自行決定回填確認碼，也不可在用戶首次提出請求的同一輪就回填。試執行會同時回顯當前委託與本次擬修改的內容。止盈/止損附加單也在此修改：attached_order_type 配合新的 attached_profit_taker_price / attached_stop_loss_price 可新增或改價，attached_profit_taker_id / attached_stop_loss_id 用於指定要修改的現有附加單，attached_cancel_all=true 則撤銷全部附加單而保留母單",
       "properties": {
         "order_id": "委託單號",
         "quantity": "新的委託數量",
@@ -258,12 +262,27 @@
         "limit_offset": "新的限價偏移量",
         "trailing_amount": "新的追蹤止損金額",
         "trailing_percent": "新的追蹤止損百分比",
+        "attached_cancel_all": "設為 true 撤銷該委託的全部止盈/止損附加單，母單本身保持不變",
+        "attached_order_type": "要新增或修改的附加單類型：`PROFIT_TAKER` / `STOP_LOSS` / `BRACKET`。除僅做 attached_cancel_all 外必填",
+        "attached_profit_taker_id": "要修改的現有止盈單單號（取自 order_detail 的 attached_orders[]）；新增附加單時省略",
+        "attached_stop_loss_id": "要修改的現有止損單單號（取自 order_detail 的 attached_orders[]）；新增附加單時省略",
+        "attached_profit_taker_price": "新的止盈觸發價",
+        "attached_stop_loss_price": "新的止損觸發價",
+        "attached_profit_taker_submit_price": "新的止盈單委託限價",
+        "attached_stop_loss_submit_price": "新的止損單委託限價",
+        "attached_time_in_force": "新的附加單有效期：`Day` / `GTC` / `GTD`",
+        "attached_expire_time": "新的附加單到期時間，Unix 時間戳（秒）；`attached_time_in_force=GTD` 時必填",
+        "attached_activate_order_type": "新的觸發後委託類型，例如 `LO` 或 `MO`",
+        "attached_outside_rth": "新的觸發後盤前盤後設置：`RTH_ONLY` / `ANY_TIME` / `OVERNIGHT`",
+        "attached_main_id": "附加單所屬母單的單號；僅在不經母單、單獨修改某個附加單時需要",
+        "attached_quantity": "新的附加單數量",
+        "attached_market_price": "附加單的參考市價",
         "execute": "本次試執行返回的 confirmation_code。省略（預設）表示 DRY RUN：只校驗並回顯請求，同時返回一個三位確認碼，不會發往交易所。必須先不帶該參數呼叫一次，把預覽展示給用戶，待用戶明確確認後才可再次呼叫並回填該碼。確認碼由訂單本身（代碼、方向、數量、價格）推導而來，只對這一筆完全相同的請求生效——改動任何欄位即失效。不可自行決定回填。"
       }
     },
     "submit_order": {
       "title": "提交委託",
-      "description": "提交買賣委託。order_type：LO（限價）/ ELO（港股增強限價）/ MO（市價）/ AO（港股競價）/ ALO（港股競價限價）/ ODD（港股碎股）/ LIT（觸價限價）/ MIT（觸價市價）/ TSLPAMT（按金額追蹤止損）/ TSLPPCT（按百分比追蹤止損）/ SLO（港股特別限價）；side：Buy/Sell；time_in_force：Day/GTC/GTD。【必須兩步確認】未傳本次試執行返回的 confirmation_code 時，本工具為 DRY RUN（試執行）：只校驗並回顯委託內容，不會發往交易所。請先不帶 execute 呼叫一次，把返回的預覽完整展示給用戶，只有在用戶明確確認這筆委託之後，才可再次呼叫並把該確認碼傳入 execute。確認碼由訂單本身（代碼、方向、數量、價格）推導而來，只對這一筆完全相同的請求生效。絕不可自行決定回填確認碼，也不可在用戶首次提出請求的同一輪就回填。該委託會動用真實資金——試執行是用戶發現代碼、方向、數量或價格錯誤的唯一機會",
+      "description": "提交買賣委託。order_type：LO（限價）/ ELO（港股增強限價）/ MO（市價）/ AO（港股競價）/ ALO（港股競價限價）/ ODD（港股碎股）/ LIT（觸價限價）/ MIT（觸價市價）/ TSLPAMT（按金額追蹤止損）/ TSLPPCT（按百分比追蹤止損）/ SLO（港股特別限價）；side：Buy/Sell；time_in_force：Day/GTC/GTD。【必須兩步確認】未傳本次試執行返回的 confirmation_code 時，本工具為 DRY RUN（試執行）：只校驗並回顯委託內容，不會發往交易所。請先不帶 execute 呼叫一次，把返回的預覽完整展示給用戶，只有在用戶明確確認這筆委託之後，才可再次呼叫並把該確認碼傳入 execute。確認碼由訂單本身（代碼、方向、數量、價格）推導而來，只對這一筆完全相同的請求生效。絕不可自行決定回填確認碼，也不可在用戶首次提出請求的同一輪就回填。該委託會動用真實資金——試執行是用戶發現代碼、方向、數量或價格錯誤的唯一機會。如需附加止盈/止損單：設置 attached_order_type（PROFIT_TAKER / STOP_LOSS / BRACKET）並填寫 attached_profit_taker_price 和/或 attached_stop_loss_price；附加單會在試執行預覽中回顯，並計入確認碼",
       "properties": {
         "symbol": "證券代碼",
         "order_type": "委託類型（港股全部支援；美股僅支援 `LO` / `MO` / `LIT` / `MIT` / `TSLPAMT` / `TSLPPCT`）：<br>- `LO`（限價單）：需 `submitted_price`<br>- `ELO`（增強限價單，港股）：需 `submitted_price`<br>- `MO`（市價單）：無需價格<br>- `AO`（競價單，港股）：以競價價成交，無需價格<br>- `ALO`（競價限價單，港股）：需 `submitted_price`<br>- `ODD`（碎股單，港股）：需 `submitted_price`，用於非標準手數<br>- `LIT`（觸價限價）：需 `submitted_price` 與 `trigger_price`，行情觸及觸發價時激活<br>- `MIT`（觸價市價）：僅需 `trigger_price`，觸及後按市價成交<br>- `TSLPAMT`（按金額追蹤止損限價）：需 `trailing_amount` 與 `limit_offset`<br>- `TSLPPCT`（按百分比追蹤止損限價）：需 `trailing_percent`（0-1）與 `limit_offset`<br>- `SLO`（特別限價單，港股）：需 `submitted_price`，提交後不可改單",
@@ -278,14 +297,36 @@
         "expire_date": "到期日期（`yyyy-mm-dd`），`time_in_force=GTD` 時必填",
         "outside_rth": "盤前盤後設置：`RTH_ONLY`（僅常規交易時段）、`ANY_TIME`（含盤前盤後任意時段）、`OVERNIGHT`（夜盤，僅美股）",
         "remark": "委託備註（最多 255 字符）",
+        "attached_order_type": "附加止盈/止損單類型：`PROFIT_TAKER`（僅止盈）、`STOP_LOSS`（僅止損）、`BRACKET`（止盈止損同時掛）。普通委託請省略；不傳該參數時其餘 attached_* 參數均被忽略",
+        "attached_profit_taker_price": "止盈觸發價。`PROFIT_TAKER` 與 `BRACKET` 必填",
+        "attached_stop_loss_price": "止損觸發價。`STOP_LOSS` 與 `BRACKET` 必填",
+        "attached_profit_taker_submit_price": "止盈單觸發後的委託限價，配合 `attached_activate_order_type=LO` 使用",
+        "attached_stop_loss_submit_price": "止損單觸發後的委託限價，配合 `attached_activate_order_type=LO` 使用",
+        "attached_time_in_force": "附加單有效期：`Day` / `GTC` / `GTD`；省略則沿用母單設置",
+        "attached_expire_time": "附加單到期時間，Unix 時間戳（秒），例如 `\"1767139200\"`；`attached_time_in_force=GTD` 時必填",
+        "attached_activate_order_type": "附加單觸發後提交的委託類型，例如 `LO`（需同時給出對應的 `attached_*_submit_price`）或 `MO`",
+        "attached_outside_rth": "附加單觸發後的盤前盤後設置：`RTH_ONLY` / `ANY_TIME` / `OVERNIGHT`",
         "execute": "本次試執行返回的 confirmation_code。省略（預設）表示 DRY RUN：只校驗並回顯請求，同時返回一個三位確認碼，不會發往交易所。必須先不帶該參數呼叫一次，把預覽展示給用戶，待用戶明確確認後才可再次呼叫並回填該碼。確認碼由訂單本身（代碼、方向、數量、價格）推導而來，只對這一筆完全相同的請求生效——改動任何欄位即失效。不可自行決定回填。"
+      }
+    },
+    "submit_multileg_order": {
+      "title": "提交組合期權委託",
+      "description": "提交多腿期權組合委託，各腿作為一個策略單一起成交或掛單。strategy：CoveredCall（備兌認購）/ CoveredPut（備兌認沽）/ VerticalCallSpread（垂直認購價差）/ VerticalPutSpread（垂直認沽價差）/ Collar（領口）/ Straddle（跨式）/ Strangle（寬跨式）；side：Buy/Sell（整個策略的方向）；order_type：LO（需 submitted_price，為組合淨價）或 MO；legs[]：{symbol, ratio_quantity}，按策略順序排列，僅接受期權代碼；ratio_quantity 恆為正數——每條腿的買賣方向由 strategy 與 side 共同決定",
+      "properties": {
+        "strategy": "組合策略，決定所需腿數與每條腿的方向：`CoveredCall`（備兌認購）/ `CoveredPut`（備兌認沽）/ `VerticalCallSpread`（垂直認購價差）/ `VerticalPutSpread`（垂直認沽價差）/ `Collar`（領口）/ `Straddle`（跨式）/ `Strangle`（寬跨式）",
+        "side": "買賣方向：`Buy`（買入）或 `Sell`（賣出），指整個策略的方向",
+        "order_type": "委託類型：`LO`（限價，需 `submitted_price`）或 `MO`（市價）",
+        "submitted_quantity": "委託組數（每組為一套按 `legs` 比例構成的腿）",
+        "legs": "組合的各條腿，按策略順序排列，僅接受期權代碼",
+        "submitted_price": "整個組合的淨限價，`LO` 必填",
+        "remark": "委託備註（最多 255 字符）"
       }
     },
     "ah_premium": {
       "title": "A/H 溢價",
       "description": "獲取 A/H 股溢價歷史 K 線數據，返回 items[]{timestamp, open, high, low, close}，表示溢價百分比",
       "properties": {
-        "symbol": "證券代碼，例如 `\"700.HK\"`",
+        "symbol": "證券代碼，例如 `\"700.HK\"`。請用規範代碼，補零的代碼（如 \"00700.HK\"）會返回空記錄而非報錯",
         "period": "K 線週期：`1m`、`5m`、`15m`、`30m`、`60m`、`day`（預設）、`week`、`month`、`year`",
         "count": "返回的 K 線數量（預設 100）"
       }
@@ -294,14 +335,14 @@
       "title": "A/H 溢價（分時）",
       "description": "獲取 A/H 股溢價當日分時數據，返回 items[]{timestamp, premium_rate}，逐分鐘展示溢價百分比",
       "properties": {
-        "symbol": "證券代碼，例如 `\"700.HK\"`"
+        "symbol": "證券代碼，例如 `\"700.HK\"`。請用規範代碼，補零的代碼（如 \"00700.HK\"）會返回空記錄而非報錯"
       }
     },
     "alert_add": {
       "title": "新增價格預警",
       "description": "新增價格預警，返回已創建的預警對象。condition：price_rise/price_fall（絕對價格）或 percent_rise/percent_fall（升跌幅）；frequency：once/daily/every",
       "properties": {
-        "symbol": "證券代碼，例如 `\"700.HK\"`",
+        "symbol": "證券代碼，例如 `\"700.HK\"`。請用規範代碼，補零的代碼（如 \"00700.HK\"）會返回空記錄而非報錯",
         "condition": "預警條件：`price_rise`、`price_fall`、`percent_rise`、`percent_fall`",
         "price": "閾值價格或百分比數值",
         "frequency": "預警頻率：`once`（觸發一次後停用）、`daily`（每日一次）、`every`（每次滿足條件都觸發）"
@@ -330,7 +371,7 @@
     },
     "alert_list": {
       "title": "價格預警列表",
-      "description": "獲取所有已配置的價格預警，返回 lists[]{counter_id, indicators[]{id, condition, price, frequency, enabled, triggered_at}}"
+      "description": "獲取所有已配置的價格預警，返回 lists[]{symbol, indicators[]{id, condition, price, frequency, enabled, triggered_at}}"
     },
     "anomaly": {
       "title": "市場異動",
@@ -345,7 +386,7 @@
       "title": "券商持倉",
       "description": "獲取指定證券的主要券商持倉數據，返回 items[]{broker_name, holding_quantity, holding_change, holding_ratio}",
       "properties": {
-        "symbol": "證券代碼，例如 `\"700.HK\"`",
+        "symbol": "證券代碼，例如 `\"700.HK\"`。請用規範代碼，補零的代碼（如 \"00700.HK\"）會返回空記錄而非報錯",
         "period": "時間窗口：`rct_1`（近 1 日，預設）、`rct_5`（近 5 日）、`rct_20`（近 20 日）、`rct_60`（近 60 日）"
       }
     },
@@ -353,7 +394,7 @@
       "title": "券商持倉（日度）",
       "description": "獲取指定券商（broker_id）對某證券的逐日持倉歷史，返回 items[]{date, holding_quantity, holding_change, holding_ratio}",
       "properties": {
-        "symbol": "證券代碼，例如 `\"700.HK\"`",
+        "symbol": "證券代碼，例如 `\"700.HK\"`。請用規範代碼，補零的代碼（如 \"00700.HK\"）會返回空記錄而非報錯",
         "broker_id": "券商參與者編號"
       }
     },
@@ -361,19 +402,19 @@
       "title": "券商持倉明細",
       "description": "獲取完整的券商持倉明細列表，返回 items[]{broker_id, broker_name, holding_quantity, holding_ratio, holding_change, date}",
       "properties": {
-        "symbol": "證券代碼，例如 `\"700.HK\"`"
+        "symbol": "證券代碼，例如 `\"700.HK\"`。請用規範代碼，補零的代碼（如 \"00700.HK\"）會返回空記錄而非報錯"
       }
     },
     "brokers": {
       "title": "經紀商隊列",
       "description": "獲取港股經紀商買賣盤隊列（僅港股），返回 bid_brokers/ask_brokers[]{position, broker_ids}，通過 participants 工具將 broker_id 映射為名稱",
       "properties": {
-        "symbol": "證券代碼，例如 `\"700.HK\"`"
+        "symbol": "證券代碼，例如 `\"700.HK\"`。請用規範代碼，補零的代碼（如 \"00700.HK\"）會返回空記錄而非報錯"
       }
     },
     "calc_indexes": {
       "title": "指標計算",
-      "description": "批量計算證券的行情/財務指標（PE、PB、股息率、最新價、換手率等），傳入 symbols 和 indexes 列表，返回各標的的指標值",
+      "description": "批量計算證券的行情/財務指標（PE、PB、股息率、最新價、換手率等），傳入 symbols 和 indexes 列表，返回各標的的指標值。當請求希臘字母指標（Delta、Gamma、Theta、Vega、Rho）時，返回值已歸一化：theta 為每日值（一天的時間損耗），vega 為隱含波動率每變動 1% 的價格變化，rho 為無風險利率每變動 1% 的價格變化。",
       "properties": {
         "symbols": "證券代碼，例如 `[\"700.HK\", \"AAPL.US\"]`",
         "indexes": "待計算指標：`LastDone`、`ChangeValue`、`ChangeRate`、`Volume`、`Turnover`、`YtdChangeRate`、`TurnoverRate`、`TotalMarketValue`、`CapitalFlow`、`Amplitude`、`VolumeRatio`、`PeTtmRatio`、`PbRatio`、`DividendRatioTtm`、`FiveDayChangeRate`、`TenDayChangeRate`、`HalfYearChangeRate`、`FiveMinutesChangeRate`、`ExpiryDate`、`StrikePrice`、`UpperStrikePrice`、`LowerStrikePrice`、`OutstandingQty`、`OutstandingRatio`、`Premium`、`ItmOtm`、`ImpliedVolatility`、`WarrantDelta`、`CallPrice`、`ToCallPrice`、`EffectiveLeverage`、`LeverageRatio`、`ConversionRatio`、`BalancePoint`、`OpenInterest`、`Delta`、`Gamma`、`Theta`、`Vega`、`Rho`"
@@ -381,7 +422,7 @@
     },
     "candlesticks": {
       "title": "K 線數據",
-      "description": "獲取 K 線數據（OHLCV）。period：1m/5m/15m/30m/60m/day/week/month/year；trade_sessions：intraday（預設，僅正常時段）或 all（含盤前盤後）",
+      "description": "獲取 K 線數據（OHLCV）。period：1m/5m/15m/30m/60m/day/week/month/year；trade_sessions：intraday（預設，僅正常時段）或 all（含盤前盤後）。若賬戶權限上限低於請求的 count，會返回權限允許範圍內盡量多的數據而不報錯——如果需要精確數量，請檢查返回數組的長度。",
       "properties": {
         "symbol": "證券代碼",
         "period": "K 線週期：`1m`、`5m`、`15m`、`30m`、`60m`、`day`、`week`、`month`、`year`",
@@ -392,30 +433,30 @@
     },
     "capital_distribution": {
       "title": "資金分佈",
-      "description": "獲取資金分佈（大/中/小單流入流出），返回 {timestamp, capital_in{large, medium, small}, capital_out{large, medium, small}}",
+      "description": "獲取資金分佈（大/中/小單流入流出），返回 {timestamp, capital_in{large, medium, small}, capital_out{large, medium, small}, data_available}。data_available 為 false 時表示該標的（如指數）沒有資金流數據，此時其餘欄位仍會返回但都是無意義的零值",
       "properties": {
-        "symbol": "證券代碼，例如 `\"700.HK\"`"
+        "symbol": "證券代碼，例如 `\"700.HK\"`。請用規範代碼，補零的代碼（如 \"00700.HK\"）會返回空記錄而非報錯"
       }
     },
     "capital_flow": {
       "title": "資金流向",
       "description": "獲取資金淨流入/流出當日時間序列，返回 items[]{timestamp, inflow, outflow, net_flow}",
       "properties": {
-        "symbol": "證券代碼，例如 `\"700.HK\"`"
+        "symbol": "證券代碼，例如 `\"700.HK\"`。請用規範代碼，補零的代碼（如 \"00700.HK\"）會返回空記錄而非報錯"
       }
     },
     "company": {
       "title": "公司概況",
-      "description": "獲取公司概況，返回 name、description、employees、CEO、founded_year、website、exchange、industry、market_cap 等信息。美股賬戶查詢 `.US` 標的時會路由到專屬美股接口，返回結構不同（intro、market_cap、top_rank_tags、sharelist、detail_url），與 output_schema 不符；其餘組合走通用接口，符合 output_schema",
+      "description": "獲取公司概況，返回 name、description、employees、CEO、founded_year、website、exchange、industry、market_cap 等信息。美股賬戶查詢 `.US` 標的會得到美股專屬變體（intro、market_cap、top_rank_tags、sharelist、detail_url）。區域由賬戶自動識別",
       "properties": {
-        "symbol": "證券代碼，例如 `\"700.HK\"`"
+        "symbol": "證券代碼，例如 `\"700.HK\"`。請用規範代碼，補零的代碼（如 \"00700.HK\"）會返回空記錄而非報錯"
       }
     },
     "consensus": {
       "title": "一致預期",
-      "description": "獲取分析師一致預期，返回 items[]{period, revenue_estimate, eps_estimate, net_income_estimate, analyst_count, last_updated}。美股賬戶查詢 `.US` 標的時會路由到專屬美股一致預期接口，返回結構不同（ai_summary + 按期間的 details[] 列表），與 output_schema 不符；其餘組合走通用接口，符合 output_schema",
+      "description": "獲取分析師一致預期，返回 items[]{period, revenue_estimate, eps_estimate, net_income_estimate, analyst_count, last_updated}。美股賬戶查詢 `.US` 標的會得到美股專屬變體（ai_summary + 按期間的 details[] 列表，替代 items[]）。區域由賬戶自動識別",
       "properties": {
-        "symbol": "證券代碼，例如 `\"700.HK\"`"
+        "symbol": "證券代碼，例如 `\"700.HK\"`。請用規範代碼，補零的代碼（如 \"00700.HK\"）會返回空記錄而非報錯"
       }
     },
     "constituent": {
@@ -429,7 +470,7 @@
       "title": "公司行動",
       "description": "獲取公司行動信息（拆股、回購、更名等），返回 items[]{action_type, effective_date, ratio, description}",
       "properties": {
-        "symbol": "證券代碼，例如 `\"700.HK\"`"
+        "symbol": "證券代碼，例如 `\"700.HK\"`。請用規範代碼，補零的代碼（如 \"00700.HK\"）會返回空記錄而非報錯"
       }
     },
     "dca_check": {
@@ -443,26 +484,26 @@
       "title": "盤口深度",
       "description": "獲取買賣盤深度（最多 10 檔），返回 {bids[]{position, price, volume, order_num}, asks[]{position, price, volume, order_num}}",
       "properties": {
-        "symbol": "證券代碼，例如 `\"700.HK\"`"
+        "symbol": "證券代碼，例如 `\"700.HK\"`。請用規範代碼，補零的代碼（如 \"00700.HK\"）會返回空記錄而非報錯"
       }
     },
     "dividend": {
       "title": "派息歷史",
-      "description": "獲取證券的派息歷史，返回 items[]{ex_date（除權日）, pay_date（派發日）, record_date, dividend_type, amount, currency, status}。美股賬戶查詢 `.US` 標的時會按 ETF/個股路由到對應的專屬美股派息接口，返回結構不同，與 output_schema 不符（dividend_yield/dividend_yield_ttm 是百分比數值，例如 0.34 代表 0.34%，不是 0-1 的小數）；其餘組合走通用接口，符合 output_schema",
+      "description": "獲取證券的派息歷史，返回 items[]{ex_date（除權日）, pay_date（派發日）, record_date, dividend_type, amount, currency, status}。美股賬戶查詢 `.US` 標的會按 ETF/個股得到美股專屬變體（dividend_yield/dividend_yield_ttm 是百分比數值，例如 0.34 代表 0.34%，不是 0-1 的小數）。區域由賬戶自動識別",
       "properties": {
-        "symbol": "證券代碼，例如 `\"700.HK\"`"
+        "symbol": "證券代碼，例如 `\"700.HK\"`。請用規範代碼，補零的代碼（如 \"00700.HK\"）會返回空記錄而非報錯"
       }
     },
     "dividend_detail": {
       "title": "派息明細",
       "description": "獲取詳細派息分紅方案，返回 details[]{period, cash_dividend, stock_dividend, record_date, ex_date, pay_date, currency}",
       "properties": {
-        "symbol": "證券代碼，例如 `\"700.HK\"`"
+        "symbol": "證券代碼，例如 `\"700.HK\"`。請用規範代碼，補零的代碼（如 \"00700.HK\"）會返回空記錄而非報錯"
       }
     },
     "etf_docs": {
       "title": "ETF文件（美股）",
-      "description": "獲取美股ETF的監管/招募說明書文件（etf-files）。僅限美股賬戶；港股/滬深/新加坡賬戶調用會返回 DcRegionRestricted 錯誤",
+      "description": "獲取美股ETF的監管/招募說明書文件（etf-files）。僅限美股賬戶；亞太賬戶調用會返回 DcRegionRestricted 錯誤",
       "properties": {
         "symbol": "ETF代碼，例如 `\"SPY.US\"`",
         "limit": "最多返回的文件數量，留空返回全部"
@@ -476,14 +517,14 @@
       "title": "高管與董事",
       "description": "獲取公司高管及董事會成員信息，返回 members[]{name, title, appointed_date, age, biography, compensation}",
       "properties": {
-        "symbol": "證券代碼，例如 `\"700.HK\"`"
+        "symbol": "證券代碼，例如 `\"700.HK\"`。請用規範代碼，補零的代碼（如 \"00700.HK\"）會返回空記錄而非報錯"
       }
     },
     "filings": {
       "title": "監管公告",
       "description": "獲取監管文件公告（8-K、10-Q、10-K 等），返回 items[]{id, title, type, language, filing_date, url}",
       "properties": {
-        "symbol": "證券代碼，例如 `\"700.HK\"`"
+        "symbol": "證券代碼，例如 `\"700.HK\"`。請用規範代碼，補零的代碼（如 \"00700.HK\"）會返回空記錄而非報錯"
       }
     },
     "finance_calendar": {
@@ -507,7 +548,7 @@
     },
     "financial_report_key_metrics": {
       "title": "關鍵財務指標（美股）",
-      "description": "獲取美股標的的關鍵財務指標（fin-keyfactor）。report: af（年度，默認）、saf、qf、q1/q2/q3。僅限美股賬戶；港股/滬深/新加坡賬戶調用會返回 DcRegionRestricted 錯誤",
+      "description": "獲取美股標的的關鍵財務指標（fin-keyfactor）。report: af（年度，默認）、saf、qf、q1/q2/q3。僅限美股賬戶；亞太賬戶調用會返回 DcRegionRestricted 錯誤",
       "properties": {
         "symbol": "證券代碼，例如 `\"AAPL.US\"`",
         "report": "報告期：`\"annual\"`（默認）或 `\"quarterly\"`"
@@ -517,14 +558,14 @@
       "title": "EPS 預測",
       "description": "獲取 EPS 預測及分析師預期歷史，返回 items[]{forecast_start_date, forecast_end_date, eps_estimate, eps_actual, surprise_pct, analyst_count}",
       "properties": {
-        "symbol": "證券代碼，例如 `\"700.HK\"`"
+        "symbol": "證券代碼，例如 `\"700.HK\"`。請用規範代碼，補零的代碼（如 \"00700.HK\"）會返回空記錄而非報錯"
       }
     },
     "fund_holder": {
       "title": "持倉基金",
       "description": "獲取持有指定證券的基金及 ETF，返回 fund_holders[]{fund_name, fund_symbol, shares, ratio, change, reported_at}",
       "properties": {
-        "symbol": "證券代碼，例如 `\"700.HK\"`"
+        "symbol": "證券代碼，例如 `\"700.HK\"`。請用規範代碼，補零的代碼（如 \"00700.HK\"）會返回空記錄而非報錯"
       }
     },
     "grid_symbol_info": {
@@ -573,7 +614,7 @@
     },
     "grid_submit": {
       "title": "提交網格訂單",
-      "description": "提交網格交易訂單。需提供 symbol、settlement_currency 及網格規則:基準價/上限價/下限價、trigger_price_type(1=價差,2=百分比)及對應的價差/百分比上下沿、trigger_quantity、上下限數量、time_in_force(0=當日,1=GTC,6=GTD)、grid_order_type_up/down(GMO/GLO/GTG)、邊界事件(1=忽略,2=按最新價平倉)。價格/數量為字串。需先通過 grid_questionnaire 授權。【必須兩步確認】未傳本次試執行返回的 confirmation_code 時，本工具為 DRY RUN（試執行）：只校驗並回顯請求內容，不會發往交易所。請先不帶 execute 呼叫一次，把返回的預覽完整展示給用戶，只有在用戶明確確認之後，才可再次呼叫並把該確認碼傳入 execute。確認碼由訂單本身（代碼、方向、數量、價格）推導而來，只對這一筆完全相同的請求生效。絕不可自行決定回填確認碼。網格一旦生效會自行持續交易",
+      "description": "提交網格交易訂單。需提供 symbol、settlement_currency 及網格規則:基準價/上限價/下限價、trigger_price_type(1=價差,2=百分比)及對應的價差/百分比上下沿、trigger_quantity、上下限數量、time_in_force(0=當日,1=GTC,6=GTD)、grid_order_type_up/down(GMO/GLO/GTG)、邊界事件(1=忽略,2=按最新價平倉)。價格/數量為字串。【必須兩步確認】未傳本次試執行返回的 confirmation_code 時，本工具為 DRY RUN（試執行）：只校驗並回顯請求內容，不會發往交易所。請先不帶 execute 呼叫一次，把返回的預覽完整展示給用戶，只有在用戶明確確認之後，才可再次呼叫並把該確認碼傳入 execute。確認碼由訂單本身（代碼、方向、數量、價格）推導而來，只對這一筆完全相同的請求生效。絕不可自行決定回填確認碼。網格一旦生效會自行持續交易",
       "properties": {
         "symbol": "證券代碼,例如 \"700.HK\"",
         "settlement_currency": "結算貨幣,例如 \"HKD\"",
@@ -656,10 +697,6 @@
         "execute": "本次試執行返回的 confirmation_code。省略（預設）表示 DRY RUN：只校驗並回顯請求，同時返回一個三位確認碼，不會發往交易所。必須先不帶該參數呼叫一次，把預覽展示給用戶，待用戶明確確認後才可再次呼叫並回填該碼。確認碼由訂單本身（代碼、方向、數量、價格）推導而來，只對這一筆完全相同的請求生效——改動任何欄位即失效。不可自行決定回填。"
       }
     },
-    "grid_questionnaire": {
-      "title": "網格策略授權",
-      "description": "記錄提交網格訂單前所需的一次性策略風險披露同意,無需參數。"
-    },
     "history_candlesticks_by_date": {
       "title": "歷史 K 線（按日期）",
       "description": "按日期區間獲取歷史 K 線（OHLCV）數據。僅 symbol 必填，period 預設 day、forward_adjust 預設 false、trade_sessions 預設 all。period：1m/5m/15m/30m/60m/day/week/month/year",
@@ -674,7 +711,7 @@
     },
     "history_candlesticks_by_offset": {
       "title": "歷史 K 線（按偏移）",
-      "description": "以參考時間為錨點按偏移量獲取歷史 K 線（OHLCV）數據。僅 symbol 必填，period 預設 day、count 預設 100、forward_adjust 與 forward 預設 false、trade_sessions 預設 all。",
+      "description": "以參考時間為錨點按偏移量獲取歷史 K 線（OHLCV）數據。僅 symbol 必填，period 預設 day、count 預設 100、forward_adjust 與 forward 預設 false、trade_sessions 預設 all。若賬戶權限上限低於請求的 count，會返回權限允許範圍內盡量多的數據而不報錯——如果需要精確數量，請檢查返回數組的長度。",
       "properties": {
         "symbol": "證券代碼",
         "period": "K 線週期：`1m`、`5m`、`15m`、`30m`、`60m`、`day`、`week`、`month`、`year`（預設 `day`）",
@@ -698,35 +735,35 @@
       "title": "行業估值",
       "description": "獲取同行業可比公司估值對比，返回 list[]{symbol, name, pe, pb, ps, dividend_yield, history[]{date, pe, pb}}",
       "properties": {
-        "symbol": "證券代碼，例如 `\"700.HK\"`"
+        "symbol": "證券代碼，例如 `\"700.HK\"`。請用規範代碼，補零的代碼（如 \"00700.HK\"）會返回空記錄而非報錯"
       }
     },
     "industry_valuation_dist": {
       "title": "行業估值分佈",
       "description": "獲取行業 PE/PB/PS 估值分佈，返回 distributions{pe/pb/ps}{min, p25, median, p75, max, current_percentile}，顯示個股在行業中的分位",
       "properties": {
-        "symbol": "證券代碼，例如 `\"700.HK\"`"
+        "symbol": "證券代碼，例如 `\"700.HK\"`。請用規範代碼，補零的代碼（如 \"00700.HK\"）會返回空記錄而非報錯"
       }
     },
     "institution_rating": {
       "title": "機構評級",
       "description": "獲取機構評級彙總，返回 analyst{buy, outperform, hold, underperform, sell 家數, target_price, consensus_rating} 及評級列表",
       "properties": {
-        "symbol": "證券代碼，例如 `\"700.HK\"`"
+        "symbol": "證券代碼，例如 `\"700.HK\"`。請用規範代碼，補零的代碼（如 \"00700.HK\"）會返回空記錄而非報錯"
       }
     },
     "institution_rating_detail": {
       "title": "機構評級明細",
       "description": "獲取機構評級與目標價歷史明細，返回 target.list[]{analyst, firm, rating, target_price, timestamp}",
       "properties": {
-        "symbol": "證券代碼，例如 `\"700.HK\"`"
+        "symbol": "證券代碼，例如 `\"700.HK\"`。請用規範代碼，補零的代碼（如 \"00700.HK\"）會返回空記錄而非報錯"
       }
     },
     "intraday": {
       "title": "分時數據",
       "description": "獲取分時（逐分鐘）價格/成交量數據。trade_sessions：intraday（預設，僅正常時段）或 all（含盤前盤後）",
       "properties": {
-        "symbol": "證券代碼，例如 `\"700.HK\"`",
+        "symbol": "證券代碼，例如 `\"700.HK\"`。請用規範代碼，補零的代碼（如 \"00700.HK\"）會返回空記錄而非報錯",
         "trade_sessions": "包含的交易時段：`intraday`（預設，僅常規時段）或 `all`（含盤前盤後）"
       }
     },
@@ -734,7 +771,7 @@
       "title": "投資者關係",
       "description": "獲取投資者關係事件與公告，返回 items[]{title, event_type, event_date, url, description}",
       "properties": {
-        "symbol": "證券代碼，例如 `\"700.HK\"`"
+        "symbol": "證券代碼，例如 `\"700.HK\"`。請用規範代碼，補零的代碼（如 \"00700.HK\"）會返回空記錄而非報錯"
       }
     },
     "market_status": {
@@ -773,7 +810,7 @@
       "title": "資訊",
       "description": "獲取證券相關最新新聞，返回 items[]{id, title, source, publish_time, summary, url, related_symbols[]}",
       "properties": {
-        "symbol": "證券代碼，例如 `\"700.HK\"`"
+        "symbol": "證券代碼，例如 `\"700.HK\"`。請用規範代碼，補零的代碼（如 \"00700.HK\"）會返回空記錄而非報錯"
       }
     },
     "news_detail": {
@@ -791,14 +828,14 @@
       "title": "經營業績",
       "description": "獲取公司經營指標（僅港股），返回 items[]{period, metric_name, value, unit}，如客運量、貨運量、門店數等",
       "properties": {
-        "symbol": "證券代碼，例如 `\"700.HK\"`"
+        "symbol": "證券代碼，例如 `\"700.HK\"`。請用規範代碼，補零的代碼（如 \"00700.HK\"）會返回空記錄而非報錯"
       }
     },
     "option_chain_expiry_date_list": {
       "title": "期權到期日列表",
       "description": "獲取期權鏈可選到期日列表，返回 expiry_dates[]（yyyy-mm-dd）。配合 option_chain_info_by_date 查詢行權價和 Greeks",
       "properties": {
-        "symbol": "證券代碼，例如 `\"700.HK\"`"
+        "symbol": "證券代碼，例如 `\"700.HK\"`。請用規範代碼，補零的代碼（如 \"00700.HK\"）會返回空記錄而非報錯"
       }
     },
     "option_chain_info_by_date": {
@@ -811,9 +848,9 @@
     },
     "option_quote": {
       "title": "期權報價",
-      "description": "獲取期權行情（最多 500 個），返回各標的：last_done（最新價）, prev_close, open, high, low, volume（成交量）, turnover（成交額）, implied_volatility（隱含波動率）, delta/gamma/theta/vega/rho（Greeks）, open_interest（未平倉量）",
+      "description": "獲取期權行情（最多 500 個）。symbols 必須是期權合約代碼（例如 \"AAPL230317P160000.US\"），不能用普通股票代碼——請先用 option_chain_info_by_date 返回的 call.symbol/put.symbol 欄位獲取有效的期權代碼。返回各標的：last_done（最新價）, prev_close, open, high, low, volume（成交量）, turnover（成交額）, implied_volatility（隱含波動率）, delta/gamma/theta/vega/rho（Greeks）, open_interest（未平倉量）。Greeks 已歸一化：theta 為每日值（一天的時間損耗），vega 為隱含波動率每變動 1% 的價格變化，rho 為無風險利率每變動 1% 的價格變化。",
       "properties": {
-        "symbols": "證券代碼，例如 `[\"700.HK\", \"AAPL.US\"]`"
+        "symbols": "期權合約代碼，例如 `[\"AAPL230317P160000.US\"]`。不是普通股票代碼——請先用 option_chain_expiry_date_list 列出到期日，再用 option_chain_info_by_date 按行使價獲取的 call.symbol/put.symbol 欄位拿到有效代碼"
       }
     },
     "option_volume": {
@@ -846,7 +883,7 @@
       "title": "機構股東",
       "description": "獲取證券的機構股東信息，返回 shareholders[]{institution, shares, ratio, change, change_type, reported_at}",
       "properties": {
-        "symbol": "證券代碼，例如 `\"700.HK\"`"
+        "symbol": "證券代碼，例如 `\"700.HK\"`。請用規範代碼，補零的代碼（如 \"00700.HK\"）會返回空記錄而非報錯"
       }
     },
     "sharelist_add": {
@@ -928,7 +965,7 @@
       "title": "討論列表",
       "description": "獲取證券相關的社區討論，返回 items[]{id, title, author, created_at, like_count, comment_count, content_summary}",
       "properties": {
-        "symbol": "證券代碼，例如 `\"700.HK\"`"
+        "symbol": "證券代碼，例如 `\"700.HK\"`。請用規範代碼，補零的代碼（如 \"00700.HK\"）會返回空記錄而非報錯"
       }
     },
     "topic_create": {
@@ -970,7 +1007,7 @@
       "title": "成交統計",
       "description": "獲取成交統計（主動買/主動賣/中性盤成交量分佈），返回 items[]{price_range, buy_volume, sell_volume, neutral_volume}",
       "properties": {
-        "symbol": "證券代碼，例如 `\"700.HK\"`"
+        "symbol": "證券代碼，例如 `\"700.HK\"`。請用規範代碼，補零的代碼（如 \"00700.HK\"）會返回空記錄而非報錯"
       }
     },
     "trades": {
@@ -996,16 +1033,16 @@
     },
     "valuation": {
       "title": "估值",
-      "description": "獲取估值概覽及同業對比，返回 metrics.pe/pb/ps/dividend_yield{current, industry_avg, 5yr_avg, percentile} 及同業對比列表。美股賬戶查詢 `.US` 標的時會路由到專屬美股估值接口，返回結構不同（ai_summary + 字段不同的 metrics.pe），與 output_schema 不符；其餘組合走通用接口，符合 output_schema",
+      "description": "獲取估值概覽及同業對比，返回 metrics.pe/pb/ps/dividend_yield{current, industry_avg, 5yr_avg, percentile} 及同業對比列表。美股賬戶查詢 `.US` 標的會得到美股專屬變體（ai_summary + 字段不同的 metrics.pe）。區域由賬戶自動識別",
       "properties": {
-        "symbol": "證券代碼，例如 `\"700.HK\"`"
+        "symbol": "證券代碼，例如 `\"700.HK\"`。請用規範代碼，補零的代碼（如 \"00700.HK\"）會返回空記錄而非報錯"
       }
     },
     "valuation_history": {
       "title": "估值歷史",
       "description": "獲取詳細估值歷史時間序列，返回 history.metrics{pe/pb/ps/dividend_yield}[]{timestamp, value}，用於長期分位分析",
       "properties": {
-        "symbol": "證券代碼，例如 `\"700.HK\"`"
+        "symbol": "證券代碼，例如 `\"700.HK\"`。請用規範代碼，補零的代碼（如 \"00700.HK\"）會返回空記錄而非報錯"
       }
     },
     "warrant_issuers": {
@@ -1203,7 +1240,7 @@
     },
     "industry_rank": {
       "title": "行業排行榜",
-      "description": "按市場（US/HK/CN/SG）和指標排列行業。indicator：0=領漲 1=今日走勢 2=人氣 3=市值 4=營收 5=營收增長率 6=淨利潤 7=淨利潤增長率。sort_type：0=單級 1=多層。返回 items[]{counter_id（如 BK/US/IN00258）, name, chg, lists[]}，counter_id 可直接傳入 industry_peers",
+      "description": "按市場（US/HK/CN/SG）和指標排列行業。indicator：0=領漲 1=今日走勢 2=人氣 3=市值 4=營收 5=營收增長率 6=淨利潤 7=淨利潤增長率。sort_type：0=單級 1=多層。返回 items[]{symbol（如 IN00258.US）, name, chg, lists[]}，可將某行的 symbol 直接傳入 industry_peers",
       "properties": {
         "market": "市場代碼：US、HK、CN、SG",
         "indicator": "排列指標：0=領漲、1=今日走勢、2=人氣、3=市值、4=營收、5=營收增長率、6=淨利潤、7=淨利潤增長率",
@@ -1212,9 +1249,9 @@
     },
     "industry_peers": {
       "title": "行業同業分組樹",
-      "description": "獲取行業分組的層級同業樹，接受來自 industry_rank 的 BK counter_id（如 BK/US/IN00258），返回 chain{name, counter_id, stock_num, chg, ytd_chg, next[...]} 和 top{name, market}",
+      "description": "獲取行業分組的層級同業樹，接受來自 industry_rank 的行業 symbol（如 IN00258.US），返回 chain{name, symbol, stock_num, chg, ytd_chg, next[...]} 和 top{name, market}",
       "properties": {
-        "symbol": "來自 industry_rank 的 BK counter_id，例如 `\"BK/US/IN00258\"`"
+        "symbol": "來自 industry_rank 的行業 symbol，例如 `\"IN00258.US\"`；也接受 BK counter_id 形式（`\"BK/US/IN00258\"`）"
       }
     },
     "financial_report_snapshot": {

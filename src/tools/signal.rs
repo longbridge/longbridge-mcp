@@ -96,6 +96,23 @@ fn unwrap_embedded_json(raw: &str) -> serde_json::Value {
     serde_json::from_str(raw).unwrap_or_else(|_| serde_json::Value::String(raw.to_owned()))
 }
 
+/// The embedded analysis document repeats the signal's `summary` and `title`
+/// verbatim inside `analysis.signal`; the canonical copies already sit at the
+/// top level, so drop the nested duplicates. The summary alone runs to ~1 KB of
+/// Markdown, so this is the largest single redundancy in a `signal_detail`
+/// payload. `outlook_desc` is deliberately kept — it is the *localized* outlook
+/// label (e.g. "强烈看多"), not a verbatim copy of the English `outlook` enum.
+fn drop_analysis_duplicates(item: &mut serde_json::Value) {
+    if let Some(signal) = item
+        .get_mut("analysis")
+        .and_then(|a| a.get_mut("signal"))
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        signal.remove("summary");
+        signal.remove("title");
+    }
+}
+
 /// `GET /v1/signals/{signal_id}` — one signal with its full analysis.
 pub async fn signal_detail(
     mctx: &crate::tools::McpContext,
@@ -107,7 +124,9 @@ pub async fn signal_detail(
     let analysis = unwrap_embedded_json(&signal.json_data);
     let mut item = SignalItem::from(signal);
     item.analysis = Some(analysis);
-    tool_json(&item)
+    let mut value = serde_json::to_value(&item).map_err(Error::Serialize)?;
+    drop_analysis_duplicates(&mut value);
+    tool_json(&value)
 }
 
 /// `GET /v1/facts/security_facts` — the fact (catalyst) events behind signals.
@@ -148,6 +167,59 @@ mod tests {
             v,
             serde_json::Value::String("not json".into()),
             "an unparsable payload must survive rather than be dropped"
+        );
+    }
+
+    #[test]
+    fn drop_analysis_duplicates_removes_nested_summary_and_title_only() {
+        let mut value = serde_json::json!({
+            "summary": "canonical summary",
+            "title": "canonical title",
+            "outlook": "Bullish",
+            "outlook_desc": "强烈看多",
+            "analysis": {
+                "confidence": "high",
+                "signal": {
+                    "summary": "canonical summary",
+                    "title": "canonical title",
+                    "outlook_desc": "强烈看多",
+                    "strategy_fit": 88
+                }
+            }
+        });
+        drop_analysis_duplicates(&mut value);
+
+        let signal = &value["analysis"]["signal"];
+        assert!(
+            signal.get("summary").is_none(),
+            "the nested verbatim summary duplicate must be dropped"
+        );
+        assert!(
+            signal.get("title").is_none(),
+            "the nested verbatim title duplicate must be dropped"
+        );
+        // Distinct nested data survives.
+        assert_eq!(
+            signal["strategy_fit"], 88,
+            "unrelated nested fields must be preserved"
+        );
+        // Top-level canonical copies survive.
+        assert_eq!(
+            value["summary"], "canonical summary",
+            "the top-level summary must be kept"
+        );
+        assert_eq!(
+            value["title"], "canonical title",
+            "the top-level title must be kept"
+        );
+        // The localized outlook label is kept, not treated as a duplicate.
+        assert_eq!(
+            value["outlook_desc"], "强烈看多",
+            "the localized outlook label must be preserved"
+        );
+        assert_eq!(
+            value["analysis"]["signal"]["outlook_desc"], "强烈看多",
+            "the nested localized outlook label must be preserved"
         );
     }
 }

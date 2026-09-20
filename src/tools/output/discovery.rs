@@ -2,7 +2,7 @@
 //! tool families ("discovery" tools).
 //!
 //! Mirrors the shape produced by each tool *after* its post-transform pipeline
-//! runs (snake_case + RFC3339 + `counter_id`→`symbol` + `Decimal`→`String`).
+//! runs (snake_case + RFC3339 + `Decimal`→`String`).
 //! Most tools here are HTTP passthroughs whose full upstream payload is not
 //! statically known, so every struct below intentionally models only the
 //! subset of fields named in the tool's `description`. All such fields are
@@ -386,6 +386,12 @@ pub struct ScreenerSearchResponse {
     /// Total number of matching securities.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub total: Option<i64>,
+    /// Per-indicator display metadata, keyed by indicator key: `{ key: { name,
+    /// unit } }`. The `name`/`unit` labels are identical for a given key across
+    /// every result row, so they are listed once here instead of being repeated
+    /// on each row's `indicators[]`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub legend: Option<serde_json::Value>,
     /// Result rows for the current page.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub items: Option<Vec<ScreenerResultItem>>,
