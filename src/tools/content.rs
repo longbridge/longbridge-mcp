@@ -63,7 +63,11 @@ pub async fn news(
 ) -> Result<CallToolResult, McpError> {
     let ctx = ContentContext::new(mctx.create_config());
     let result = ctx.news(p.symbol).await.map_err(Error::longbridge)?;
-    tool_json(&result)
+    // News items sourced from community posts embed `[st]…#Name.HK[/st]` ticker
+    // markup in their description; rewrite it to the readable ticker.
+    let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;
+    crate::serialize::strip_cashtags_in_field(&mut value, "description");
+    tool_json(&value)
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -133,7 +137,14 @@ pub async fn news_detail(
             None,
         ));
     }
-    tool_json(item)
+    let mut item = item.clone();
+    // Rewrite `[st]…#Name.HK[/st]` ticker markup to the readable ticker, and
+    // drop the display-only author avatar URL.
+    for field in ["description", "body"] {
+        crate::serialize::strip_cashtags_in_field(&mut item, field);
+    }
+    crate::serialize::drop_keys(&mut item, &["avatar"]);
+    tool_json(&item)
 }
 
 pub async fn topic(
@@ -142,7 +153,11 @@ pub async fn topic(
 ) -> Result<CallToolResult, McpError> {
     let ctx = ContentContext::new(mctx.create_config());
     let result = ctx.topics(p.symbol).await.map_err(Error::longbridge)?;
-    tool_json(&result)
+    // Community posts wrap every ticker mention in `[st]…#Name.HK[/st]` markup;
+    // rewrite it to the readable ticker.
+    let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;
+    crate::serialize::strip_cashtags_in_field(&mut value, "description");
+    tool_json(&value)
 }
 
 pub async fn topic_detail(
@@ -154,7 +169,11 @@ pub async fn topic_detail(
         .topic_detail(p.topic_id)
         .await
         .map_err(Error::longbridge)?;
-    tool_json(&result)
+    let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;
+    for field in ["description", "body"] {
+        crate::serialize::strip_cashtags_in_field(&mut value, field);
+    }
+    tool_json(&value)
 }
 
 pub async fn topic_replies(
@@ -170,7 +189,13 @@ pub async fn topic_replies(
         .list_topic_replies(p.topic_id, opts)
         .await
         .map_err(Error::longbridge)?;
-    tool_json(&result)
+    let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;
+    // Reply bodies can embed `[st]…#Name.HK[/st]` ticker markup like topics do;
+    // rewrite it to the readable ticker.
+    crate::serialize::strip_cashtags_in_field(&mut value, "body");
+    // Drop the per-author avatar image URL — pure display, no analytic value.
+    crate::serialize::drop_keys(&mut value, &["avatar"]);
+    tool_json(&value)
 }
 
 pub async fn topic_create(

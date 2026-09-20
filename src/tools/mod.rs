@@ -175,6 +175,9 @@ where
 fn tool_error(name: &str, err: &McpError) -> CallToolResult {
     let message = upstream_message_of(err).unwrap_or_else(|| err.message.as_ref());
     if is_terminal_none(err) {
+        // Count the degraded condition (tools that return the error to
+        // `measured_tool_call` land here instead of calling `terminal_none_ok`).
+        crate::metrics::record_terminal_degraded(name, openapi_error_code_of(err));
         let envelope = serde_json::json!({
             "error_code": openapi_error_code_of(err),
             "message": message,
@@ -324,6 +327,20 @@ fn error_hint(err: &McpError) -> Option<&'static str> {
              the relevant market data package.",
         );
     }
+    // Zero-quota history candlestick (301607 with `limit:0`) is a missing
+    // entitlement, not an oversized request — the "use fewer symbols" hint below
+    // would be actively misleading, so handle it first. (Matches the terminal
+    // branch in `is_terminal_none`.)
+    if code == Some(301_607)
+        && (msg.contains("limit:0")
+            || upstream_message_of(err).is_some_and(|m| m.to_lowercase().contains("limit:0")))
+    {
+        return Some(
+            "Hint: this account has no history-candlestick quota (limit:0). The empty result is a \
+             permission/subscription gap, not an oversized request — reducing the number of \
+             symbols will NOT help. Tell the user their account lacks history market-data access.",
+        );
+    }
     if matches_error_class(
         code,
         &msg,
@@ -433,14 +450,32 @@ fn recoverable_of(err: &McpError) -> &'static str {
     "none"
 }
 
+/// True when `err` is a rate-limit / too-frequent condition the caller can
+/// resolve by waiting and retrying (i.e. `recoverable_of(err) == "backoff"`).
+/// Exposed for tools that want to do their own short in-function retry.
+pub(crate) fn is_backoff(err: &McpError) -> bool {
+    recoverable_of(err) == "backoff"
+}
+
 /// True only for the known *terminal* quote conditions that return
-/// `isError:false` with a schema-valid empty result: 301604 (no quote access)
-/// and 301603 (no quotes). Deliberately narrow — a bare "no access" needle is
-/// omitted so a 403 permission error can't be mistaken for a terminal quote
-/// condition.
+/// `isError:false` with a schema-valid empty result: 301604 (no quote access),
+/// 301603 (no quotes), and 301607 *with `limit:0`* (the account has zero
+/// history-candlestick quota). Deliberately narrow — a bare "no access" needle
+/// is omitted so a 403 permission error can't be mistaken for a terminal quote
+/// condition, and the `limit:0` guard keeps the *other* 301607 ("too many
+/// symbols", `limit`>0) as `fix_params` + count-boundary retry, not terminal.
 fn is_terminal_none(err: &McpError) -> bool {
     let code = openapi_error_code_of(err);
     let msg = err.message.to_lowercase();
+    // Zero-quota history candlestick: 301607 whose message reports `limit:0`.
+    // (Integers carry no leading zeros, so `limit:0` never matches `limit:10`
+    // etc.) Checked on both the display text and the clean upstream message.
+    if code == Some(301_607)
+        && (msg.contains("limit:0")
+            || upstream_message_of(err).is_some_and(|m| m.to_lowercase().contains("limit:0")))
+    {
+        return true;
+    }
     matches_error_class(
         code,
         &msg,
@@ -450,6 +485,40 @@ fn is_terminal_none(err: &McpError) -> bool {
             numeric: &["301604", "301603"],
         },
     )
+}
+
+/// For the quote-family tools: when `err` is a terminal no-access/no-data quote
+/// condition (301604/301603), return the SAME degraded `isError:false` result
+/// `tool_error` produces — but as an `Ok` the tool itself returns, so the call
+/// is NOT counted as an error by `measured_tool_call` (which keys off the inner
+/// `Result::is_err()`, before `tool_error` runs). Returns `None` for every other
+/// error, which the caller must propagate as `Err` unchanged.
+///
+/// Kept in sync with `tool_error`'s terminal branch: the `note`/`recoverable`
+/// fields must match that path. The tools that call this are array-rooted with
+/// no `output_schema` (never in `TERMINAL_OBJECT_ROOTED`), so no
+/// `structured_content` is attached.
+pub(crate) fn terminal_none_ok(name: &str, err: &McpError) -> Option<CallToolResult> {
+    if !is_terminal_none(err) {
+        return None;
+    }
+    // Observability: the error rate deliberately won't show these, so count them
+    // separately — each one is still a user who got no data.
+    crate::metrics::record_terminal_degraded(name, openapi_error_code_of(err));
+    let message = upstream_message_of(err).unwrap_or_else(|| err.message.as_ref());
+    let envelope = serde_json::json!({
+        "error_code": openapi_error_code_of(err),
+        "message": message,
+        "recoverable": "none",
+        "hint": error_hint(err),
+        "note": "These fields are EMPTY because access was denied or no data exists — NOT \
+                 because the values are zero. This is a permission/no-data placeholder, not a \
+                 real quote. Tell the user they lack the required market-data access (or that \
+                 no data exists); do not present the empty values as real.",
+    });
+    Some(CallToolResult::success(vec![Content::text(
+        envelope.to_string(),
+    )]))
 }
 
 mod alert;
@@ -639,11 +708,57 @@ impl McpContext {
         }
     }
 
-    /// Build an SDK `Config` for this request.
+    /// Whether the deployment configured an explicit upstream HTTP host, via
+    /// either name the SDK honours: `LONGBRIDGE_HTTP_URL` or the legacy
+    /// `LONGPORT_HTTP_URL` alias (the SDK's `env_var` tries the former then the
+    /// latter). An empty or non-UTF8 value counts as unset — it is not a usable
+    /// host, and pinning the global gateway is safer than deferring to a broken
+    /// override. The SDK also reads a `.env` file, but that is a dev-only
+    /// convenience not present in the deployments this decision protects.
+    fn http_url_override_configured() -> bool {
+        ["LONGBRIDGE_HTTP_URL", "LONGPORT_HTTP_URL"]
+            .iter()
+            .filter_map(|name| std::env::var(name).ok())
+            .any(|value| !value.is_empty())
+    }
+
+    /// Pure pin decision, split out so it can be unit-tested without mutating
+    /// the process environment (which the crate forbids via `unsafe`).
     ///
-    /// All three upstream URLs are set explicitly from [`crate::endpoints`], so
-    /// the SDK neither reads them from the environment nor geolocates an access
-    /// point — see that module for why the endpoints are pinned.
+    /// `pinned_env` is true for canary and mainland — dedicated environments
+    /// pinned unconditionally (nothing in the environment may influence them),
+    /// so both REST and WS share the pinned host. Otherwise (production) pin
+    /// only a `us_` credential that has no configured upstream — the safety net
+    /// for the global gateway. A configured upstream (a regional `-hk` / `-us`
+    /// cluster) always wins, and a non-`us_` credential is always left to the
+    /// SDK.
+    fn should_pin(pinned_env: bool, override_configured: bool, is_us: bool) -> bool {
+        pinned_env || (!override_configured && is_us)
+    }
+
+    /// Whether this request's upstream must be pinned to [`crate::endpoints`]
+    /// rather than left to the SDK's own env/geolocation resolution.
+    ///
+    /// Canary and mainland pin all three URLs together (deterministic, no
+    /// drift). On production, when this declines to pin, the SDK resolves each
+    /// URL independently — a deployment that configures only some of them can
+    /// split REST and WS across hosts, so a regional cluster should configure
+    /// them consistently (or set `LONGBRIDGE_REGION`, which also selects the
+    /// pinned mainland environment).
+    fn pin_upstream(&self) -> bool {
+        let pinned_env = matches!(
+            crate::endpoints::current(),
+            crate::endpoints::Environment::Canary | crate::endpoints::Environment::Mainland
+        );
+        Self::should_pin(
+            pinned_env,
+            Self::http_url_override_configured(),
+            longbridge::DcRegion::from_credential(&self.token) == longbridge::DcRegion::Us,
+        )
+    }
+
+    /// Build an SDK `Config` for this request. See `pin_upstream` for
+    /// when the three upstream URLs are pinned versus left to the SDK.
     pub fn create_config(&self) -> Arc<longbridge::Config> {
         let mut config =
             longbridge::Config::from_oauth(longbridge::oauth::OAuth::from_token(&self.token))
@@ -651,10 +766,13 @@ impl McpContext {
                 .enable_overnight()
                 // Identify MCP-originated requests on the Context path (REST and
                 // WebSocket upgrades), mirroring how longbridge-cli tags itself.
-                .header("user-agent", self.user_agent())
+                .header("user-agent", self.user_agent());
+        if self.pin_upstream() {
+            config = config
                 .http_url(crate::endpoints::http_url())
                 .quote_ws_url(crate::endpoints::quote_ws_url())
                 .trade_ws_url(crate::endpoints::trade_ws_url());
+        }
         if let Some(ref lang) = self.language {
             let lb_lang = if lang.contains("zh-CN") || lang.contains("zh-Hans") {
                 longbridge::Language::ZH_CN
@@ -673,14 +791,18 @@ impl McpContext {
         Arc::new(config)
     }
 
-    /// Build an SDK `HttpClient` for this request. The base URL is pinned the
-    /// same way as in [`McpContext::create_config`], so REST calls can never
-    /// drift to a different access point than the WebSocket.
+    /// Build an SDK `HttpClient` for this request. The base URL follows the same
+    /// rule as [`McpContext::create_config`] (`pin_upstream`): when pinned, REST
+    /// and the WebSocket share the pinned host. When not pinned, both are left to
+    /// the SDK, which resolves REST and each WS URL independently — so they only
+    /// stay co-located if the deployment configures its upstreams consistently.
     pub fn create_http_client(&self) -> longbridge::httpclient::HttpClient {
-        let http_config = longbridge::httpclient::HttpClientConfig::from_oauth(
+        let mut http_config = longbridge::httpclient::HttpClientConfig::from_oauth(
             longbridge::oauth::OAuth::from_token(&self.token),
-        )
-        .http_url(crate::endpoints::http_url());
+        );
+        if self.pin_upstream() {
+            http_config = http_config.http_url(crate::endpoints::http_url());
+        }
         let mut client = longbridge::httpclient::HttpClient::new(http_config);
         // NOTE: This is very important for passing headers to upstream Longbridge services.
         // Do not remove this unless you have a good reason and know exactly which headers to forward instead.
@@ -1676,7 +1798,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get option quotes (max 500 symbols). Symbols must be option contract symbols (e.g. \"AAPL230317P160000.US\"), NOT plain stock symbols — obtain valid ones from option_chain_info_by_date's call.symbol/put.symbol fields. Returns last_done, prev_close, open, high, low, volume, turnover, implied_volatility, delta, gamma, theta, vega, rho, open_interest per symbol."
+        description = "Get option quotes (max 500 symbols). Symbols must be option contract symbols (e.g. \"AAPL230317P160000.US\"), NOT plain stock symbols — obtain valid ones from option_chain_info_by_date's call.symbol/put.symbol fields. Returns last_done, prev_close, open, high, low, volume, turnover, implied_volatility, delta, gamma, theta, vega, rho, open_interest per symbol. Greeks are normalized: theta is the per-day value (one day's time decay), vega is the price change per 1% change in implied volatility, and rho is the price change per 1% change in the risk-free interest rate."
     )]
     async fn option_quote(
         &self,
@@ -2168,7 +2290,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Calculate financial indexes for symbols. Pass symbols, and optionally indexes (e.g. [\"PeTtmRatio\",\"PbRatio\",\"LastDone\",\"TurnoverRate\"]). When indexes is omitted or empty, defaults to [\"LastDone\",\"ChangeValue\",\"ChangeRate\",\"Volume\",\"PeTtmRatio\",\"PbRatio\",\"DividendRatioTtm\",\"TurnoverRate\",\"TotalMarketValue\"]. Returns per-symbol index values."
+        description = "Calculate financial indexes for symbols. Pass symbols, and optionally indexes (e.g. [\"PeTtmRatio\",\"PbRatio\",\"LastDone\",\"TurnoverRate\"]). When indexes is omitted or empty, defaults to [\"LastDone\",\"ChangeValue\",\"ChangeRate\",\"Volume\",\"PeTtmRatio\",\"PbRatio\",\"DividendRatioTtm\",\"TurnoverRate\",\"TotalMarketValue\"]. Returns per-symbol index values. When Greek indexes (Delta, Gamma, Theta, Vega, Rho) are requested, they are normalized: theta is the per-day value (one day's time decay), vega is the price change per 1% change in implied volatility, and rho is the price change per 1% change in the risk-free interest rate."
     )]
     async fn calc_indexes(
         &self,
@@ -5413,12 +5535,12 @@ impl ServerHandler for Longbridge {
             ));
         }
         // DC-region execution gate, independent of the /v1/v2 restricted-endpoint
-        // check above: on the main (`/mcp`) and authenticated `/agent` endpoints,
-        // a tool hidden from `tools/list` for this account's region must also be
-        // un-callable by name, or the listing filter is merely cosmetic.
-        if restricted_version(&context).is_none()
-            && let Ok(mctx) = extract_context(&context)
-        {
+        // check above: on every authenticated endpoint — main (`/mcp`), `/agent`,
+        // and the restricted `/v2` directory endpoint — a tool hidden from
+        // `tools/list` for this account's region must also be un-callable by name,
+        // or the listing filter is merely cosmetic. Token-less endpoints have no
+        // context, so `extract_context` fails and the gate is skipped.
+        if let Ok(mctx) = extract_context(&context) {
             let region = mctx.dc_region().await;
             if is_hidden_for_dc_region(request.name.as_ref(), region) {
                 return Err(McpError::invalid_request(
@@ -5456,12 +5578,15 @@ impl ServerHandler for Longbridge {
         // the clone cost (Arc ref-bumps + String title copies), not filter work.
         let tools = if is_agent_endpoint(&context) && !is_authenticated(&context) {
             tools_agent_endpoint().to_vec()
-        } else if let Some(version) = restricted_version(&context) {
-            match version {
-                RestrictedVersion::V2 => tools_v2_endpoint().to_vec(),
-            }
         } else {
-            let mut tools = tools_main_endpoint().to_vec();
+            // Both the main (`/mcp`) and restricted (`/v2`) slices are region-
+            // filtered: a US-DC-only tool must not be advertised to an AP account
+            // (and vice versa) on ANY authenticated endpoint, including the public
+            // directory endpoint, or it is offered only to fail upstream.
+            let mut tools = match restricted_version(&context) {
+                Some(RestrictedVersion::V2) => tools_v2_endpoint().to_vec(),
+                None => tools_main_endpoint().to_vec(),
+            };
             if let Ok(mctx) = extract_context(&context) {
                 let region = mctx.dc_region().await;
                 tools.retain(|t| !is_hidden_for_dc_region(t.name.as_ref(), region));
@@ -5625,9 +5750,20 @@ mod tests {
     /// End-to-end: the client produced by `create_http_client` must put the
     /// synthesized `User-Agent` (client UA + our token) on the wire as the
     /// primary value. A minimal TCP server captures the real request headers;
-    /// the SDK base URL is redirected to it via the `HTTP_URL` env var.
+    /// the SDK base URL is redirected to it via `UPSTREAM_OVERRIDE` (which only
+    /// takes effect on the pinned path, hence the `us_` token below).
     #[tokio::test]
     async fn upstream_request_carries_synthesized_user_agent() {
+        // The `us_` token pins the upstream so `UPSTREAM_OVERRIDE` can redirect
+        // it. A shell that exports an HTTP override would leave the token
+        // unpinned, so skip (visibly) rather than fire at a real host.
+        if super::McpContext::http_url_override_configured() {
+            eprintln!(
+                "skipping upstream_request_carries_synthesized_user_agent: an HTTP upstream \
+                 override is set, which unpins the us_ path"
+            );
+            return;
+        }
         use std::io::{Read, Write};
         use std::net::TcpListener;
         use std::sync::{Arc, Mutex};
@@ -5666,7 +5802,11 @@ mod tests {
         });
 
         let mctx = super::McpContext {
-            token: "dummy-token".to_string(),
+            // `us_` prefix makes DcRegion::Us, so the upstream is pinned to
+            // `endpoints::http_url()` — which the UPSTREAM_OVERRIDE below then
+            // redirects to the local echo server. A region-less token would be
+            // left to the SDK's own resolution and skip the override.
+            token: "us_dummy-token".to_string(),
             language: None,
             client_user_agent: Some("claude-code/2.1.89 (cli)".to_string()),
             extra_headers: Vec::new(),
@@ -5690,6 +5830,58 @@ mod tests {
         assert!(
             ua.starts_with("claude-code/2.1.89 (cli) longbridge-mcp/"),
             "unexpected upstream User-Agent: {ua}"
+        );
+    }
+
+    /// The pin decision, exhaustively. This is the regression guard for the
+    /// mainland connection-refused incident: it pins the SDK only for canary and
+    /// for an un-configured `us_` credential, and leaves every other case to the
+    /// SDK (which is how the mainland cluster reaches `.cn`). Tested through the
+    /// pure `should_pin` so it needs no `unsafe` env mutation and covers the
+    /// "configured upstream suppresses the us_ pin" branch that a live env cannot.
+    #[test]
+    fn should_pin_covers_every_case() {
+        use super::McpContext;
+        // (pinned_env, override_configured, is_us) -> pinned?
+        // `pinned_env` = canary or mainland (both pinned unconditionally).
+        let cases = [
+            // A pinned environment pins no matter what.
+            ((true, false, false), true),
+            ((true, true, false), true),
+            ((true, true, true), true),
+            // Production: only an un-configured us_ credential is pinned.
+            ((false, false, true), true),
+            // A configured upstream suppresses the us_ pin (regional host wins).
+            ((false, true, true), false),
+            // Non-us credentials on production are always left to the SDK.
+            ((false, false, false), false),
+            ((false, true, false), false),
+        ];
+        for ((pinned_env, override_configured, is_us), expected) in cases {
+            assert_eq!(
+                McpContext::should_pin(pinned_env, override_configured, is_us),
+                expected,
+                "should_pin(pinned_env={pinned_env}, override={override_configured}, us={is_us})"
+            );
+        }
+    }
+
+    /// End-to-end sanity through `pin_upstream`: on production (the test
+    /// default), an `ap_` credential is never pinned regardless of ambient env,
+    /// so a regional cluster's configured upstream is honoured. (In the mainland
+    /// environment the same credential *would* be pinned to `.cn`; that path is
+    /// covered by `should_pin_covers_every_case`'s `pinned_env` cases.)
+    #[test]
+    fn pin_upstream_defers_ap_credentials_on_production() {
+        let ctx = super::McpContext {
+            token: "ap_token".to_string(),
+            language: None,
+            client_user_agent: None,
+            extra_headers: Vec::new(),
+        };
+        assert!(
+            !ctx.pin_upstream(),
+            "ap credentials on production must be left to the SDK's own upstream"
         );
     }
 
@@ -5866,6 +6058,37 @@ mod tests {
     }
 
     #[test]
+    fn v2_endpoint_region_filtering_hides_us_only_tools_for_ap() {
+        use longbridge::DcRegion;
+
+        // `list_tools` now applies the same region retain to the /v2 slice as to
+        // the main slice. Guards against the /v2 directory endpoint regressing to
+        // advertise US-DC-only tools (e.g. financial_report_key_metrics) to AP
+        // accounts, which then 100%-fail upstream.
+        let in_v2 = |name: &str| {
+            super::tools_v2_endpoint()
+                .iter()
+                .any(|t| t.name.as_ref() == name)
+        };
+
+        // At least one US-only tool is v2-public, so the /v2 retain is load-bearing.
+        assert!(
+            super::US_ONLY_TOOLS.iter().any(|n| in_v2(n)),
+            "expected a US-only tool to be v2-public (e.g. financial_report_key_metrics)"
+        );
+        for name in super::US_ONLY_TOOLS.iter().filter(|n| in_v2(n)) {
+            assert!(
+                super::is_hidden_for_dc_region(name, DcRegion::Ap),
+                "US-only tool `{name}` on /v2 must be hidden for AP accounts"
+            );
+            assert!(
+                !super::is_hidden_for_dc_region(name, DcRegion::Us),
+                "US-only tool `{name}` on /v2 must stay visible for US accounts"
+            );
+        }
+    }
+
+    #[test]
     fn region_scoped_us_params_are_optional() {
         // A `us_*` input is region-scoped (meaningful only for US accounts). It must never be `required` — an AP-account session cannot
         // satisfy it, and the region is inferred from the account rather than
@@ -5991,10 +6214,22 @@ mod quote_cmd_tests {
     /// to `GET /v1/quote/cmd` against a local server — no HTTP mocking.
     #[tokio::test]
     async fn upstream_request_carries_x_mcp_tool_and_user_agent() {
+        // The `us_` token pins the upstream so `UPSTREAM_OVERRIDE` can redirect
+        // it; a shell that exports an HTTP override would leave it unpinned, so
+        // skip (visibly) rather than fire at a real host.
+        if super::McpContext::http_url_override_configured() {
+            eprintln!(
+                "skipping upstream_request_carries_x_mcp_tool_and_user_agent: an HTTP upstream \
+                 override is set, which unpins the us_ path"
+            );
+            return;
+        }
         let (port, rx) = spawn_capture_server().await;
 
         let mctx = McpContext {
-            token: "test-token".to_string(),
+            // `us_` prefix pins the upstream to `endpoints::http_url()`, which the
+            // UPSTREAM_OVERRIDE below redirects to the local capture server.
+            token: "us_test-token".to_string(),
             language: None,
             client_user_agent: Some("claude-test/1.0 (cli)".to_string()),
             extra_headers: Vec::new(),
@@ -6094,12 +6329,16 @@ mod quote_cmd_tests {
         );
     }
 
-    /// Guard: upstream URLs come from `crate::endpoints` alone. The SDK would
-    /// happily pick them up from the environment (or a `.env` file) if any code
-    /// here read them back, which would reintroduce exactly the ambiguity that
-    /// module exists to remove. Structural rather than behavioral on purpose —
-    /// asserting it by setting the variables would need `unsafe` env mutation,
-    /// which the crate forbids.
+    /// Guard: this crate reads only a small, deliberate allowlist of upstream
+    /// env vars; the quote/trade WS URLs must be resolved by the SDK, not read
+    /// back here, or the per-host ambiguity would creep back in. The allowlist
+    /// (both `LONGBRIDGE_`/`LONGPORT_` spellings, matching the SDK's own
+    /// resolution) is `HTTP_URL` — the override `McpContext::pin_upstream`
+    /// consults so a regional `-hk`/`-us` cluster keeps its own upstream — and
+    /// `REGION`, the startup environment selector read once in
+    /// `main::region_env` (`cn` selects the mainland environment). Structural
+    /// rather than behavioral on purpose — asserting it by setting the variables
+    /// would need `unsafe` env mutation, which the crate forbids.
     #[test]
     fn upstream_urls_are_never_read_from_the_environment() {
         // Assembled from parts so this test does not match its own source.
@@ -6108,9 +6347,16 @@ mod quote_cmd_tests {
         let forbidden: Vec<String> = PREFIXES
             .iter()
             .flat_map(|prefix| {
-                SUFFIXES
-                    .iter()
-                    .map(move |suffix| format!("{prefix}_{suffix}"))
+                SUFFIXES.iter().filter_map(move |suffix| {
+                    // Allowlist (see doc above): the HTTP override and the REGION
+                    // selector, in both spellings the SDK honours.
+                    let allowed = *suffix == "HTTP_URL" || *suffix == "REGION";
+                    if allowed {
+                        None
+                    } else {
+                        Some(format!("{prefix}_{suffix}"))
+                    }
+                })
             })
             .collect();
         let src_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
@@ -6524,6 +6770,60 @@ mod tool_error_tests {
         );
         let v: serde_json::Value = serde_json::from_str(&text_of(&result)).unwrap();
         assert_eq!(v["error_code"], 301603);
+    }
+
+    #[test]
+    fn terminal_none_ok_degrades_terminal_but_propagates_others() {
+        // 301604 (no quote access) is terminal → Some(isError:false), so a tool
+        // returning it via `Ok(terminal_none_ok(..))` is NOT counted as an error.
+        let terminal = McpError::internal_error(
+            "WsResponseErrorDetail { code: 301604, msg: \"no quote access\" }".to_string(),
+            Some(serde_json::json!({ "openapi_error_code": 301604 })),
+        );
+        let ok = super::terminal_none_ok("option_quote", &terminal).expect("301604 must degrade");
+        assert_ne!(
+            ok.is_error,
+            Some(true),
+            "terminal degraded result must be a success"
+        );
+        let v: serde_json::Value = serde_json::from_str(&text_of(&ok)).unwrap();
+        assert_eq!(v["error_code"], 301604);
+        assert_eq!(v["recoverable"], "none");
+
+        // 301607 with a zero history-candlestick quota (limit:0) is also terminal.
+        let zero_quota = McpError::internal_error(
+            "history candlestick symbol count out of limit, requested:0/limit:0".to_string(),
+            Some(serde_json::json!({
+                "openapi_error_code": 301607,
+                "upstream_message": "history candlestick symbol count out of limit, requested:0/limit:0"
+            })),
+        );
+        assert!(
+            super::terminal_none_ok("history_candlesticks_by_date", &zero_quota).is_some(),
+            "301607 with limit:0 (no history quota) must degrade to Ok"
+        );
+
+        // But 301607 with a non-zero limit ("too many symbols") is NOT terminal —
+        // it is fix_params + count-boundary retry, and must still propagate.
+        let too_many = McpError::internal_error(
+            "WsResponseErrorDetail { code: 301607, msg: \"requested:200/limit:100\" }".to_string(),
+            Some(serde_json::json!({ "openapi_error_code": 301607 })),
+        );
+        assert!(
+            super::terminal_none_ok("history_candlesticks_by_offset", &too_many).is_none(),
+            "301607 with limit>0 must stay a real error, not be swallowed"
+        );
+
+        // A reauth error (401103) is not terminal → None; the caller must
+        // propagate it as `Err` (so it stays a real, counted error).
+        let reauth = McpError::internal_error(
+            "token is expired".to_string(),
+            Some(serde_json::json!({ "openapi_error_code": 401103 })),
+        );
+        assert!(
+            super::terminal_none_ok("stock_positions", &reauth).is_none(),
+            "non-terminal errors must not be swallowed into an Ok"
+        );
     }
 
     #[test]
@@ -7030,6 +7330,31 @@ mod tool_error_tests {
         assert!(
             hint.contains("fewer") || hint.contains("reduce"),
             "got: {hint}"
+        );
+    }
+
+    #[test]
+    fn zero_history_quota_hint_does_not_tell_caller_to_reduce_symbols() {
+        // 301607 with limit:0 is a missing entitlement, not an oversized request.
+        // Its hint must NOT tell the model to retry with fewer symbols — that
+        // would pair a "reduce symbols" hint with the "no access" terminal note
+        // and mislead the client.
+        let err = McpError::internal_error(
+            "history candlestick symbol count out of limit, requested:0/limit:0".to_string(),
+            Some(serde_json::json!({
+                "openapi_error_code": 301607,
+                "upstream_message":
+                    "history candlestick symbol count out of limit, requested:0/limit:0"
+            })),
+        );
+        let hint = error_hint(&err).expect("expected a 301607 limit:0 hint");
+        assert!(
+            !hint.to_lowercase().contains("fewer"),
+            "zero-quota hint must not say 'fewer symbols', got: {hint}"
+        );
+        assert!(
+            hint.contains("quota") || hint.contains("access"),
+            "zero-quota hint should name the missing quota/access, got: {hint}"
         );
     }
 
