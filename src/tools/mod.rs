@@ -1144,6 +1144,7 @@ fn all_tools_full_cached() -> &'static [rmcp::model::Tool] {
             .map(|mut tool| {
                 let mut schema = serde_json::Value::Object((*tool.input_schema).clone());
                 strip_null_from_type_arrays(&mut schema);
+                strip_nonstandard_formats(&mut schema);
                 if let Some(connect_page) = retarget {
                     replace_in_json_strings(
                         &mut schema,
@@ -1162,6 +1163,16 @@ fn all_tools_full_cached() -> &'static [rmcp::model::Tool] {
                 }
                 if let serde_json::Value::Object(obj) = schema {
                     tool.input_schema = std::sync::Arc::new(obj);
+                }
+                // Output schemas (declared via `schema_for::<T>()`) carry the
+                // same schemars-derived numeric formats; sanitize them too so
+                // clients validating structured content don't warn either.
+                if let Some(output_schema) = &tool.output_schema {
+                    let mut schema = serde_json::Value::Object((**output_schema).clone());
+                    strip_nonstandard_formats(&mut schema);
+                    if let serde_json::Value::Object(obj) = schema {
+                        tool.output_schema = Some(std::sync::Arc::new(obj));
+                    }
                 }
                 tool
             })
@@ -1526,6 +1537,60 @@ fn strip_null_from_type_arrays(value: &mut serde_json::Value) {
         serde_json::Value::Array(arr) => {
             for v in arr.iter_mut() {
                 strip_null_from_type_arrays(v);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// The `format` values defined by the JSON Schema 2020-12 format-annotation
+/// vocabulary. Everything else — notably the numeric formats schemars derives
+/// from Rust integer/float types (`usize` -> `uint`, `u64` -> `uint64`, `i64`
+/// -> `int64`, `f64` -> `double`, …) — is non-standard, so strict MCP clients
+/// log `unknown format "uint" ignored` for it on every tool call. See
+/// longbridge/developers#1264.
+const STANDARD_JSON_SCHEMA_FORMATS: &[&str] = &[
+    "date-time",
+    "date",
+    "time",
+    "duration",
+    "email",
+    "idn-email",
+    "hostname",
+    "idn-hostname",
+    "ipv4",
+    "ipv6",
+    "uri",
+    "uri-reference",
+    "iri",
+    "iri-reference",
+    "uuid",
+    "uri-template",
+    "json-pointer",
+    "relative-json-pointer",
+    "regex",
+];
+
+/// Recursively drop every `format` annotation whose value is not a standard
+/// JSON Schema format (see [`STANDARD_JSON_SCHEMA_FORMATS`]). `type` is
+/// preserved, so an integer/number is still constrained as such; only the
+/// advisory, unrecognized keyword is removed. Standard string formats
+/// (`date-time`, `uri`, …) are left untouched.
+fn strip_nonstandard_formats(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(map) => {
+            if let Some(serde_json::Value::String(fmt)) = map.get("format")
+                && !STANDARD_JSON_SCHEMA_FORMATS.contains(&fmt.as_str())
+            {
+                map.remove("format");
+            }
+            for v in map.values_mut() {
+                strip_nonstandard_formats(v);
+            }
+        }
+        serde_json::Value::Array(arr) => {
+            for v in arr.iter_mut() {
+                strip_nonstandard_formats(v);
             }
         }
         _ => {}
@@ -6118,6 +6183,72 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+
+    #[test]
+    fn tool_schemas_carry_no_nonstandard_numeric_format() {
+        // JSON Schema defines no numeric `format`s, so schemars-derived values
+        // like `uint`/`uint64`/`int64`/`double` make strict clients log
+        // `unknown format "..." ignored` on every call. Every non-standard
+        // `format` must be stripped (keeping only the JSON Schema standard ones)
+        // from both the input schemas exposed in `tools/list` AND the output
+        // schemas exposed as resources. `list_tools()` nulls `output_schema`
+        // (a jq projection can return any shape), so the output-schema contract
+        // is served from `all_tools_full_cached()` instead — check both.
+        // Regression: developers#1264.
+        fn offending_formats(value: &serde_json::Value, out: &mut Vec<String>) {
+            match value {
+                serde_json::Value::Object(map) => {
+                    if let Some(serde_json::Value::String(fmt)) = map.get("format")
+                        && !super::STANDARD_JSON_SCHEMA_FORMATS.contains(&fmt.as_str())
+                    {
+                        out.push(fmt.clone());
+                    }
+                    for v in map.values() {
+                        offending_formats(v, out);
+                    }
+                }
+                serde_json::Value::Array(arr) => {
+                    for v in arr {
+                        offending_formats(v, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // Input schemas as the client sees them in `tools/list`.
+        for tool in crate::tools::list_tools() {
+            let mut found = Vec::new();
+            offending_formats(
+                &serde_json::Value::Object((*tool.input_schema).clone()),
+                &mut found,
+            );
+            assert!(
+                found.is_empty(),
+                "tool `{}` input schema exposes non-standard format(s) {:?}",
+                tool.name,
+                found
+            );
+        }
+
+        // Output schemas as the client fetches them via resources.
+        for tool in super::all_tools_full_cached() {
+            let Some(output_schema) = &tool.output_schema else {
+                continue;
+            };
+            let mut found = Vec::new();
+            offending_formats(
+                &serde_json::Value::Object((**output_schema).clone()),
+                &mut found,
+            );
+            assert!(
+                found.is_empty(),
+                "tool `{}` output schema exposes non-standard format(s) {:?}",
+                tool.name,
+                found
+            );
         }
     }
 
