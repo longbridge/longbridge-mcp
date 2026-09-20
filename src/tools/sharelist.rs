@@ -5,7 +5,6 @@ use rmcp::model::CallToolResult;
 use rmcp::schemars::JsonSchema;
 use rmcp::serde::Deserialize;
 
-use crate::counter::symbol_to_counter_id;
 use crate::tools::support::http_client::{http_delete_tool, http_get_tool, http_post_tool};
 use crate::tools::support::tolerant::{tolerant_option_u32, tolerant_vec_string};
 
@@ -96,8 +95,7 @@ pub async fn sharelist_add(
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
     let path = format!("/v1/sharelists/{}/items", p.id);
-    let cids: Vec<String> = p.symbols.iter().map(|s| symbol_to_counter_id(s)).collect();
-    let body = serde_json::json!({ "counter_ids": cids.join(",") });
+    let body = serde_json::json!({ "symbols": p.symbols.join(",") });
     http_post_tool(&client, &path, body).await
 }
 
@@ -107,8 +105,7 @@ pub async fn sharelist_remove(
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
     let path = format!("/v1/sharelists/{}/items", p.id);
-    let cids: Vec<String> = p.symbols.iter().map(|s| symbol_to_counter_id(s)).collect();
-    let body = serde_json::json!({ "counter_ids": cids.join(",") });
+    let body = serde_json::json!({ "symbols": p.symbols.join(",") });
     http_delete_tool(&client, &path, body).await
 }
 
@@ -118,8 +115,7 @@ pub async fn sharelist_sort(
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
     let path = format!("/v1/sharelists/{}/items/sort", p.id);
-    let cids: Vec<String> = p.symbols.iter().map(|s| symbol_to_counter_id(s)).collect();
-    let body = serde_json::json!({ "counter_ids": cids.join(",") });
+    let body = serde_json::json!({ "symbols": p.symbols.join(",") });
     http_post_tool(&client, &path, body).await
 }
 

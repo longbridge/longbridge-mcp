@@ -6,7 +6,6 @@ use rmcp::model::CallToolResult;
 use rmcp::schemars::JsonSchema;
 use rmcp::serde::{Deserialize, Serialize};
 
-use crate::counter::{index_symbol_to_counter_id, is_etf, symbol_to_counter_id};
 use crate::error::Error;
 use crate::serialize::{convert_unix_paths, transform_json};
 use crate::tools::support::http_client::{
@@ -17,7 +16,7 @@ use crate::tools::tool_json;
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct SymbolParam {
-    /// Security symbol, e.g. "700.HK"
+    /// Security symbol, e.g. "700.HK". Use the canonical form — a padded code like "00700.HK" returns an empty record, not an error.
     pub symbol: String,
 }
 
@@ -33,7 +32,7 @@ pub struct AnomalyParam {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct BrokerHoldingDailyParam {
-    /// Security symbol, e.g. "700.HK"
+    /// Security symbol, e.g. "700.HK". Use the canonical form — a padded code like "00700.HK" returns an empty record, not an error.
     pub symbol: String,
     /// Broker participant number
     pub broker_id: String,
@@ -41,7 +40,7 @@ pub struct BrokerHoldingDailyParam {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct BrokerHoldingParam {
-    /// Security symbol, e.g. "700.HK"
+    /// Security symbol, e.g. "700.HK". Use the canonical form — a padded code like "00700.HK" returns an empty record, not an error.
     pub symbol: String,
     /// Period: "rct_1" (1 day, default), "rct_5" (5 days), "rct_20" (20 days), "rct_60" (60 days)
     pub period: Option<String>,
@@ -49,7 +48,7 @@ pub struct BrokerHoldingParam {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct AhPremiumParam {
-    /// Security symbol, e.g. "700.HK"
+    /// Security symbol, e.g. "700.HK". Use the canonical form — a padded code like "00700.HK" returns an empty record, not an error.
     pub symbol: String,
     /// K-line period: "1m", "5m", "15m", "30m", "60m", "day" (default), "week", "month", "year"
     pub period: Option<String>,
@@ -104,14 +103,13 @@ pub async fn broker_holding(
     p: BrokerHoldingParam,
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
-    let cid = symbol_to_counter_id(&p.symbol);
     let period = p.period.as_deref().unwrap_or("rct_1");
     // Each entry's `chg` is an integer share delta padded with a fake ".0000"
     // fractional part; strip the trailing zeros (lossless).
     http_get_tool_trimming_zeros(
         &client,
         "/v1/quote/broker-holding",
-        &[("counter_id", cid.as_str()), ("type", period)],
+        &[("symbol", p.symbol.as_str()), ("type", period)],
     )
     .await
 }
@@ -121,14 +119,13 @@ pub async fn broker_holding_detail(
     p: SymbolParam,
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
-    let cid = symbol_to_counter_id(&p.symbol);
     // The share-count delta fields (shares.chg_*) are integers padded with a
     // fake ".0000" fractional part across all rows; strip the trailing zeros
     // (lossless) — they are ~half the bytes of this ~100 KB payload.
     http_get_tool_trimming_zeros(
         &client,
         "/v1/quote/broker-holding/detail",
-        &[("counter_id", cid.as_str())],
+        &[("symbol", p.symbol.as_str())],
     )
     .await
 }
@@ -138,12 +135,11 @@ pub async fn broker_holding_daily(
     p: BrokerHoldingDailyParam,
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
-    let cid = symbol_to_counter_id(&p.symbol);
     http_get_tool(
         &client,
         "/v1/quote/broker-holding/daily",
         &[
-            ("counter_id", cid.as_str()),
+            ("symbol", p.symbol.as_str()),
             ("parti_number", p.broker_id.as_str()),
         ],
     )
@@ -155,7 +151,6 @@ pub async fn ah_premium(
     p: AhPremiumParam,
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
-    let cid = symbol_to_counter_id(&p.symbol);
     let line_type = match p.period.as_deref().unwrap_or("day") {
         "1m" => "1",
         "5m" => "5",
@@ -172,7 +167,7 @@ pub async fn ah_premium(
         &client,
         "/v1/quote/ahpremium/klines",
         &[
-            ("counter_id", cid.as_str()),
+            ("symbol", p.symbol.as_str()),
             ("line_type", line_type),
             ("line_num", count_str.as_str()),
         ],
@@ -229,10 +224,9 @@ pub async fn ah_premium_intraday(
     p: SymbolParam,
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
-    let cid = symbol_to_counter_id(&p.symbol);
     let resp: String = client
         .request(Method::GET, "/v1/quote/ahpremium/timeshares")
-        .query_params(vec![("counter_id", cid.as_str()), ("days", "1")])
+        .query_params(vec![("symbol", p.symbol.as_str()), ("days", "1")])
         .response::<String>()
         .send()
         .await
@@ -253,11 +247,10 @@ pub async fn trade_stats(
     p: SymbolParam,
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
-    let cid = symbol_to_counter_id(&p.symbol);
     let raw = http_get_tool_unix(
         &client,
         "/v1/quote/trades-statistics",
-        &[("counter_id", cid.as_str())],
+        &[("symbol", p.symbol.as_str())],
         &["statistics.timestamp", "statistics.trade_date.*"],
     )
     .await?;
@@ -287,10 +280,8 @@ pub async fn anomaly(
         ("size", count.as_str()),
         ("market", market_upper.as_str()),
     ];
-    let cid;
     if let Some(ref sym) = p.symbol {
-        cid = symbol_to_counter_id(sym);
-        params.push(("counter_id", cid.as_str()));
+        params.push(("symbol", sym.as_str()));
     }
     // `alert_time` arrives as a raw unix-seconds string (e.g. "1789105515"),
     // which a model cannot interpret; convert it to RFC3339 like every other
@@ -308,25 +299,23 @@ pub async fn constituent(
     mctx: &crate::tools::McpContext,
     p: IndexSymbolParam,
 ) -> Result<CallToolResult, McpError> {
-    // When the symbol resolves to an ETF counter (e.g. `ETF/US/QQQ`), return the
-    // ETF's asset allocation instead of index constituents. Indexes keep the
-    // original index-constituents behaviour. When the symbol is an ETF but the
-    // upstream reports no allocation groups (some ETFs are not covered), fall
-    // through to the index-constituents source below.
-    if is_etf(&p.symbol)
-        && let Some(result) = etf_asset_allocation(mctx, &p.symbol).await?
-    {
+    // ETFs answer with their asset allocation, indexes with their constituents.
+    // Only ETFs carry allocation groups -- an index or a plain stock comes back
+    // empty -- so ask that source first and let the empty answer route everything
+    // else to index-constituents. The order matters: some ETFs (e.g. `SPY.US`)
+    // also resolve on index-constituents, so asking that first would shadow the
+    // allocation.
+    if let Some(result) = etf_asset_allocation(mctx, &p.symbol).await? {
         return tool_json(&result);
     }
 
     let client = mctx.create_http_client();
-    let cid = index_symbol_to_counter_id(&p.symbol);
     // Per-constituent noise: `intro` (long blurb), `market` (derivable from
     // symbol), constant `delay`/`trade_status`.
     http_get_tool_dropping(
         &client,
         "/v1/quote/index-constituents",
-        &[("counter_id", cid.as_str())],
+        &[("symbol", p.symbol.as_str())],
         &["intro", "market", "delay", "trade_status"],
     )
     .await
@@ -382,9 +371,9 @@ pub async fn industry_rank(
     if !limit.is_empty() {
         params.push(("limit", limit.as_str()));
     }
-    // Use the raw HTTP response to preserve BK counter_ids as-is.
-    // http_get_tool applies transform_json which renames counter_id → symbol,
-    // losing the BK format needed by industry_peers.
+    // Use the raw HTTP response so the industry `symbol` (`IN00258.US`) and the
+    // leading stock's fields reach the caller untouched by `transform_json`'s
+    // snake_case pass.
     use reqwest::Method;
     let raw: String = client
         .request(Method::GET, "/v1/quote/industry/rank")
@@ -395,7 +384,13 @@ pub async fn industry_rank(
         .map_err(|e| Error::longbridge(e.into()))?;
     let mut data: serde_json::Value =
         serde_json::from_str(&raw).map_err(crate::error::Error::Serialize)?;
-    // The response wraps the real rows in a group element whose own
+    // Each row carries the industry `counter_id` (`BK/HK/IN20351`) alongside the
+    // equivalent `symbol` (`IN20351.HK`), and the leading stock's
+    // `leading_counter_id` (`ST/HK/2672`) alongside `leading_ticker`. Drop the
+    // counter_id forms so the response is symbol-based; pass the industry
+    // `symbol` to `industry_peers`.
+    crate::serialize::drop_keys(&mut data, &["counter_id", "leading_counter_id"]);
+    // The response also wraps the real rows in a group element whose own
     // counter_id/symbol/name/chg are blank, and each row carries value_name/
     // value_data/prev_close that are empty unless a value-column indicator (e.g.
     // 市值) was requested. Drop the empty-string fields; they are re-added
@@ -423,7 +418,6 @@ pub async fn short_trades(
     p: ShortTradesParam,
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
-    let cid = symbol_to_counter_id(&p.symbol);
     let page_size = p.page_size.unwrap_or_else(|| "20".to_string());
     let is_hk = p.symbol.to_uppercase().ends_with(".HK");
     let path = if is_hk {
@@ -435,7 +429,7 @@ pub async fn short_trades(
         &client,
         path,
         &[
-            ("counter_id", cid.as_str()),
+            ("symbol", p.symbol.as_str()),
             ("last_timestamp", p.last_timestamp.as_str()),
             ("page_size", page_size.as_str()),
         ],

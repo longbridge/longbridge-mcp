@@ -1415,6 +1415,7 @@ const TOOL_ENDPOINTS: &[(&str, u8)] = &[
     ("ipo_orders", 0),
     ("ipo_profit_loss", 0),
     ("replace_order", 0),
+    ("submit_multileg_order", 0),
     ("submit_order", 0),
     ("withdrawals", 0),
     // Reverse-auth tool — only surfaced on the unauthenticated `/agent`
@@ -1700,7 +1701,7 @@ use crate::tools::quote::{
 };
 use crate::tools::trade::{
     CashFlowParam, EstimateMaxQtyParam, HistoryOrdersParam, OrderDetailParam, ReplaceOrderParam,
-    SubmitOrderParam,
+    SubmitMultiLegOrderParam, SubmitOrderParam,
 };
 
 #[tool_router(vis = "pub(crate)")]
@@ -2655,6 +2656,30 @@ impl Longbridge {
         .await
     }
 
+    /// Submit a multi-leg option combination order.
+    #[tool(
+        title = "Submit Multi-Leg Order",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false,
+            open_world_hint = true
+        ),
+        output_schema = schema_for::<output::OrderIdResponse>(),
+        description = "Submit a multi-leg option combination order; all legs fill or rest together as one strategy order. strategy: CoveredCall / CoveredPut / VerticalCallSpread / VerticalPutSpread / Collar / Straddle / Strangle. side: Buy/Sell (direction of the whole strategy). order_type: LO (needs submitted_price, a net price for the combination) or MO. legs[]: {symbol, ratio_quantity} in strategy order, option symbols only; ratio_quantity is always positive — each leg's buy/sell direction is implied by strategy plus side."
+    )]
+    async fn submit_multileg_order(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<SubmitMultiLegOrderParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("submit_multileg_order", format!("{p:?}"), || {
+            trade::submit_multileg_order(&mctx, p)
+        })
+        .await
+    }
+
     /// Replace (modify) an order.
     #[tool(
         title = "Replace Order",
@@ -3463,7 +3488,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::social::AlertListResponse>(),
-        description = "Get all configured price alerts. Returns lists[]{counter_id, indicators[]{id, indicator_id, condition, price, frequency, enabled, triggered_at}}."
+        description = "Get all configured price alerts. Returns lists[]{symbol, indicators[]{id, indicator_id, condition, price, frequency, enabled, triggered_at}}."
     )]
     async fn alert_list(
         &self,
@@ -5038,7 +5063,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Industry ranking list by market (US/HK/CN/SG) and indicator (0=领涨/1=今日走势/2=人气/3=市值/4=营收/5=营收增长率/6=净利润/7=净利润增长率). sort_type: 0=单级 1=多层. Returns items[]{counter_id(BK/US/IN00258), name, chg, lists[]}. Pass counter_id directly to industry_peers."
+        description = "Industry ranking list by market (US/HK/CN/SG) and indicator (0=领涨/1=今日走势/2=人气/3=市值/4=营收/5=营收增长率/6=净利润/7=净利润增长率). sort_type: 0=单级 1=多层. Returns items[]{symbol(IN00258.US), name, chg, lists[]}. Pass a row's symbol directly to industry_peers."
     )]
     async fn industry_rank(
         &self,
@@ -5062,7 +5087,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::fundamental::IndustryPeersResponse>(),
-        description = "Hierarchical sub-sector tree for an industry group. Accepts BK counter_id from industry_rank (e.g. BK/US/IN00258). Returns chain{name,counter_id,stock_num,chg,ytd_chg,next[{...}]} and top{name,market}. Each node shows stock count, daily change, and YTD change."
+        description = "Hierarchical sub-sector tree for an industry group. Accepts an industry symbol from industry_rank (e.g. IN00258.US). Returns chain{name,symbol,stock_num,chg,ytd_chg,next[{...}]} and top{name,market}. Each node shows stock count, daily change, and YTD change."
     )]
     async fn industry_peers(
         &self,
@@ -5963,6 +5988,7 @@ mod tests {
             "dca_update",
             // Order write operations.
             "submit_order",
+            "submit_multileg_order",
             "cancel_order",
             "replace_order",
             // IPO order management.
@@ -7416,9 +7442,11 @@ mod jq_catalog_tests {
                 tool.name
             );
             assert!(
-                tool.input_schema["properties"]["_jq"]
-                    .get("description")
-                    .is_none()
+                tool.input_schema["properties"]["_jq"]["description"]
+                    .as_str()
+                    .is_some_and(|d| d.contains("jq")),
+                "{} _jq must carry a self-contained description",
+                tool.name
             );
             let lookup = Longbridge.get_tool(&tool.name).unwrap();
             assert_eq!(lookup.input_schema, tool.input_schema);

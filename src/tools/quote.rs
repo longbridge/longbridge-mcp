@@ -6,7 +6,6 @@ use rmcp::model::CallToolResult;
 use rmcp::schemars::JsonSchema;
 use rmcp::serde::Deserialize;
 
-use crate::counter::symbol_to_counter_id;
 use crate::error::Error;
 use crate::tools::output;
 use crate::tools::support::http_client::{
@@ -21,7 +20,7 @@ use crate::tools::tool_json;
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct SymbolsParam {
-    /// Security symbols, e.g. ["700.HK", "AAPL.US"]
+    /// Security symbols, e.g. ["700.HK", "AAPL.US"]. Use the canonical form — a padded code like "00700.HK" returns an empty record, not an error.
     #[serde(deserialize_with = "tolerant_vec_string")]
     pub symbols: Vec<String>,
 }
@@ -38,13 +37,13 @@ pub struct OptionSymbolsParam {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct SymbolParam {
-    /// Security symbol, e.g. "700.HK"
+    /// Security symbol, e.g. "700.HK". Use the canonical form — a padded code like "00700.HK" returns an empty record, not an error.
     pub symbol: String,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct IntradayParam {
-    /// Security symbol, e.g. "700.HK"
+    /// Security symbol, e.g. "700.HK". Use the canonical form — a padded code like "00700.HK" returns an empty record, not an error.
     pub symbol: String,
     /// Trade sessions to include: "intraday" (default, regular hours only) or "all" (include pre-market and post-market).
     pub trade_sessions: Option<String>,
@@ -52,7 +51,7 @@ pub struct IntradayParam {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct SymbolCountParam {
-    /// Security symbol, e.g. "700.HK"
+    /// Security symbol, e.g. "700.HK". Use the canonical form — a padded code like "00700.HK" returns an empty record, not an error.
     pub symbol: String,
     /// Maximum number of results (max 1000)
     #[serde(deserialize_with = "tolerant_usize")]
@@ -61,7 +60,7 @@ pub struct SymbolCountParam {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct CandlesticksParam {
-    /// Security symbol, e.g. "700.HK"
+    /// Security symbol, e.g. "700.HK". Use the canonical form — a padded code like "00700.HK" returns an empty record, not an error.
     pub symbol: String,
     /// Period: 1m, 5m, 15m, 30m, 60m, day, week, month, year (default: day)
     #[serde(default = "default_candlestick_period")]
@@ -94,7 +93,7 @@ fn default_trade_sessions() -> String {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct HistoryCandlesticksByOffsetParam {
-    /// Security symbol, e.g. "700.HK"
+    /// Security symbol, e.g. "700.HK". Use the canonical form — a padded code like "00700.HK" returns an empty record, not an error.
     pub symbol: String,
     /// Period: 1m, 5m, 15m, 30m, 60m, day, week, month, year (default: day)
     #[serde(default = "default_candlestick_period")]
@@ -120,7 +119,7 @@ pub struct HistoryCandlesticksByOffsetParam {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct HistoryCandlesticksByDateParam {
-    /// Security symbol, e.g. "700.HK"
+    /// Security symbol, e.g. "700.HK". Use the canonical form — a padded code like "00700.HK" returns an empty record, not an error.
     pub symbol: String,
     /// Period: 1m, 5m, 15m, 30m, 60m, day, week, month, year (default: day)
     #[serde(default = "default_candlestick_period")]
@@ -155,7 +154,7 @@ pub struct MarketDateRangeParam {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct SymbolDateParam {
-    /// Security symbol, e.g. "700.HK"
+    /// Security symbol, e.g. "700.HK". Use the canonical form — a padded code like "00700.HK" returns an empty record, not an error.
     pub symbol: String,
     /// Date (yyyy-mm-dd)
     pub date: String,
@@ -188,7 +187,7 @@ pub struct WarrantListParam {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct CalcIndexesParam {
-    /// Security symbols, e.g. ["700.HK", "AAPL.US"]
+    /// Security symbols, e.g. ["700.HK", "AAPL.US"]. Use the canonical form — a padded code like "00700.HK" returns an empty record, not an error.
     #[serde(deserialize_with = "tolerant_vec_string")]
     pub symbols: Vec<String>,
     /// Calc indexes (optional; defaults to LastDone, ChangeValue, ChangeRate, Volume, PeTtmRatio, PbRatio, DividendRatioTtm, TurnoverRate, TotalMarketValue): LastDone, ChangeValue, ChangeRate, Volume, Turnover, YtdChangeRate, TurnoverRate, TotalMarketValue, CapitalFlow, Amplitude, VolumeRatio, PeTtmRatio, PbRatio, DividendRatioTtm, FiveDayChangeRate, TenDayChangeRate, HalfYearChangeRate, FiveMinutesChangeRate, ExpiryDate, StrikePrice, UpperStrikePrice, LowerStrikePrice, OutstandingQty, OutstandingRatio, Premium, ItmOtm, ImpliedVolatility, WarrantDelta, CallPrice, ToCallPrice, EffectiveLeverage, LeverageRatio, ConversionRatio, BalancePoint, OpenInterest, Delta, Gamma, Theta, Vega, Rho
@@ -1081,7 +1080,6 @@ pub async fn short_positions(
     p: ShortPositionsParam,
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
-    let cid = symbol_to_counter_id(&p.symbol);
     let count = p.count.unwrap_or(20).clamp(1, 100);
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -1090,7 +1088,7 @@ pub async fn short_positions(
         .to_string();
     let page_size = count.to_string();
     let params = [
-        ("counter_id", cid.as_str()),
+        ("symbol", p.symbol.as_str()),
         ("last_timestamp", now.as_str()),
         ("page_size", page_size.as_str()),
     ];
@@ -1176,8 +1174,7 @@ pub async fn option_volume(
     p: OptionVolumeParam,
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
-    let cid = symbol_to_counter_id(&p.symbol);
-    let params = [("underlying_counter_id", cid.as_str())];
+    let params = [("symbol", p.symbol.as_str())];
     http_get_tool(&client, "/v1/quote/option-volume-stats", &params).await
 }
 
@@ -1186,7 +1183,6 @@ pub async fn option_volume_daily(
     p: OptionVolumeDailyParam,
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
-    let cid = symbol_to_counter_id(&p.symbol);
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -1194,7 +1190,7 @@ pub async fn option_volume_daily(
         .to_string();
     let line_num = p.count.unwrap_or(20).to_string();
     let params = [
-        ("counter_id", cid.as_str()),
+        ("symbol", p.symbol.as_str()),
         ("timestamp", now.as_str()),
         ("line_num", line_num.as_str()),
         ("direction", "1"),

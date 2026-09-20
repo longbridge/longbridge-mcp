@@ -3,7 +3,7 @@ use reqwest::Method;
 use rmcp::model::{CallToolResult, Content, ErrorData as McpError};
 
 use crate::error::Error;
-use crate::serialize::{convert_unix_paths, transform_json};
+use crate::serialize::{convert_unix_paths, drop_redundant_counter_ids, transform_json};
 
 /// Build a tool result from a transformed JSON string, additionally populating
 /// `structured_content` when the JSON is an object. MCP requires a tool that
@@ -12,10 +12,19 @@ use crate::serialize::{convert_unix_paths, transform_json};
 /// response spec-compliant whether or not the tool currently declares a schema.
 /// Array- or scalar-rooted responses leave `structured_content` unset (the MCP
 /// `structuredContent` field must be an object).
+///
+/// Any redundant `counter_id`/`counter_ids` a passthrough response echoes
+/// alongside the equivalent `symbol`/`symbols` is dropped here, so every
+/// passthrough tool is symbol-based without a per-tool cleanup call.
 fn success_with_structured(json: String) -> CallToolResult {
-    let structured = serde_json::from_str::<serde_json::Value>(&json)
-        .ok()
-        .filter(serde_json::Value::is_object);
+    let Ok(mut value) = serde_json::from_str::<serde_json::Value>(&json) else {
+        // `transform_json` always emits valid JSON; on the theoretical parse
+        // failure, fall back to the raw text with no structured content.
+        return CallToolResult::success(vec![Content::text(json)]);
+    };
+    drop_redundant_counter_ids(&mut value);
+    let json = serde_json::to_string(&value).unwrap_or(json);
+    let structured = value.is_object().then_some(value);
     let mut result = CallToolResult::success(vec![Content::text(json)]);
     result.structured_content = structured;
     result
