@@ -1144,7 +1144,7 @@ fn all_tools_full_cached() -> &'static [rmcp::model::Tool] {
             .map(|mut tool| {
                 let mut schema = serde_json::Value::Object((*tool.input_schema).clone());
                 strip_null_from_type_arrays(&mut schema);
-                strip_nonstandard_numeric_formats(&mut schema);
+                strip_nonstandard_formats(&mut schema);
                 if let Some(connect_page) = retarget {
                     replace_in_json_strings(
                         &mut schema,
@@ -1169,7 +1169,7 @@ fn all_tools_full_cached() -> &'static [rmcp::model::Tool] {
                 // clients validating structured content don't warn either.
                 if let Some(output_schema) = &tool.output_schema {
                     let mut schema = serde_json::Value::Object((**output_schema).clone());
-                    strip_nonstandard_numeric_formats(&mut schema);
+                    strip_nonstandard_formats(&mut schema);
                     if let serde_json::Value::Object(obj) = schema {
                         tool.output_schema = Some(std::sync::Arc::new(obj));
                     }
@@ -1542,36 +1542,54 @@ fn strip_null_from_type_arrays(value: &mut serde_json::Value) {
     }
 }
 
-/// Non-standard numeric `format` values schemars derives from Rust integer/float
-/// types (`usize` -> `uint`, `u64` -> `uint64`, `i64` -> `int64`, `f64` ->
-/// `double`, …). JSON Schema defines no standard numeric formats, so strict MCP
-/// clients log `unknown format "uint" ignored` for every one of them on each
-/// tool call. See longbridge/developers#1264.
-const NONSTANDARD_NUMERIC_FORMATS: &[&str] = &[
-    "uint", "uint8", "uint16", "uint32", "uint64", "uint128", "int", "int8", "int16", "int32",
-    "int64", "int128", "float", "double",
+/// The `format` values defined by the JSON Schema 2020-12 format-annotation
+/// vocabulary. Everything else — notably the numeric formats schemars derives
+/// from Rust integer/float types (`usize` -> `uint`, `u64` -> `uint64`, `i64`
+/// -> `int64`, `f64` -> `double`, …) — is non-standard, so strict MCP clients
+/// log `unknown format "uint" ignored` for it on every tool call. See
+/// longbridge/developers#1264.
+const STANDARD_JSON_SCHEMA_FORMATS: &[&str] = &[
+    "date-time",
+    "date",
+    "time",
+    "duration",
+    "email",
+    "idn-email",
+    "hostname",
+    "idn-hostname",
+    "ipv4",
+    "ipv6",
+    "uri",
+    "uri-reference",
+    "iri",
+    "iri-reference",
+    "uuid",
+    "uri-template",
+    "json-pointer",
+    "relative-json-pointer",
+    "regex",
 ];
 
-/// Recursively drop `format` annotations that carry a non-standard numeric
-/// format (see [`NONSTANDARD_NUMERIC_FORMATS`]). `type` is preserved, so the
-/// schema still constrains the value to an integer/number; only the advisory,
-/// unrecognized `format` keyword is removed. String formats (`date-time`,
-/// `uri`, …) are left untouched.
-fn strip_nonstandard_numeric_formats(value: &mut serde_json::Value) {
+/// Recursively drop every `format` annotation whose value is not a standard
+/// JSON Schema format (see [`STANDARD_JSON_SCHEMA_FORMATS`]). `type` is
+/// preserved, so an integer/number is still constrained as such; only the
+/// advisory, unrecognized keyword is removed. Standard string formats
+/// (`date-time`, `uri`, …) are left untouched.
+fn strip_nonstandard_formats(value: &mut serde_json::Value) {
     match value {
         serde_json::Value::Object(map) => {
             if let Some(serde_json::Value::String(fmt)) = map.get("format")
-                && NONSTANDARD_NUMERIC_FORMATS.contains(&fmt.as_str())
+                && !STANDARD_JSON_SCHEMA_FORMATS.contains(&fmt.as_str())
             {
                 map.remove("format");
             }
             for v in map.values_mut() {
-                strip_nonstandard_numeric_formats(v);
+                strip_nonstandard_formats(v);
             }
         }
         serde_json::Value::Array(arr) => {
             for v in arr.iter_mut() {
-                strip_nonstandard_numeric_formats(v);
+                strip_nonstandard_formats(v);
             }
         }
         _ => {}
@@ -6147,12 +6165,13 @@ mod tests {
         // JSON Schema defines no numeric `format`s, so schemars-derived values
         // like `uint`/`uint64`/`int64`/`double` make strict clients log
         // `unknown format "..." ignored` on every call. list_tools() must strip
-        // them from both input and output schemas. Regression: developers#1264.
+        // every non-standard `format` (keeping only the JSON Schema standard
+        // ones) from both input and output schemas. Regression: developers#1264.
         fn offending_formats(value: &serde_json::Value, out: &mut Vec<String>) {
             match value {
                 serde_json::Value::Object(map) => {
                     if let Some(serde_json::Value::String(fmt)) = map.get("format")
-                        && super::NONSTANDARD_NUMERIC_FORMATS.contains(&fmt.as_str())
+                        && !super::STANDARD_JSON_SCHEMA_FORMATS.contains(&fmt.as_str())
                     {
                         out.push(fmt.clone());
                     }
@@ -6183,7 +6202,7 @@ mod tests {
             }
             assert!(
                 found.is_empty(),
-                "tool `{}` exposes non-standard numeric format(s) {:?}",
+                "tool `{}` exposes non-standard schema format(s) {:?}",
                 tool.name,
                 found
             );
