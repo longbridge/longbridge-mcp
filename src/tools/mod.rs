@@ -6164,9 +6164,13 @@ mod tests {
     fn tool_schemas_carry_no_nonstandard_numeric_format() {
         // JSON Schema defines no numeric `format`s, so schemars-derived values
         // like `uint`/`uint64`/`int64`/`double` make strict clients log
-        // `unknown format "..." ignored` on every call. list_tools() must strip
-        // every non-standard `format` (keeping only the JSON Schema standard
-        // ones) from both input and output schemas. Regression: developers#1264.
+        // `unknown format "..." ignored` on every call. Every non-standard
+        // `format` must be stripped (keeping only the JSON Schema standard ones)
+        // from both the input schemas exposed in `tools/list` AND the output
+        // schemas exposed as resources. `list_tools()` nulls `output_schema`
+        // (a jq projection can return any shape), so the output-schema contract
+        // is served from `all_tools_full_cached()` instead — check both.
+        // Regression: developers#1264.
         fn offending_formats(value: &serde_json::Value, out: &mut Vec<String>) {
             match value {
                 serde_json::Value::Object(map) => {
@@ -6188,21 +6192,34 @@ mod tests {
             }
         }
 
+        // Input schemas as the client sees them in `tools/list`.
         for tool in crate::tools::list_tools() {
             let mut found = Vec::new();
             offending_formats(
                 &serde_json::Value::Object((*tool.input_schema).clone()),
                 &mut found,
             );
-            if let Some(output_schema) = &tool.output_schema {
-                offending_formats(
-                    &serde_json::Value::Object((**output_schema).clone()),
-                    &mut found,
-                );
-            }
             assert!(
                 found.is_empty(),
-                "tool `{}` exposes non-standard schema format(s) {:?}",
+                "tool `{}` input schema exposes non-standard format(s) {:?}",
+                tool.name,
+                found
+            );
+        }
+
+        // Output schemas as the client fetches them via resources.
+        for tool in super::all_tools_full_cached() {
+            let Some(output_schema) = &tool.output_schema else {
+                continue;
+            };
+            let mut found = Vec::new();
+            offending_formats(
+                &serde_json::Value::Object((**output_schema).clone()),
+                &mut found,
+            );
+            assert!(
+                found.is_empty(),
+                "tool `{}` output schema exposes non-standard format(s) {:?}",
                 tool.name,
                 found
             );
