@@ -101,10 +101,16 @@ pub struct SubmitOrderParam {
     pub trailing_percent: Option<String>,
     /// Expiry date (yyyy-mm-dd). Required when time_in_force is GTD
     pub expire_date: Option<String>,
-    /// Outside regular trading hours: "RTH_ONLY" (regular trading hours only), "ANY_TIME" (any time including pre/post market), "OVERNIGHT" (overnight session, US only)
+    /// Outside regular trading hours: "RTH_ONLY" (regular trading hours only), "ANY_TIME" (any time including pre/post market), "OVERNIGHT" (overnight session, US only), "OPTION_PRE_MARKET" (US option pre-market session)
     pub outside_rth: Option<String>,
     /// Order remark (max 255 characters)
     pub remark: Option<String>,
+    /// Idempotency key, unique per intended order (e.g. a UUID). When two
+    /// requests carry the same value the exchange places one order and returns
+    /// the original `order_id` for the second, so a retry after a timeout or a
+    /// dropped connection cannot double-fill. Set it whenever you may retry;
+    /// generate a NEW value for a genuinely new order.
+    pub client_request_id: Option<String>,
     /// Attach a take-profit / stop-loss leg to this order: "PROFIT_TAKER"
     /// (take-profit only), "STOP_LOSS" (stop-loss only) or "BRACKET" (both).
     /// Omit for a plain order; every other attached_* field is ignored without
@@ -128,7 +134,7 @@ pub struct SubmitOrderParam {
     /// (then set the matching attached_*_submit_price) or "MO".
     pub attached_activate_order_type: Option<String>,
     /// Outside-RTH setting of the triggered leg: "RTH_ONLY" / "ANY_TIME" /
-    /// "OVERNIGHT".
+    /// "OVERNIGHT" / "OPTION_PRE_MARKET".
     pub attached_outside_rth: Option<String>,
     /// The `confirmation_code` from this order's dry run. WITHOUT IT NOTHING IS
     /// SENT.
@@ -161,7 +167,9 @@ pub struct MultiLegParam {
 pub struct SubmitMultiLegOrderParam {
     /// Strategy, which fixes how many legs are required and the direction of
     /// each: CoveredCall / CoveredPut (stock + option) / VerticalCallSpread /
-    /// VerticalPutSpread / Collar / Straddle / Strangle
+    /// VerticalPutSpread / Collar / Straddle / Strangle / CalendarCallSpread /
+    /// CalendarPutSpread (the two calendar spreads pair the same strike across
+    /// two expiries)
     pub strategy: String,
     /// Buy or Sell — the direction of the strategy as a whole
     pub side: String,
@@ -176,6 +184,9 @@ pub struct SubmitMultiLegOrderParam {
     pub submitted_price: Option<String>,
     /// Order remark (max 255 characters)
     pub remark: Option<String>,
+    /// Idempotency key, unique per intended order. See the field of the same
+    /// name on `submit_order`.
+    pub client_request_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -222,7 +233,7 @@ pub struct ReplaceOrderParam {
     /// New order type for the triggered leg, e.g. "LO" or "MO".
     pub attached_activate_order_type: Option<String>,
     /// New outside-RTH setting for the triggered leg: "RTH_ONLY" / "ANY_TIME"
-    /// / "OVERNIGHT".
+    /// / "OVERNIGHT" / "OPTION_PRE_MARKET".
     pub attached_outside_rth: Option<String>,
     /// ID of the parent order that owns the attached leg, when the leg is
     /// modified on its own rather than through its parent.
@@ -997,6 +1008,9 @@ pub async fn submit_order(
     if let Some(ref v) = p.remark {
         opts = opts.remark(v.clone());
     }
+    if let Some(ref v) = p.client_request_id {
+        opts = opts.client_request_id(v.clone());
+    }
     if let Some(ref v) = p.attached_order_type {
         opts = opts.attached_params(attached_submit_params(&p, v)?);
     }
@@ -1037,6 +1051,7 @@ pub async fn submit_order(
                 "expire_date": p.expire_date,
                 "outside_rth": p.outside_rth,
                 "remark": p.remark,
+                "client_request_id": p.client_request_id,
                 "attached": attached_submit_preview(&p),
             }),
         );
@@ -1119,6 +1134,9 @@ pub async fn submit_multileg_order(
     }
     if let Some(ref v) = p.remark {
         opts = opts.remark(v.clone());
+    }
+    if let Some(ref v) = p.client_request_id {
+        opts = opts.client_request_id(v.clone());
     }
 
     let (ctx, _) = TradeContext::new(mctx.create_config());
