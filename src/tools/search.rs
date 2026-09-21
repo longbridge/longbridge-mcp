@@ -48,6 +48,20 @@ fn fmt_unix_ts(ts: i64) -> String {
     }
 }
 
+/// Read a unix-seconds timestamp that the upstream may encode as a JSON number
+/// *or* a string (Longbridge commonly serializes `int64` as a string to avoid
+/// JS precision loss). Returns `None` for a missing, unparseable, or
+/// non-positive value so callers can omit the field rather than emit a
+/// misleading `1970-01-01T00:00:00Z`.
+fn as_unix_ts(v: &serde_json::Value) -> Option<i64> {
+    let ts = match v {
+        serde_json::Value::Number(n) => n.as_i64().or_else(|| n.as_f64().map(|f| f as i64))?,
+        serde_json::Value::String(s) => s.trim().parse::<i64>().ok()?,
+        _ => return None,
+    };
+    (ts > 0).then_some(ts)
+}
+
 fn val_str(v: &serde_json::Value) -> String {
     match v {
         serde_json::Value::String(s) => s.clone(),
@@ -70,11 +84,14 @@ fn transform_news_item(item: &serde_json::Value) -> serde_json::Value {
                     );
                 }
                 "publish_at_timestamp" => {
-                    let ts = v.as_i64().unwrap_or(0);
-                    obj.insert(
-                        "time".to_string(),
-                        serde_json::Value::String(fmt_unix_ts(ts)),
-                    );
+                    // Omit `time` on a missing/zero/unparseable timestamp rather
+                    // than emit a misleading `1970-01-01T00:00:00Z`.
+                    if let Some(ts) = as_unix_ts(v) {
+                        obj.insert(
+                            "time".to_string(),
+                            serde_json::Value::String(fmt_unix_ts(ts)),
+                        );
+                    }
                 }
                 "description" => {
                     let excerpt = truncate_chars(&strip_html(&val_str(v)), 80);
@@ -106,11 +123,12 @@ fn transform_topic_item(item: &serde_json::Value) -> serde_json::Value {
                     );
                 }
                 "created_at_timestamp" => {
-                    let ts = v.as_i64().unwrap_or(0);
-                    obj.insert(
-                        "time".to_string(),
-                        serde_json::Value::String(fmt_unix_ts(ts)),
-                    );
+                    if let Some(ts) = as_unix_ts(v) {
+                        obj.insert(
+                            "time".to_string(),
+                            serde_json::Value::String(fmt_unix_ts(ts)),
+                        );
+                    }
                 }
                 "description" => {
                     let excerpt = truncate_chars(&strip_html(&val_str(v)), 80);
@@ -199,7 +217,63 @@ pub async fn topic_search(
 
 #[cfg(test)]
 mod tests {
-    use super::transform_news_item;
+    use super::{transform_news_item, transform_topic_item};
+
+    /// The upstream may send `publish_at_timestamp` as a JSON string; it must
+    /// still produce a real `time`, not `1970-01-01T00:00:00Z` (the epoch-0
+    /// value a failed `as_i64()` used to fall back to).
+    #[test]
+    fn string_timestamp_parses_to_real_time() {
+        // 2025-09-16T00:00:00Z
+        let item = serde_json::json!({"id": "1", "publish_at_timestamp": "1757980800"});
+        let time = transform_news_item(&item)["time"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert!(time.starts_with("2025-09-16"), "unexpected time: {time}");
+
+        // topic path uses `created_at_timestamp`, same rule.
+        let topic = serde_json::json!({"id": "1", "created_at_timestamp": "1757980800"});
+        assert!(
+            transform_topic_item(&topic)["time"]
+                .as_str()
+                .unwrap()
+                .starts_with("2025-09-16")
+        );
+    }
+
+    /// A numeric timestamp keeps working.
+    #[test]
+    fn numeric_timestamp_parses_to_real_time() {
+        let item = serde_json::json!({"id": "1", "publish_at_timestamp": 1757980800_i64});
+        assert!(
+            transform_news_item(&item)["time"]
+                .as_str()
+                .unwrap()
+                .starts_with("2025-09-16")
+        );
+    }
+
+    /// A missing, zero, or unparseable timestamp omits `time` entirely rather
+    /// than emitting a misleading `1970-01-01T00:00:00Z`.
+    #[test]
+    fn missing_or_zero_timestamp_omits_time() {
+        for bad in [
+            serde_json::json!({"id": "1"}),
+            serde_json::json!({"id": "1", "publish_at_timestamp": 0}),
+            serde_json::json!({"id": "1", "publish_at_timestamp": "0"}),
+            serde_json::json!({"id": "1", "publish_at_timestamp": ""}),
+            serde_json::json!({"id": "1", "publish_at_timestamp": "not-a-number"}),
+            serde_json::json!({"id": "1", "publish_at_timestamp": serde_json::Value::Null}),
+        ] {
+            let out = transform_news_item(&bad);
+            assert!(
+                out.get("time").is_none(),
+                "expected no `time` for {bad}, got {:?}",
+                out.get("time")
+            );
+        }
+    }
 
     /// Trimming and the `...` marker are intentional — `truncate_chars`
     /// (shared with `measured_tool_call`'s error logging) applies both, a
