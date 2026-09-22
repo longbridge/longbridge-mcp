@@ -35,9 +35,6 @@ pub struct DocsParam {
     /// Max `query` hits, default 5, max 20.
     pub limit: Option<usize>,
     /// With `page`: fetch the live page instead of the bundled snapshot.
-    // Not read until Task 10 wires `page`/`fresh` to a live documentation
-    // fetch; `query`/`page` already return `docs_unavailable` in this task.
-    #[allow(dead_code)]
     pub fresh: Option<bool>,
 }
 
@@ -121,6 +118,19 @@ fn notes_for(tool: &rmcp::model::Tool) -> Vec<String> {
     notes
 }
 
+/// Build the `annotations` sub-object in this crate's snake_case convention
+/// (see `search`'s `read_only` field), rather than `rmcp::model::ToolAnnotations`'s
+/// own `#[serde(rename_all = "camelCase")]` wire format. `title` is left out;
+/// `tool_doc`'s own `title` field already covers it.
+fn annotations_doc(annotations: Option<&rmcp::model::ToolAnnotations>) -> Value {
+    serde_json::json!({
+        "read_only_hint": annotations.and_then(|a| a.read_only_hint),
+        "destructive_hint": annotations.and_then(|a| a.destructive_hint),
+        "idempotent_hint": annotations.and_then(|a| a.idempotent_hint),
+        "open_world_hint": annotations.and_then(|a| a.open_world_hint),
+    })
+}
+
 /// Full documentation of one tool, localized when a translation exists.
 pub(crate) fn tool_doc(name: &str, lang: Lang) -> Option<Value> {
     let tool = all_tools_full_cached().iter().find(|t| t.name == name)?;
@@ -142,7 +152,7 @@ pub(crate) fn tool_doc(name: &str, lang: Lang) -> Option<Value> {
         "category": category_of(name),
         "description": description,
         "input_schema": Value::Object((*tool.input_schema).clone()),
-        "annotations": tool.annotations,
+        "annotations": annotations_doc(tool.annotations.as_ref()),
         "notes": notes_for(tool),
     });
     if let Some(schema) = output_schema_map().get(name) {
@@ -232,11 +242,11 @@ pub(crate) async fn docs(mctx: &McpContext, p: DocsParam) -> Result<CallToolResu
             .collect();
         return tool_json(&docs);
     }
-    if p.query.is_some() || p.page.is_some() {
+    if p.query.is_some() || p.page.is_some() || p.fresh == Some(true) {
         return Ok(envelope(
             "docs_unavailable",
             "Documentation site lookup is not wired yet.".into(),
-            "none",
+            "fix_params",
             "Use `tool` or `topic` for now.",
             Value::Null,
         ));
@@ -295,7 +305,7 @@ mod tests {
             "zh-CN description must contain 委托"
         );
         assert_eq!(
-            doc["annotations"]["destructiveHint"], true,
+            doc["annotations"]["destructive_hint"], true,
             "submit_order must be flagged destructive"
         );
     }
