@@ -657,7 +657,7 @@ pub(crate) fn tool_result(json: String) -> CallToolResult {
     result
 }
 
-fn tool_json<T>(value: &T) -> Result<CallToolResult, McpError>
+pub(crate) fn tool_json<T>(value: &T) -> Result<CallToolResult, McpError>
 where
     T: serde::Serialize,
 {
@@ -1160,7 +1160,7 @@ fn client_bucket_from_context(ctx: &RequestContext<RoleServer>) -> &'static str 
 ///
 /// This is used for documentation resources where verbose field descriptions
 /// are useful and do not need to live in the hot `tools/list` descriptor.
-fn all_tools_full_cached() -> &'static [rmcp::model::Tool] {
+pub(crate) fn all_tools_full_cached() -> &'static [rmcp::model::Tool] {
     static TOOLS: std::sync::OnceLock<Vec<rmcp::model::Tool>> = std::sync::OnceLock::new();
     TOOLS.get_or_init(|| {
         // Descriptions and schema docs are literals naming

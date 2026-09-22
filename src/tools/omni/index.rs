@@ -4,20 +4,16 @@
 
 use std::collections::HashMap;
 
-#[allow(dead_code)]
 const K1: f32 = 1.2;
-#[allow(dead_code)]
 const B: f32 = 0.75;
 
 /// One weighted text field of a document.
-#[allow(dead_code)]
 pub(crate) struct Field {
     pub weight: f32,
     pub text: String,
 }
 
 /// A document to index, identified by `key`.
-#[allow(dead_code)]
 pub(crate) struct Doc {
     pub key: String,
     pub fields: Vec<Field>,
@@ -25,20 +21,17 @@ pub(crate) struct Doc {
 
 /// A ranked search hit.
 #[derive(Debug, Clone, PartialEq)]
-#[allow(dead_code)]
 pub(crate) struct Hit {
     pub key: String,
     pub score: f32,
 }
 
-#[allow(dead_code)]
 struct Posting {
     doc: usize,
     weighted_tf: f32,
 }
 
 /// Inverted index over weighted fields.
-#[allow(dead_code)]
 pub(crate) struct Index {
     keys: Vec<String>,
     lengths: Vec<f32>,
@@ -51,7 +44,6 @@ fn is_cjk(c: char) -> bool {
 }
 
 /// Lower-cased tokens: ASCII words plus CJK unigrams and bigrams.
-#[allow(dead_code)]
 pub(crate) fn tokenize(text: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut ascii = String::new();
@@ -89,7 +81,6 @@ pub(crate) fn tokenize(text: &str) -> Vec<String> {
 
 impl Index {
     /// Build the index; `docs` order defines internal ids.
-    #[allow(dead_code)]
     pub(crate) fn build(docs: Vec<Doc>) -> Self {
         let mut keys = Vec::with_capacity(docs.len());
         let mut lengths = Vec::with_capacity(docs.len());
@@ -133,7 +124,6 @@ impl Index {
 
     /// Top `limit` documents by BM25 score, descending; empty for an empty
     /// query or no matching term.
-    #[allow(dead_code)]
     pub(crate) fn search(&self, query: &str, limit: usize) -> Vec<Hit> {
         let n = self.keys.len() as f32;
         let mut scores: HashMap<usize, f32> = HashMap::new();

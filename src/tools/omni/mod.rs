@@ -2,3 +2,4 @@
 //! cover the whole tool catalogue without listing it.
 
 pub(crate) mod index;
+pub(crate) mod search;

@@ -13,7 +13,7 @@ use crate::tools::{self, Longbridge};
 
 /// Per-locale embedded translation files. Each entry is one
 /// `(language code, content of locales/<code>/<filename>)` pair.
-const TOOL_LOCALES: &[(&str, &str)] = &[
+pub(crate) const TOOL_LOCALES: &[(&str, &str)] = &[
     ("zh-CN", include_str!("../../locales/zh-CN/tools.json")),
     ("zh-HK", include_str!("../../locales/zh-HK/tools.json")),
 ];

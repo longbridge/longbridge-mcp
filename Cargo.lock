@@ -1747,6 +1747,7 @@ dependencies = [
  "jaq-std",
  "longbridge",
  "prometheus",
+ "regex",
  "reqwest 0.12.28",
  "rmcp",
  "rust_decimal",
