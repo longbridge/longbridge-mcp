@@ -81,6 +81,31 @@ def split_sections(md):
     return title, [(h, t[:MAX_SECTION_CHARS]) for h, t in sections if t]
 
 
+def guard_partial_crawl(pages):
+    """Refuse to overwrite a good snapshot with a partial crawl.
+
+    A transient outage upstream makes `fetch` skip pages, which would silently
+    shrink `data/docs-index.json`. Exit non-zero instead when nothing was
+    crawled, or when the crawl lost more than 10% of the existing snapshot's
+    pages, leaving the previous file in place.
+    """
+    if not pages:
+        print("error: crawled 0 pages; refusing to overwrite", file=sys.stderr)
+        sys.exit(1)
+    try:
+        with open(OUT, encoding="utf-8") as f:
+            previous = len(json.load(f).get("pages", []))
+    except (OSError, ValueError):
+        return
+    if previous and len(pages) < previous * 0.9:
+        print(
+            f"error: crawled {len(pages)} pages, more than 10% below the existing "
+            f"{previous} in {OUT}; refusing to overwrite",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+
 def main():
     index_md = fetch(INDEX_URL)
     paths = []
@@ -109,6 +134,7 @@ def main():
                 "sections": [{"heading": h, "text": t} for h, t in sections],
             })
             time.sleep(0.05)
+    guard_partial_crawl(pages)
     with open("data/docs-tool-pages.json", encoding="utf-8") as f:
         tool_pages = json.load(f)
     snapshot = {

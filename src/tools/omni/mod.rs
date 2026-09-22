@@ -44,7 +44,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = false
         ),
-        description = "Find Longbridge MCP tools by natural-language or Chinese keywords (e.g. \"latest quote\", \"市场温度\", \"place order\"). Returns compact hits: name, title, summary, required params, read_only, category. Then call `docs` for the full schema and `execute` to run."
+        description = "Find Longbridge MCP tools by natural-language or Chinese keywords (e.g. \"latest quote\", \"市场温度\", \"place order\"). Returns compact hits: name, title, summary, required params, read_only, category; when nothing matches, {\"hits\": [], \"hint\": \"…\"}. Then call `docs` for the full schema and `execute` to run."
     )]
     async fn search(
         &self,

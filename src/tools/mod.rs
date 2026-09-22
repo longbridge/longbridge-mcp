@@ -1108,7 +1108,6 @@ pub(crate) fn is_hidden_for_dc_region(name: &str, region: longbridge::DcRegion) 
 
 /// Whether `name` is restricted to one DC region at all (so the caller must
 /// resolve the account's region before deciding visibility).
-#[allow(dead_code)]
 pub(crate) fn is_region_scoped(name: &str) -> bool {
     US_ONLY_TOOLS.contains(&name) || AP_ONLY_TOOLS.contains(&name)
 }

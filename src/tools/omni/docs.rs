@@ -8,7 +8,7 @@ use rmcp::serde::Deserialize;
 use serde_json::Value;
 
 use crate::tools::McpContext;
-use crate::tools::omni::dispatch::unknown_tool;
+use crate::tools::omni::dispatch::{envelope, unknown_tool};
 use crate::tools::omni::docs_index;
 use crate::tools::omni::search::{category_of, localized};
 use crate::tools::omni::truncate::{MAX_OUTPUT_TOKENS, truncate_result};
@@ -212,24 +212,26 @@ pub(crate) async fn docs(mctx: &McpContext, p: DocsParam) -> Result<CallToolResu
     validate_param(&p)?;
     let lang = Lang::parse(p.lang.as_deref(), mctx.language.as_deref());
     if let Some(topic) = &p.topic {
+        let known = TOPICS
+            .iter()
+            .map(|(id, _)| *id)
+            .collect::<Vec<_>>()
+            .join(", ");
         return match TOPICS.iter().find(|(id, _)| id == topic) {
             Some((id, md)) => tool_json(&serde_json::json!({"topic": id, "markdown": md})),
-            None => Err(McpError::invalid_params(
-                format!(
-                    "unknown topic `{topic}`; known: {}",
-                    TOPICS
-                        .iter()
-                        .map(|(id, _)| *id)
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ),
-                None,
+            None => Ok(envelope(
+                "unknown_topic",
+                format!("unknown topic `{topic}`; known: {known}"),
+                "fix_params",
+                "Retry with one of the listed topic ids, or call `docs` with no arguments for \
+                 the catalogue.",
+                Value::Null,
             )),
         };
     }
     if let Some(name) = &p.tool {
         return match tool_doc(name, lang) {
-            Some(doc) => tool_json(&doc),
+            Some(doc) => Ok(truncate_result(tool_json(&doc)?, MAX_OUTPUT_TOKENS)),
             None => Ok(unknown_tool(name)),
         };
     }
@@ -241,13 +243,17 @@ pub(crate) async fn docs(mctx: &McpContext, p: DocsParam) -> Result<CallToolResu
                     .unwrap_or_else(|| serde_json::json!({"name": n, "error": "unknown tool"}))
             })
             .collect();
-        return tool_json(&docs);
+        return Ok(truncate_result(tool_json(&docs)?, MAX_OUTPUT_TOKENS));
     }
     if let Some(page) = &p.page {
         if !docs_index::valid_page_path(page) {
-            return Err(McpError::invalid_params(
-                "page must look like trade/order/submit",
-                None,
+            return Ok(envelope(
+                "invalid_page",
+                format!("page `{page}` must look like trade/order/submit"),
+                "fix_params",
+                "Use a slash-separated docs path without `.`/`..` segments, or call `docs` with \
+                 `query` to find one.",
+                Value::Null,
             ));
         }
         let markdown = if p.fresh == Some(true) {
@@ -257,12 +263,19 @@ pub(crate) async fn docs(mctx: &McpContext, p: DocsParam) -> Result<CallToolResu
         } else if let Some(md) = docs_index::page_from_snapshot(page, lang) {
             md
         } else {
-            docs_index::fetch_page(page, lang).await.map_err(|_| {
-                McpError::invalid_params(
-                    format!("unknown page `{page}`; use `query` to find pages"),
-                    None,
-                )
-            })?
+            match docs_index::fetch_page(page, lang).await {
+                Ok(md) => md,
+                Err(_) => {
+                    return Ok(envelope(
+                        "unknown_page",
+                        format!("unknown page `{page}`"),
+                        "fix_params",
+                        "The page is neither in the bundled snapshot nor live; call `docs` with \
+                         `query` to find the right page path.",
+                        Value::Null,
+                    ));
+                }
+            }
         };
         let result = tool_json(&serde_json::json!({
             "page": page,
@@ -274,7 +287,14 @@ pub(crate) async fn docs(mctx: &McpContext, p: DocsParam) -> Result<CallToolResu
     }
     if let Some(query) = &p.query {
         if query.trim().is_empty() {
-            return Err(McpError::invalid_params("query must be non-empty", None));
+            return Ok(envelope(
+                "invalid_query",
+                "`query` must be non-empty".into(),
+                "fix_params",
+                "Pass keywords to search the Longbridge OpenAPI docs, e.g. \"submit order\", or \
+                 use `topic` for a guide.",
+                Value::Null,
+            ));
         }
         return tool_json(&docs_index::search_docs(query, lang, p.limit.unwrap_or(5)));
     }
@@ -481,16 +501,53 @@ mod tests {
         );
     }
 
+    /// `docs` never returns a protocol error for a fixable argument: the model
+    /// gets a `fix_params` envelope it can act on.
+    fn assert_fix_params_envelope(result: &CallToolResult, code: &str) {
+        assert_eq!(
+            result.is_error,
+            Some(true),
+            "a rejected `docs` call must be an error result"
+        );
+        let v = crate::tools::jq::result_value(result);
+        assert_eq!(
+            v["error_code"], code,
+            "the envelope must carry the `{code}` error code, got {v}"
+        );
+        assert_eq!(
+            v["recoverable"], "fix_params",
+            "the caller can fix the argument and retry"
+        );
+    }
+
+    #[tokio::test]
+    async fn docs_unknown_topic_returns_a_fix_params_envelope() {
+        let p = DocsParam {
+            topic: Some("nope".into()),
+            ..no_lang_param()
+        };
+        let result = docs(&ctx(), p)
+            .await
+            .expect("an unknown topic must not be a protocol error");
+        assert_fix_params_envelope(&result, "unknown_topic");
+        assert!(
+            crate::tools::jq::result_value(&result)["message"]
+                .as_str()
+                .is_some_and(|m| m.contains("pipelines")),
+            "the message must list the known topic ids"
+        );
+    }
+
     #[tokio::test]
     async fn docs_invalid_page_path_is_rejected_before_any_fetch() {
         let p = DocsParam {
             page: Some("../etc/passwd".into()),
             ..no_lang_param()
         };
-        assert!(
-            docs(&ctx(), p).await.is_err(),
-            "a path-traversal page must be rejected without ever fetching"
-        );
+        let result = docs(&ctx(), p)
+            .await
+            .expect("a path-traversal page must not be a protocol error");
+        assert_fix_params_envelope(&result, "invalid_page");
     }
 
     #[tokio::test]
@@ -509,14 +566,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn docs_blank_query_is_invalid_params() {
+    async fn docs_blank_query_returns_a_fix_params_envelope() {
         let p = DocsParam {
             query: Some("   ".into()),
             ..no_lang_param()
         };
-        assert!(
-            docs(&ctx(), p).await.is_err(),
-            "a blank query must be rejected"
-        );
+        let result = docs(&ctx(), p)
+            .await
+            .expect("a blank query must not be a protocol error");
+        assert_fix_params_envelope(&result, "invalid_query");
     }
 }

@@ -283,6 +283,14 @@ pub(crate) fn search(p: SearchParam) -> Result<CallToolResult, McpError> {
             }))
         })
         .collect();
+    if hits.is_empty() {
+        return tool_json(&serde_json::json!({
+            "hits": [],
+            "hint": "No tool matched the query. Try different keywords (English or Chinese), a \
+                     broader term, or call `docs` with a `topic` (e.g. getting-started) or \
+                     `query`.",
+        }));
+    }
     tool_json(&hits)
 }
 
@@ -303,6 +311,29 @@ mod tests {
                     .to_string()
             })
             .collect()
+    }
+
+    #[test]
+    fn zero_hits_return_an_object_with_a_hint() {
+        let r = search(SearchParam {
+            query: "zzzqqqxyzzy".into(),
+            pattern: Some("^zzzqqq".into()),
+            category: None,
+            limit: None,
+        })
+        .expect("search should succeed");
+        let value = crate::tools::jq::result_value(&r);
+        assert_eq!(
+            value["hits"],
+            serde_json::json!([]),
+            "a query matching nothing must still report an empty `hits` array, got {value}"
+        );
+        assert!(
+            value["hint"]
+                .as_str()
+                .is_some_and(|h| h.contains("No tool matched")),
+            "an empty result must carry a hint pointing at `docs`, got {value}"
+        );
     }
 
     #[test]
