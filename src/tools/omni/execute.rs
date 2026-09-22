@@ -12,7 +12,7 @@ use rmcp::serde::Deserialize;
 use rmcp::service::RequestContext;
 use serde_json::Value;
 
-use crate::tools::omni::dispatch::{Dispatcher, envelope, is_write_tool};
+use crate::tools::omni::dispatch::{Dispatcher, envelope, is_known_tool, is_write_tool};
 use crate::tools::omni::pipeline::{self, Outcome, PlanError, Runner, Status, Step};
 use crate::tools::omni::truncate::{MAX_OUTPUT_TOKENS, truncate_result};
 use crate::tools::{Longbridge, McpContext};
@@ -136,6 +136,14 @@ pub(crate) fn assemble(
     result
 }
 
+/// The `inner_tool` metric label for `tool`. Tool names come straight from the
+/// caller, so an unknown one would mint a new Prometheus label value on every
+/// typo and grow the time series without bound; those are all folded into
+/// `"unknown"`.
+fn metric_label(tool: &str) -> &str {
+    if is_known_tool(tool) { tool } else { "unknown" }
+}
+
 /// The account's DC region, resolved only when at least one requested tool is
 /// region-scoped (resolving it makes an HTTP call).
 async fn region_for(mctx: &McpContext, tools: &[&str]) -> Option<longbridge::DcRegion> {
@@ -163,7 +171,7 @@ pub(crate) async fn execute(
             .call(&tool, p.arguments.unwrap_or_default())
             .await;
         crate::metrics::record_omni_step(
-            &tool,
+            metric_label(&tool),
             if result.is_error == Some(true) {
                 "error"
             } else {
@@ -219,7 +227,7 @@ pub(crate) async fn execute(
             .get(&step.id)
             .map(|o| o.status.as_str())
             .unwrap_or("error");
-        crate::metrics::record_omni_step(&step.tool, status);
+        crate::metrics::record_omni_step(metric_label(&step.tool), status);
     }
     Ok(truncate_result(
         assemble(&outcomes, &plan.return_ids),
@@ -283,6 +291,25 @@ mod tests {
         assert!(
             shape_error(&ok).is_none(),
             "a valid single-call shape passes"
+        );
+    }
+
+    #[test]
+    fn metric_label_only_keeps_known_tool_names() {
+        assert_eq!(
+            metric_label("quote"),
+            "quote",
+            "a dispatchable tool is labelled by its own name"
+        );
+        assert_eq!(
+            metric_label("qoute"),
+            "unknown",
+            "a caller-supplied name the router does not know must not mint a label value"
+        );
+        assert_eq!(
+            metric_label(""),
+            "unknown",
+            "an empty tool name is folded into the `unknown` label"
         );
     }
 

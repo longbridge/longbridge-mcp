@@ -1,6 +1,13 @@
 //! Multi-step `execute`: validate a DAG of tool calls, resolve `$from`
 //! references, run independent steps concurrently, project each result with
 //! jq so only the requested summary returns to the model.
+//!
+//! Every jq filter runs on a blocking thread under a timeout, and a filter that
+//! times out is abandoned rather than killed: the thread keeps spinning until
+//! the filter finishes on its own (see `crate::tools::jq`). One pipeline can ask
+//! for many projections — one per step plus one per `$from` reference — so
+//! [`MAX_PROJECTIONS`] caps how many blocking threads a single request is able
+//! to orphan.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::future::Future;
@@ -22,16 +29,9 @@ use crate::tools::jq::{project_bounded, result_value};
 pub(crate) const MAX_STEPS: usize = 10;
 /// Most steps run at the same time.
 pub(crate) const MAX_CONCURRENCY: usize = 4;
-/// Order-defining fields a write step may not take from an upstream step.
-pub(crate) const FORBIDDEN_WRITE_REFS: &[&str] = &[
-    "symbol",
-    "side",
-    "quantity",
-    "submitted_quantity",
-    "price",
-    "submitted_price",
-    "trigger_price",
-];
+/// Most jq projections one `execute` call may ask for: step `jq` filters plus
+/// `jq` on `$from` references.
+pub(crate) const MAX_PROJECTIONS: usize = 15;
 
 /// One pipeline step as supplied by the caller.
 #[derive(Debug, Clone)]
@@ -105,16 +105,17 @@ pub(crate) enum PlanError {
         /// The write step it depends on.
         write: String,
     },
-    /// A write step takes an order-defining field from another step.
+    /// A write step takes any argument from another step.
     #[error(
-        "write step `{step}` must not take `{field}` from another step; write literal values the user can confirm"
+        "write step `{step}` must not take any argument from another step via `$from`; write literal values the user can confirm in the dry-run preview"
     )]
     WriteRefForbidden {
         /// The write step.
         step: String,
-        /// The offending field name.
-        field: String,
     },
+    /// More than [`MAX_PROJECTIONS`] jq filters were supplied.
+    #[error("too many jq projections: {0} (max {MAX_PROJECTIONS})")]
+    TooManyProjections(usize),
     /// `return` names a step that does not exist.
     #[error("`return` names unknown step `{0}`")]
     UnknownReturn(String),
@@ -200,6 +201,7 @@ pub(crate) fn validate(
         return Err(PlanError::MultipleWrites(writes));
     }
     let mut deps: Vec<Vec<usize>> = Vec::with_capacity(steps.len());
+    let mut projections = steps.iter().filter(|s| s.jq.is_some()).count();
     for step in &steps {
         let args = Value::Object(step.arguments.clone());
         if has_malformed_ref(&args) {
@@ -209,6 +211,14 @@ pub(crate) fn validate(
         }
         let mut refs = Vec::new();
         collect_refs(&args, &mut refs);
+        projections += refs.iter().filter(|(_, jq)| jq.is_some()).count();
+        // A write step's arguments must be literals the user can read in the
+        // dry-run preview, so no `$from` is allowed anywhere inside them.
+        if is_write(&step.tool) && !refs.is_empty() {
+            return Err(PlanError::WriteRefForbidden {
+                step: step.id.clone(),
+            });
+        }
         let mut mine = Vec::new();
         for (target, _) in &refs {
             let Some(&t) = index.get(target) else {
@@ -230,21 +240,10 @@ pub(crate) fn validate(
                 mine.push(t);
             }
         }
-        if is_write(&step.tool) {
-            for field in FORBIDDEN_WRITE_REFS {
-                if step
-                    .arguments
-                    .get(*field)
-                    .is_some_and(|v| as_ref(v).is_some())
-                {
-                    return Err(PlanError::WriteRefForbidden {
-                        step: step.id.clone(),
-                        field: (*field).to_string(),
-                    });
-                }
-            }
-        }
         deps.push(mine);
+    }
+    if projections > MAX_PROJECTIONS {
+        return Err(PlanError::TooManyProjections(projections));
     }
     // Kahn's algorithm for cycle detection.
     let mut indegree: Vec<usize> = deps.iter().map(Vec::len).collect();
@@ -785,35 +784,61 @@ mod tests {
             },
             "nothing may consume a write step's result"
         );
-        let price_ref = vec![
-            step("a", "quote", json!({}), None),
-            step(
-                "w",
-                "submit_order",
-                json!({"symbol": "700.HK", "submitted_price": {"$from": "a", "jq": ".[0].last_done"}}),
-                None,
-            ),
+        let referencing_writes = [
+            json!({"symbol": "700.HK", "submitted_price": {"$from": "a", "jq": ".[0].last_done"}}),
+            json!({"remark": {"$from": "a"}}),
+            json!({"legs": [{"symbol": {"$from": "a"}}]}),
         ];
-        assert_eq!(
-            validate(price_ref, None, &write_is_submit).unwrap_err(),
-            PlanError::WriteRefForbidden {
-                step: "w".into(),
-                field: "submitted_price".into()
-            },
-            "order-defining fields must be literals the user can confirm"
-        );
+        for arguments in referencing_writes {
+            let plan = vec![
+                step("a", "quote", json!({}), None),
+                step("w", "submit_order", arguments.clone(), None),
+            ];
+            assert_eq!(
+                validate(plan, None, &write_is_submit).unwrap_err(),
+                PlanError::WriteRefForbidden { step: "w".into() },
+                "a write step must not take any argument from another step, however nested: {arguments}"
+            );
+        }
         let ok = vec![
             step("a", "quote", json!({}), None),
             step(
                 "w",
                 "submit_order",
-                json!({"symbol": "700.HK", "remark": {"$from": "a"}}),
+                json!({"symbol": "700.HK", "side": "Buy", "submitted_quantity": 100}),
                 None,
             ),
         ];
         assert!(
             validate(ok, None, &write_is_submit).is_ok(),
-            "a write step may reference a non order-defining field"
+            "a write step whose arguments are all literals is accepted"
+        );
+    }
+
+    #[test]
+    fn validate_caps_the_number_of_jq_projections() {
+        // A chain of `n` steps, each with its own `jq`, each after the first
+        // projecting its `$from` reference too: `2 * n - 1` projections.
+        let chain = |n: usize| -> Vec<Step> {
+            (0..n)
+                .map(|i| {
+                    let args = if i == 0 {
+                        json!({})
+                    } else {
+                        json!({"x": {"$from": format!("s{}", i - 1), "jq": "."}})
+                    };
+                    step(&format!("s{i}"), "quote", args, Some("."))
+                })
+                .collect()
+        };
+        assert_eq!(
+            validate(chain(9), None, &no_write).unwrap_err(),
+            PlanError::TooManyProjections(17),
+            "step filters and reference filters both count towards MAX_PROJECTIONS"
+        );
+        assert!(
+            validate(chain(8), None, &no_write).is_ok(),
+            "a pipeline with exactly MAX_PROJECTIONS filters is accepted"
         );
     }
 
