@@ -174,7 +174,7 @@ where
 /// instead return a schema-valid `isError:false` success so they are not counted
 /// as tool-result errors, with a `note` making clear the empty payload is a
 /// permission/no-data placeholder — not real quote data.
-fn tool_error(name: &str, err: &McpError) -> CallToolResult {
+pub(crate) fn tool_error(name: &str, err: &McpError) -> CallToolResult {
     let message = upstream_message_of(err).unwrap_or_else(|| err.message.as_ref());
     if is_terminal_none(err) {
         // Count the degraded condition (tools that return the error to
@@ -1100,11 +1100,18 @@ const AP_ONLY_TOOLS: &[&str] = &[
 /// True when `name` is restricted to the DC region opposite `region` — i.e.
 /// it should be hidden from `tools/list` and rejected by `call_tool` for an
 /// account in `region`.
-fn is_hidden_for_dc_region(name: &str, region: longbridge::DcRegion) -> bool {
+pub(crate) fn is_hidden_for_dc_region(name: &str, region: longbridge::DcRegion) -> bool {
     match region {
         longbridge::DcRegion::Us => AP_ONLY_TOOLS.contains(&name),
         longbridge::DcRegion::Ap => US_ONLY_TOOLS.contains(&name),
     }
+}
+
+/// Whether `name` is restricted to one DC region at all (so the caller must
+/// resolve the account's region before deciding visibility).
+#[allow(dead_code)]
+pub(crate) fn is_region_scoped(name: &str) -> bool {
+    US_ONLY_TOOLS.contains(&name) || AP_ONLY_TOOLS.contains(&name)
 }
 
 fn extract_context(ctx: &RequestContext<RoleServer>) -> Result<McpContext, McpError> {
@@ -1516,7 +1523,8 @@ pub fn v2_list_tools() -> Vec<rmcp::model::Tool> {
 ///
 /// Used for dispatch and as the source of the cached public tool descriptors.
 /// `get_tool` returns those public descriptors, including the common _jq input.
-fn cached_router() -> &'static rmcp::handler::server::router::tool::ToolRouter<Longbridge> {
+pub(crate) fn cached_router() -> &'static rmcp::handler::server::router::tool::ToolRouter<Longbridge>
+{
     use rmcp::handler::server::router::tool::ToolRouter;
     static ROUTER: std::sync::OnceLock<ToolRouter<Longbridge>> = std::sync::OnceLock::new();
     ROUTER.get_or_init(Longbridge::tool_router)
