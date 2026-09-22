@@ -455,26 +455,27 @@ mod tests {
 
     #[test]
     fn project_bounded_times_out_on_unbounded_filter() {
-        // `[range(0; 1e12)] | length` never lets its `spawn_blocking` closure
-        // return within the test. Tokio's `Runtime::drop` blocks
+        // `last(range(0; 1e11))` never lets its `spawn_blocking` closure
+        // return within the test: it folds through ~1e11 numbers keeping
+        // only the last one, so it runs well past `FILTER_TIMEOUT` but at
+        // constant memory (no growing aggregate), unlike a `[range(...)]`
+        // collect. That matters because Tokio's `Runtime::drop` blocks
         // unconditionally on outstanding blocking-pool tasks (see
-        // `BlockingPool::shutdown`, called with `timeout: None`), so awaiting
-        // this under `#[tokio::test]` hangs the whole test binary at
-        // teardown for as long as the orphaned worker keeps growing its
-        // array (confirmed: the process was SIGKILLed after 60+s). Build the
-        // runtime by hand and leak it so the orphaned thread is reclaimed
-        // when the process exits instead of blocking this test's teardown.
+        // `BlockingPool::shutdown`, called with `timeout: None` from
+        // `Drop`), so awaiting this under `#[tokio::test]` would hang the
+        // whole test binary at teardown for as long as the orphaned worker
+        // keeps running. Build the runtime by hand and shut it down in the
+        // background instead: the orphaned thread only spins one CPU core
+        // (it cannot OOM the shared ~320-test binary) and is abandoned
+        // rather than joined, since joining it is exactly what would hang.
         let runtime = tokio::runtime::Runtime::new().expect("runtime must build");
         let err = runtime
-            .block_on(project_bounded(
-                "[range(0; 1e12)] | length".into(),
-                json!(null),
-            ))
+            .block_on(project_bounded("last(range(0; 1e11))".into(), json!(null)))
             .expect_err("must time out or hit limit");
         assert!(
             err.contains("timed out") || err.contains("output limit"),
             "got: {err}"
         );
-        std::mem::forget(runtime);
+        runtime.shutdown_background();
     }
 }
