@@ -304,6 +304,17 @@ pub(crate) enum Status {
     Skipped,
 }
 
+impl Status {
+    /// The lowercase status string reported to the caller.
+    pub(crate) fn as_str(&self) -> &'static str {
+        match self {
+            Status::Ok => "ok",
+            Status::Error => "error",
+            Status::Skipped => "skipped",
+        }
+    }
+}
+
 /// Result of one step: `value` is the projected result, or an error envelope.
 #[derive(Debug, Clone)]
 pub(crate) struct Outcome {

@@ -104,19 +104,24 @@ pub(crate) fn plan_error_result(err: PlanError) -> CallToolResult {
 }
 
 /// Build the pipeline response: status for every step, data only for `return_ids`.
+///
+/// `is_error` is set iff no step the caller can see succeeded: when
+/// `return_ids` is non-empty, that means none of the *returned* steps is
+/// `Ok`; when it is empty (e.g. an explicit `"return": []` for a status-only
+/// pipeline), it means no step at all is `Ok`.
 pub(crate) fn assemble(
     outcomes: &BTreeMap<String, Outcome>,
     return_ids: &[String],
 ) -> CallToolResult {
     let mut steps = serde_json::Map::new();
     let mut any_returned_ok = false;
+    let mut any_ok = false;
     for (id, outcome) in outcomes {
-        let status = match outcome.status {
-            Status::Ok => "ok",
-            Status::Error => "error",
-            Status::Skipped => "skipped",
-        };
-        let mut entry = serde_json::json!({ "status": status, "elapsed_ms": outcome.elapsed_ms });
+        any_ok |= outcome.status == Status::Ok;
+        let mut entry = serde_json::json!({
+            "status": outcome.status.as_str(),
+            "elapsed_ms": outcome.elapsed_ms,
+        });
         if return_ids.contains(id) {
             entry["result"] = outcome.value.clone();
             any_returned_ok |= outcome.status == Status::Ok;
@@ -126,7 +131,12 @@ pub(crate) fn assemble(
     let body = serde_json::json!({ "steps": steps });
     let mut result = CallToolResult::success(vec![Content::text(body.to_string())]);
     result.structured_content = Some(body);
-    if !any_returned_ok {
+    let is_error = if return_ids.is_empty() {
+        !any_ok
+    } else {
+        !any_returned_ok
+    };
+    if is_error {
         result.is_error = Some(true);
     }
     result
@@ -216,11 +226,7 @@ pub(crate) async fn execute(
     for step in &plan.steps {
         let status = outcomes
             .get(&step.id)
-            .map(|o| match o.status {
-                Status::Ok => "ok",
-                Status::Error => "error",
-                Status::Skipped => "skipped",
-            })
+            .map(|o| o.status.as_str())
             .unwrap_or("error");
         crate::metrics::record_omni_step(&step.tool, status);
     }
@@ -250,7 +256,8 @@ mod tests {
         let err = shape_error(&both).expect("error");
         assert_eq!(
             crate::tools::jq::result_value(&err)["recoverable"],
-            "fix_params"
+            "fix_params",
+            "giving both `tool` and `steps` is a fixable shape error"
         );
         let neither = ExecuteParam {
             tool: None,
@@ -273,7 +280,8 @@ mod tests {
             crate::tools::jq::result_value(&err)["message"]
                 .as_str()
                 .expect("msg")
-                .contains("_jq")
+                .contains("_jq"),
+            "the error must explain that inner `_jq` is not applied"
         );
         let ok = ExecuteParam {
             tool: Some("quote".into()),
@@ -291,8 +299,14 @@ mod tests {
     fn plan_error_maps_to_fix_params_envelope() {
         let r = plan_error_result(crate::tools::omni::pipeline::PlanError::Cycle);
         let v = crate::tools::jq::result_value(&r);
-        assert_eq!(v["error_code"], "invalid_pipeline");
-        assert_eq!(v["recoverable"], "fix_params");
+        assert_eq!(
+            v["error_code"], "invalid_pipeline",
+            "a rejected plan must carry the invalid_pipeline error code"
+        );
+        assert_eq!(
+            v["recoverable"], "fix_params",
+            "a plan error is always fixable by the caller"
+        );
     }
 
     #[test]
@@ -317,11 +331,57 @@ mod tests {
         );
         let r = assemble(&outcomes, &["b".to_string()]);
         let v = crate::tools::jq::result_value(&r);
-        assert_eq!(v["steps"]["a"], json!({"status": "ok", "elapsed_ms": 5}));
-        assert_eq!(v["steps"]["b"]["status"], "error");
-        assert_eq!(v["steps"]["b"]["result"]["error_code"], "x");
+        assert_eq!(
+            v["steps"]["a"],
+            json!({"status": "ok", "elapsed_ms": 5}),
+            "a step not in `return_ids` reports status only, no `result`"
+        );
+        assert_eq!(
+            v["steps"]["b"]["status"], "error",
+            "a failed step's status must be reported as error"
+        );
+        assert_eq!(
+            v["steps"]["b"]["result"]["error_code"], "x",
+            "a step in `return_ids` must carry its outcome value as `result`"
+        );
         assert_eq!(r.is_error, Some(true), "all returned steps failed");
         let r = assemble(&outcomes, &["a".to_string(), "b".to_string()]);
         assert_ne!(r.is_error, Some(true), "one returned step succeeded");
+    }
+
+    #[test]
+    fn assemble_with_empty_return_ids_falls_back_to_overall_success() {
+        use crate::tools::omni::pipeline::{Outcome, Status};
+        let mut all_ok = std::collections::BTreeMap::new();
+        all_ok.insert(
+            "a".to_string(),
+            Outcome {
+                status: Status::Ok,
+                elapsed_ms: 1,
+                value: json!(null),
+            },
+        );
+        let r = assemble(&all_ok, &[]);
+        assert_ne!(
+            r.is_error,
+            Some(true),
+            "an empty `return` with a successful step must not be an error"
+        );
+
+        let mut all_error = std::collections::BTreeMap::new();
+        all_error.insert(
+            "a".to_string(),
+            Outcome {
+                status: Status::Error,
+                elapsed_ms: 1,
+                value: json!({"error_code": "x"}),
+            },
+        );
+        let r = assemble(&all_error, &[]);
+        assert_eq!(
+            r.is_error,
+            Some(true),
+            "an empty `return` where every step failed must still be an error"
+        );
     }
 }
