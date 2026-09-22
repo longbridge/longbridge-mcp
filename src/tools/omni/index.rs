@@ -226,8 +226,14 @@ mod tests {
     #[test]
     fn empty_query_or_no_match_returns_empty() {
         let index = Index::build(vec![doc("quote", "quote", "x")]);
-        assert!(index.search("", 10).is_empty());
-        assert!(index.search("zzzz", 10).is_empty());
+        assert!(
+            index.search("", 10).is_empty(),
+            "empty query should return no hits"
+        );
+        assert!(
+            index.search("zzzz", 10).is_empty(),
+            "unmatched query should return no hits"
+        );
     }
 
     #[test]
