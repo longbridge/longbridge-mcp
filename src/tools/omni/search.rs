@@ -36,20 +36,24 @@ pub struct SearchParam {
 }
 
 /// One tool's translated title, description, and parameter descriptions for
-/// a single locale, used to broaden the search index beyond English text.
-#[allow(dead_code)]
-struct Localized {
-    title: String,
-    description: String,
-    params: Vec<String>,
+/// a single locale, used to broaden the search index beyond English text and
+/// to serve localized tool documentation.
+pub(crate) struct Localized {
+    pub(crate) title: String,
+    pub(crate) description: String,
+    pub(crate) params: Vec<String>,
+    /// The locale code this translation came from, e.g. `"zh-CN"`.
+    pub(crate) lang: &'static str,
 }
 
-#[allow(dead_code)]
-fn localized() -> &'static HashMap<String, Vec<Localized>> {
+/// Per-tool translations, keyed by tool name, one entry per locale in
+/// `crate::auth::TOOL_LOCALES`. Used to broaden the search index and to
+/// localize tool documentation (`docs`).
+pub(crate) fn localized() -> &'static HashMap<String, Vec<Localized>> {
     static MAP: OnceLock<HashMap<String, Vec<Localized>>> = OnceLock::new();
     MAP.get_or_init(|| {
         let mut map: HashMap<String, Vec<Localized>> = HashMap::new();
-        for (_, raw) in crate::auth::TOOL_LOCALES {
+        for (code, raw) in crate::auth::TOOL_LOCALES {
             let parsed: serde_json::Value =
                 serde_json::from_str(raw).expect("locale file must be valid JSON");
             let Some(tools) = parsed.get("tools").and_then(|v| v.as_object()) else {
@@ -78,6 +82,7 @@ fn localized() -> &'static HashMap<String, Vec<Localized>> {
                         .unwrap_or_default()
                         .to_string(),
                     params,
+                    lang: code,
                 });
             }
         }

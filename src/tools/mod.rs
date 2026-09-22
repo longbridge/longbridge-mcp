@@ -615,7 +615,7 @@ fn zero_for(schema: Option<&rmcp::model::JsonObject>) -> serde_json::Value {
 /// `tool name -> full output schema`, built once from the uncompacted tool list
 /// so nested `properties`/`required` survive. Backs the terminal `isError:false`
 /// path (see `tool_error`).
-fn output_schema_map()
+pub(crate) fn output_schema_map()
 -> &'static std::collections::HashMap<String, std::sync::Arc<rmcp::model::JsonObject>> {
     static MAP: std::sync::OnceLock<
         std::collections::HashMap<String, std::sync::Arc<rmcp::model::JsonObject>>,
