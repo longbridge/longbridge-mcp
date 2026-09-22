@@ -55,6 +55,13 @@ impl RestrictedVersion {
 #[derive(Clone, Copy, Debug)]
 pub struct RestrictedEndpoint(pub RestrictedVersion);
 
+/// Marker inserted by [`mcp_auth_layer`] for every request that proceeds on
+/// the `/omni` endpoint. `ServerHandler` reads it to list only the three
+/// omni meta-tools (`search`, `docs`, `execute`) and to route `tools/call`
+/// through the omni router instead of the full tool router.
+#[derive(Clone, Copy, Debug)]
+pub struct OmniEndpoint;
+
 /// Which endpoint a request arrived on, which decides how token-less requests
 /// are handled.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -93,12 +100,17 @@ pub enum AuthMode {
 /// [`RestrictedEndpoint`] marker carrying that [`RestrictedVersion`] is attached
 /// to every request that proceeds, so handlers expose and accept only that
 /// version's allowlist.
+///
+/// When `omni` is `true` (the `/omni` endpoint) an [`OmniEndpoint`] marker is
+/// attached to every request that proceeds, so handlers expose and accept only
+/// the three omni meta-tools.
 pub async fn mcp_auth_layer(
     mut req: Request,
     next: Next,
     base_url: &str,
     mode: AuthMode,
     restricted: Option<RestrictedVersion>,
+    omni: bool,
 ) -> Response {
     let resource = crate::auth::metadata::public_url_from_headers(req.headers(), base_url).url;
     // A restricted endpoint points at its own RFC 9728 resource-specific
@@ -167,6 +179,10 @@ pub async fn mcp_auth_layer(
         req.extensions_mut().insert(RestrictedEndpoint(version));
     }
 
+    if omni {
+        req.extensions_mut().insert(OmniEndpoint);
+    }
+
     next.run(req).await
 }
 
@@ -183,7 +199,15 @@ mod tests {
             "/mcp",
             get(|| async { "ok" }).layer(axum::middleware::from_fn(
                 move |req: Request, next: Next| async move {
-                    mcp_auth_layer(req, next, "https://example.com", AuthMode::Required, None).await
+                    mcp_auth_layer(
+                        req,
+                        next,
+                        "https://example.com",
+                        AuthMode::Required,
+                        None,
+                        false,
+                    )
+                    .await
                 },
             )),
         )
@@ -259,5 +283,46 @@ mod tests {
             logged.contains("test-client/1.0"),
             "expected the User-Agent in the log: {logged}"
         );
+    }
+
+    #[tokio::test]
+    async fn omni_flag_tags_request_with_omni_endpoint_marker() {
+        use axum::body::Body;
+        use axum::http::{Request, StatusCode};
+
+        let app = Router::new().route(
+            "/",
+            get(|req: axum::extract::Request| async move {
+                if req.extensions().get::<OmniEndpoint>().is_some() {
+                    "omni"
+                } else {
+                    "plain"
+                }
+            })
+            .layer(axum::middleware::from_fn(
+                |req: axum::extract::Request, next: axum::middleware::Next| async move {
+                    mcp_auth_layer(
+                        req,
+                        next,
+                        "https://example.com",
+                        AuthMode::Required,
+                        None,
+                        true,
+                    )
+                    .await
+                },
+            )),
+        );
+        let req = Request::builder()
+            .uri("/")
+            .header("Authorization", "Bearer t")
+            .body(Body::empty())
+            .expect("request");
+        let resp = app.oneshot(req).await.expect("response");
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), 1024)
+            .await
+            .expect("body");
+        assert_eq!(&body[..], b"omni");
     }
 }

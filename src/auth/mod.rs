@@ -297,35 +297,44 @@ pub fn create_router(state: Arc<AppState>) -> Router {
     //     missing token yields 401, exactly as before this feature.
     //   - `AuthMode::Optional` for the `/agent` endpoint: token-less requests
     //     are allowed through into the `authenticate` reverse-auth flow.
-    let make_mcp_with_auth =
-        |base_url: String,
-         mode: middleware::AuthMode,
-         restricted: Option<middleware::RestrictedVersion>| {
-            let svc = StreamableHttpService::new(
-                move || Ok(Longbridge),
-                Arc::new(NeverSessionManager::default()),
-                StreamableHttpServerConfig::default()
-                    .with_stateful_mode(false)
-                    .disable_allowed_hosts(),
-            );
-            tower::ServiceBuilder::new()
-                .layer(axum::middleware::from_fn(
-                    move |req: axum::extract::Request, next: axum::middleware::Next| {
-                        let base_url = base_url.clone();
-                        async move {
-                            middleware::mcp_auth_layer(req, next, &base_url, mode, restricted).await
-                        }
-                    },
-                ))
-                .service(svc)
-        };
+    let make_mcp_with_auth = |base_url: String,
+                              mode: middleware::AuthMode,
+                              restricted: Option<middleware::RestrictedVersion>,
+                              omni: bool| {
+        let svc = StreamableHttpService::new(
+            move || Ok(Longbridge),
+            Arc::new(NeverSessionManager::default()),
+            StreamableHttpServerConfig::default()
+                .with_stateful_mode(false)
+                .disable_allowed_hosts(),
+        );
+        tower::ServiceBuilder::new()
+            .layer(axum::middleware::from_fn(
+                move |req: axum::extract::Request, next: axum::middleware::Next| {
+                    let base_url = base_url.clone();
+                    async move {
+                        middleware::mcp_auth_layer(req, next, &base_url, mode, restricted, omni)
+                            .await
+                    }
+                },
+            ))
+            .service(svc)
+    };
 
     // Main endpoints — Bearer required (token-less -> 401). Mounted at both
     // `/mcp` and root so deployments that strip or omit the `/mcp` prefix work.
-    let mcp_with_auth =
-        make_mcp_with_auth(state.base_url.clone(), middleware::AuthMode::Required, None);
-    let mcp_with_auth_root =
-        make_mcp_with_auth(state.base_url.clone(), middleware::AuthMode::Required, None);
+    let mcp_with_auth = make_mcp_with_auth(
+        state.base_url.clone(),
+        middleware::AuthMode::Required,
+        None,
+        false,
+    );
+    let mcp_with_auth_root = make_mcp_with_auth(
+        state.base_url.clone(),
+        middleware::AuthMode::Required,
+        None,
+        false,
+    );
     // Root mount, plus a thin front layer that serves the human landing page for
     // browser GETs to `/`. All programmatic MCP traffic passes straight through.
     let root_service = tower::ServiceBuilder::new()
@@ -336,8 +345,12 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .service(mcp_with_auth_root);
     // Optional-auth endpoint — same MCP server, but token-less requests are let
     // through so an OAuth-incapable client can call the `authenticate` tool.
-    let mcp_agent =
-        make_mcp_with_auth(state.base_url.clone(), middleware::AuthMode::Optional, None);
+    let mcp_agent = make_mcp_with_auth(
+        state.base_url.clone(),
+        middleware::AuthMode::Optional,
+        None,
+        false,
+    );
     // Restricted public endpoint — Bearer required, but only the curated
     // allowlist is listed and callable. `/v2` is the read surface submitted to
     // third-party app directories (OpenAI/Claude/Grok): read-only market
@@ -347,6 +360,16 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         state.base_url.clone(),
         middleware::AuthMode::Required,
         Some(middleware::RestrictedVersion::V2),
+        false,
+    );
+    // Omni endpoint — Bearer required, full capability surface, but only the
+    // three meta-tools are listed and callable; every other tool is reached
+    // through `execute`.
+    let mcp_omni = make_mcp_with_auth(
+        state.base_url.clone(),
+        middleware::AuthMode::Required,
+        None,
+        true,
     );
 
     Router::new()
@@ -359,6 +382,7 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .merge(oauth_proxy_routes)
         .nest_service("/agent", mcp_agent)
         .nest_service("/v2", mcp_v2)
+        .nest_service("/omni", mcp_omni)
         .nest_service("/mcp", mcp_with_auth)
         // Also serve at root so deployments that omit the /mcp path prefix work.
         .fallback_service(root_service)

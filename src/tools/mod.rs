@@ -13,7 +13,9 @@ use rmcp::tool;
 use rmcp::tool_handler;
 use rmcp::tool_router;
 
-use crate::auth::middleware::{AgentEndpoint, BearerToken, RestrictedEndpoint, RestrictedVersion};
+use crate::auth::middleware::{
+    AgentEndpoint, BearerToken, OmniEndpoint, RestrictedEndpoint, RestrictedVersion,
+};
 use crate::error::Error;
 use crate::serialize::to_tool_json;
 use crate::tools::support::text::{clip_chars, truncate_chars};
@@ -1027,6 +1029,17 @@ fn is_agent_endpoint(ctx: &RequestContext<RoleServer>) -> bool {
     ctx.extensions
         .get::<axum::http::request::Parts>()
         .map(|parts| parts.extensions.get::<AgentEndpoint>().is_some())
+        .unwrap_or(false)
+}
+
+/// Whether the request arrived on the `/omni` endpoint (see
+/// [`OmniEndpoint`]). Only the three omni meta-tools are listed and callable
+/// there; everything else is reached through `execute`.
+#[allow(dead_code)]
+fn is_omni_endpoint(ctx: &RequestContext<RoleServer>) -> bool {
+    ctx.extensions
+        .get::<axum::http::request::Parts>()
+        .map(|parts| parts.extensions.get::<OmniEndpoint>().is_some())
         .unwrap_or(false)
 }
 
