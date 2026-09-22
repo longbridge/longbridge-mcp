@@ -152,7 +152,7 @@ fn filter_error(message: &str) -> CallToolResult {
 /// The JSON value a tool result carries: `structured_content` when present,
 /// otherwise the `content` text parsed as JSON (one item as-is, several as an
 /// array, non-JSON text as a JSON string).
-pub(super) fn result_value(result: &CallToolResult) -> Value {
+pub(crate) fn result_value(result: &CallToolResult) -> Value {
     if let Some(structured) = &result.structured_content {
         return structured.clone();
     }
@@ -201,7 +201,7 @@ fn run(filter: &Filter, input: Value) -> Result<Value, String> {
 // Not yet called outside tests; the omni pipeline (a later task) is its first
 // production caller.
 #[allow(dead_code)]
-pub(super) fn project(code: &str, input: Value) -> Result<Value, String> {
+pub(crate) fn project(code: &str, input: Value) -> Result<Value, String> {
     let filter = compile(code).map_err(|error| error.message.to_string())?;
     run(&filter, input)
 }
@@ -210,7 +210,7 @@ pub(super) fn project(code: &str, input: Value) -> Result<Value, String> {
 // Not yet called outside tests; the omni pipeline (a later task) is its first
 // production caller.
 #[allow(dead_code)]
-pub(super) async fn project_bounded(code: String, input: Value) -> Result<Value, String> {
+pub(crate) async fn project_bounded(code: String, input: Value) -> Result<Value, String> {
     let worker = tokio::task::spawn_blocking(move || project(&code, input));
     match tokio::time::timeout(FILTER_TIMEOUT, worker).await {
         Ok(Ok(result)) => result,

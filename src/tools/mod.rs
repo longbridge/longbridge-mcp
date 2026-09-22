@@ -532,7 +532,7 @@ mod dca;
 mod fundamental;
 mod grid;
 mod ipo;
-mod jq;
+pub(crate) mod jq;
 mod macrodata;
 mod market;
 mod omni;

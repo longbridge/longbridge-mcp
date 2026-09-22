@@ -3,4 +3,5 @@
 
 pub(crate) mod dispatch;
 pub(crate) mod index;
+pub(crate) mod pipeline;
 pub(crate) mod search;
