@@ -273,7 +273,7 @@
         "attached_time_in_force": "新的附加单有效期：`Day` / `GTC` / `GTD`",
         "attached_expire_time": "新的附加单到期时间，Unix 时间戳（秒）；`attached_time_in_force=GTD` 时必填",
         "attached_activate_order_type": "新的触发后委托类型，例如 `LO` 或 `MO`",
-        "attached_outside_rth": "新的触发后盘前盘后设置：`RTH_ONLY` / `ANY_TIME` / `OVERNIGHT`",
+        "attached_outside_rth": "新的触发后盘前盘后设置：`RTH_ONLY` / `ANY_TIME` / `OVERNIGHT` / `OPTION_PRE_MARKET`",
         "attached_main_id": "附加单所属母单的单号；仅在不经母单、单独修改某个附加单时需要",
         "attached_quantity": "新的附加单数量",
         "attached_market_price": "附加单的参考市价",
@@ -295,8 +295,9 @@
         "trailing_amount": "跟踪金额（绝对价格距离），`TSLPAMT` 必填",
         "trailing_percent": "跟踪百分比（小数形式，例如 `0.05` 表示 5%），`TSLPPCT` 必填",
         "expire_date": "到期日期（`yyyy-mm-dd`），`time_in_force=GTD` 时必填",
-        "outside_rth": "盘前盘后设置：`RTH_ONLY`（仅常规交易时段）、`ANY_TIME`（含盘前盘后任意时段）、`OVERNIGHT`（夜盘，仅美股）",
+        "outside_rth": "盘前盘后设置：`RTH_ONLY`（仅常规交易时段）、`ANY_TIME`（含盘前盘后任意时段）、`OVERNIGHT`（夜盘，仅美股）、`OPTION_PRE_MARKET`（美股期权盘前时段）",
         "remark": "委托备注（最多 255 字符）",
+        "client_request_id": "幂等键，每笔委托唯一（例如一个 UUID）。两次请求携带相同值时交易所只会下一笔单，第二次返回原有的 order_id，因此超时或断连后的重试不会重复成交。可能重试时务必设置；下一笔新委托必须换一个新值",
         "attached_order_type": "附加止盈/止损单类型：`PROFIT_TAKER`（仅止盈）、`STOP_LOSS`（仅止损）、`BRACKET`（止盈止损同时挂）。普通委托请省略；不传该参数时其余 attached_* 参数均被忽略",
         "attached_profit_taker_price": "止盈触发价。`PROFIT_TAKER` 与 `BRACKET` 必填",
         "attached_stop_loss_price": "止损触发价。`STOP_LOSS` 与 `BRACKET` 必填",
@@ -305,21 +306,22 @@
         "attached_time_in_force": "附加单有效期：`Day` / `GTC` / `GTD`；省略则沿用母单设置",
         "attached_expire_time": "附加单到期时间，Unix 时间戳（秒），例如 `\"1767139200\"`；`attached_time_in_force=GTD` 时必填",
         "attached_activate_order_type": "附加单触发后提交的委托类型，例如 `LO`（需同时给出对应的 `attached_*_submit_price`）或 `MO`",
-        "attached_outside_rth": "附加单触发后的盘前盘后设置：`RTH_ONLY` / `ANY_TIME` / `OVERNIGHT`",
+        "attached_outside_rth": "附加单触发后的盘前盘后设置：`RTH_ONLY` / `ANY_TIME` / `OVERNIGHT` / `OPTION_PRE_MARKET`",
         "execute": "本次试运行返回的 confirmation_code。省略（默认）表示 DRY RUN：只校验并回显请求，同时返回一个三位确认码，不会发往交易所。必须先不带该参数调用一次，把预览展示给用户，待用户明确确认后才可再次调用并回填该码。确认码由订单本身（代码、方向、数量、价格）推导而来，只对这一笔完全相同的请求生效——改动任何字段即失效。不可自行决定回填。"
       }
     },
     "submit_multileg_order": {
       "title": "提交组合期权委托",
-      "description": "提交多腿期权组合委托，各腿作为一个策略单一起成交或挂单。strategy：CoveredCall（备兑看涨）/ CoveredPut（备兑看跌）/ VerticalCallSpread（垂直看涨价差）/ VerticalPutSpread（垂直看跌价差）/ Collar（领口）/ Straddle（跨式）/ Strangle（宽跨式）；side：Buy/Sell（整个策略的方向）；order_type：LO（需 submitted_price，为组合净价）或 MO；legs[]：{symbol, ratio_quantity}，按策略顺序排列，仅接受期权代码；ratio_quantity 恒为正数——每条腿的买卖方向由 strategy 与 side 共同决定",
+      "description": "提交多腿期权组合委托，各腿作为一个策略单一起成交或挂单。strategy：CoveredCall（备兑看涨）/ CoveredPut（备兑看跌）/ VerticalCallSpread（垂直看涨价差）/ VerticalPutSpread（垂直看跌价差）/ Collar（领口）/ Straddle（跨式）/ Strangle（宽跨式）/ CalendarCallSpread（认购日历价差）/ CalendarPutSpread（认沽日历价差）；side：Buy/Sell（整个策略的方向）；order_type：LO（需 submitted_price，为组合净价）或 MO；legs[]：{symbol, ratio_quantity}，按策略顺序排列，仅接受期权代码；ratio_quantity 恒为正数——每条腿的买卖方向由 strategy 与 side 共同决定",
       "properties": {
-        "strategy": "组合策略，决定所需腿数与每条腿的方向：`CoveredCall`（备兑看涨）/ `CoveredPut`（备兑看跌）/ `VerticalCallSpread`（垂直看涨价差）/ `VerticalPutSpread`（垂直看跌价差）/ `Collar`（领口）/ `Straddle`（跨式）/ `Strangle`（宽跨式）",
+        "strategy": "组合策略，决定所需腿数与每条腿的方向：`CoveredCall`（备兑看涨）/ `CoveredPut`（备兑看跌）/ `VerticalCallSpread`（垂直看涨价差）/ `VerticalPutSpread`（垂直看跌价差）/ `Collar`（领口）/ `Straddle`（跨式）/ `Strangle`（宽跨式）/ `CalendarCallSpread`（认购日历价差）/ `CalendarPutSpread`（认沽日历价差）。两种日历价差为相同行权价、不同到期日",
         "side": "买卖方向：`Buy`（买入）或 `Sell`（卖出），指整个策略的方向",
         "order_type": "委托类型：`LO`（限价，需 `submitted_price`）或 `MO`（市价）",
         "submitted_quantity": "委托组数（每组为一套按 `legs` 比例构成的腿）",
         "legs": "组合的各条腿，按策略顺序排列，仅接受期权代码",
         "submitted_price": "整个组合的净限价，`LO` 必填",
-        "remark": "委托备注（最多 255 字符）"
+        "remark": "委托备注（最多 255 字符）",
+        "client_request_id": "幂等键，每笔委托唯一。含义同 submit_order 的同名字段"
       }
     },
     "ah_premium": {
@@ -833,24 +835,25 @@
     },
     "option_chain_expiry_date_list": {
       "title": "期权到期日列表",
-      "description": "获取期权链可选到期日列表，返回 expiry_dates[]（yyyy-mm-dd）。配合 option_chain_info_by_date 查询行权价和 Greeks",
+      "description": "获取期权链可选到期日列表，返回 expiry_dates[]（yyyy-mm-dd）。配合 option_chain_info_by_date 获取某个到期日的合约列表",
       "properties": {
         "symbol": "证券代码，例如 `\"700.HK\"`。请用规范代码，补零的代码（如 \"00700.HK\"）会返回空记录而非报错"
       }
     },
     "option_chain_info_by_date": {
       "title": "期权链",
-      "description": "获取指定到期日的期权链，返回 strikePrices[]{strike_price, call{symbol, last_done, iv, delta, gamma}, put{symbol, last_done, iv, delta, gamma}}",
+      "description": "获取指定到期日的期权合约列表。每份合约一条记录，认购与认沽不再按行权价配对：{symbol, expiry_date, strike_price, direction（Call/Put）, option_type（Monthly/Weekly/Quarterly）, standard_attr（Normal/Old）, days_to_expiry}。按 direction 区分认购与认沽；standard_only=true 可滤掉公司行动遗留的老合约。本接口不含价格与 Greeks，需要时把 symbol 传给 option_quote",
       "properties": {
-        "symbol": "证券代码",
-        "date": "到期日（`yyyy-mm-dd`）"
+        "symbol": "标的证券代码，例如 `\"AAPL.US\"`。请用规范代码，补零的代码（如 \"00700.HK\"）会返回空记录而非报错",
+        "date": "到期日（`yyyy-mm-dd`），必填。可用 option_chain_expiry_date_list 列出可选到期日",
+        "standard_only": "仅返回标准合约。省略或 false 时返回全部，包含公司行动遗留的老合约（`standard_attr: \"Old\"`）"
       }
     },
     "option_quote": {
       "title": "期权报价",
-      "description": "获取期权行情（最多 500 个）。symbols 必须是期权合约代码（例如 \"AAPL230317P160000.US\"），不能用普通股票代码——请先用 option_chain_info_by_date 返回的 call.symbol/put.symbol 字段获取有效的期权代码。返回各标的：last_done（最新价）, prev_close, open, high, low, volume（成交量）, turnover（成交额）, implied_volatility（隐含波动率）, delta/gamma/theta/vega/rho（Greeks）, open_interest（未平仓量）。Greeks 已归一化：theta 为每日值（一天的时间损耗），vega 为隐含波动率每变动 1% 的价格变化，rho 为无风险利率每变动 1% 的价格变化。",
+      "description": "获取期权行情（最多 500 个）。symbols 必须是期权合约代码（例如 \"AAPL230317P160000.US\"），不能用普通股票代码——请先用 option_chain_info_by_date 返回的每份合约的 symbol 字段获取有效的期权代码。返回各标的：last_done（最新价）, prev_close, open, high, low, volume（成交量）, turnover（成交额）, implied_volatility（隐含波动率）, delta/gamma/theta/vega/rho（Greeks）, open_interest（未平仓量）。Greeks 已归一化：theta 为每日值（一天的时间损耗），vega 为隐含波动率每变动 1% 的价格变化，rho 为无风险利率每变动 1% 的价格变化。",
       "properties": {
-        "symbols": "期权合约代码，例如 `[\"AAPL230317P160000.US\"]`。不是普通股票代码——请先用 option_chain_expiry_date_list 列出到期日，再用 option_chain_info_by_date 按行权价获取的 call.symbol/put.symbol 字段拿到有效代码"
+        "symbols": "期权合约代码，例如 `[\"AAPL230317P160000.US\"]`。不是普通股票代码——请先用 option_chain_expiry_date_list 列出到期日，再用 option_chain_info_by_date 取得该到期日各合约的 symbol 字段"
       }
     },
     "option_volume": {

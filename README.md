@@ -231,6 +231,8 @@ So raising verbosity is safe: `RUST_LOG=debug` (or `trace`) gives you the server
 
 The server expects a Longbridge OAuth access token in `Authorization: Bearer <token>`. On missing or invalid auth it returns `401` with a `WWW-Authenticate` header pointing to the protected-resource metadata, which directs clients to the Longbridge OAuth authorization server.
 
+Send `x-papertrading: true` (or `1`) on a request to run it against the paper-trading environment. Upstream rejects a paper-trading request made with a real-money token, so the header is a safety guard rather than a routing switch: it can only narrow what a token may do. `LONGBRIDGE_PAPERTRADING=true` turns it on for the whole deployment instead.
+
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/.well-known/oauth-protected-resource` | Protected Resource Metadata (RFC 9728) |

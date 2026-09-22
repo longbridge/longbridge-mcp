@@ -736,6 +736,23 @@ impl McpContext {
         pinned_env || (!override_configured && is_us)
     }
 
+    /// Whether the caller asked for paper trading, via an `x-papertrading`
+    /// request header.
+    ///
+    /// `true` and `1` both count; any other value, and an absent header, mean
+    /// real money. Keys arrive lower-cased from [`collect_headers`].
+    ///
+    /// Trusting a client header is safe in the one direction that matters:
+    /// the flag only ever *narrows* what a token may do. Upstream rejects a
+    /// paper-trading request made with a real-money token, so a spurious
+    /// header fails the call rather than routing it somewhere unexpected.
+    fn papertrading_requested(headers: &[(String, String)]) -> bool {
+        headers.iter().any(|(key, value)| {
+            let value = value.trim();
+            key == "x-papertrading" && (value.eq_ignore_ascii_case("true") || value == "1")
+        })
+    }
+
     /// Whether this request's upstream must be pinned to [`crate::endpoints`]
     /// rather than left to the SDK's own env/geolocation resolution.
     ///
@@ -772,6 +789,9 @@ impl McpContext {
                 .http_url(crate::endpoints::http_url())
                 .quote_ws_url(crate::endpoints::quote_ws_url())
                 .trade_ws_url(crate::endpoints::trade_ws_url());
+        }
+        if Self::papertrading_requested(&self.extra_headers) {
+            config = config.enable_papertrading();
         }
         if let Some(ref lang) = self.language {
             let lb_lang = if lang.contains("zh-CN") || lang.contains("zh-Hans") {
@@ -1760,9 +1780,9 @@ fn read_output_schema_resource(uri: &str) -> Result<ReadResourceResult, McpError
 use crate::tools::quote::{
     CalcIndexesParam, CandlesticksParam, CreateWatchlistGroupParam, DeleteWatchlistGroupParam,
     HistoryCandlesticksByDateParam, HistoryCandlesticksByOffsetParam, MarketDateRangeParam,
-    MarketParam, OptionVolumeDailyParam, OptionVolumeParam, SecurityListParam, ShortPositionsParam,
-    SymbolCountParam, SymbolDateParam, SymbolParam, SymbolsParam, UpdateWatchlistGroupParam,
-    WarrantListParam,
+    MarketParam, OptionChainByDateParam, OptionVolumeDailyParam, OptionVolumeParam,
+    SecurityListParam, ShortPositionsParam, SymbolCountParam, SymbolParam, SymbolsParam,
+    UpdateWatchlistGroupParam, WarrantListParam,
 };
 use crate::tools::trade::{
     CashFlowParam, EstimateMaxQtyParam, HistoryOrdersParam, OrderDetailParam, ReplaceOrderParam,
@@ -1863,7 +1883,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get option quotes (max 500 symbols). Symbols must be option contract symbols (e.g. \"AAPL230317P160000.US\"), NOT plain stock symbols — obtain valid ones from option_chain_info_by_date's call.symbol/put.symbol fields. Returns last_done, prev_close, open, high, low, volume, turnover, implied_volatility, delta, gamma, theta, vega, rho, open_interest per symbol. Greeks are normalized: theta is the per-day value (one day's time decay), vega is the price change per 1% change in implied volatility, and rho is the price change per 1% change in the risk-free interest rate."
+        description = "Get option quotes (max 500 symbols). Symbols must be option contract symbols (e.g. \"AAPL230317P160000.US\"), NOT plain stock symbols — obtain valid ones from the symbol field of each option_chain_info_by_date contract. Returns last_done, prev_close, open, high, low, volume, turnover, implied_volatility, delta, gamma, theta, vega, rho, open_interest per symbol. Greeks are normalized: theta is the per-day value (one day's time decay), vega is the price change per 1% change in implied volatility, and rho is the price change per 1% change in the risk-free interest rate."
     )]
     async fn option_quote(
         &self,
@@ -2088,7 +2108,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get option chain expiry dates for a symbol (e.g. AAPL.US). Returns expiry_dates[] as \"yyyy-mm-dd\" strings. Use with option_chain_info_by_date to get strikes and Greeks."
+        description = "Get option chain expiry dates for a symbol (e.g. AAPL.US). Returns expiry_dates[] as \"yyyy-mm-dd\" strings. Use with option_chain_info_by_date to get the contracts for one of those dates."
     )]
     async fn option_chain_expiry_date_list(
         &self,
@@ -2111,12 +2131,12 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get option chain for an expiry date. Returns strikePrices[]{strike_price, call{symbol, last_done, iv, delta, gamma}, put{symbol, last_done, iv, delta, gamma}}."
+        description = "Get the option contract list for one expiry date. Returns one entry per contract (calls and puts are NOT paired): {symbol, expiry_date, strike_price, direction (Call/Put), option_type (Monthly/Weekly/Quarterly), standard_attr (Normal/Old), days_to_expiry}. Filter on `direction` to split calls from puts, and pass standard_only=true to drop the legacy post-corporate-action contracts. Carries no prices or Greeks — pass the symbols to option_quote for those."
     )]
     async fn option_chain_info_by_date(
         &self,
         ctx: RequestContext<RoleServer>,
-        Parameters(p): Parameters<SymbolDateParam>,
+        Parameters(p): Parameters<OptionChainByDateParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
         measured_tool_call("option_chain_info_by_date", format!("{p:?}"), || {
@@ -2731,7 +2751,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::OrderIdResponse>(),
-        description = "Submit a multi-leg option combination order; all legs fill or rest together as one strategy order. strategy: CoveredCall / CoveredPut / VerticalCallSpread / VerticalPutSpread / Collar / Straddle / Strangle. side: Buy/Sell (direction of the whole strategy). order_type: LO (needs submitted_price, a net price for the combination) or MO. legs[]: {symbol, ratio_quantity} in strategy order, option symbols only; ratio_quantity is always positive — each leg's buy/sell direction is implied by strategy plus side."
+        description = "Submit a multi-leg option combination order; all legs fill or rest together as one strategy order. strategy: CoveredCall / CoveredPut / VerticalCallSpread / VerticalPutSpread / Collar / Straddle / Strangle / CalendarCallSpread / CalendarPutSpread. side: Buy/Sell (direction of the whole strategy). order_type: LO (needs submitted_price, a net price for the combination) or MO. legs[]: {symbol, ratio_quantity} in strategy order, option symbols only; ratio_quantity is always positive — each leg's buy/sell direction is implied by strategy plus side."
     )]
     async fn submit_multileg_order(
         &self,
@@ -5790,6 +5810,28 @@ mod tests {
             client_user_agent: ua.map(str::to_owned),
             extra_headers: Vec::new(),
         }
+    }
+
+    #[test]
+    fn papertrading_is_requested_only_by_an_affirmative_header() {
+        let header = |key: &str, value: &str| vec![(key.to_string(), value.to_string())];
+        for value in ["true", "TRUE", "True", " true ", "1", " 1 "] {
+            assert!(
+                super::McpContext::papertrading_requested(&header("x-papertrading", value)),
+                "x-papertrading: {value:?} must enable paper trading"
+            );
+        }
+        for value in ["false", "", "0", "yes", "true-ish"] {
+            assert!(
+                !super::McpContext::papertrading_requested(&header("x-papertrading", value)),
+                "x-papertrading: {value:?} must not enable paper trading"
+            );
+        }
+        assert!(!super::McpContext::papertrading_requested(&[]));
+        assert!(!super::McpContext::papertrading_requested(&header(
+            "x-papertrading-mode",
+            "true"
+        )));
     }
 
     #[test]

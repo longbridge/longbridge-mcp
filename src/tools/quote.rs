@@ -28,9 +28,9 @@ pub struct SymbolsParam {
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct OptionSymbolsParam {
     /// Option contract symbols, e.g. ["AAPL230317P160000.US"]. These are NOT
-    /// plain stock symbols — get valid ones from `option_chain_info_by_date`'s
-    /// per-strike `call.symbol`/`put.symbol` fields (after listing expiry
-    /// dates with `option_chain_expiry_date_list`).
+    /// plain stock symbols — get valid ones from the `symbol` field of each
+    /// `option_chain_info_by_date` contract (after listing expiry dates with
+    /// `option_chain_expiry_date_list`).
     #[serde(deserialize_with = "tolerant_vec_string")]
     pub symbols: Vec<String>,
 }
@@ -153,11 +153,16 @@ pub struct MarketDateRangeParam {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
-pub struct SymbolDateParam {
-    /// Security symbol, e.g. "700.HK". Use the canonical form — a padded code like "00700.HK" returns an empty record, not an error.
+pub struct OptionChainByDateParam {
+    /// Underlying security symbol, e.g. "AAPL.US". Use the canonical form — a padded code like "00700.HK" returns an empty record, not an error.
     pub symbol: String,
-    /// Date (yyyy-mm-dd)
+    /// Expiry date (yyyy-mm-dd). Required — list the tradable ones with
+    /// `option_chain_expiry_date_list`.
     pub date: String,
+    /// Return standard contracts only. Omitted or false returns everything,
+    /// including the legacy contracts left over from a corporate action
+    /// (`standard_attr: "Old"`), which are rarely what a caller wants.
+    pub standard_only: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -692,12 +697,12 @@ pub async fn option_chain_expiry_date_list(
 
 pub async fn option_chain_info_by_date(
     mctx: &crate::tools::McpContext,
-    p: SymbolDateParam,
+    p: OptionChainByDateParam,
 ) -> Result<CallToolResult, McpError> {
     let date = parse::parse_date(&p.date)?;
     let ctx = mctx.get_quote_context().await;
     let result = ctx
-        .option_chain_info_by_date(p.symbol, date)
+        .option_chain_info_by_date(p.symbol, date, p.standard_only.unwrap_or(false))
         .await
         .map_err(|e| {
             mctx.evict_quote_context();
