@@ -4,6 +4,7 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::future::Future;
+use std::mem;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Instant;
@@ -77,6 +78,12 @@ pub(crate) enum PlanError {
     /// Two steps share an id.
     #[error("duplicate step id `{0}`")]
     DuplicateId(String),
+    /// An object carries `$from` but is not a well-formed reference.
+    #[error("step `{step}` has a malformed `$from` reference: use {{\"$from\": id, \"jq\": expr}}")]
+    MalformedRef {
+        /// The step whose arguments carry the malformed reference.
+        step: String,
+    },
     /// A `$from` names a step that does not exist.
     #[error("step `{step}` references unknown step `{target}`")]
     UnknownRef {
@@ -134,7 +141,27 @@ fn as_ref(value: &Value) -> Option<(&str, Option<&str>)> {
     if obj.keys().any(|k| k != "$from" && k != "jq") {
         return None;
     }
-    Some((from, obj.get("jq").and_then(|v| v.as_str())))
+    let jq = match obj.get("jq") {
+        Some(value) => Some(value.as_str()?),
+        None => None,
+    };
+    Some((from, jq))
+}
+
+/// Whether any object under `value` carries a `$from` key without being a
+/// well-formed reference: a typo in the reference must not reach the tool as a
+/// literal argument.
+fn has_malformed_ref(value: &Value) -> bool {
+    match value {
+        Value::Object(map) => {
+            if map.contains_key("$from") && as_ref(value).is_none() {
+                return true;
+            }
+            map.values().any(has_malformed_ref)
+        }
+        Value::Array(items) => items.iter().any(has_malformed_ref),
+        _ => false,
+    }
 }
 
 fn collect_refs<'a>(value: &'a Value, out: &mut Vec<(&'a str, Option<&'a str>)>) {
@@ -182,6 +209,11 @@ pub(crate) fn validate(
     let mut deps: Vec<Vec<usize>> = Vec::with_capacity(steps.len());
     for step in &steps {
         let args = Value::Object(step.arguments.clone());
+        if has_malformed_ref(&args) {
+            return Err(PlanError::MalformedRef {
+                step: step.id.clone(),
+            });
+        }
         let mut refs = Vec::new();
         collect_refs(&args, &mut refs);
         let mut mine = Vec::new();
@@ -300,13 +332,34 @@ pub(crate) type Runner = Arc<
         + Sync,
 >;
 
-fn jq_error(message: &str) -> Value {
+/// The `jq_filter_error` envelope. `already_ran` tells a step's own projection
+/// (its tool has run) apart from a `$from` reference's projection, which fails
+/// before the referencing step is called.
+fn jq_error(message: &str, already_ran: bool) -> Value {
+    let message = if already_ran {
+        format!("step jq projection failed: {message}. The step's tool has already executed.")
+    } else {
+        format!(
+            "`$from` reference projection failed: {message}. The step was not called, but earlier steps have already executed."
+        )
+    };
     json!({
         "error_code": "jq_filter_error",
-        "message": format!("step jq projection failed: {message}. The step's tool has already executed."),
+        "message": message,
         "recoverable": "fix_params",
         "hint": "Correct the step's `jq` (or the `$from` reference's `jq`) and re-run; do not retry write steps automatically.",
         "data": null
+    })
+}
+
+/// The envelope for a step the scheduler could not complete.
+fn internal_error(message: String) -> Value {
+    json!({
+        "error_code": "internal",
+        "message": message,
+        "recoverable": "none",
+        "hint": null,
+        "data": null,
     })
 }
 
@@ -332,7 +385,7 @@ async fn resolve(value: Value, outcomes: &BTreeMap<String, Outcome>) -> Result<V
         return match jq {
             Some(code) => project_bounded(code.to_string(), upstream)
                 .await
-                .map_err(|m| jq_error(&m)),
+                .map_err(|m| jq_error(&m, false)),
             None => Ok(upstream),
         };
     }
@@ -370,9 +423,14 @@ fn propagate_skips(
             if done[i] || running.contains(&i) {
                 continue;
             }
-            let blocked = plan.deps[i]
-                .iter()
-                .find(|&&d| done[d] && outcomes[&plan.steps[d].id].status != Status::Ok);
+            let blocked = plan.deps[i].iter().find(|&&d| {
+                done[d]
+                    && outcomes
+                        .get(&plan.steps[d].id)
+                        .expect("a step marked done has an outcome")
+                        .status
+                        != Status::Ok
+            });
             if let Some(&d) = blocked {
                 outcomes.insert(
                     plan.steps[i].id.clone(),
@@ -468,7 +526,7 @@ pub(crate) async fn run(plan: &Plan, runner: Runner) -> BTreeMap<String, Outcome
                             Outcome {
                                 status: Status::Error,
                                 elapsed_ms,
-                                value: jq_error(&m),
+                                value: jq_error(&m, true),
                             },
                         ),
                     },
@@ -498,29 +556,48 @@ pub(crate) async fn run(plan: &Plan, runner: Runner) -> BTreeMap<String, Outcome
             }
             Some(Err(join_error)) => {
                 // A panicked step must not hang the pipeline; report it and continue.
-                let i = spawned
-                    .remove(&join_error.id())
-                    .expect("a join error names a step this pipeline spawned");
-                running.remove(&i);
-                done[i] = true;
-                outcomes.insert(
-                    plan.steps[i].id.clone(),
-                    Outcome {
-                        status: Status::Error,
-                        elapsed_ms: 0,
-                        value: json!({
-                            "error_code": "internal",
-                            "message": join_error.to_string(),
-                            "recoverable": "none",
-                            "hint": null,
-                            "data": null,
-                        }),
-                    },
-                );
+                let failed: Vec<usize> = match spawned.remove(&join_error.id()) {
+                    Some(i) => vec![i],
+                    // The error names no task we spawned, so the step it belongs
+                    // to is unknown: fail everything in flight rather than wait
+                    // for a result that can no longer arrive.
+                    None => mem::take(&mut running).into_iter().collect(),
+                };
+                for i in failed {
+                    running.remove(&i);
+                    done[i] = true;
+                    outcomes.insert(
+                        plan.steps[i].id.clone(),
+                        Outcome {
+                            status: Status::Error,
+                            elapsed_ms: 0,
+                            value: internal_error(format!(
+                                "step `{}` did not complete: {join_error}",
+                                plan.steps[i].id
+                            )),
+                        },
+                    );
+                }
             }
             None => {
-                if !done.iter().all(|d| *d) {
-                    unreachable!("no running tasks but pending steps remain");
+                // Nothing left to join while steps are still pending. `validate`
+                // rules this out, but a hand-built `Plan` (say, with a cycle)
+                // must fail the request's steps rather than panic it.
+                for (i, step_done) in done.iter_mut().enumerate() {
+                    if !*step_done {
+                        *step_done = true;
+                        outcomes.insert(
+                            plan.steps[i].id.clone(),
+                            Outcome {
+                                status: Status::Error,
+                                elapsed_ms: 0,
+                                value: internal_error(format!(
+                                    "step `{}` was never scheduled: its dependencies cannot complete",
+                                    plan.steps[i].id
+                                )),
+                            },
+                        );
+                    }
                 }
                 break;
             }
@@ -531,6 +608,9 @@ pub(crate) async fn run(plan: &Plan, runner: Runner) -> BTreeMap<String, Outcome
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
+
     use super::*;
     use rmcp::model::Content;
     use serde_json::json;
@@ -539,7 +619,10 @@ mod tests {
         Step {
             id: id.into(),
             tool: tool.into(),
-            arguments: args.as_object().expect("object").clone(),
+            arguments: args
+                .as_object()
+                .expect("test step arguments are a JSON object")
+                .clone(),
             jq: jq.map(String::from),
         }
     }
@@ -566,8 +649,12 @@ mod tests {
             &no_write,
         )
         .expect("valid plan");
-        assert_eq!(plan.deps[0], Vec::<usize>::new());
-        assert_eq!(plan.deps[1], vec![0]);
+        assert_eq!(
+            plan.deps[0],
+            Vec::<usize>::new(),
+            "a step without references depends on nothing"
+        );
+        assert_eq!(plan.deps[1], vec![0], "`$from: a` makes `b` depend on `a`");
         assert_eq!(
             plan.return_ids,
             vec!["b".to_string()],
@@ -579,14 +666,16 @@ mod tests {
     fn validate_rejects_structural_errors() {
         assert_eq!(
             validate(vec![], None, &no_write).unwrap_err(),
-            PlanError::Empty
+            PlanError::Empty,
+            "an empty pipeline is rejected"
         );
         let many = (0..11)
             .map(|i| step(&format!("s{i}"), "quote", json!({}), None))
             .collect();
         assert_eq!(
             validate(many, None, &no_write).unwrap_err(),
-            PlanError::TooMany(11)
+            PlanError::TooMany(11),
+            "more than MAX_STEPS steps are rejected"
         );
         assert_eq!(
             validate(
@@ -595,7 +684,8 @@ mod tests {
                 &no_write
             )
             .unwrap_err(),
-            PlanError::BadId("Bad-Id".into())
+            PlanError::BadId("Bad-Id".into()),
+            "step ids are restricted to [a-z0-9_]"
         );
         assert_eq!(
             validate(
@@ -607,7 +697,8 @@ mod tests {
                 &no_write
             )
             .unwrap_err(),
-            PlanError::DuplicateId("a".into())
+            PlanError::DuplicateId("a".into()),
+            "two steps may not share an id"
         );
         assert_eq!(
             validate(
@@ -619,7 +710,8 @@ mod tests {
             PlanError::UnknownRef {
                 step: "a".into(),
                 target: "zz".into()
-            }
+            },
+            "`$from` must name an existing step"
         );
         assert_eq!(
             validate(
@@ -631,7 +723,8 @@ mod tests {
                 &no_write
             )
             .unwrap_err(),
-            PlanError::Cycle
+            PlanError::Cycle,
+            "mutually referencing steps are a cycle"
         );
         assert_eq!(
             validate(
@@ -640,8 +733,33 @@ mod tests {
                 &no_write
             )
             .unwrap_err(),
-            PlanError::UnknownReturn("nope".into())
+            PlanError::UnknownReturn("nope".into()),
+            "`return` must name existing steps"
         );
+    }
+
+    #[test]
+    fn validate_rejects_malformed_references() {
+        let malformed = [
+            json!({"x": {"$from": "a", "typo": ".x"}}),
+            json!({"x": {"$from": 123}}),
+            json!({"x": {"$from": "a", "jq": 5}}),
+        ];
+        for arguments in malformed {
+            assert_eq!(
+                validate(
+                    vec![
+                        step("a", "quote", json!({}), None),
+                        step("b", "quote", arguments.clone(), None),
+                    ],
+                    None,
+                    &no_write
+                )
+                .unwrap_err(),
+                PlanError::MalformedRef { step: "b".into() },
+                "a near-miss reference must be rejected, not passed through as a literal: {arguments}"
+            );
+        }
     }
 
     #[test]
@@ -652,7 +770,8 @@ mod tests {
         ];
         assert_eq!(
             validate(two, None, &write_is_submit).unwrap_err(),
-            PlanError::MultipleWrites(vec!["a".into(), "b".into()])
+            PlanError::MultipleWrites(vec!["a".into(), "b".into()]),
+            "at most one write step per pipeline, reported in step order"
         );
         let dep = vec![
             step("w", "submit_order", json!({}), None),
@@ -663,7 +782,8 @@ mod tests {
             PlanError::DependsOnWrite {
                 step: "b".into(),
                 write: "w".into()
-            }
+            },
+            "nothing may consume a write step's result"
         );
         let price_ref = vec![
             step("a", "quote", json!({}), None),
@@ -679,7 +799,8 @@ mod tests {
             PlanError::WriteRefForbidden {
                 step: "w".into(),
                 field: "submitted_price".into()
-            }
+            },
+            "order-defining fields must be literals the user can confirm"
         );
         let ok = vec![
             step("a", "quote", json!({}), None),
@@ -743,9 +864,17 @@ mod tests {
         )
         .expect("valid plan");
         let out = run(&plan, fake_runner()).await;
-        assert_eq!(out["picks"].status, Status::Ok);
-        assert_eq!(out["picks"].value, json!(["700.HK", "AAPL.US"]));
-        assert_eq!(out["quotes"].value, json!(["700.HK"]));
+        assert_eq!(out["picks"].status, Status::Ok, "the source step succeeds");
+        assert_eq!(
+            out["picks"].value,
+            json!(["700.HK", "AAPL.US"]),
+            "the step's own jq projects its result"
+        );
+        assert_eq!(
+            out["quotes"].value,
+            json!(["700.HK"]),
+            "the reference's jq narrows the upstream value before the call"
+        );
     }
 
     #[tokio::test]
@@ -761,10 +890,25 @@ mod tests {
         )
         .expect("valid plan");
         let out = run(&plan, fake_runner()).await;
-        assert_eq!(out["bad"].status, Status::Error);
-        assert_eq!(out["bad"].value["error_code"], "x");
-        assert_eq!(out["dep"].status, Status::Skipped);
-        assert_eq!(out["ok"].status, Status::Ok);
+        assert_eq!(
+            out["bad"].status,
+            Status::Error,
+            "an inner error result is an error outcome"
+        );
+        assert_eq!(
+            out["bad"].value["error_code"], "x",
+            "the inner envelope is kept as the outcome value"
+        );
+        assert_eq!(
+            out["dep"].status,
+            Status::Skipped,
+            "a dependent of a failed step is skipped"
+        );
+        assert_eq!(
+            out["ok"].status,
+            Status::Ok,
+            "an independent step still runs"
+        );
     }
 
     #[tokio::test]
@@ -779,8 +923,15 @@ mod tests {
         )
         .expect("valid plan");
         let out = run(&plan, fake_runner()).await;
-        assert_eq!(out["quotes"].status, Status::Error);
-        assert_eq!(out["quotes"].value["error_code"], "invalid_params");
+        assert_eq!(
+            out["quotes"].status,
+            Status::Error,
+            "arguments resolving to a non-object fail the step"
+        );
+        assert_eq!(
+            out["quotes"].value["error_code"], "invalid_params",
+            "the step reports an invalid_params envelope instead of panicking"
+        );
     }
 
     #[tokio::test]
@@ -796,10 +947,26 @@ mod tests {
         )
         .expect("valid plan");
         let out = run(&plan, fake_runner()).await;
-        assert_eq!(out["mid"].status, Status::Skipped);
-        assert_eq!(out["mid"].value, json!({"skipped_because": "bad"}));
-        assert_eq!(out["last"].status, Status::Skipped);
-        assert_eq!(out["last"].value, json!({"skipped_because": "mid"}));
+        assert_eq!(
+            out["mid"].status,
+            Status::Skipped,
+            "the direct dependent of the failed step is skipped"
+        );
+        assert_eq!(
+            out["mid"].value,
+            json!({"skipped_because": "bad"}),
+            "a skip names the step that blocked it"
+        );
+        assert_eq!(
+            out["last"].status,
+            Status::Skipped,
+            "the skip propagates through the chain, not only one level"
+        );
+        assert_eq!(
+            out["last"].value,
+            json!({"skipped_because": "mid"}),
+            "each skip names its immediate blocker"
+        );
     }
 
     #[tokio::test]
@@ -833,7 +1000,90 @@ mod tests {
         )
         .expect("valid plan");
         let out = run(&plan, fake_runner()).await;
-        assert_eq!(out["a"].status, Status::Error);
-        assert_eq!(out["a"].value["error_code"], "jq_filter_error");
+        assert_eq!(
+            out["a"].status,
+            Status::Error,
+            "an uncompilable jq filter fails the step"
+        );
+        assert_eq!(
+            out["a"].value["error_code"], "jq_filter_error",
+            "the step reports the jq_filter_error envelope"
+        );
+    }
+
+    #[tokio::test]
+    async fn run_never_exceeds_max_concurrency() {
+        let in_flight = Arc::new(AtomicUsize::new(0));
+        let watermark = Arc::new(AtomicUsize::new(0));
+        let runner: Runner = {
+            let in_flight = Arc::clone(&in_flight);
+            let watermark = Arc::clone(&watermark);
+            Arc::new(move |_tool: String, _args: JsonObject| {
+                let in_flight = Arc::clone(&in_flight);
+                let watermark = Arc::clone(&watermark);
+                Box::pin(async move {
+                    let now = in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+                    watermark.fetch_max(now, Ordering::SeqCst);
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                    in_flight.fetch_sub(1, Ordering::SeqCst);
+                    CallToolResult::success(vec![Content::text("{}")])
+                })
+            })
+        };
+        let steps = (0..6)
+            .map(|i| step(&format!("s{i}"), "quote", json!({}), None))
+            .collect();
+        let plan = validate(steps, None, &no_write).expect("valid plan");
+        let out = run(&plan, runner).await;
+        for i in 0..6 {
+            assert_eq!(
+                out[&format!("s{i}")].status,
+                Status::Ok,
+                "every independent step runs to completion"
+            );
+        }
+        let peak = watermark.load(Ordering::SeqCst);
+        assert!(
+            peak <= MAX_CONCURRENCY,
+            "at most MAX_CONCURRENCY steps may be in flight, saw {peak}"
+        );
+        assert_eq!(
+            peak, MAX_CONCURRENCY,
+            "the scheduler keeps all MAX_CONCURRENCY slots busy"
+        );
+    }
+
+    #[tokio::test]
+    async fn run_reports_a_panicking_step_and_keeps_going() {
+        let runner: Runner = Arc::new(|tool: String, _args: JsonObject| {
+            Box::pin(async move {
+                assert!(tool != "boom_panic", "the fake tool panics on purpose");
+                CallToolResult::success(vec![Content::text("{}")])
+            })
+        });
+        let plan = validate(
+            vec![
+                step("bad", "boom_panic", json!({}), None),
+                step("ok", "quote", json!({}), None),
+            ],
+            None,
+            &no_write,
+        )
+        .expect("valid plan");
+        let out = run(&plan, runner).await;
+        assert_eq!(
+            out["bad"].status,
+            Status::Error,
+            "a panicking step becomes an error outcome, not a hang"
+        );
+        assert_eq!(
+            out["bad"].value["error_code"], "internal",
+            "a panicked step reports the internal envelope"
+        );
+        assert_eq!(
+            out["ok"].status,
+            Status::Ok,
+            "an independent step still completes after a panic"
+        );
     }
 }
