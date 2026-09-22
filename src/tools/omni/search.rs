@@ -12,18 +12,12 @@ use crate::tools::omni::index::{Doc, Field, Index};
 use crate::tools::support::text::clip_chars;
 use crate::tools::tool_json;
 
-// Nothing in this module is called outside tests yet; wiring the `/omni`
-// dispatcher to `search` (a later task) is its first production caller.
-#[allow(dead_code)]
 const DEFAULT_LIMIT: usize = 10;
-#[allow(dead_code)]
 const MAX_LIMIT: usize = 50;
-#[allow(dead_code)]
 const SUMMARY_CHARS: usize = 160;
 
 /// Parameters for `search`.
 #[derive(Debug, Deserialize, JsonSchema)]
-#[allow(dead_code)]
 pub struct SearchParam {
     /// Natural-language or keyword query; English and Chinese both work, e.g. "latest quote", "市场温度".
     pub query: String,
@@ -90,7 +84,6 @@ pub(crate) fn localized() -> &'static HashMap<String, Vec<Localized>> {
     })
 }
 
-#[allow(dead_code)]
 fn categories() -> &'static HashMap<&'static str, (&'static str, &'static str)> {
     // tool name -> (scope id, scope name)
     static SCOPES: OnceLock<serde_json::Value> = OnceLock::new();
@@ -113,12 +106,10 @@ fn categories() -> &'static HashMap<&'static str, (&'static str, &'static str)> 
 }
 
 /// Scope name of a tool, from `data/scopes.json`.
-#[allow(dead_code)]
 pub(crate) fn category_of(tool: &str) -> Option<&'static str> {
     categories().get(tool).map(|(_, name)| *name)
 }
 
-#[allow(dead_code)]
 fn schema_param_text(tool: &rmcp::model::Tool) -> String {
     let mut out = String::new();
     if let Some(props) = tool
@@ -142,7 +133,6 @@ fn schema_param_text(tool: &rmcp::model::Tool) -> String {
 }
 
 /// The tool-catalogue index, built once per process.
-#[allow(dead_code)]
 pub(crate) fn tool_index() -> &'static Index {
     static INDEX: OnceLock<Index> = OnceLock::new();
     INDEX.get_or_init(|| {
@@ -197,7 +187,6 @@ pub(crate) fn tool_index() -> &'static Index {
     })
 }
 
-#[allow(dead_code)]
 fn edit_distance(a: &str, b: &str) -> usize {
     let a: Vec<char> = a.chars().collect();
     let b: Vec<char> = b.chars().collect();
@@ -214,7 +203,6 @@ fn edit_distance(a: &str, b: &str) -> usize {
 }
 
 /// Tool names closest to `name` by edit distance, then by index score.
-#[allow(dead_code)]
 pub(crate) fn suggest(name: &str, limit: usize) -> Vec<String> {
     let mut candidates: Vec<(usize, String)> = crate::tools::all_tools_full_cached()
         .iter()
@@ -232,7 +220,6 @@ pub(crate) fn suggest(name: &str, limit: usize) -> Vec<String> {
 }
 
 /// Run `search`.
-#[allow(dead_code)]
 pub(crate) fn search(p: SearchParam) -> Result<CallToolResult, McpError> {
     if p.query.trim().is_empty() {
         return Err(McpError::invalid_params("query must be non-empty", None));

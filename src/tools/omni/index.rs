@@ -117,7 +117,6 @@ impl Index {
     }
 
     /// Number of indexed documents.
-    #[allow(dead_code)]
     pub(crate) fn len(&self) -> usize {
         self.keys.len()
     }

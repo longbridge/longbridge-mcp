@@ -1,5 +1,5 @@
-//! `docs`: full tool documentation, topic guides and (Task 9) the Longbridge
-//! OpenAPI documentation snapshot.
+//! `docs`: full tool documentation, topic guides and the Longbridge OpenAPI
+//! documentation snapshot.
 
 use rmcp::ErrorData as McpError;
 use rmcp::model::CallToolResult;
@@ -8,8 +8,10 @@ use rmcp::serde::Deserialize;
 use serde_json::Value;
 
 use crate::tools::McpContext;
-use crate::tools::omni::dispatch::{envelope, unknown_tool};
+use crate::tools::omni::dispatch::unknown_tool;
+use crate::tools::omni::docs_index;
 use crate::tools::omni::search::{category_of, localized};
+use crate::tools::omni::truncate::{MAX_OUTPUT_TOKENS, truncate_result};
 use crate::tools::{
     all_tools_full_cached, is_region_scoped, output_schema_map, tool_json, v2_tool_names,
 };
@@ -154,6 +156,7 @@ pub(crate) fn tool_doc(name: &str, lang: Lang) -> Option<Value> {
         "input_schema": Value::Object((*tool.input_schema).clone()),
         "annotations": annotations_doc(tool.annotations.as_ref()),
         "notes": notes_for(tool),
+        "related_pages": docs_index::related_pages(name),
     });
     if let Some(schema) = output_schema_map().get(name) {
         doc["output_schema"] = Value::Object((**schema).clone());
@@ -183,6 +186,7 @@ pub(crate) fn catalog() -> Value {
             .collect::<Vec<_>>(),
         "categories": categories,
         "docs_site": "Use `query` to search open.longbridge.com documentation, or `page` (e.g. trade/order/submit) to read one page.",
+        "docs_snapshot_generated_at": docs_index::snapshot().generated_at,
     })
 }
 
@@ -239,14 +243,40 @@ pub(crate) async fn docs(mctx: &McpContext, p: DocsParam) -> Result<CallToolResu
             .collect();
         return tool_json(&docs);
     }
-    if p.query.is_some() || p.page.is_some() || p.fresh == Some(true) {
-        return Ok(envelope(
-            "docs_unavailable",
-            "Documentation site lookup is not wired yet.".into(),
-            "fix_params",
-            "Use `tool` or `topic` for now.",
-            Value::Null,
-        ));
+    if let Some(page) = &p.page {
+        if !docs_index::valid_page_path(page) {
+            return Err(McpError::invalid_params(
+                "page must look like trade/order/submit",
+                None,
+            ));
+        }
+        let markdown = if p.fresh == Some(true) {
+            docs_index::fetch_page(page, lang)
+                .await
+                .map_err(|e| McpError::internal_error(format!("failed to fetch page: {e}"), None))?
+        } else if let Some(md) = docs_index::page_from_snapshot(page, lang) {
+            md
+        } else {
+            docs_index::fetch_page(page, lang).await.map_err(|_| {
+                McpError::invalid_params(
+                    format!("unknown page `{page}`; use `query` to find pages"),
+                    None,
+                )
+            })?
+        };
+        let result = tool_json(&serde_json::json!({
+            "page": page,
+            "lang": lang.code(),
+            "url": docs_index::page_url(page, lang),
+            "markdown": markdown,
+        }))?;
+        return Ok(truncate_result(result, MAX_OUTPUT_TOKENS));
+    }
+    if let Some(query) = &p.query {
+        if query.trim().is_empty() {
+            return Err(McpError::invalid_params("query must be non-empty", None));
+        }
+        return tool_json(&docs_index::search_docs(query, lang, p.limit.unwrap_or(5)));
     }
     tool_json(&catalog())
 }
@@ -381,6 +411,112 @@ mod tests {
         assert!(
             validate_param(&p).is_err(),
             "more than MAX_TOOLS names must be rejected"
+        );
+    }
+
+    #[test]
+    fn tool_doc_includes_related_pages() {
+        let doc = tool_doc("submit_order", Lang::En).expect("submit_order exists");
+        let related = doc["related_pages"]
+            .as_array()
+            .expect("related_pages must be an array");
+        assert!(
+            related.iter().any(|p| p == "trade/order/submit"),
+            "submit_order must be related to trade/order/submit, got {related:?}"
+        );
+    }
+
+    #[test]
+    fn catalog_includes_docs_snapshot_generated_at() {
+        let cat = catalog();
+        assert!(
+            cat["docs_snapshot_generated_at"]
+                .as_str()
+                .is_some_and(|s| !s.is_empty()),
+            "catalog must report a non-empty docs snapshot timestamp"
+        );
+    }
+
+    fn no_lang_param() -> DocsParam {
+        DocsParam {
+            tool: None,
+            tools: None,
+            topic: None,
+            query: None,
+            page: None,
+            lang: None,
+            limit: None,
+            fresh: None,
+        }
+    }
+
+    fn ctx() -> McpContext {
+        McpContext {
+            token: "test-token".into(),
+            language: None,
+            client_user_agent: None,
+            extra_headers: Vec::new(),
+        }
+    }
+
+    /// A known snapshot page, so `docs` never falls through to `fetch_page`
+    /// (no network access is allowed in tests).
+    #[tokio::test]
+    async fn docs_page_reads_from_bundled_snapshot() {
+        let p = DocsParam {
+            page: Some("trade/order/submit".into()),
+            ..no_lang_param()
+        };
+        let result = docs(&ctx(), p).await.expect("known page must succeed");
+        let value = crate::tools::jq::result_value(&result);
+        assert_eq!(
+            value["page"], "trade/order/submit",
+            "the response must echo back the requested page path"
+        );
+        assert!(
+            value["markdown"]
+                .as_str()
+                .is_some_and(|md| md.contains("## Request")),
+            "got {value:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn docs_invalid_page_path_is_rejected_before_any_fetch() {
+        let p = DocsParam {
+            page: Some("../etc/passwd".into()),
+            ..no_lang_param()
+        };
+        assert!(
+            docs(&ctx(), p).await.is_err(),
+            "a path-traversal page must be rejected without ever fetching"
+        );
+    }
+
+    #[tokio::test]
+    async fn docs_query_returns_search_hits() {
+        let p = DocsParam {
+            query: Some("submit order".into()),
+            ..no_lang_param()
+        };
+        let result = docs(&ctx(), p).await.expect("query must succeed");
+        let value = crate::tools::jq::result_value(&result);
+        let hits = value.as_array().expect("query result must be an array");
+        assert!(
+            hits.iter().any(|h| h["page"] == "trade/order/submit"),
+            "got {hits:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn docs_blank_query_is_invalid_params() {
+        let p = DocsParam {
+            query: Some("   ".into()),
+            ..no_lang_param()
+        };
+        assert!(
+            docs(&ctx(), p).await.is_err(),
+            "a blank query must be rejected"
         );
     }
 }

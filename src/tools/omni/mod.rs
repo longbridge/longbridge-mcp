@@ -3,6 +3,7 @@
 
 pub(crate) mod dispatch;
 pub(crate) mod docs;
+pub(crate) mod docs_index;
 pub(crate) mod execute;
 pub(crate) mod index;
 pub(crate) mod pipeline;
