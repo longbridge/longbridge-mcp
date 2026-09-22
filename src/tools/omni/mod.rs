@@ -82,7 +82,7 @@ impl Longbridge {
             idempotent_hint = false,
             open_world_hint = true
         ),
-        description = "Run a Longbridge MCP tool by name: {\"tool\": \"quote\", \"arguments\": {\"symbols\": [\"700.HK\"]}}. Or a pipeline: {\"steps\": [{\"id\", \"tool\", \"arguments\", \"jq\"}...], \"return\": [ids]} where any argument may be {\"$from\": id, \"jq\": expr}. Max 10 steps, 30 s. Write tools are two-step (dry-run then execute=confirmation_code); at most one write step per pipeline and its symbol/side/quantity/price must be literal. Use `search` to find tools and `docs` for schemas."
+        description = "Run a Longbridge MCP tool by name: {\"tool\": \"quote\", \"arguments\": {\"symbols\": [\"700.HK\"]}}. Or a pipeline: {\"steps\": [{\"id\": \"picks\", \"tool\": \"screener_search\", \"arguments\": {...}, \"jq\": \".data | map(.symbol)\"}, {\"id\": \"quotes\", \"tool\": \"quote\", \"arguments\": {\"symbols\": {\"$from\": \"picks\"}}}], \"return\": [\"quotes\"]} where any argument may be {\"$from\": id, \"jq\": expr}. Max 10 steps, 30 s. Write tools are two-step (dry-run then execute=confirmation_code); at most one write step per pipeline and its symbol/side/quantity/price must be literal. Use `search` to find tools and `docs` for schemas."
     )]
     async fn execute(
         &self,
@@ -125,9 +125,10 @@ pub(crate) fn tools() -> &'static [Tool] {
     })
 }
 
-/// Whether `name` is one of the omni meta-tools.
+/// Whether `name` is one of the omni meta-tools. Derived from the router, so a
+/// tool added to or renamed in the omni impl block stays callable on `/omni`.
 pub(crate) fn is_omni_tool(name: &str) -> bool {
-    matches!(name, "search" | "docs" | "execute")
+    tools().iter().any(|t| t.name == name)
 }
 
 #[cfg(test)]

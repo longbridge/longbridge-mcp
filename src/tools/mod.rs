@@ -535,7 +535,7 @@ mod ipo;
 pub(crate) mod jq;
 mod macrodata;
 mod market;
-mod omni;
+pub(crate) mod omni;
 mod output;
 mod portfolio;
 mod quant;
@@ -5602,20 +5602,8 @@ impl ServerHandler for Longbridge {
         Ok(info)
     }
 
-    /// List tools, gated on endpoint and authentication state.
-    ///
-    /// Three cases:
-    /// - **Main endpoint** (`/mcp`, root): a token is always present (the auth
-    ///   middleware rejects token-less requests with 401 before they reach
-    ///   here), so the full tool set is returned — the `authenticate` tool is
-    ///   filtered out, keeping the main endpoint's tool list byte-for-byte
-    ///   identical to its pre-feature behaviour.
-    /// - **`/agent` endpoint, authenticated**: behaves exactly like the main
-    ///   endpoint — full tool set, no `authenticate`.
-    /// - **`/agent` endpoint, unauthenticated**: only the `authenticate` tool is
-    ///   exposed, so an OAuth-incapable client can complete the handshake and
-    ///   self-authorize. After `authenticate` succeeds and the client starts
-    ///   sending the returned token, the next `tools/list` returns the full set.
+    /// Look up one tool by name, across the main catalogue and the omni
+    /// meta-tools.
     fn get_tool(&self, name: &str) -> Option<rmcp::model::Tool> {
         all_tools_cached()
             .iter()
@@ -5703,6 +5691,22 @@ impl ServerHandler for Longbridge {
         .await
     }
 
+    /// List tools, gated on endpoint and authentication state.
+    ///
+    /// Four cases:
+    /// - **Main endpoint** (`/mcp`, root): a token is always present (the auth
+    ///   middleware rejects token-less requests with 401 before they reach
+    ///   here), so the full tool set is returned — the `authenticate` tool is
+    ///   filtered out, keeping the main endpoint's tool list byte-for-byte
+    ///   identical to its pre-feature behaviour.
+    /// - **`/agent` endpoint, authenticated**: behaves exactly like the main
+    ///   endpoint — full tool set, no `authenticate`.
+    /// - **`/agent` endpoint, unauthenticated**: only the `authenticate` tool is
+    ///   exposed, so an OAuth-incapable client can complete the handshake and
+    ///   self-authorize. After `authenticate` succeeds and the client starts
+    ///   sending the returned token, the next `tools/list` returns the full set.
+    /// - **`/omni`**: returns only the three omni meta-tools, unfiltered by
+    ///   region.
     async fn list_tools(
         &self,
         _request: Option<rmcp::model::PaginatedRequestParams>,

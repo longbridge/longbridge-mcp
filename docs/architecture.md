@@ -50,6 +50,45 @@ Longbridge MCP Server is a Rust service with no durable session state that expos
 5. Response flows back through rmcp → axum → MCP Client
 ```
 
+## Endpoints
+
+One `Longbridge` MCP server is mounted several times. Two axes vary: which tools
+the endpoint lists and calls (its **surface**), and whether a Bearer token is
+required.
+
+| Path | Surface | Auth | Manifest | Notes |
+|------|---------|------|----------|-------|
+| `/mcp`, `/` (root) | Full catalogue, direct calls | Required (401 without a token) | `/mcp/tools.json` | Root also serves the human landing page for browser `GET /` |
+| `/v2` | V2 allowlist, direct calls | Required | `/v2/tools.json` | Public directory endpoint: read-only market data plus read-only account/portfolio and order history — no trade execution, DCA, IPO orders or money movement |
+| `/agent` | Full catalogue, direct calls | Optional | — | Token-less requests reach the `authenticate` tool; unauthenticated `tools/list` returns only that tool |
+| `/omni` | Three meta-tools (`search`, `docs`, `execute`); the full catalogue is reachable through `execute` | Required | `/omni/tools.json` | Calling any other tool by name is rejected with a pointer to `execute` |
+
+Every surface is region-filtered by the account's data center except `/omni`,
+whose three meta-tools are region-independent — `execute` applies the DC-region
+gate per inner call instead.
+
+### Omni request lifecycle
+
+```
+POST /omni  tools/call {name:"execute", arguments:{steps:[...], return:["quotes"]}, _jq:"..."}
+  │
+  ├─ mcp_auth_layer            BearerToken + OmniEndpoint marker in request extensions
+  ├─ call_tool                 omni branch: name ∉ {search,docs,execute} → rejected
+  ├─ jq::call                  the outer `_jq` is stripped and pre-compiled as usual
+  ├─ omni::execute             parses steps; validates the DAG, write-step rules,
+  │  │                         tool existence and the DC-region gate
+  │  └─ omni::pipeline         topological scheduling: independent steps run
+  │     │                      concurrently; `$from` references resolve when ready
+  │     └─ omni::dispatch      synthesizes CallToolRequestParams → cached_router().call()
+  │        └─ the ordinary #[tool] fn → measured_tool_call → SDK
+  ├─ omni::truncate            token-budget truncation, marked --- TRUNCATED ---
+  └─ jq::call post-filter → response
+```
+
+`dispatch` goes through exactly the same `cached_router().call()` as `/mcp`, so
+`measured_tool_call` timings, metrics, error envelopes, the `CURRENT_TOOL` label
+and the two-step write confirmation all apply unchanged.
+
 ## Module Structure
 
 ```
@@ -91,6 +130,10 @@ src/
     ├── authenticate.rs     Self-service OAuth code exchange tool (1)
     ├── calendar.rs         Finance calendar tool (1)
     ├── quant.rs            Quant indicator script tool (1)
+    │
+    ├── omni/               The `/omni` endpoint: the three meta-tools (search, docs,
+    │                       execute), the pipeline scheduler, inner-call dispatch,
+    │                       the docs index and output truncation
     │
     ├── output/             Typed output schemas for tools with a known post-transform shape
     │   ├── mod.rs

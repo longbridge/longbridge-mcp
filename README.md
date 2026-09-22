@@ -122,6 +122,14 @@ On first use, the client reads the `WWW-Authenticate` challenge, fetches `/.well
 
 </details>
 
+### `/omni`: three-tool endpoint
+
+`https://mcp.longbridge.com/omni` exposes only `search`, `docs` and `execute` (about 2k tokens of tool definitions instead of 40k+). `search` finds tools by English or Chinese keywords, `docs` returns full schemas, topic guides and a bundled snapshot of the Longbridge OpenAPI documentation (searchable with `query`, readable page by page with `page`), and `execute` runs any tool by name or a multi-step pipeline whose later steps reference earlier results with `{"$from": id, "jq": expr}`. Same Bearer token and OAuth flow as `/mcp`; same capability surface, including two-step order confirmation. `GET /omni/tools.json` serves the manifest, and `docs/omni/` holds the guides served by `docs`.
+
+```bash
+claude mcp add --transport http longbridge-omni https://mcp.longbridge.com/omni
+```
+
 ## The 164 tools
 
 Twenty categories spanning market data, trading, research and account management.

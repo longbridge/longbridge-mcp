@@ -163,6 +163,23 @@ async fn scopes_json() -> axum::Json<&'static serde_json::Value> {
     axum::Json(&*SCOPES_JSON)
 }
 
+/// Manifest for the `/omni` endpoint: the three meta-tools and their instructions.
+///
+/// Deliberately not the `build_tools_json` shape — `/omni` advertises no
+/// catalogue, so there are no scopes or translations to prune; the whole
+/// surface is the three tools plus the instructions clients see on
+/// `initialize`.
+async fn omni_tools_json() -> axum::Json<&'static serde_json::Value> {
+    static OMNI_TOOLS_JSON: std::sync::LazyLock<serde_json::Value> =
+        std::sync::LazyLock::new(|| {
+            serde_json::json!({
+                "server_instructions": tools::omni::INSTRUCTIONS,
+                "tools": tools::omni::tools(),
+            })
+        });
+    axum::Json(&*OMNI_TOOLS_JSON)
+}
+
 async fn health() -> axum::http::StatusCode {
     axum::http::StatusCode::OK
 }
@@ -283,7 +300,9 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route("/mcp/tools.json", axum::routing::get(tools_json))
         .route("/mcp/scopes.json", axum::routing::get(scopes_json))
         // Restricted public manifest for the `/v2` endpoint (allowlist only).
-        .route("/v2/tools.json", axum::routing::get(v2_tools_json));
+        .route("/v2/tools.json", axum::routing::get(v2_tools_json))
+        // Manifest for the `/omni` endpoint (the three meta-tools only).
+        .route("/omni/tools.json", axum::routing::get(omni_tools_json));
 
     let oauth_proxy_routes: Router = Router::new()
         .route("/oauth2/token", axum::routing::post(oauth_proxy::token))
@@ -559,6 +578,201 @@ mod tests {
             .matches(super::LANDING_PAGE_URL_PLACEHOLDER)
             .count();
         assert_eq!(html.matches(dynamic_url).count(), expected_count);
+    }
+
+    /// A JSON-RPC request body for the stateless Streamable HTTP transport.
+    fn rpc(method: &str, params: serde_json::Value) -> String {
+        serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": method, "params": params})
+            .to_string()
+    }
+
+    /// Streamable HTTP (stateless) answers a POST with either JSON or one SSE
+    /// `data:` frame; return the JSON-RPC body either way.
+    fn rpc_body(content_type: &str, body: &[u8]) -> serde_json::Value {
+        let text = std::str::from_utf8(body).expect("response body must be UTF-8");
+        if content_type.starts_with("text/event-stream") {
+            let data = text
+                .lines()
+                .find_map(|l| l.strip_prefix("data:"))
+                .expect("SSE response must carry a `data:` frame");
+            serde_json::from_str(data.trim()).expect("SSE data frame must be JSON")
+        } else {
+            serde_json::from_str(text).expect("response body must be JSON")
+        }
+    }
+
+    async fn post_omni(
+        app: axum::Router,
+        token: Option<&str>,
+        body: String,
+    ) -> (axum::http::StatusCode, String, Vec<u8>) {
+        use tower::ServiceExt;
+        let mut req = axum::http::Request::builder()
+            .method("POST")
+            .uri("/omni")
+            // The transport rejects a request with no `Host`; a real HTTP/1.1
+            // client always sends one, `Request::builder` does not.
+            .header("host", "example.com")
+            .header("content-type", "application/json")
+            .header("accept", "application/json, text/event-stream");
+        if let Some(t) = token {
+            req = req.header("authorization", format!("Bearer {t}"));
+        }
+        let resp = app
+            .oneshot(
+                req.body(axum::body::Body::from(body))
+                    .expect("request must build"),
+            )
+            .await
+            .expect("router must answer");
+        let status = resp.status();
+        let ct = resp
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default()
+            .to_string();
+        let bytes = axum::body::to_bytes(resp.into_body(), 4 * 1024 * 1024)
+            .await
+            .expect("response body must be readable");
+        (status, ct, bytes.to_vec())
+    }
+
+    /// `AppState` carries no `Default`; only `base_url` matters to these tests.
+    fn test_state() -> std::sync::Arc<super::AppState> {
+        std::sync::Arc::new(super::AppState {
+            base_url: "https://example.com".into(),
+        })
+    }
+
+    fn test_app() -> axum::Router {
+        super::create_router(test_state())
+    }
+
+    #[tokio::test]
+    async fn omni_without_token_is_401() {
+        let (status, _, _) =
+            post_omni(test_app(), None, rpc("tools/list", serde_json::json!({}))).await;
+        assert_eq!(
+            status,
+            axum::http::StatusCode::UNAUTHORIZED,
+            "/omni must require a Bearer token"
+        );
+    }
+
+    #[tokio::test]
+    async fn omni_lists_three_tools_over_http() {
+        let (status, ct, body) = post_omni(
+            test_app(),
+            Some("t"),
+            rpc("tools/list", serde_json::json!({})),
+        )
+        .await;
+        assert_eq!(
+            status,
+            axum::http::StatusCode::OK,
+            "an authenticated tools/list on /omni must succeed"
+        );
+        let v = rpc_body(&ct, &body);
+        let tools = v["result"]["tools"]
+            .as_array()
+            .expect("tools/list result must carry a `tools` array");
+        let mut names: Vec<&str> = tools
+            .iter()
+            .map(|t| t["name"].as_str().expect("each tool must have a name"))
+            .collect();
+        names.sort_unstable();
+        assert_eq!(
+            names,
+            ["docs", "execute", "search"],
+            "/omni must list exactly the three meta-tools"
+        );
+        assert!(
+            body.len() < 8 * 1024,
+            "omni tools/list is {} bytes",
+            body.len()
+        );
+    }
+
+    #[tokio::test]
+    async fn omni_rejects_direct_inner_tool_calls() {
+        let (_, ct, body) = post_omni(
+            test_app(),
+            Some("t"),
+            rpc(
+                "tools/call",
+                serde_json::json!({"name": "quote", "arguments": {"symbols": ["700.HK"]}}),
+            ),
+        )
+        .await;
+        let v = rpc_body(&ct, &body);
+        assert!(
+            v["error"]["message"]
+                .as_str()
+                .expect("a rejected call must carry an error message")
+                .contains("execute"),
+            "the rejection must point at `execute`, got {v}"
+        );
+    }
+
+    #[tokio::test]
+    async fn omni_execute_with_top_level_jq_projects_a_local_result() {
+        // `docs` needs no upstream call, so it exercises the whole path offline.
+        let params = serde_json::json!({
+            "name": "docs",
+            "arguments": {"tool": "quote", "_jq": "{name, required: .input_schema.required}"}
+        });
+        let (_, ct, body) = post_omni(test_app(), Some("t"), rpc("tools/call", params)).await;
+        let v = rpc_body(&ct, &body);
+        let text = v["result"]["content"][0]["text"]
+            .as_str()
+            .expect("a successful tools/call must carry text content");
+        let projected: serde_json::Value =
+            serde_json::from_str(text).expect("the projected result must be JSON");
+        assert_eq!(
+            projected["name"], "quote",
+            "the top-level _jq projection must keep `name`"
+        );
+        assert_eq!(
+            projected["required"],
+            serde_json::json!(["symbols"]),
+            "the top-level _jq projection must read the tool's input schema"
+        );
+    }
+
+    #[tokio::test]
+    async fn omni_tools_json_manifest() {
+        use tower::ServiceExt;
+        let req = axum::http::Request::builder()
+            .uri("/omni/tools.json")
+            .body(axum::body::Body::empty())
+            .expect("request must build");
+        let resp = test_app().oneshot(req).await.expect("router must answer");
+        assert_eq!(
+            resp.status(),
+            axum::http::StatusCode::OK,
+            "/omni/tools.json must be served"
+        );
+        let bytes = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+            .await
+            .expect("manifest body must be readable");
+        let v: serde_json::Value =
+            serde_json::from_slice(&bytes).expect("the manifest must be JSON");
+        assert_eq!(
+            v["tools"]
+                .as_array()
+                .expect("the manifest must carry a `tools` array")
+                .len(),
+            3,
+            "the omni manifest lists the three meta-tools"
+        );
+        assert!(
+            v["server_instructions"]
+                .as_str()
+                .expect("the manifest must carry `server_instructions`")
+                .contains("search"),
+            "the omni instructions must mention `search`"
+        );
     }
 
     #[test]
