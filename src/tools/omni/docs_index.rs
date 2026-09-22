@@ -59,7 +59,91 @@ fn snapshot_lang(lang: Lang) -> &'static str {
     }
 }
 
+/// Page index per language, one `Doc` per page: `title` (weight 12 — raised
+/// from an initial 8), the last path segment on its own (weight 30 — see
+/// below; e.g. `quote` in `quote/pull/quote`, a page named exactly after the
+/// query term is usually what a one-word query wants), the full path with
+/// `/`/`-` turned into spaces (5), all section headings joined (4), and all
+/// section texts joined (1). Ranking happens here, over whole pages, so
+/// BM25's document-length normalisation compares like with like — a page
+/// covering a topic across several sections is not outranked by a single
+/// short, term-dense section from an unrelated page (see `section_index`,
+/// used only to pick an excerpt within the page `search_docs` already
+/// chose).
+///
+/// The last-path-segment weight is tuned well past the 6 first tried: the
+/// Longbridge docs site has many sibling `quote/...`/`socket/...` pages that
+/// all mention "quote" throughout title/path/headings/body, so single-word
+/// queries land in a narrow BM25 score band (roughly 2.6–2.9 for `"quote"`
+/// across 15+ candidates); at weight 6 or even 16, `quote/pull/quote` lands
+/// just outside the top 5 behind several less-central pages. Weight 30 gives
+/// an exact last-segment match (the page *named* after the query) enough of
+/// a lead to clear that band with a comfortable margin — see the ranking
+/// regression tests below, and Task 10's fix-round-1 report for the
+/// per-weight rankings that were tried.
+fn page_index(lang: Lang) -> &'static Index {
+    static EN: OnceLock<Index> = OnceLock::new();
+    static ZH: OnceLock<Index> = OnceLock::new();
+    let cell = match snapshot_lang(lang) {
+        "en" => &EN,
+        _ => &ZH,
+    };
+    cell.get_or_init(|| {
+        let want = snapshot_lang(lang);
+        let docs = snapshot()
+            .pages
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| p.lang == want)
+            .map(|(pi, page)| Doc {
+                key: pi.to_string(),
+                fields: vec![
+                    Field {
+                        weight: 12.0,
+                        text: page.title.clone(),
+                    },
+                    Field {
+                        weight: 30.0,
+                        text: page
+                            .path
+                            .rsplit('/')
+                            .next()
+                            .unwrap_or(&page.path)
+                            .replace('-', " "),
+                    },
+                    Field {
+                        weight: 5.0,
+                        text: page.path.replace(['/', '-'], " "),
+                    },
+                    Field {
+                        weight: 4.0,
+                        text: page
+                            .sections
+                            .iter()
+                            .map(|s| s.heading.as_str())
+                            .collect::<Vec<_>>()
+                            .join(" "),
+                    },
+                    Field {
+                        weight: 1.0,
+                        text: page
+                            .sections
+                            .iter()
+                            .map(|s| s.text.as_str())
+                            .collect::<Vec<_>>()
+                            .join(" "),
+                    },
+                ],
+            })
+            .collect();
+        Index::build(docs)
+    })
+}
+
 /// Section index per language, keyed `"<page index>:<section index>"`.
+/// Ranking uses `page_index`; this index only locates, within a page
+/// `search_docs` already picked, the single section whose own text best
+/// matches the query, to serve as `heading`/`excerpt`.
 fn section_index(lang: Lang) -> &'static Index {
     static EN: OnceLock<Index> = OnceLock::new();
     static ZH: OnceLock<Index> = OnceLock::new();
@@ -111,62 +195,75 @@ pub(crate) fn page_url(path: &str, lang: Lang) -> String {
     }
 }
 
-/// Search sections and roll hits up to one entry per page: a page's score is
-/// the sum of its matching sections' BM25 scores (a page relevant across
-/// several sections outranks one short section that happens to repeat the
-/// query terms densely), and its excerpt comes from its single best section.
-/// Shape: `{page,title,heading,url,excerpt,score}`.
+/// Rank pages with `page_index`, then pick the `heading`/`excerpt` for each
+/// winning page from `section_index`: the query's best-scoring section
+/// within that page, falling back to the page's first section, or (a page
+/// with no sections) an empty heading and the start of its raw Markdown.
+/// One hit per page. Shape: `{page,title,heading,url,excerpt,score}`.
 pub(crate) fn search_docs(query: &str, lang: Lang, limit: usize) -> Vec<Value> {
     let s = snapshot();
-    let index = section_index(lang);
-    let mut totals: HashMap<usize, f32> = HashMap::new();
-    let mut best: HashMap<usize, (f32, usize)> = HashMap::new();
-    for hit in index.search(query, index.len()) {
+    let section_idx = section_index(lang);
+    let mut best_section: HashMap<usize, usize> = HashMap::new();
+    for hit in section_idx.search(query, section_idx.len()) {
         let (pi, si) = hit
             .key
             .split_once(':')
             .expect("key format is `page:section`");
         let pi: usize = pi.parse().expect("page index must be numeric");
         let si: usize = si.parse().expect("section index must be numeric");
-        *totals.entry(pi).or_insert(0.0) += hit.score;
-        let entry = best.entry(pi).or_insert((hit.score, si));
-        if hit.score > entry.0 {
-            *entry = (hit.score, si);
-        }
+        // `search` is sorted by descending score, so the first entry seen
+        // for a page is that page's best-scoring section.
+        best_section.entry(pi).or_insert(si);
     }
-    let mut ranked: Vec<(usize, f32)> = totals.into_iter().collect();
-    ranked.sort_by(|a, b| {
-        b.1.partial_cmp(&a.1)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then_with(|| s.pages[a.0].path.cmp(&s.pages[b.0].path))
-    });
-    ranked
+    page_index(lang)
+        .search(query, limit)
         .into_iter()
-        .take(limit)
-        .map(|(pi, total)| {
+        .map(|hit| {
+            let pi: usize = hit.key.parse().expect("page index must be numeric");
             let page = &s.pages[pi];
-            let (_, si) = best[&pi];
-            let section = &page.sections[si];
+            let (heading, excerpt) = match best_section
+                .get(&pi)
+                .copied()
+                .and_then(|si| page.sections.get(si))
+                .or(page.sections.first())
+            {
+                Some(section) => (
+                    section.heading.clone(),
+                    clip_chars(&section.text, EXCERPT_CHARS),
+                ),
+                None => (String::new(), clip_chars(&page.markdown, EXCERPT_CHARS)),
+            };
             serde_json::json!({
                 "page": page.path,
                 "title": page.title,
-                "heading": section.heading,
+                "heading": heading,
                 "url": page_url(&page.path, lang),
-                "excerpt": clip_chars(&section.text, EXCERPT_CHARS),
-                "score": (total * 10.0).round() / 10.0,
+                "excerpt": excerpt,
+                "score": (hit.score * 10.0).round() / 10.0,
             })
         })
         .collect()
 }
 
+/// `(path, lang) -> page index`, built once, so `page_from_snapshot` looks
+/// pages up in constant time instead of scanning the whole snapshot.
+fn page_lookup() -> &'static HashMap<(String, String), usize> {
+    static LOOKUP: OnceLock<HashMap<(String, String), usize>> = OnceLock::new();
+    LOOKUP.get_or_init(|| {
+        snapshot()
+            .pages
+            .iter()
+            .enumerate()
+            .map(|(i, p)| ((p.path.clone(), p.lang.clone()), i))
+            .collect()
+    })
+}
+
 /// Whole-page Markdown from the snapshot.
 pub(crate) fn page_from_snapshot(path: &str, lang: Lang) -> Option<String> {
     let want = snapshot_lang(lang);
-    snapshot()
-        .pages
-        .iter()
-        .find(|p| p.path == path && p.lang == want)
-        .map(|p| p.markdown.clone())
+    let &i = page_lookup().get(&(path.to_string(), want.to_string()))?;
+    Some(snapshot().pages[i].markdown.clone())
 }
 
 /// `a/b-c/d` style paths only: lowercase, digits, `-`, `_`, single `/` separators.
@@ -283,6 +380,35 @@ mod tests {
             "an empty path segment must be rejected"
         );
         assert!(!valid_page_path(""), "an empty path must be rejected");
+    }
+
+    #[test]
+    fn common_queries_rank_the_focused_page_over_boilerplate_matches() {
+        let hits = search_docs("quote", Lang::En, 5);
+        assert!(
+            hits.iter().any(|h| h["page"] == "quote/pull/quote"),
+            "expected quote/pull/quote in the top 5 for `quote`, got {hits:?}"
+        );
+        assert!(
+            !hits.iter().any(|h| h["page"] == "changelog"),
+            "changelog must not crowd out focused pages for `quote`, got {hits:?}"
+        );
+
+        let hits = search_docs("order", Lang::En, 5);
+        assert!(
+            hits.iter().any(|h| h["page"] == "trade/order/submit"),
+            "expected trade/order/submit in the top 5 for `order`, got {hits:?}"
+        );
+        assert!(
+            !hits.iter().any(|h| h["page"] == "changelog"),
+            "changelog must not crowd out focused pages for `order`, got {hits:?}"
+        );
+
+        let hits = search_docs("cancel order", Lang::En, 3);
+        assert!(
+            hits.iter().any(|h| h["page"] == "trade/order/withdraw"),
+            "expected trade/order/withdraw in the top 3 for `cancel order`, got {hits:?}"
+        );
     }
 
     #[test]

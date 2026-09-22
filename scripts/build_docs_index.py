@@ -18,6 +18,9 @@ LANGS = {"en": "", "zh-CN": "zh-CN/"}
 MAX_SECTION_CHARS = 4000
 OUT = "data/docs-index.json"
 LINK_RE = re.compile(r"^- \[(.+?)\]\((https?://[^)]+?/docs/([^)\s]+))\)")
+# Defensive: the live `.md` endpoint has not been observed to serve front
+# matter (title comes from the first `# ` heading, or falls back to the
+# llms.txt link text), but these are cheap no-ops if a page ever adds one.
 FRONT_MATTER_RE = re.compile(r"\A---\n.*?\n---\n", re.S)
 FRONT_MATTER_TITLE_RE = re.compile(r"\A---\n.*?\ntitle:\s*(.+?)\s*\n.*?\n---\n", re.S)
 CLI_COMMAND_RE = re.compile(r"<CliCommand>.*?</CliCommand>\n?", re.S)
