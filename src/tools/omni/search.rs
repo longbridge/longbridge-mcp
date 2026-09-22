@@ -88,12 +88,13 @@ fn localized() -> &'static HashMap<String, Vec<Localized>> {
 #[allow(dead_code)]
 fn categories() -> &'static HashMap<&'static str, (&'static str, &'static str)> {
     // tool name -> (scope id, scope name)
+    static SCOPES: OnceLock<serde_json::Value> = OnceLock::new();
     static MAP: OnceLock<HashMap<&'static str, (&'static str, &'static str)>> = OnceLock::new();
+    let scopes = SCOPES.get_or_init(|| {
+        serde_json::from_str(include_str!("../../../data/scopes.json"))
+            .expect("scopes.json must be valid JSON")
+    });
     MAP.get_or_init(|| {
-        let scopes: &'static serde_json::Value = Box::leak(Box::new(
-            serde_json::from_str(include_str!("../../../data/scopes.json"))
-                .expect("scopes.json must be valid JSON"),
-        ));
         let mut map = HashMap::new();
         for scope in scopes["scopes"].as_array().expect("scopes array") {
             let id = scope["id"].as_str().expect("scope id");
@@ -253,8 +254,14 @@ pub(crate) fn search(p: SearchParam) -> Result<CallToolResult, McpError> {
         .iter()
         .map(|t| (t.name.as_ref(), t))
         .collect();
-    let hits: Vec<serde_json::Value> = tool_index()
-        .search(&p.query, MAX_LIMIT.max(limit) * 4)
+    let index = tool_index();
+    let pool = if pattern.is_some() || category.is_some() {
+        index.len()
+    } else {
+        limit
+    };
+    let hits: Vec<serde_json::Value> = index
+        .search(&p.query, pool)
         .into_iter()
         .filter(|h| pattern.as_ref().is_none_or(|re| re.is_match(&h.key)))
         .filter(|h| {
@@ -388,6 +395,10 @@ mod tests {
             limit: Some(50),
         })
         .expect("search should succeed");
+        assert!(
+            !names(&r).is_empty(),
+            "category filter must keep matching tools"
+        );
         assert!(
             names(&r)
                 .iter()
