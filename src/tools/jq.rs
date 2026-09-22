@@ -149,26 +149,33 @@ fn filter_error(message: &str) -> CallToolResult {
     }).to_string())])
 }
 
-fn apply(filter: Filter, mut result: CallToolResult) -> Result<CallToolResult, String> {
-    let input = result.structured_content.take().unwrap_or_else(|| {
-        let mut values: Vec<Value> = result
-            .content
-            .iter()
-            .map(|content| {
-                if let Some(text) = content.as_text() {
-                    serde_json::from_str(&text.text)
-                        .unwrap_or_else(|_| Value::String(text.text.clone()))
-                } else {
-                    serde_json::to_value(content).expect("MCP content must serialize")
-                }
-            })
-            .collect();
-        if values.len() == 1 {
-            values.pop().unwrap()
-        } else {
-            Value::Array(values)
-        }
-    });
+/// The JSON value a tool result carries: `structured_content` when present,
+/// otherwise the `content` text parsed as JSON (one item as-is, several as an
+/// array, non-JSON text as a JSON string).
+pub(super) fn result_value(result: &CallToolResult) -> Value {
+    if let Some(structured) = &result.structured_content {
+        return structured.clone();
+    }
+    let mut values: Vec<Value> = result
+        .content
+        .iter()
+        .map(|content| {
+            if let Some(text) = content.as_text() {
+                serde_json::from_str(&text.text)
+                    .unwrap_or_else(|_| Value::String(text.text.clone()))
+            } else {
+                serde_json::to_value(content).expect("MCP content must serialize")
+            }
+        })
+        .collect();
+    if values.len() == 1 {
+        values.pop().expect("length checked")
+    } else {
+        Value::Array(values)
+    }
+}
+
+fn run(filter: &Filter, input: Value) -> Result<Value, String> {
     let input: Val = serde_json::from_value(input).map_err(|error| error.to_string())?;
     let ctx = Ctx::<data::JustLut<Val>>::new(&filter.lut, Vars::new([]));
     let mut values = Vec::new();
@@ -183,11 +190,41 @@ fn apply(filter: Filter, mut result: CallToolResult) -> Result<CallToolResult, S
         }
         values.push(serde_json::from_str::<Value>(&value).map_err(|error| error.to_string())?);
     }
-    let value = if values.len() == 1 {
-        values.pop().unwrap()
+    Ok(if values.len() == 1 {
+        values.pop().expect("length checked")
     } else {
         Value::Array(values)
-    };
+    })
+}
+
+/// Compile `code` and run it over `input` with the same output limits as `_jq`.
+// Not yet called outside tests; the omni pipeline (a later task) is its first
+// production caller.
+#[allow(dead_code)]
+pub(super) fn project(code: &str, input: Value) -> Result<Value, String> {
+    let filter = compile(code).map_err(|error| error.message.to_string())?;
+    run(&filter, input)
+}
+
+/// [`project`] on a blocking thread, bounded by [`FILTER_TIMEOUT`].
+// Not yet called outside tests; the omni pipeline (a later task) is its first
+// production caller.
+#[allow(dead_code)]
+pub(super) async fn project_bounded(code: String, input: Value) -> Result<Value, String> {
+    let worker = tokio::task::spawn_blocking(move || project(&code, input));
+    match tokio::time::timeout(FILTER_TIMEOUT, worker).await {
+        Ok(Ok(result)) => result,
+        Ok(Err(_)) => Err("filter worker failed".into()),
+        Err(_) => Err("filter timed out after 5s; narrow the jq expression (avoid unbounded ranges or repeats)".into()),
+    }
+}
+
+fn apply(filter: Filter, mut result: CallToolResult) -> Result<CallToolResult, String> {
+    let input = result
+        .structured_content
+        .take()
+        .unwrap_or_else(|| result_value(&result));
+    let value = run(&filter, input)?;
     result.content = vec![Content::text(value.to_string())];
     result.structured_content = value.is_object().then_some(value);
     Ok(result)
@@ -387,5 +424,57 @@ mod tests {
             drop(reader);
             server_task.await.unwrap();
         }).await.expect("MCP test timed out");
+    }
+
+    #[test]
+    fn project_returns_single_output_as_is_and_many_as_array() {
+        let input = json!({"data": [{"symbol": "700.HK", "x": 1}, {"symbol": "AAPL.US", "x": 2}]});
+        let one = project(".data | map(.symbol)", input.clone()).expect("valid filter");
+        assert_eq!(one, json!(["700.HK", "AAPL.US"]));
+        let many = project(".data[] | .symbol", input.clone()).expect("valid filter");
+        assert_eq!(many, json!(["700.HK", "AAPL.US"]));
+        let none = project(".data[] | select(.x > 5)", input).expect("valid filter");
+        assert_eq!(none, json!([]));
+    }
+
+    #[test]
+    fn project_rejects_invalid_filter_with_message() {
+        let err = project(".data | map(", json!({})).expect_err("syntax error");
+        assert!(err.contains("Invalid _jq expression"), "got: {err}");
+    }
+
+    #[test]
+    fn result_value_prefers_structured_content_then_text() {
+        let mut r = CallToolResult::success(vec![Content::text("{\"a\":1}")]);
+        assert_eq!(result_value(&r), json!({"a": 1}));
+        r.structured_content = Some(json!({"b": 2}));
+        assert_eq!(result_value(&r), json!({"b": 2}));
+        let plain = CallToolResult::success(vec![Content::text("not json")]);
+        assert_eq!(result_value(&plain), json!("not json"));
+    }
+
+    #[test]
+    fn project_bounded_times_out_on_unbounded_filter() {
+        // `[range(0; 1e12)] | length` never lets its `spawn_blocking` closure
+        // return within the test. Tokio's `Runtime::drop` blocks
+        // unconditionally on outstanding blocking-pool tasks (see
+        // `BlockingPool::shutdown`, called with `timeout: None`), so awaiting
+        // this under `#[tokio::test]` hangs the whole test binary at
+        // teardown for as long as the orphaned worker keeps growing its
+        // array (confirmed: the process was SIGKILLed after 60+s). Build the
+        // runtime by hand and leak it so the orphaned thread is reclaimed
+        // when the process exits instead of blocking this test's teardown.
+        let runtime = tokio::runtime::Runtime::new().expect("runtime must build");
+        let err = runtime
+            .block_on(project_bounded(
+                "[range(0; 1e12)] | length".into(),
+                json!(null),
+            ))
+            .expect_err("must time out or hit limit");
+        assert!(
+            err.contains("timed out") || err.contains("output limit"),
+            "got: {err}"
+        );
+        std::mem::forget(runtime);
     }
 }
