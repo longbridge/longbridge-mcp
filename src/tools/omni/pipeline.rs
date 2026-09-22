@@ -19,13 +19,10 @@ use crate::tools::jq::{project_bounded, result_value};
 // dispatcher to `execute` (a later task) is its first production caller.
 
 /// Most steps one `execute` call may contain.
-#[allow(dead_code)]
 pub(crate) const MAX_STEPS: usize = 10;
 /// Most steps run at the same time.
-#[allow(dead_code)]
 pub(crate) const MAX_CONCURRENCY: usize = 4;
 /// Order-defining fields a write step may not take from an upstream step.
-#[allow(dead_code)]
 pub(crate) const FORBIDDEN_WRITE_REFS: &[&str] = &[
     "symbol",
     "side",
@@ -38,7 +35,6 @@ pub(crate) const FORBIDDEN_WRITE_REFS: &[&str] = &[
 
 /// One pipeline step as supplied by the caller.
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub(crate) struct Step {
     /// Caller-chosen identifier other steps reference with `$from`.
     pub id: String,
@@ -52,7 +48,6 @@ pub(crate) struct Step {
 
 /// A validated pipeline. `deps[i]` are indices `steps[i]` reads from.
 #[derive(Debug)]
-#[allow(dead_code)]
 pub(crate) struct Plan {
     /// Steps in the order the caller supplied them.
     pub steps: Vec<Step>,
@@ -64,7 +59,6 @@ pub(crate) struct Plan {
 
 /// Why a pipeline was rejected before running.
 #[derive(Debug, thiserror::Error, PartialEq)]
-#[allow(dead_code)]
 pub(crate) enum PlanError {
     /// No steps were supplied.
     #[error("steps must not be empty")]
@@ -177,7 +171,6 @@ fn collect_refs<'a>(value: &'a Value, out: &mut Vec<(&'a str, Option<&'a str>)>)
 }
 
 /// Validate structure, dependencies and write rules.
-#[allow(dead_code)]
 pub(crate) fn validate(
     steps: Vec<Step>,
     return_ids: Option<Vec<String>>,
@@ -302,7 +295,6 @@ pub(crate) fn validate(
 
 /// Terminal state of one step.
 #[derive(Debug, Clone, PartialEq)]
-#[allow(dead_code)]
 pub(crate) enum Status {
     /// The step ran and its projection succeeded.
     Ok,
@@ -314,7 +306,6 @@ pub(crate) enum Status {
 
 /// Result of one step: `value` is the projected result, or an error envelope.
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub(crate) struct Outcome {
     /// How the step ended.
     pub status: Status,
@@ -325,7 +316,6 @@ pub(crate) struct Outcome {
 }
 
 /// Executes one inner tool call.
-#[allow(dead_code)]
 pub(crate) type Runner = Arc<
     dyn Fn(String, JsonObject) -> Pin<Box<dyn Future<Output = CallToolResult> + Send>>
         + Send
@@ -452,7 +442,6 @@ fn propagate_skips(
 
 /// Run the plan: schedule steps whose dependencies succeeded, up to
 /// [`MAX_CONCURRENCY`] at a time; dependents of a failed step are `Skipped`.
-#[allow(dead_code)]
 pub(crate) async fn run(plan: &Plan, runner: Runner) -> BTreeMap<String, Outcome> {
     let n = plan.steps.len();
     let mut outcomes: BTreeMap<String, Outcome> = BTreeMap::new();

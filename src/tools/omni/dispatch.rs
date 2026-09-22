@@ -36,7 +36,6 @@ pub(crate) fn is_known_tool(name: &str) -> bool {
 }
 
 /// Whether `name` is a write tool (`destructive_hint = true`).
-#[allow(dead_code)]
 pub(crate) fn is_write_tool(name: &str) -> bool {
     crate::tools::cached_router()
         .get(name)
@@ -57,7 +56,6 @@ pub(crate) fn unknown_tool(name: &str) -> CallToolResult {
 }
 
 /// Per-request dispatcher bound to the caller's context.
-#[allow(dead_code)]
 pub(crate) struct Dispatcher {
     server: Longbridge,
     ctx: RequestContext<RoleServer>,
@@ -66,7 +64,6 @@ pub(crate) struct Dispatcher {
 
 impl Dispatcher {
     /// `region` is `None` when no requested tool is region-scoped.
-    #[allow(dead_code)]
     pub(crate) fn new(
         server: Longbridge,
         ctx: RequestContext<RoleServer>,
@@ -81,7 +78,6 @@ impl Dispatcher {
 
     /// Call `tool` with `arguments`. Never returns a protocol error: unknown
     /// tools, hidden tools and argument-parse failures all become envelopes.
-    #[allow(dead_code)]
     pub(crate) async fn call(&self, tool: &str, arguments: JsonObject) -> CallToolResult {
         if !is_known_tool(tool) {
             return unknown_tool(tool);

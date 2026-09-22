@@ -206,6 +206,47 @@ pub fn set_quote_ws_pool_entries(entries: usize) {
     QUOTE_WS_POOL_ENTRIES.set(entries as i64);
 }
 
+static OMNI_STEPS_TOTAL: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    let counter = IntCounterVec::new(
+        Opts::new(
+            "mcp_omni_execute_steps_total",
+            "Inner tool calls made through omni execute",
+        ),
+        &["inner_tool", "status"],
+    )
+    .unwrap();
+    REGISTRY.register(Box::new(counter.clone())).unwrap();
+    counter
+});
+
+static OMNI_PIPELINE_SIZE: LazyLock<HistogramVec> = LazyLock::new(|| {
+    let histogram = HistogramVec::new(
+        prometheus::HistogramOpts::new(
+            "mcp_omni_pipeline_steps",
+            "Number of steps per omni execute call",
+        )
+        .buckets(vec![1.0, 2.0, 3.0, 4.0, 6.0, 8.0, 10.0]),
+        &[],
+    )
+    .unwrap();
+    REGISTRY.register(Box::new(histogram.clone())).unwrap();
+    histogram
+});
+
+/// Count one inner tool call made by omni `execute`; `status` is ok/error/skipped.
+pub fn record_omni_step(inner_tool: &str, status: &str) {
+    OMNI_STEPS_TOTAL
+        .with_label_values(&[inner_tool, status])
+        .inc();
+}
+
+/// Observe the step count of one omni `execute` call.
+pub fn record_omni_pipeline_size(steps: usize) {
+    OMNI_PIPELINE_SIZE
+        .with_label_values(&[])
+        .observe(steps as f64);
+}
+
 pub async fn metrics_handler() -> impl IntoResponse {
     let encoder = TextEncoder::new();
     let metric_families = REGISTRY.gather();

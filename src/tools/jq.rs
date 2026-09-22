@@ -200,7 +200,6 @@ fn run(filter: &Filter, input: Value) -> Result<Value, String> {
 /// Compile `code` and run it over `input` with the same output limits as `_jq`.
 // Not yet called outside tests; the omni pipeline (a later task) is its first
 // production caller.
-#[allow(dead_code)]
 pub(crate) fn project(code: &str, input: Value) -> Result<Value, String> {
     let filter = compile(code).map_err(|error| error.message.to_string())?;
     run(&filter, input)
@@ -209,7 +208,6 @@ pub(crate) fn project(code: &str, input: Value) -> Result<Value, String> {
 /// [`project`] on a blocking thread, bounded by [`FILTER_TIMEOUT`].
 // Not yet called outside tests; the omni pipeline (a later task) is its first
 // production caller.
-#[allow(dead_code)]
 pub(crate) async fn project_bounded(code: String, input: Value) -> Result<Value, String> {
     let worker = tokio::task::spawn_blocking(move || project(&code, input));
     match tokio::time::timeout(FILTER_TIMEOUT, worker).await {
