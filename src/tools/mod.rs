@@ -535,6 +535,7 @@ mod ipo;
 mod jq;
 mod macrodata;
 mod market;
+mod omni;
 mod output;
 mod portfolio;
 mod quant;
