@@ -410,6 +410,14 @@ pub fn create_router(state: Arc<AppState>) -> Router {
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
+    use std::sync::Arc;
+
+    use axum::Router;
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use tower::ServiceExt;
+
+    use super::{AppState, create_router};
 
     /// Guard: in static tool metadata — descriptions, input schemas, and the
     /// translations — the connect page may only appear as
@@ -580,34 +588,57 @@ mod tests {
         assert_eq!(html.matches(dynamic_url).count(), expected_count);
     }
 
+    /// The JSON-RPC id every [`rpc`] request carries; [`rpc_body`] matches the
+    /// response frame on it.
+    const RPC_ID: u64 = 1;
+
     /// A JSON-RPC request body for the stateless Streamable HTTP transport.
     fn rpc(method: &str, params: serde_json::Value) -> String {
-        serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": method, "params": params})
+        serde_json::json!({"jsonrpc": "2.0", "id": RPC_ID, "method": method, "params": params})
             .to_string()
     }
 
-    /// Streamable HTTP (stateless) answers a POST with either JSON or one SSE
-    /// `data:` frame; return the JSON-RPC body either way.
+    /// Streamable HTTP (stateless) answers a POST with either JSON or an SSE
+    /// stream; return the JSON-RPC response body either way.
+    ///
+    /// The stream may carry notifications (progress, logging) before the
+    /// response, so every `data:` frame is parsed and the one answering
+    /// [`RPC_ID`] is returned — falling back to the last frame that carries a
+    /// `result` or an `error` when the server answers with a different id.
     fn rpc_body(content_type: &str, body: &[u8]) -> serde_json::Value {
         let text = std::str::from_utf8(body).expect("response body must be UTF-8");
-        if content_type.starts_with("text/event-stream") {
-            let data = text
-                .lines()
-                .find_map(|l| l.strip_prefix("data:"))
-                .expect("SSE response must carry a `data:` frame");
-            serde_json::from_str(data.trim()).expect("SSE data frame must be JSON")
-        } else {
-            serde_json::from_str(text).expect("response body must be JSON")
+        if !content_type.starts_with("text/event-stream") {
+            return serde_json::from_str(text).expect("response body must be JSON");
         }
+        let frames: Vec<serde_json::Value> = text
+            .lines()
+            .filter_map(|l| l.strip_prefix("data:"))
+            .map(|data| serde_json::from_str(data.trim()).expect("SSE data frame must be JSON"))
+            .collect();
+        assert!(
+            !frames.is_empty(),
+            "SSE response must carry at least one `data:` frame, got {text:?}"
+        );
+        frames
+            .iter()
+            .find(|f| f["id"] == serde_json::json!(RPC_ID))
+            .or_else(|| {
+                frames
+                    .iter()
+                    .rfind(|f| f.get("result").is_some() || f.get("error").is_some())
+            })
+            .unwrap_or_else(|| {
+                panic!("no SSE frame answers request id {RPC_ID}; frames: {frames:?}")
+            })
+            .clone()
     }
 
     async fn post_omni(
-        app: axum::Router,
+        app: Router,
         token: Option<&str>,
         body: String,
-    ) -> (axum::http::StatusCode, String, Vec<u8>) {
-        use tower::ServiceExt;
-        let mut req = axum::http::Request::builder()
+    ) -> (StatusCode, String, Vec<u8>) {
+        let mut req = Request::builder()
             .method("POST")
             .uri("/omni")
             // The transport rejects a request with no `Host`; a real HTTP/1.1
@@ -619,10 +650,7 @@ mod tests {
             req = req.header("authorization", format!("Bearer {t}"));
         }
         let resp = app
-            .oneshot(
-                req.body(axum::body::Body::from(body))
-                    .expect("request must build"),
-            )
+            .oneshot(req.body(Body::from(body)).expect("request must build"))
             .await
             .expect("router must answer");
         let status = resp.status();
@@ -639,14 +667,14 @@ mod tests {
     }
 
     /// `AppState` carries no `Default`; only `base_url` matters to these tests.
-    fn test_state() -> std::sync::Arc<super::AppState> {
-        std::sync::Arc::new(super::AppState {
+    fn test_state() -> Arc<AppState> {
+        Arc::new(AppState {
             base_url: "https://example.com".into(),
         })
     }
 
-    fn test_app() -> axum::Router {
-        super::create_router(test_state())
+    fn test_app() -> Router {
+        create_router(test_state())
     }
 
     #[tokio::test]
@@ -655,7 +683,7 @@ mod tests {
             post_omni(test_app(), None, rpc("tools/list", serde_json::json!({}))).await;
         assert_eq!(
             status,
-            axum::http::StatusCode::UNAUTHORIZED,
+            StatusCode::UNAUTHORIZED,
             "/omni must require a Bearer token"
         );
     }
@@ -670,7 +698,7 @@ mod tests {
         .await;
         assert_eq!(
             status,
-            axum::http::StatusCode::OK,
+            StatusCode::OK,
             "an authenticated tools/list on /omni must succeed"
         );
         let v = rpc_body(&ct, &body);
@@ -716,8 +744,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn omni_execute_with_top_level_jq_projects_a_local_result() {
-        // `docs` needs no upstream call, so it exercises the whole path offline.
+    async fn omni_top_level_jq_projects_docs_result_over_http() {
+        // `docs` needs no upstream call, so the top-level `_jq` projection is
+        // exercised end-to-end over HTTP without touching the network.
         let params = serde_json::json!({
             "name": "docs",
             "arguments": {"tool": "quote", "_jq": "{name, required: .input_schema.required}"}
@@ -742,15 +771,14 @@ mod tests {
 
     #[tokio::test]
     async fn omni_tools_json_manifest() {
-        use tower::ServiceExt;
-        let req = axum::http::Request::builder()
+        let req = Request::builder()
             .uri("/omni/tools.json")
-            .body(axum::body::Body::empty())
+            .body(Body::empty())
             .expect("request must build");
         let resp = test_app().oneshot(req).await.expect("router must answer");
         assert_eq!(
             resp.status(),
-            axum::http::StatusCode::OK,
+            StatusCode::OK,
             "/omni/tools.json must be served"
         );
         let bytes = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
