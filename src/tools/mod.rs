@@ -665,6 +665,17 @@ where
     Ok(tool_result(json))
 }
 
+/// Serialize `value` verbatim, without the snake_case/RFC3339 transforms
+/// `tool_json` applies to upstream data. For server-authored payloads such as
+/// JSON Schemas, whose `$defs` names and camelCase keywords must not change.
+pub(crate) fn tool_plain_json<T>(value: &T) -> Result<CallToolResult, McpError>
+where
+    T: serde::Serialize,
+{
+    let json = serde_json::to_string(value).map_err(Error::Serialize)?;
+    Ok(tool_result(json))
+}
+
 /// Per-request context extracted from HTTP headers.
 pub struct McpContext {
     pub token: String,

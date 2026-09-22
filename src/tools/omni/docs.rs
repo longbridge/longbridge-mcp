@@ -13,7 +13,7 @@ use crate::tools::omni::docs_index;
 use crate::tools::omni::search::{category_of, localized};
 use crate::tools::omni::truncate::{MAX_OUTPUT_TOKENS, truncate_result};
 use crate::tools::{
-    all_tools_full_cached, is_region_scoped, output_schema_map, tool_json, v2_tool_names,
+    all_tools_full_cached, is_region_scoped, output_schema_map, tool_plain_json, v2_tool_names,
 };
 
 /// Max tool names accepted at once by `tools`.
@@ -218,7 +218,7 @@ pub(crate) async fn docs(mctx: &McpContext, p: DocsParam) -> Result<CallToolResu
             .collect::<Vec<_>>()
             .join(", ");
         return match TOPICS.iter().find(|(id, _)| id == topic) {
-            Some((id, md)) => tool_json(&serde_json::json!({"topic": id, "markdown": md})),
+            Some((id, md)) => tool_plain_json(&serde_json::json!({"topic": id, "markdown": md})),
             None => Ok(envelope(
                 "unknown_topic",
                 format!("unknown topic `{topic}`; known: {known}"),
@@ -231,7 +231,7 @@ pub(crate) async fn docs(mctx: &McpContext, p: DocsParam) -> Result<CallToolResu
     }
     if let Some(name) = &p.tool {
         return match tool_doc(name, lang) {
-            Some(doc) => Ok(truncate_result(tool_json(&doc)?, MAX_OUTPUT_TOKENS)),
+            Some(doc) => Ok(truncate_result(tool_plain_json(&doc)?, MAX_OUTPUT_TOKENS)),
             None => Ok(unknown_tool(name)),
         };
     }
@@ -243,7 +243,7 @@ pub(crate) async fn docs(mctx: &McpContext, p: DocsParam) -> Result<CallToolResu
                     .unwrap_or_else(|| serde_json::json!({"name": n, "error": "unknown tool"}))
             })
             .collect();
-        return Ok(truncate_result(tool_json(&docs)?, MAX_OUTPUT_TOKENS));
+        return Ok(truncate_result(tool_plain_json(&docs)?, MAX_OUTPUT_TOKENS));
     }
     if let Some(page) = &p.page {
         if !docs_index::valid_page_path(page) {
@@ -277,7 +277,7 @@ pub(crate) async fn docs(mctx: &McpContext, p: DocsParam) -> Result<CallToolResu
                 }
             }
         };
-        let result = tool_json(&serde_json::json!({
+        let result = tool_plain_json(&serde_json::json!({
             "page": page,
             "lang": lang.code(),
             "url": docs_index::page_url(page, lang),
@@ -296,9 +296,9 @@ pub(crate) async fn docs(mctx: &McpContext, p: DocsParam) -> Result<CallToolResu
                 Value::Null,
             ));
         }
-        return tool_json(&docs_index::search_docs(query, lang, p.limit.unwrap_or(5)));
+        return tool_plain_json(&docs_index::search_docs(query, lang, p.limit.unwrap_or(5)));
     }
-    tool_json(&catalog())
+    tool_plain_json(&catalog())
 }
 
 #[cfg(test)]
@@ -498,6 +498,43 @@ mod tests {
                 .as_str()
                 .is_some_and(|md| md.contains("## Request")),
             "got {value:?}"
+        );
+    }
+
+    /// Tool docs carry JSON Schemas verbatim: `$defs` names, `$ref` targets
+    /// and camelCase keywords must survive, or references dangle.
+    #[tokio::test]
+    async fn docs_tool_keeps_schema_keys_verbatim() {
+        let p = DocsParam {
+            tool: Some("screener_search".into()),
+            ..no_lang_param()
+        };
+        let result = docs(&ctx(), p).await.expect("known tool must succeed");
+        let value = crate::tools::jq::result_value(&result);
+        let expected = crate::tools::output_schema_map()
+            .get("screener_search")
+            .expect("screener_search declares an output_schema");
+        assert_eq!(
+            value["output_schema"],
+            Value::Object((**expected).clone()),
+            "output_schema must be returned without key rewriting"
+        );
+    }
+
+    /// Catalogue category names match the ones `search` accepts as filters.
+    #[tokio::test]
+    async fn docs_catalog_keeps_category_names() {
+        let result = docs(&ctx(), no_lang_param())
+            .await
+            .expect("catalogue must succeed");
+        let value = crate::tools::jq::result_value(&result);
+        let categories = value["categories"]
+            .as_object()
+            .expect("categories must be an object");
+        assert!(
+            categories.keys().all(|k| !k.contains('_') && k != "other"),
+            "category names must not be snake_cased, got {:?}",
+            categories.keys().collect::<Vec<_>>()
         );
     }
 

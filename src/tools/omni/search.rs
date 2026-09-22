@@ -10,7 +10,7 @@ use rmcp::serde::Deserialize;
 
 use crate::tools::omni::index::{Doc, Field, Index};
 use crate::tools::support::text::clip_chars;
-use crate::tools::tool_json;
+use crate::tools::tool_plain_json;
 
 const DEFAULT_LIMIT: usize = 10;
 const MAX_LIMIT: usize = 50;
@@ -284,14 +284,14 @@ pub(crate) fn search(p: SearchParam) -> Result<CallToolResult, McpError> {
         })
         .collect();
     if hits.is_empty() {
-        return tool_json(&serde_json::json!({
+        return tool_plain_json(&serde_json::json!({
             "hits": [],
             "hint": "No tool matched the query. Try different keywords (English or Chinese), a \
                      broader term, or call `docs` with a `topic` (e.g. getting-started) or \
                      `query`.",
         }));
     }
-    tool_json(&hits)
+    tool_plain_json(&hits)
 }
 
 #[cfg(test)]
