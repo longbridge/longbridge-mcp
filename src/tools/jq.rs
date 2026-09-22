@@ -22,7 +22,7 @@ const MAX_RESULTS: usize = 10_000;
 const MAX_OUTPUT_BYTES: usize = 8 * 1024 * 1024;
 const FILTER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
-pub(super) fn describe(tool: &mut Tool) {
+pub(crate) fn describe(tool: &mut Tool) {
     let schema = std::sync::Arc::make_mut(&mut tool.input_schema);
     schema
         .entry("properties")
@@ -198,16 +198,14 @@ fn run(filter: &Filter, input: Value) -> Result<Value, String> {
 }
 
 /// Compile `code` and run it over `input` with the same output limits as `_jq`.
-// Not yet called outside tests; the omni pipeline (a later task) is its first
-// production caller.
+// Called in production through the omni pipeline, i.e. `omni::execute`.
 pub(crate) fn project(code: &str, input: Value) -> Result<Value, String> {
     let filter = compile(code).map_err(|error| error.message.to_string())?;
     run(&filter, input)
 }
 
 /// [`project`] on a blocking thread, bounded by [`FILTER_TIMEOUT`].
-// Not yet called outside tests; the omni pipeline (a later task) is its first
-// production caller.
+// Called in production through the omni pipeline, i.e. `omni::execute`.
 pub(crate) async fn project_bounded(code: String, input: Value) -> Result<Value, String> {
     let worker = tokio::task::spawn_blocking(move || project(&code, input));
     match tokio::time::timeout(FILTER_TIMEOUT, worker).await {

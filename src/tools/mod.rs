@@ -50,7 +50,7 @@ fn next_call_id() -> u64 {
     NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
-async fn measured_tool_call<F, Fut>(
+pub(crate) async fn measured_tool_call<F, Fut>(
     name: &'static str,
     params: String,
     f: F,
@@ -1036,7 +1036,6 @@ fn is_agent_endpoint(ctx: &RequestContext<RoleServer>) -> bool {
 /// Whether the request arrived on the `/omni` endpoint (see
 /// [`OmniEndpoint`]). Only the three omni meta-tools are listed and callable
 /// there; everything else is reached through `execute`.
-#[allow(dead_code)]
 fn is_omni_endpoint(ctx: &RequestContext<RoleServer>) -> bool {
     ctx.extensions
         .get::<axum::http::request::Parts>()
@@ -1114,7 +1113,7 @@ pub(crate) fn is_region_scoped(name: &str) -> bool {
     US_ONLY_TOOLS.contains(&name) || AP_ONLY_TOOLS.contains(&name)
 }
 
-fn extract_context(ctx: &RequestContext<RoleServer>) -> Result<McpContext, McpError> {
+pub(crate) fn extract_context(ctx: &RequestContext<RoleServer>) -> Result<McpContext, McpError> {
     let parts = ctx
         .extensions
         .get::<axum::http::request::Parts>()
@@ -1557,7 +1556,7 @@ fn replace_in_json_strings(value: &mut serde_json::Value, from: &str, to: &str) 
     }
 }
 
-fn strip_null_from_type_arrays(value: &mut serde_json::Value) {
+pub(crate) fn strip_null_from_type_arrays(value: &mut serde_json::Value) {
     match value {
         serde_json::Value::Object(map) => {
             if let Some(serde_json::Value::Array(types)) = map.get_mut("type") {
@@ -1618,7 +1617,7 @@ const STANDARD_JSON_SCHEMA_FORMATS: &[&str] = &[
 /// preserved, so an integer/number is still constrained as such; only the
 /// advisory, unrecognized keyword is removed. Standard string formats
 /// (`date-time`, `uri`, …) are left untouched.
-fn strip_nonstandard_formats(value: &mut serde_json::Value) {
+pub(crate) fn strip_nonstandard_formats(value: &mut serde_json::Value) {
     match value {
         serde_json::Value::Object(map) => {
             if let Some(serde_json::Value::String(fmt)) = map.get("format")
@@ -5564,6 +5563,10 @@ impl ServerHandler for Longbridge {
             context.peer.set_peer_info(request);
         }
         let mut info = self.get_info();
+        if is_omni_endpoint(&context) {
+            info.instructions = Some(format!("{}\n\n{}", omni::INSTRUCTIONS, jq::INSTRUCTIONS));
+            return Ok(info);
+        }
         if is_agent_endpoint(&context) && !is_authenticated(&context) {
             info.instructions = Some(format!(
                 "Longbridge MCP AUTHORIZATION endpoint. The `/agent` path is only a temporary \
@@ -5616,6 +5619,7 @@ impl ServerHandler for Longbridge {
     fn get_tool(&self, name: &str) -> Option<rmcp::model::Tool> {
         all_tools_cached()
             .iter()
+            .chain(omni::tools().iter())
             .find(|tool| tool.name == name)
             .cloned()
     }
@@ -5640,6 +5644,29 @@ impl ServerHandler for Longbridge {
                 ),
                 None,
             ));
+        }
+        // The `/omni` endpoint exposes only the three meta-tools; everything
+        // else is reached through `execute`, which applies the DC-region and
+        // write-confirmation gates itself for each inner call.
+        if is_omni_endpoint(&context) {
+            if !omni::is_omni_tool(request.name.as_ref()) {
+                return Err(McpError::invalid_request(
+                    format!(
+                        "Tool `{}` is not exposed on the /omni endpoint; call it through \
+                         `execute` (use `search` to find it).",
+                        request.name
+                    ),
+                    None,
+                ));
+            }
+            let client = client_bucket_from_context(&context);
+            return jq::call(request, |request| async move {
+                let tcc = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
+                crate::metrics::CURRENT_CLIENT
+                    .scope(client, omni::omni_router().call(tcc))
+                    .await
+            })
+            .await;
         }
         // DC-region execution gate, independent of the /v1/v2 restricted-endpoint
         // check above: on every authenticated endpoint — main (`/mcp`), `/agent`,
@@ -5681,6 +5708,12 @@ impl ServerHandler for Longbridge {
         _request: Option<rmcp::model::PaginatedRequestParams>,
         context: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> Result<rmcp::model::ListToolsResult, rmcp::ErrorData> {
+        if is_omni_endpoint(&context) {
+            return Ok(rmcp::model::ListToolsResult {
+                tools: omni::tools().to_vec(),
+                ..Default::default()
+            });
+        }
         // Both slices are pre-filtered once at startup; each request only pays
         // the clone cost (Arc ref-bumps + String title copies), not filter work.
         let tools = if is_agent_endpoint(&context) && !is_authenticated(&context) {

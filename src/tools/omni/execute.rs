@@ -24,10 +24,6 @@ use crate::tools::{Longbridge, McpContext};
 pub(crate) const PIPELINE_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// One step of a pipeline.
-// Not yet constructed outside tests: the `/omni` `execute` tool registration
-// (task 9) is its first production caller, deserializing this from the
-// request JSON.
-#[allow(dead_code)]
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct StepParam {
     /// Step id, unique within the call, [a-z0-9_]{1,32}. Other steps reference it via {"$from": id}.
@@ -41,8 +37,6 @@ pub struct StepParam {
 }
 
 /// Parameters for `execute`. Give either `tool` (+ `arguments`) or `steps` (+ `return`).
-// Not yet constructed outside tests; see `StepParam`.
-#[allow(dead_code)]
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ExecuteParam {
     /// Single-call form: tool name (see `search`; get its schema via `docs`).
@@ -153,9 +147,6 @@ async fn region_for(mctx: &McpContext, tools: &[&str]) -> Option<longbridge::DcR
 }
 
 /// Run `execute`: a single inner tool call, or a validated pipeline of steps.
-// Not yet called outside tests: wiring `/omni`'s `execute` tool to this
-// function (task 9) is its first production caller.
-#[allow(dead_code)]
 pub(crate) async fn execute(
     server: Longbridge,
     ctx: RequestContext<RoleServer>,

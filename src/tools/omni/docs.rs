@@ -204,9 +204,6 @@ pub(crate) fn validate_param(p: &DocsParam) -> Result<(), McpError> {
 }
 
 /// Run `docs`.
-// Not yet called outside tests: the `/omni` `docs` tool registration (task 9)
-// is its first production caller.
-#[allow(dead_code)]
 pub(crate) async fn docs(mctx: &McpContext, p: DocsParam) -> Result<CallToolResult, McpError> {
     validate_param(&p)?;
     let lang = Lang::parse(p.lang.as_deref(), mctx.language.as_deref());

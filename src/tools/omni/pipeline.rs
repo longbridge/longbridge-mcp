@@ -15,8 +15,8 @@ use tokio::task::{Id, JoinSet};
 
 use crate::tools::jq::{project_bounded, result_value};
 
-// Nothing in this module is called outside tests yet; wiring the `/omni`
-// dispatcher to `execute` (a later task) is its first production caller.
+// This module is driven by `omni::execute`, which is the `/omni` `execute`
+// tool's implementation.
 
 /// Most steps one `execute` call may contain.
 pub(crate) const MAX_STEPS: usize = 10;
