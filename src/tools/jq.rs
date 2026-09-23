@@ -14,7 +14,7 @@ use serde_json::Value;
 mod error;
 
 type Filter = jaq_core::Filter<data::JustLut<Val>>;
-pub(super) const INSTRUCTIONS: &str = "All tools accept optional `_jq`, a filter expression using jq CLI syntax applied to the response, e.g. .data | map({symbol}); one output is returned as-is, several as a JSON array. Omit it for the full JSON response.";
+pub(super) const INSTRUCTIONS: &str = "All tools accept optional `_jq`, a filter expression using jq CLI syntax applied to the response, e.g. .data | map({symbol}); one output is returned as-is, several as a JSON array. Omit it for the full JSON response. Extra builtins: `table` turns an array of objects into compact {cols, rows}, e.g. map({timestamp, close}) | table; `num` turns a numeric string into a number.";
 
 /// Per-tool schema description for the injected `_jq` property, so a client
 /// inspecting a single tool's schema learns the contract without depending on
@@ -23,6 +23,30 @@ const JQ_PROPERTY_DESCRIPTION: &str = "Optional jq filter (jaq syntax) applied t
 const MAX_RESULTS: usize = 10_000;
 const MAX_OUTPUT_BYTES: usize = 8 * 1024 * 1024;
 const FILTER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+/// Server-provided definitions loaded after the jaq standard library, so they
+/// may use it and a caller's own `def` of the same name still shadows them.
+///
+/// - `num`: a decimal string becomes a number only when that is lossless for
+///   a model reading it: no leading zeros (security codes such as `00700`),
+///   at most 15 integer digits (long order ids would lose precision as a
+///   double), no exponent or whitespace. Anything else passes through.
+/// - `table`: an array of objects becomes `{cols, rows}`. Columns are the
+///   union of keys in first-seen order, a missing key is `null` so every row
+///   lines up with `cols`, and each cell goes through `num`.
+const BUILTIN_DEFS: &str = r#"
+def num:
+  if type == "string" and test("^-?(0|[1-9][0-9]{0,14})(\\.[0-9]+)?$")
+  then tonumber else . end;
+def table:
+  if type != "array" or any(.[]; type != "object")
+  then error("table expects an array of objects")
+  else
+    (reduce (.[] | keys_unsorted[]) as $k ([];
+      if any(.[]; . == $k) then . else . + [$k] end)) as $cols
+    | {cols: $cols, rows: map(. as $row | [$cols[] | $row[.] | num])}
+  end;
+"#;
+
 pub(crate) fn describe(tool: &mut Tool) {
     let schema = std::sync::Arc::make_mut(&mut tool.input_schema);
     schema
@@ -39,6 +63,12 @@ pub(crate) fn describe(tool: &mut Tool) {
     tool.output_schema = None;
 }
 
+fn builtin_defs() -> impl Iterator<Item = jaq_core::load::parse::Def<&'static str>> {
+    jaq_core::load::parse(BUILTIN_DEFS, |p| p.defs())
+        .expect("BUILTIN_DEFS must parse as jq definitions")
+        .into_iter()
+}
+
 fn compile(code: &str) -> Result<Filter, McpError> {
     if code.trim().is_empty() {
         return Err(McpError::invalid_params(
@@ -51,7 +81,8 @@ fn compile(code: &str) -> Result<Filter, McpError> {
     let modules = Loader::new(
         jaq_core::defs()
             .chain(jaq_std::defs().filter(|def| def.name != "debug"))
-            .chain(jaq_json::defs()),
+            .chain(jaq_json::defs())
+            .chain(builtin_defs()),
     )
     .load(&arena, File { code, path: () })
     .map_err(|errors| {
@@ -452,6 +483,77 @@ mod tests {
         assert_eq!(many, json!(["700.HK", "AAPL.US"]));
         let none = project(".data[] | select(.x > 5)", input).expect("valid filter");
         assert_eq!(none, json!([]));
+    }
+
+    #[test]
+    fn num_converts_only_lossless_decimal_strings() {
+        for (input, expected) in [
+            (json!("332.81"), json!(332.81)),
+            (json!("-4075366.054"), json!(-4075366.054)),
+            (json!("0"), json!(0)),
+            (json!("0.5"), json!(0.5)),
+            (json!(5), json!(5)),
+            (json!(null), json!(null)),
+            (json!(true), json!(true)),
+            // Leading zeros carry meaning in security codes.
+            (json!("00700"), json!("00700")),
+            // Over 15 integer digits would lose precision as a double (order ids).
+            (
+                json!("701234567890123456789"),
+                json!("701234567890123456789"),
+            ),
+            (json!("2026-09-21T04:00:00Z"), json!("2026-09-21T04:00:00Z")),
+            (json!("1e5"), json!("1e5")),
+            (json!(" 1"), json!(" 1")),
+            (json!(""), json!("")),
+        ] {
+            assert_eq!(
+                project("num", input.clone()).expect("num runs"),
+                expected,
+                "num({input})"
+            );
+        }
+    }
+
+    #[test]
+    fn table_aligns_rows_to_the_union_of_keys() {
+        let input = json!([
+            {"close": "375.3", "timestamp": "2026-09-21T04:00:00Z", "order_id": "701234567890123456789"},
+            {"close": "378.9", "volume": 27852827},
+        ]);
+        assert_eq!(
+            project("table", input).expect("table runs"),
+            json!({
+                "cols": ["close", "timestamp", "order_id", "volume"],
+                "rows": [
+                    [375.3, "2026-09-21T04:00:00Z", "701234567890123456789", null],
+                    [378.9, null, null, 27852827],
+                ],
+            })
+        );
+    }
+
+    #[test]
+    fn table_handles_empty_input_and_rejects_non_tables() {
+        assert_eq!(
+            project("table", json!([])).expect("empty table"),
+            json!({"cols": [], "rows": []})
+        );
+        for input in [json!({"a": 1}), json!([1, 2]), json!("x")] {
+            let err = project("table", input.clone()).expect_err("not an array of objects");
+            assert!(
+                err.contains("table"),
+                "error for {input} names the builtin: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn caller_definitions_shadow_the_builtins() {
+        assert_eq!(
+            project("def table: 1; table", json!([])).expect("shadowed"),
+            json!(1)
+        );
     }
 
     #[test]
