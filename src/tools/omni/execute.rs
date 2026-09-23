@@ -14,7 +14,6 @@ use serde_json::Value;
 
 use crate::tools::omni::dispatch::{Dispatcher, envelope, is_known_tool, is_write_tool};
 use crate::tools::omni::pipeline::{self, Outcome, PlanError, Runner, Status, Step};
-use crate::tools::omni::truncate::{MAX_OUTPUT_TOKENS, truncate_result};
 use crate::tools::{Longbridge, McpContext};
 
 /// Hard bound on a whole pipeline. On expiry the `tokio::time::timeout`
@@ -179,7 +178,7 @@ pub(crate) async fn execute(
             },
         );
         crate::metrics::record_omni_pipeline_size(1);
-        return Ok(truncate_result(result, MAX_OUTPUT_TOKENS));
+        return Ok(result);
     }
     let steps: Vec<Step> = p
         .steps
@@ -229,10 +228,7 @@ pub(crate) async fn execute(
             .unwrap_or("error");
         crate::metrics::record_omni_step(metric_label(&step.tool), status);
     }
-    Ok(truncate_result(
-        assemble(&outcomes, &plan.return_ids),
-        MAX_OUTPUT_TOKENS,
-    ))
+    Ok(assemble(&outcomes, &plan.return_ids))
 }
 
 #[cfg(test)]

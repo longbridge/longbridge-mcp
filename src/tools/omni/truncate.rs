@@ -1,6 +1,11 @@
 //! Bound the size of what `execute` returns to the model.
 
-use rmcp::model::{CallToolResult, Content};
+use std::future::Future;
+
+use rmcp::ErrorData as McpError;
+use rmcp::model::{CallToolRequestParams, CallToolResult, Content};
+
+use crate::tools::jq;
 
 /// Default cap on the final response, in estimated tokens.
 pub(crate) const MAX_OUTPUT_TOKENS: usize = 6000;
@@ -39,10 +44,28 @@ pub(crate) fn truncate_result(mut result: CallToolResult, max_tokens: usize) -> 
     result
 }
 
+/// Run an omni meta-tool through the caller's top-level `_jq`, then bound the
+/// filtered result to [`MAX_OUTPUT_TOKENS`].
+///
+/// The order matters: `_jq` is how a caller narrows an oversized response, so
+/// it must see the complete JSON. Cutting first would hand the filter a
+/// marker-suffixed string that no longer parses.
+pub(crate) async fn call_with_budget<F, Fut>(
+    request: CallToolRequestParams,
+    invoke: F,
+) -> Result<CallToolResult, McpError>
+where
+    F: FnOnce(CallToolRequestParams) -> Fut,
+    Fut: Future<Output = Result<CallToolResult, McpError>>,
+{
+    jq::call(request, invoke)
+        .await
+        .map(|result| truncate_result(result, MAX_OUTPUT_TOKENS))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rmcp::model::Content;
 
     #[test]
     fn estimate_is_ceil_of_quarter_chars() {
@@ -85,6 +108,62 @@ mod tests {
         assert!(
             out.structured_content.is_none(),
             "structured_content no longer matches the cut text and must be dropped"
+        );
+    }
+
+    fn request(jq: Option<&str>) -> CallToolRequestParams {
+        let mut request = CallToolRequestParams::new("execute");
+        if let Some(jq) = jq {
+            request.arguments = Some(
+                serde_json::json!({ "_jq": jq })
+                    .as_object()
+                    .expect("object literal")
+                    .clone(),
+            );
+        }
+        request
+    }
+
+    fn big_series() -> CallToolResult {
+        let rows: Vec<serde_json::Value> = (0..2_000)
+            .map(|i| serde_json::json!({"inflow": format!("{i}.123"), "timestamp": "2026-09-22T13:30:00Z"}))
+            .collect();
+        CallToolResult::success(vec![Content::text(
+            serde_json::Value::Array(rows).to_string(),
+        )])
+    }
+
+    #[tokio::test]
+    async fn top_level_jq_sees_the_full_result_before_the_budget_cuts_it() {
+        let out = call_with_budget(request(Some(".[-1].inflow")), |_| async {
+            Ok(big_series())
+        })
+        .await
+        .expect("call succeeds");
+        assert_ne!(
+            out.is_error,
+            Some(true),
+            "the filter must run on parsed JSON, not cut text"
+        );
+        assert_eq!(
+            out.content[0].as_text().expect("text").text,
+            "\"1999.123\"",
+            "the filter must see the last element of the untruncated result"
+        );
+    }
+
+    #[tokio::test]
+    async fn unfiltered_oversized_result_is_still_cut() {
+        let out = call_with_budget(request(None), |_| async { Ok(big_series()) })
+            .await
+            .expect("call succeeds");
+        assert!(
+            out.content[0]
+                .as_text()
+                .expect("text")
+                .text
+                .contains("--- TRUNCATED ---"),
+            "without `_jq` the budget still applies"
         );
     }
 }

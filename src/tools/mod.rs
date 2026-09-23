@@ -5658,7 +5658,7 @@ impl ServerHandler for Longbridge {
                 ));
             }
             let client = client_bucket_from_context(&context);
-            return jq::call(request, |request| async move {
+            return omni::truncate::call_with_budget(request, |request| async move {
                 let tcc = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
                 crate::metrics::CURRENT_CLIENT
                     .scope(client, omni::omni_router().call(tcc))

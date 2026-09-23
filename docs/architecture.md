@@ -81,8 +81,9 @@ POST /omni  tools/call {name:"execute", arguments:{steps:[...], return:["quotes"
   │     │                      concurrently; `$from` references resolve when ready
   │     └─ omni::dispatch      synthesizes CallToolRequestParams → cached_router().call()
   │        └─ the ordinary #[tool] fn → measured_tool_call → SDK
-  ├─ omni::truncate            token-budget truncation, marked --- TRUNCATED ---
-  └─ jq::call post-filter → response
+  ├─ jq::call post-filter      the outer `_jq` runs on the complete result
+  └─ omni::truncate            token-budget truncation after `_jq`, marked
+                               --- TRUNCATED --- → response
 ```
 
 `dispatch` goes through exactly the same `cached_router().call()` as `/mcp`, so

@@ -11,7 +11,6 @@ use crate::tools::McpContext;
 use crate::tools::omni::dispatch::{envelope, unknown_tool};
 use crate::tools::omni::docs_index;
 use crate::tools::omni::search::{category_of, localized};
-use crate::tools::omni::truncate::{MAX_OUTPUT_TOKENS, truncate_result};
 use crate::tools::{
     all_tools_full_cached, is_region_scoped, output_schema_map, tool_plain_json, v2_tool_names,
 };
@@ -231,7 +230,7 @@ pub(crate) async fn docs(mctx: &McpContext, p: DocsParam) -> Result<CallToolResu
     }
     if let Some(name) = &p.tool {
         return match tool_doc(name, lang) {
-            Some(doc) => Ok(truncate_result(tool_plain_json(&doc)?, MAX_OUTPUT_TOKENS)),
+            Some(doc) => tool_plain_json(&doc),
             None => Ok(unknown_tool(name)),
         };
     }
@@ -243,7 +242,7 @@ pub(crate) async fn docs(mctx: &McpContext, p: DocsParam) -> Result<CallToolResu
                     .unwrap_or_else(|| serde_json::json!({"name": n, "error": "unknown tool"}))
             })
             .collect();
-        return Ok(truncate_result(tool_plain_json(&docs)?, MAX_OUTPUT_TOKENS));
+        return tool_plain_json(&docs);
     }
     if let Some(page) = &p.page {
         if !docs_index::valid_page_path(page) {
@@ -283,7 +282,7 @@ pub(crate) async fn docs(mctx: &McpContext, p: DocsParam) -> Result<CallToolResu
             "url": docs_index::page_url(page, lang),
             "markdown": markdown,
         }))?;
-        return Ok(truncate_result(result, MAX_OUTPUT_TOKENS));
+        return Ok(result);
     }
     if let Some(query) = &p.query {
         if query.trim().is_empty() {
