@@ -11,6 +11,8 @@ use rmcp::{
 };
 use serde_json::Value;
 
+mod error;
+
 type Filter = jaq_core::Filter<data::JustLut<Val>>;
 pub(super) const INSTRUCTIONS: &str = "All tools accept optional `_jq`, a filter expression using jq CLI syntax applied to the response, e.g. .data | map({symbol}); one output is returned as-is, several as a JSON array. Omit it for the full JSON response.";
 
@@ -21,7 +23,6 @@ const JQ_PROPERTY_DESCRIPTION: &str = "Optional jq filter (jaq syntax) applied t
 const MAX_RESULTS: usize = 10_000;
 const MAX_OUTPUT_BYTES: usize = 8 * 1024 * 1024;
 const FILTER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
-
 pub(crate) fn describe(tool: &mut Tool) {
     let schema = std::sync::Arc::make_mut(&mut tool.input_schema);
     schema
@@ -181,7 +182,9 @@ fn run(filter: &Filter, input: Value) -> Result<Value, String> {
     let mut values = Vec::new();
     let mut bytes = 0;
     for value in filter.id.run((ctx, input)).map(jaq_core::unwrap_valr) {
-        let value = value.map_err(|error| error.to_string())?.to_string();
+        let value = value
+            .map_err(|error| error::describe(&error.to_string()))?
+            .to_string();
         bytes += value.len();
         if values.len() >= MAX_RESULTS || bytes > MAX_OUTPUT_BYTES {
             return Err(
@@ -358,6 +361,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn runtime_failure_message_does_not_echo_a_large_input() {
+        let secret_tail = "tail-that-must-not-be-echoed";
+        let input = json!(format!("{}{secret_tail}", "x".repeat(50_000)));
+        let result = filtered(".steps", input).await;
+        assert_eq!(result.is_error, Some(true), "indexing a string must fail");
+        let text = &result.content[0].as_text().unwrap().text;
+        assert!(
+            text.contains("cannot index"),
+            "the jaq reason must survive: {text}"
+        );
+        assert!(
+            !text.contains(secret_tail),
+            "the input must not be echoed back"
+        );
+        assert!(text.len() < 1_000, "error envelope is {} bytes", text.len());
+    }
+
+    #[tokio::test]
     async fn json_text_and_plain_text_are_supported() {
         let result = call(request(json!("ascii_upcase")), |_| async {
             Ok(CallToolResult::success(vec![Content::text("hello")]))
@@ -431,6 +452,35 @@ mod tests {
         assert_eq!(many, json!(["700.HK", "AAPL.US"]));
         let none = project(".data[] | select(.x > 5)", input).expect("valid filter");
         assert_eq!(none, json!([]));
+    }
+
+    #[test]
+    fn real_jaq_errors_are_described_by_shape() {
+        let series: Vec<Value> = (0..391)
+            .map(|i| json!({"inflow": format!("{i}.123"), "timestamp": "2026-09-22T13:30:00Z"}))
+            .collect();
+        let long = json!("x".repeat(500));
+        for (code, input, expected) in [
+            (
+                ".foo.bar",
+                json!(series),
+                r#"cannot index array[391] of {inflow, timestamp} with "foo""#,
+            ),
+            (
+                ". + 1",
+                json!({"steps": series, "return": ["q"]}),
+                "cannot calculate object {steps, return} + 1",
+            ),
+            (
+                ".[]",
+                long.clone(),
+                "cannot use string (500 chars) as iterable (array or object)",
+            ),
+            (". - 1", long, "cannot calculate string (500 chars) - 1"),
+        ] {
+            let err = project(code, input).expect_err("filter must fail");
+            assert_eq!(err, expected, "{code}");
+        }
     }
 
     #[test]
