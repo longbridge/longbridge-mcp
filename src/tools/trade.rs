@@ -1287,7 +1287,7 @@ mod execute_gate_tests {
     /// Every tool that can move real money. Grid writes count: a live grid keeps
     /// placing orders on its own, so it is at least as consequential as a single
     /// order.
-    const GATED_TOOLS: [&str; 8] = [
+    const GATED_TOOLS: [&str; 10] = [
         "submit_order",
         "cancel_order",
         "replace_order",
@@ -1296,6 +1296,8 @@ mod execute_gate_tests {
         "grid_cancel",
         "grid_suspend",
         "grid_restart",
+        "fund_submit_order",
+        "fund_cancel_order",
     ];
 
     #[test]

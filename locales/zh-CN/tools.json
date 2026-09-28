@@ -1393,6 +1393,253 @@
         "end_time": "查询结束时间，UTC 时区，格式为 2006-01-02T15:04:05Z；留空则返回最新数据",
         "limit": "返回事实数量上限。时间范围内的事实超出该上限时，仅返回最新的 limit 条。默认 100"
       }
+    },
+    "fund_hot": {
+      "title": "基金热销榜",
+      "description": "获取长桥基金频道的热销基金列表。每行包含供其他 fund_* 工具使用的基金 counter_id（如 UT/FD/HK0000384492）。无参数。"
+    },
+    "fund_list": {
+      "title": "基金列表",
+      "description": "浏览 / 筛选基金。可选 filter（来自 fund_filters 的对象）、quick_ids、time_interval。每行包含供其他 fund_* 工具使用的 counter_id。",
+      "properties": {
+        "filter": "服务端定义的筛选对象（见 fund_filters），省略则不过滤",
+        "quick_ids": "快捷筛选 id（来自 fund_filters）",
+        "time_interval": "每行包含的收益率时间区间（如 [\"1m\",\"1y\"]）"
+      }
+    },
+    "fund_filters": {
+      "title": "基金筛选项",
+      "description": "获取 fund_list 支持的筛选项（filter 对象结构与快捷筛选 id）。无参数。"
+    },
+    "fund_detail": {
+      "title": "基金详情",
+      "description": "获取单只基金的概况与关键数据。counter_id 来自 fund_hot / fund_list。",
+      "properties": {
+        "counter_id": "基金 counter_id（如 UT/FD/HK0000384492），来自 fund_hot / fund_list"
+      }
+    },
+    "fund_analysis": {
+      "title": "基金分析",
+      "description": "获取基金一级分析（风险 / 收益概览）。counter_id 来自 fund_hot / fund_list；period 可选。",
+      "properties": {
+        "counter_id": "基金 counter_id（如 UT/FD/HK0000384492），来自 fund_hot / fund_list",
+        "period": "分析周期（服务端定义，如近 1 月 / 3 月 / 1 年），省略则用默认周期"
+      }
+    },
+    "fund_analysis_detail": {
+      "title": "基金分析详情",
+      "description": "获取基金二级分析（fund_analysis 背后的更细指标）。counter_id 来自 fund_hot / fund_list；period 可选。",
+      "properties": {
+        "counter_id": "基金 counter_id（如 UT/FD/HK0000384492），来自 fund_hot / fund_list",
+        "period": "分析周期（服务端定义，如近 1 月 / 3 月 / 1 年），省略则用默认周期"
+      }
+    },
+    "fund_trend": {
+      "title": "基金走势",
+      "description": "获取基金走势图数据。counter_id 来自 fund_hot / fund_list；period 可选。",
+      "properties": {
+        "counter_id": "基金 counter_id（如 UT/FD/HK0000384492），来自 fund_hot / fund_list",
+        "period": "分析周期（服务端定义，如近 1 月 / 3 月 / 1 年），省略则用默认周期"
+      }
+    },
+    "fund_annual_returns": {
+      "title": "基金年度收益",
+      "description": "获取基金逐年收益（分页）。counter_id 来自 fund_hot / fund_list；page / size 可选。",
+      "properties": {
+        "counter_id": "基金 counter_id（如 UT/FD/HK0000384492），来自 fund_hot / fund_list",
+        "page": "页码（从 1 开始），省略取第一页",
+        "size": "每页条数，省略用服务端默认"
+      }
+    },
+    "fund_quarterly_returns": {
+      "title": "基金季度收益",
+      "description": "获取基金逐季收益（分页）。counter_id 来自 fund_hot / fund_list；page / size 可选。",
+      "properties": {
+        "counter_id": "基金 counter_id（如 UT/FD/HK0000384492），来自 fund_hot / fund_list",
+        "page": "页码（从 1 开始），省略取第一页",
+        "size": "每页条数，省略用服务端默认"
+      }
+    },
+    "fund_performance": {
+      "title": "基金每日表现",
+      "description": "获取基金每日表现数据。counter_id 来自 fund_hot / fund_list。",
+      "properties": {
+        "counter_id": "基金 counter_id（如 UT/FD/HK0000384492），来自 fund_hot / fund_list"
+      }
+    },
+    "fund_performance_comparison": {
+      "title": "基金业绩对比",
+      "description": "将基金业绩与基准 / 同类对比。counter_id 来自 fund_hot / fund_list；period 可选。",
+      "properties": {
+        "counter_id": "基金 counter_id（如 UT/FD/HK0000384492），来自 fund_hot / fund_list",
+        "period": "分析周期（服务端定义，如近 1 月 / 3 月 / 1 年），省略则用默认周期"
+      }
+    },
+    "fund_nav": {
+      "title": "基金最新净值",
+      "description": "获取基金最新净值（NAV）。counter_id 来自 fund_hot / fund_list。",
+      "properties": {
+        "counter_id": "基金 counter_id（如 UT/FD/HK0000384492），来自 fund_hot / fund_list"
+      }
+    },
+    "fund_nav_history": {
+      "title": "基金历史净值",
+      "description": "获取基金历史净值序列（分页）。counter_id 来自 fund_hot / fund_list；page / size 可选。",
+      "properties": {
+        "counter_id": "基金 counter_id（如 UT/FD/HK0000384492），来自 fund_hot / fund_list",
+        "page": "页码（从 1 开始），省略取第一页",
+        "size": "每页条数，省略用服务端默认"
+      }
+    },
+    "fund_nav_range": {
+      "title": "基金净值区间",
+      "description": "按相对时间区间获取基金历史净值。counter_id 来自 fund_hot / fund_list；设置 month_before 或 year_before。",
+      "properties": {
+        "counter_id": "基金 counter_id（如 UT/FD/HK0000384492），来自 fund_hot / fund_list",
+        "month_before": "距今月数，与 year_before 互补，省略用默认区间",
+        "year_before": "距今年数"
+      }
+    },
+    "fund_holdings": {
+      "title": "基金持仓 Top10",
+      "description": "获取基金前十大持仓。counter_id 来自 fund_hot / fund_list；scene 可选。",
+      "properties": {
+        "counter_id": "基金 counter_id（如 UT/FD/HK0000384492），来自 fund_hot / fund_list",
+        "scene": "持仓场景选择（服务端定义，如股票 / 债券分布），省略用默认"
+      }
+    },
+    "fund_stock_holdings": {
+      "title": "基金重仓个股",
+      "description": "反查基金持有的个股。counter_id 来自 fund_hot / fund_list；limit 可选。",
+      "properties": {
+        "counter_id": "基金 counter_id（如 UT/FD/HK0000384492），来自 fund_hot / fund_list",
+        "limit": "返回个股数量上限，省略用服务端默认"
+      }
+    },
+    "fund_position_overview": {
+      "title": "基金持仓总览",
+      "description": "获取登录用户的基金持仓总览（全部持有基金）。需已认证 token。无参数。"
+    },
+    "fund_position": {
+      "title": "基金持仓详情",
+      "description": "获取单只持有基金的持仓详情。需认证。counter_id 来自 fund_position_overview / fund_hot / fund_list；start / end（yyyy-mm-dd）可选。",
+      "properties": {
+        "counter_id": "基金 counter_id（如 UT/FD/HK0000384492），来自 fund_hot / fund_list",
+        "start": "起始日期（yyyy-mm-dd），省略用默认区间",
+        "end": "结束日期（yyyy-mm-dd）"
+      }
+    },
+    "fund_position_performance": {
+      "title": "基金持仓表现",
+      "description": "获取持有基金的表现数据。需认证。counter_id 来自 fund_position_overview / fund_hot / fund_list。",
+      "properties": {
+        "counter_id": "基金 counter_id（如 UT/FD/HK0000384492），来自 fund_hot / fund_list"
+      }
+    },
+    "fund_position_profits": {
+      "title": "基金持仓收益明细",
+      "description": "获取持有基金的累计收益明细（分页）。需认证。counter_id 来自 fund_position_overview；start / end（yyyy-mm-dd）、page / size 可选。",
+      "properties": {
+        "counter_id": "基金 counter_id（如 UT/FD/HK0000384492），来自 fund_hot / fund_list",
+        "start": "起始日期（yyyy-mm-dd），省略用默认区间",
+        "end": "结束日期（yyyy-mm-dd）",
+        "page": "页码（从 1 开始），省略取第一页",
+        "size": "每页条数，省略用服务端默认"
+      }
+    },
+    "fund_position_nav": {
+      "title": "基金持仓净值历史",
+      "description": "按相对区间获取持有基金的净值历史。需认证。counter_id 来自 fund_position_overview；设置 month_before 或 year_before。",
+      "properties": {
+        "counter_id": "基金 counter_id（如 UT/FD/HK0000384492），来自 fund_hot / fund_list",
+        "month_before": "距今月数，与 year_before 互补，省略用默认区间",
+        "year_before": "距今年数"
+      }
+    },
+    "fund_position_dividends": {
+      "title": "基金持仓分红",
+      "description": "获取持有基金的分红记录（分页）。需认证。counter_id 来自 fund_position_overview；currency、start / end（Unix 秒）、page / size 可选。",
+      "properties": {
+        "counter_id": "基金 counter_id（如 UT/FD/HK0000384492），来自 fund_hot / fund_list",
+        "currency": "币种过滤（如 HKD、USD），省略则全部",
+        "start": "起始时间（Unix 秒），省略用默认区间",
+        "end": "结束时间（Unix 秒）",
+        "page": "页码（从 1 开始），省略取第一页",
+        "size": "每页条数，省略用服务端默认"
+      }
+    },
+    "fund_orders": {
+      "title": "基金订单",
+      "description": "获取用户的基金订单 / 成交记录。需认证。可选 symbols、actions、states、currency、start / end（Unix 秒）、page / size。",
+      "properties": {
+        "symbols": "按基金 symbol 过滤，省略则全部",
+        "actions": "按操作过滤，逗号分隔（如 buy,sell），省略则全部",
+        "states": "按订单状态过滤，逗号分隔，省略则全部",
+        "currency": "币种过滤（如 HKD、USD），省略则全部",
+        "start": "起始时间（Unix 秒），省略用默认区间",
+        "end": "结束时间（Unix 秒）",
+        "page": "页码（从 1 开始），省略取第一页",
+        "size": "每页条数，省略用服务端默认"
+      }
+    },
+    "fund_order": {
+      "title": "基金订单详情",
+      "description": "按 order_id（来自 fund_orders）获取单笔基金订单详情。需认证。",
+      "properties": {
+        "order_id": "基金订单 id（来自 fund_orders）"
+      }
+    },
+    "fund_transactions": {
+      "title": "基金资金变动",
+      "description": "获取用户的基金资金变动记录。需认证。可选 business_type、category、currencies、start / end（Unix 秒）、page / size。",
+      "properties": {
+        "business_type": "业务类型过滤（服务端定义），省略则全部",
+        "category": "类别过滤（服务端定义），省略则全部",
+        "currencies": "币种过滤，逗号分隔（如 HKD,USD），省略则全部",
+        "start": "起始时间（Unix 秒），省略用默认区间",
+        "end": "结束时间（Unix 秒）",
+        "page": "页码（从 1 开始），省略取第一页",
+        "size": "每页条数，省略用服务端默认"
+      }
+    },
+    "fund_validate_order": {
+      "title": "校验基金委托",
+      "description": "对基金买卖委托做下单前校验。不会下单，只把请求发到基金通道做检查并返回校验结果（费用、限额、预估份额/金额）。需认证。counter_id 来自 fund_hot / fund_list；action 为 buy 或 sell；currency 如 HKD/USD；amount（现金）与 units（份额）二选一。",
+      "properties": {
+        "counter_id": "基金 counter_id（如 UT/FD/HK0000384492），来自 fund_hot / fund_list",
+        "action": "委托方向：buy（买入）或 sell（卖出）",
+        "currency": "委托币种，如 HKD、USD",
+        "amount": "申购金额（投入现金）。按金额买入时使用；与 units 互斥",
+        "units": "赎回份额（卖出份额）。按份额卖出/买入时使用；与 amount 互斥",
+        "dividend_option": "分红方式（服务端定义，如红利再投或现金派发）",
+        "fund_source": "资金来源选择（服务端定义），省略用默认",
+        "account_channel": "账户通道（服务端定义），省略用默认"
+      }
+    },
+    "fund_submit_order": {
+      "title": "提交基金委托",
+      "description": "提交基金买卖委托。【必须两步确认】未传本次试运行返回的 confirmation_code 时为 DRY RUN（试运行）：先不带 execute 调用一次，把预览完整展示给用户，只有在用户明确确认后才可再次调用并把该确认码传入 execute。需认证。counter_id 来自 fund_hot / fund_list；action 为 buy 或 sell；currency 如 HKD/USD；amount（投入现金）与 units（卖出份额）二选一；is_sell_all=true 全部赎回。可先用 fund_validate_order 做安全的下单前校验。",
+      "properties": {
+        "counter_id": "基金 counter_id（如 UT/FD/HK0000384492），来自 fund_hot / fund_list",
+        "action": "委托方向：buy（买入）或 sell（卖出）",
+        "currency": "委托币种，如 HKD、USD",
+        "amount": "申购金额（投入现金）。按金额买入时使用；与 units 互斥",
+        "units": "赎回份额（卖出份额）。按份额卖出/买入时使用；与 amount 互斥",
+        "dividend_option": "分红方式（服务端定义，如红利再投或现金派发）",
+        "fee": "费用金额，省略用服务端默认",
+        "is_sell_all": "是否全部卖出；用于全额赎回，会覆盖 units",
+        "remark": "委托备注",
+        "trade_method": "交易方式选择（服务端定义），省略用默认",
+        "execute": "本次试运行返回的 confirmation_code。省略（默认）表示 DRY RUN：只校验并回显请求，同时返回一个三位确认码，不会发往基金通道。必须先不带该参数调用一次，把预览展示给用户，待用户明确确认后才可再次调用并回填该码。确认码由订单本身推导而来，只对这一笔完全相同的请求生效——改动任何字段即失效。不可自行决定回填。"
+      }
+    },
+    "fund_cancel_order": {
+      "title": "撤销基金委托",
+      "description": "按 order_id 撤销基金委托。【必须两步确认】未传本次试运行返回的 confirmation_code 时为 DRY RUN（试运行）：先不带 execute 调用一次，把返回的预览（会回显本次要撤销的委托）完整展示给用户，只有在用户明确确认这笔委托后才可再次调用并把该确认码传入 execute。需认证。order_id 来自 fund_orders。",
+      "properties": {
+        "order_id": "要撤销的基金订单 id（来自 fund_orders）",
+        "execute": "本次试运行返回的 confirmation_code。省略（默认）表示 DRY RUN：只校验并回显请求，同时返回一个三位确认码，不会发往基金通道。必须先不带该参数调用一次，把预览展示给用户，待用户明确确认后才可再次调用并回填该码。确认码由订单本身推导而来，只对这一笔完全相同的请求生效——改动任何字段即失效。不可自行决定回填。"
+      }
     }
   }
 }
