@@ -1570,9 +1570,9 @@
     },
     "fund_orders": {
       "title": "基金訂單",
-      "description": "獲取用戶的基金訂單 / 成交記錄。需認證。可選 symbols、actions、states、currency、start / end（Unix 秒）、page / size。",
+      "description": "獲取用戶的基金訂單 / 成交記錄。需認證。可選 counter_ids、actions、states、currency、start / end（Unix 秒）、page / size。",
       "properties": {
-        "symbols": "按基金 symbol 過濾，省略則全部",
+        "counter_ids": "按基金 counter_id 過濾，省略則全部",
         "actions": "按操作過濾，逗號分隔（如 buy,sell），省略則全部",
         "states": "按訂單狀態過濾，逗號分隔，省略則全部",
         "currency": "幣種過濾（如 HKD、USD），省略則全部",

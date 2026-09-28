@@ -3979,7 +3979,7 @@ impl Longbridge {
             destructive_hint = false,
             idempotent_hint = true
         ),
-        description = "List the user's fund orders / execution records. Requires auth. Optional symbols, actions, states, currency, start / end (unix seconds), page / size."
+        description = "List the user's fund orders / execution records. Requires auth. Optional counter_ids, actions, states, currency, start / end (unix seconds), page / size."
     )]
     async fn fund_orders(
         &self,

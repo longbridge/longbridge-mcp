@@ -147,8 +147,8 @@ pub struct FundPositionDividendsParam {
 /// Fund orders (trade/execution records) filters.
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct FundOrdersParam {
-    /// Filter by fund symbols. Omit for all funds.
-    pub symbols: Option<Vec<String>>,
+    /// Filter by fund counter ids. Omit for all funds.
+    pub counter_ids: Option<Vec<String>>,
     /// Filter by actions, comma-separated (e.g. `buy,sell`). Omit for all.
     pub actions: Option<String>,
     /// Filter by order states, comma-separated. Omit for all states.
@@ -556,8 +556,8 @@ pub async fn fund_orders(
     p: FundOrdersParam,
 ) -> Result<CallToolResult, McpError> {
     let mut opts = GetFundOrdersOptions::new();
-    if let Some(symbols) = p.symbols {
-        opts = opts.symbols(symbols);
+    if let Some(counter_ids) = p.counter_ids {
+        opts = opts.counter_ids(counter_ids);
     }
     if let Some(actions) = p.actions {
         opts = opts.actions(actions);
