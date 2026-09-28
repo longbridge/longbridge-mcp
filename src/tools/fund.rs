@@ -662,15 +662,22 @@ pub async fn fund_submit_order(
     mctx: &McpContext,
     p: FundSubmitOrderParam,
 ) -> Result<CallToolResult, McpError> {
-    // The confirmation code covers what a wrong order would get wrong: the
-    // action, the fund, the currency, and the size. Bind the cash amount and
-    // the unit count as separate fields so changing either one invalidates the
-    // code — collapsing them into a single "size" would let a preview sent with
-    // only `amount` be confirmed by a request that also carries `units`.
+    // The confirmation code covers every field that shapes the order the broker
+    // will place, so a preview can never be confirmed by a materially different
+    // request. Bind the cash amount and the unit count as separate fields (so
+    // changing either one invalidates the code — collapsing them into a single
+    // "size" would let a preview sent with only `amount` be confirmed by a
+    // request that also carries `units`), plus the currency, dividend option,
+    // fee and trade method. `remark` is a free-text note and is not bound.
+    let dividend_option = p.dividend_option.map(|v| v.to_string()).unwrap_or_default();
+    let trade_method = p.trade_method.map(|v| v.to_string()).unwrap_or_default();
     let mut scope = dry_run::Scope::order(&p.action, &p.counter_id, "", "")
         .and("currency", &p.currency)
         .and("amount", p.amount.as_deref().unwrap_or(""))
-        .and("units", p.units.as_deref().unwrap_or(""));
+        .and("units", p.units.as_deref().unwrap_or(""))
+        .and("dividend_option", &dividend_option)
+        .and("fee", p.fee.as_deref().unwrap_or(""))
+        .and("trade_method", &trade_method);
     if p.is_sell_all == Some(true) {
         scope = scope.and("sell_all", "true");
     }
