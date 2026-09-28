@@ -4,7 +4,7 @@ version = "0.12.0"
 edition = "2024"
 
 [dependencies]
-longbridge = { git = "https://github.com/longbridge/openapi.git", rev = "ade125c97" }
+longbridge = { git = "https://github.com/longbridge/openapi.git", rev = "883717283" }
 rust_decimal = "1"
 rmcp = { version = "1.4", features = [
     "server",
