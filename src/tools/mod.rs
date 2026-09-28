@@ -6732,6 +6732,9 @@ mod tests {
             "submit_multileg_order",
             "cancel_order",
             "replace_order",
+            // Fund order write operations.
+            "fund_submit_order",
+            "fund_cancel_order",
             // IPO order management.
             "ipo_orders",
             "ipo_order_detail",

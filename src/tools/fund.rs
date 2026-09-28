@@ -663,18 +663,14 @@ pub async fn fund_submit_order(
     p: FundSubmitOrderParam,
 ) -> Result<CallToolResult, McpError> {
     // The confirmation code covers what a wrong order would get wrong: the
-    // action, the fund, the size, the currency, and whether the size is a cash
-    // amount or a unit count (dropping that distinction would let a "sell 10
-    // units" code place a "sell 10 dollars" order).
-    let size = p.amount.as_deref().or(p.units.as_deref()).unwrap_or("");
-    let by = if p.units.is_some() && p.amount.is_none() {
-        "units"
-    } else {
-        "amount"
-    };
-    let mut scope = dry_run::Scope::order(&p.action, &p.counter_id, size, "")
+    // action, the fund, the currency, and the size. Bind the cash amount and
+    // the unit count as separate fields so changing either one invalidates the
+    // code — collapsing them into a single "size" would let a preview sent with
+    // only `amount` be confirmed by a request that also carries `units`.
+    let mut scope = dry_run::Scope::order(&p.action, &p.counter_id, "", "")
         .and("currency", &p.currency)
-        .and("by", by);
+        .and("amount", p.amount.as_deref().unwrap_or(""))
+        .and("units", p.units.as_deref().unwrap_or(""));
     if p.is_sell_all == Some(true) {
         scope = scope.and("sell_all", "true");
     }
