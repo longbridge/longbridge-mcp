@@ -2563,7 +2563,7 @@ impl Longbridge {
         title = "Fund Positions",
         annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = true),
         output_schema = schema_for::<output::FundPositionsResponse>(),
-        description = "Get current fund positions. Returns list[].fund_info[]{symbol, symbol_name, currency, holding_units, current_net_asset_value, cost_net_asset_value, net_asset_value_day}."
+        description = "Get current fund positions. Returns list[].fund_info[]{counter_id, symbol_name, currency, holding_units, current_net_asset_value, cost_net_asset_value, net_asset_value_day}. counter_id is the fund id (e.g. UT/FD/HK0000384492); its last /-separated segment is the ISIN."
     )]
     async fn fund_positions(
         &self,
