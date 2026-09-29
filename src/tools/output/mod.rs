@@ -144,8 +144,8 @@ pub struct FundPositionChannel {
 
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct FundPosition {
-    /// Fund ISIN code.
-    pub symbol: String,
+    /// Fund counter id (e.g. `UT/FD/HK0000384492`); the last `/`-segment is the ISIN.
+    pub counter_id: String,
     /// Display name of the fund.
     pub symbol_name: String,
     /// Settlement currency.
