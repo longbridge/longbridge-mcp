@@ -59,7 +59,7 @@
     },
     "fund_positions": {
       "title": "基金持倉",
-      "description": "查詢當前基金持倉，返回 list[].fund_info[]{symbol, symbol_name, currency, holding_units, current_net_asset_value, cost_net_asset_value, net_asset_value_day}"
+      "description": "查詢當前基金持倉，返回 list[].fund_info[]{counter_id, symbol_name, currency, holding_units, current_net_asset_value, cost_net_asset_value, net_asset_value_day}。counter_id 為基金 id（如 UT/FD/HK0000384492），其最後一個 / 後的欄位即 ISIN。"
     },
     "margin_ratio": {
       "title": "保證金比率",

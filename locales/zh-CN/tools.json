@@ -59,7 +59,7 @@
     },
     "fund_positions": {
       "title": "基金持仓",
-      "description": "查询当前基金持仓，返回 list[].fund_info[]{symbol, symbol_name, currency, holding_units, current_net_asset_value, cost_net_asset_value, net_asset_value_day}"
+      "description": "查询当前基金持仓，返回 list[].fund_info[]{counter_id, symbol_name, currency, holding_units, current_net_asset_value, cost_net_asset_value, net_asset_value_day}。counter_id 为基金 id（如 UT/FD/HK0000384492），其最后一个 / 后的字段即 ISIN。"
     },
     "margin_ratio": {
       "title": "保证金比率",
