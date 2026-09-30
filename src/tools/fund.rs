@@ -634,7 +634,6 @@ pub async fn fund_validate_order(
     mctx: &McpContext,
     p: FundValidateOrderParam,
 ) -> Result<CallToolResult, McpError> {
-    // The SDK ctor arg is named `symbol` but carries the fund counter_id.
     let mut opts = ValidateFundOrderOptions::new(p.counter_id, p.action, p.currency);
     if let Some(amount) = p.amount {
         opts = opts.amount(amount);
