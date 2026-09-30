@@ -235,6 +235,85 @@ pub async fn http_post_tool(
     result_from_raw_json(&resp)
 }
 
+/// POST `body` to `path`, then reshape the response to match the pre-migration
+/// (SDK-typed) output shape: rename top-level keys, recursively drop keys,
+/// convert unix timestamp paths, and optionally strip padded trailing zeros.
+///
+/// Used by the quote WS→HTTP migration so a gateway proto-JSON response keeps the
+/// same tool-output shape the WS `QuoteContext` path produced.
+/// POST `body` to `path` and return the raw response body as a `String`, or the
+/// underlying `longbridge::Error` (so callers can inspect `openapi_error_code()`,
+/// e.g. the candlestick count-boundary retry). No transform/reshape is applied.
+pub async fn http_post_raw(
+    client: &HttpClient,
+    path: &str,
+    body: serde_json::Value,
+) -> Result<String, longbridge::Error> {
+    client
+        .request(Method::POST, path)
+        .body(Json(body))
+        .response::<String>()
+        .send()
+        .await
+        .map_err(Into::into)
+}
+
+/// POST `body` to `path` and return the reshaped JSON `Value`: base transform,
+/// unwrap the proto container field, rename keys, convert unix timestamps, drop
+/// keys — the shared building block for the quote WS→HTTP migration. Callers that
+/// need extra per-endpoint steps (enum int→name, null/zero stripping, session
+/// normalization) apply them to the returned value before building the result.
+pub async fn http_post_value(
+    client: &HttpClient,
+    path: &str,
+    body: serde_json::Value,
+    unwrap: Option<&str>,
+    renames: &[(&str, &str)],
+    drop: &[&str],
+    unix_paths: &[&str],
+) -> Result<serde_json::Value, McpError> {
+    let resp: String = client
+        .request(Method::POST, path)
+        .body(Json(body))
+        .response::<String>()
+        .send()
+        .await
+        .map_err(|e| Error::longbridge(e.into()))?;
+    let transformed = transform_json(resp.as_bytes()).map_err(Error::Serialize)?;
+    let mut value: serde_json::Value =
+        serde_json::from_str(&transformed).map_err(Error::Serialize)?;
+    // The gateway wraps the payload in the proto response message's single
+    // container field (e.g. `secu_quote`, `lines`); unwrap it so the tool root
+    // matches the SDK's (array- or object-rooted) shape.
+    if let Some(key) = unwrap
+        && let Some(inner) = value.get_mut(key).map(serde_json::Value::take) {
+            value = inner;
+        }
+    crate::serialize::rename_keys(&mut value, renames);
+    convert_unix_paths(&mut value, unix_paths);
+    crate::serialize::drop_keys(&mut value, drop);
+    Ok(value)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn http_post_tool_reshape(
+    client: &HttpClient,
+    path: &str,
+    body: serde_json::Value,
+    unwrap: Option<&str>,
+    renames: &[(&str, &str)],
+    drop: &[&str],
+    unix_paths: &[&str],
+    strip_zeros: bool,
+) -> Result<CallToolResult, McpError> {
+    let mut value = http_post_value(client, path, body, unwrap, renames, drop, unix_paths).await?;
+    if strip_zeros {
+        crate::serialize::strip_trailing_zeros(&mut value);
+    }
+    let json = serde_json::to_string(&value).map_err(Error::Serialize)?;
+    Ok(success_with_structured(json))
+}
+
 /// POST passthrough with unix conversion at `unix_paths` and `drop` key
 /// removal.
 pub async fn http_post_tool_unix_dropping(

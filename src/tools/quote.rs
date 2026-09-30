@@ -7,9 +7,9 @@ use rmcp::schemars::JsonSchema;
 use rmcp::serde::Deserialize;
 
 use crate::error::Error;
-use crate::tools::output;
 use crate::tools::support::http_client::{
-    http_get_tool, http_get_tool_unix, http_get_tool_unix_dropping,
+    http_get_tool, http_get_tool_unix, http_get_tool_unix_dropping, http_post_raw,
+    http_post_tool_reshape, http_post_value,
 };
 use crate::tools::support::parse;
 use crate::tools::support::tolerant::{
@@ -253,8 +253,6 @@ pub async fn static_info(
 ) -> Result<CallToolResult, McpError> {
     use crate::tools::support::us_market::is_us_crypto_symbol;
 
-    let ctx = mctx.get_quote_context().await;
-
     let (crypto_symbols, other_symbols): (Vec<String>, Vec<String>) =
         if mctx.dc_region().await == longbridge::DcRegion::Us {
             p.symbols.into_iter().partition(|s| is_us_crypto_symbol(s))
@@ -263,22 +261,56 @@ pub async fn static_info(
         };
 
     let mut results: Vec<serde_json::Value> = Vec::new();
-    for symbol in crypto_symbols {
-        let overview = ctx.us_crypto_overview(symbol).await.map_err(|e| {
-            mctx.evict_quote_context();
-            Error::longbridge(e)
-        })?;
-        let mut value = serde_json::to_value(&overview).map_err(Error::Serialize)?;
-        crate::tools::support::us_normalize::normalize_crypto_profile(&mut value);
-        results.push(value);
+    // US-crypto overview is already an HTTP-backed SDK call; keep using it (only
+    // spin up a WS context when there are crypto symbols to serve).
+    if !crypto_symbols.is_empty() {
+        let ctx = mctx.get_quote_context().await;
+        for symbol in crypto_symbols {
+            let overview = ctx.us_crypto_overview(symbol).await.map_err(|e| {
+                mctx.evict_quote_context();
+                Error::longbridge(e)
+            })?;
+            let mut value = serde_json::to_value(&overview).map_err(Error::Serialize)?;
+            crate::tools::support::us_normalize::normalize_crypto_profile(&mut value);
+            results.push(value);
+        }
     }
     if !other_symbols.is_empty() {
-        let rest = ctx.static_info(other_symbols).await.map_err(|e| {
-            mctx.evict_quote_context();
-            Error::longbridge(e)
-        })?;
-        for entry in rest {
-            results.push(serde_json::to_value(&entry).map_err(Error::Serialize)?);
+        // WS→HTTP (id 503, POST /quote/static-info). Unwrap `secu_static_info`,
+        // drop the extra `listing_date`, and fold the `stock_derivatives` int
+        // array into the SDK `DerivativeType` bitflags name (`[2]` → `"WARRANT"`).
+        let client = mctx.create_http_client();
+        let mut arr = http_post_value(
+            &client,
+            "/quote/static-info",
+            serde_json::json!({ "symbol": other_symbols }),
+            Some("secu_static_info"),
+            &[],
+            &["listing_date"],
+            &[],
+        )
+        .await?;
+        if let Some(items) = arr.as_array_mut() {
+            for it in items.iter_mut() {
+                if let Some(obj) = it.as_object_mut()
+                    && let Some(sd) = obj.get("stock_derivatives") {
+                        let bits: u8 = sd
+                            .as_array()
+                            .map(|a| {
+                                a.iter()
+                                    .filter_map(serde_json::Value::as_i64)
+                                    .fold(0u8, |acc, n| acc | (n as u8))
+                            })
+                            .unwrap_or(0);
+                        let dt = longbridge::quote::DerivativeType::from_bits_truncate(bits);
+                        if let Ok(v) = serde_json::to_value(dt) {
+                            obj.insert("stock_derivatives".to_string(), v);
+                        }
+                    }
+            }
+        }
+        if let serde_json::Value::Array(items) = arr {
+            results.extend(items);
         }
     }
     // eps/eps_ttm/bps/dividend_yield arrive with ~16 fractional digits of bogus
@@ -335,16 +367,112 @@ fn clean_session(removed: Option<serde_json::Value>) -> serde_json::Value {
     }
 }
 
+/// Replace an integer at `segments` (supporting `*` for object/array wildcards)
+/// with the SDK enum `E`'s serialized name, so an HTTP proto-JSON int (e.g.
+/// `trade_status: 0`) renders exactly as the WS/SDK path did (`"Normal"`).
+/// Reuses the SDK enum's own `TryFrom<i32>` + `Serialize`, so there is no
+/// hand-maintained int→name table to drift.
+fn map_enum_path<E>(value: &mut serde_json::Value, segments: &[&str])
+where
+    E: TryFrom<i32> + serde::Serialize,
+{
+    map_enum_path_via::<E, E>(value, segments)
+}
+
+/// Two-step variant for SDK enums built from a proto enum via `From` (e.g. the
+/// SDK `TradeSession` is `From<longbridge_proto::quote::TradeSession>`): decode
+/// the wire int with `P: TryFrom<i32>`, convert to the SDK enum `S`, serialize.
+/// On a failed decode the int is left unchanged.
+fn map_enum_path_via<P, S>(value: &mut serde_json::Value, segments: &[&str])
+where
+    P: TryFrom<i32>,
+    S: From<P> + serde::Serialize,
+{
+    let Some((seg, rest)) = segments.split_first() else {
+        if let Some(n) = value.as_i64()
+            && let Ok(p) = P::try_from(n as i32)
+                && let Ok(v) = serde_json::to_value(S::from(p)) {
+                    *value = v;
+                }
+        return;
+    };
+    match value {
+        serde_json::Value::Array(arr) if *seg == "*" => {
+            for v in arr.iter_mut() {
+                map_enum_path_via::<P, S>(v, rest);
+            }
+        }
+        serde_json::Value::Object(map) if *seg == "*" => {
+            for v in map.values_mut() {
+                map_enum_path_via::<P, S>(v, rest);
+            }
+        }
+        serde_json::Value::Object(map) => {
+            if let Some(v) = map.get_mut(*seg) {
+                map_enum_path_via::<P, S>(v, rest);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Replace a string code at `segments` (supporting `*`) with the SDK enum `E`'s
+/// serialized name via its `FromStr` (strum) parse — e.g. option `direction`
+/// `"C"` → `"Call"`, `option_type` `"W"` → `"Weekly"`, `standard_attr` `""` →
+/// `"Normal"`. Leaves the value unchanged if it does not parse.
+fn map_str_enum<E>(value: &mut serde_json::Value, segments: &[&str])
+where
+    E: std::str::FromStr + serde::Serialize,
+{
+    let Some((seg, rest)) = segments.split_first() else {
+        if let Some(s) = value.as_str()
+            && let Ok(e) = s.parse::<E>()
+                && let Ok(v) = serde_json::to_value(e) {
+                    *value = v;
+                }
+        return;
+    };
+    match value {
+        serde_json::Value::Array(arr) if *seg == "*" => {
+            for v in arr.iter_mut() {
+                map_str_enum::<E>(v, rest);
+            }
+        }
+        serde_json::Value::Object(map) if *seg == "*" => {
+            for v in map.values_mut() {
+                map_str_enum::<E>(v, rest);
+            }
+        }
+        serde_json::Value::Object(map) => {
+            if let Some(v) = map.get_mut(*seg) {
+                map_str_enum::<E>(v, rest);
+            }
+        }
+        _ => {}
+    }
+}
+
 pub async fn quote(
     mctx: &crate::tools::McpContext,
     p: SymbolsParam,
 ) -> Result<CallToolResult, McpError> {
-    let ctx = mctx.get_quote_context().await;
-    let result = ctx.quote(p.symbols).await.map_err(|e| {
-        mctx.evict_quote_context();
-        Error::longbridge(e)
-    })?;
-    let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;
+    // WS→HTTP (id 504, POST /quote/quotes). Unwrap `secu_quote`, rename
+    // `over_night_quote` → `overnight_quote`, drop the redundant `volume_str`,
+    // convert unix `timestamp`, and map `trade_status` int → the SDK enum name.
+    // The downstream shape then matches the SDK `SecurityQuote`, so the existing
+    // extended-session/null/zero transforms apply unchanged.
+    let client = mctx.create_http_client();
+    let mut value = http_post_value(
+        &client,
+        "/quote/quotes",
+        serde_json::json!({ "symbol": p.symbols }),
+        Some("secu_quote"),
+        &[("over_night_quote", "overnight_quote")],
+        &["volume_str"],
+        &["*.timestamp"],
+    )
+    .await?;
+    map_enum_path::<longbridge::quote::TradeStatus>(&mut value, &["*", "trade_status"]);
     normalize_extended_sessions(&mut value);
     // Non-US symbols carry `pre_market_quote`/`post_market_quote`/
     // `overnight_quote` as `null`; drop those (and any other absent optional).
@@ -360,53 +488,90 @@ pub async fn option_quote(
     mctx: &crate::tools::McpContext,
     p: OptionSymbolsParam,
 ) -> Result<CallToolResult, McpError> {
-    let ctx = mctx.get_quote_context().await;
-    let result = match ctx.option_quote(p.symbols.clone()).await {
+    // WS→HTTP (id 505, POST /quote/options/quotes). Unwrap `secu_quote`, drop
+    // `volume_str`, convert `timestamp`, map `trade_status`. Then merge option
+    // Greeks (which this endpoint doesn't carry) from calc-indexes, keyed by
+    // symbol — best-effort, a Greek lookup failure leaves quotes unchanged.
+    // NOTE: not runtime-verified — the canary test account lacks US option quote
+    // access (301604), so both WS and REST return no data there.
+    let client = mctx.create_http_client();
+    let mut value = match http_post_value(
+        &client,
+        "/quote/options/quotes",
+        serde_json::json!({ "symbol": p.symbols.clone() }),
+        Some("secu_quote"),
+        &[],
+        &["volume_str"],
+        &["*.timestamp"],
+    )
+    .await
+    {
         Ok(v) => v,
-        Err(e) => {
-            mctx.evict_quote_context();
-            let err: McpError = Error::longbridge(e).into();
+        Err(err) => {
             if let Some(ok) = crate::tools::terminal_none_ok("option_quote", &err) {
                 return Ok(ok);
             }
             return Err(err);
         }
     };
-    let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;
+    map_enum_path::<longbridge::quote::TradeStatus>(&mut value, &["*", "trade_status"]);
 
-    // The `option_quote` interface does not carry the option Greeks — they come
-    // from the Calc Index interface. Fetch them for the same symbols and merge
-    // delta/gamma/theta/vega/rho into each quote (best-effort: a Greek lookup
-    // failure leaves the quotes unchanged).
-    let greek_indexes = vec![
+    let greek_ints: Vec<i32> = [
         CalcIndex::Delta,
         CalcIndex::Gamma,
         CalcIndex::Theta,
         CalcIndex::Vega,
         CalcIndex::Rho,
-    ];
-    if let Ok(mut greeks) = ctx.calc_indexes(p.symbols, greek_indexes).await {
+    ]
+    .iter()
+    .map(|i| longbridge_proto::quote::CalcIndex::from(*i) as i32)
+    .collect();
+    if let Ok(mut greeks) = http_post_value(
+        &client,
+        "/quote/calc-indexes",
+        serde_json::json!({ "symbols": p.symbols, "calc_index": greek_ints }),
+        Some("security_calc_index"),
+        &[],
+        &[],
+        &[],
+    )
+    .await
+    {
         let mut by_symbol: std::collections::HashMap<String, serde_json::Value> =
             std::collections::HashMap::new();
-        for g in &mut greeks {
-            normalize_greeks(g);
-            by_symbol.insert(
-                g.symbol.clone(),
-                serde_json::json!({
-                    "delta": g.delta,
-                    "gamma": g.gamma,
-                    "theta": g.theta,
-                    "vega": g.vega,
-                    "rho": g.rho,
-                }),
-            );
+        if let Some(arr) = greeks.as_array_mut() {
+            for g in arr.iter_mut() {
+                if let Some(obj) = g.as_object_mut() {
+                    for k in ["vega", "rho"] {
+                        if let Some(s) = obj.get(k).and_then(|v| v.as_str()).filter(|s| !s.is_empty())
+                            && let Ok(d) = s.parse::<rust_decimal::Decimal>() {
+                                obj.insert(
+                                    k.to_string(),
+                                    serde_json::Value::String(
+                                        (d / rust_decimal::Decimal::ONE_HUNDRED).to_string(),
+                                    ),
+                                );
+                            }
+                    }
+                    if let Some(sym) = obj.get("symbol").and_then(|s| s.as_str()).map(String::from) {
+                        let pick = |k: &str| obj.get(k).cloned().unwrap_or(serde_json::Value::Null);
+                        by_symbol.insert(
+                            sym,
+                            serde_json::json!({
+                                "delta": pick("delta"),
+                                "gamma": pick("gamma"),
+                                "theta": pick("theta"),
+                                "vega": pick("vega"),
+                                "rho": pick("rho"),
+                            }),
+                        );
+                    }
+                }
+            }
         }
         if let Some(arr) = value.as_array_mut() {
             for item in arr {
-                let sym = item
-                    .get("symbol")
-                    .and_then(|s| s.as_str())
-                    .map(String::from);
+                let sym = item.get("symbol").and_then(|s| s.as_str()).map(String::from);
                 if let (Some(sym), Some(obj)) = (sym, item.as_object_mut())
                     && let Some(g) = by_symbol.get(&sym).and_then(|v| v.as_object())
                 {
@@ -425,85 +590,120 @@ pub async fn warrant_quote(
     mctx: &crate::tools::McpContext,
     p: SymbolsParam,
 ) -> Result<CallToolResult, McpError> {
-    let ctx = mctx.get_quote_context().await;
-    let result = ctx.warrant_quote(p.symbols).await.map_err(|e| {
-        mctx.evict_quote_context();
-        Error::longbridge(e)
-    })?;
-    // Cap warrant analytics precision at 6 dp (same as warrant_list).
-    let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;
+    // WS→HTTP (id 506, POST /quote/warrants/quotes). Unwrap `secu_quote`, drop the
+    // redundant `volume_str`, convert unix `timestamp`, map `trade_status` int →
+    // SDK name. Cap warrant analytics precision at 6 dp (same as warrant_list).
+    let client = mctx.create_http_client();
+    let mut value = http_post_value(
+        &client,
+        "/quote/warrants/quotes",
+        serde_json::json!({ "symbol": p.symbols }),
+        Some("secu_quote"),
+        &[],
+        &["volume_str"],
+        &["*.timestamp"],
+    )
+    .await?;
+    map_enum_path::<longbridge::quote::TradeStatus>(&mut value, &["*", "trade_status"]);
     crate::serialize::round_decimals(&mut value, 6);
-    tool_json(&value)
+    Ok(crate::tools::tool_result(
+        serde_json::to_string(&value).map_err(Error::Serialize)?,
+    ))
 }
 
 pub async fn depth(
     mctx: &crate::tools::McpContext,
     p: SymbolParam,
 ) -> Result<CallToolResult, McpError> {
-    let ctx = mctx.get_quote_context().await;
-    let result = ctx.depth(p.symbol).await.map_err(|e| {
-        mctx.evict_quote_context();
-        Error::longbridge(e)
-    })?;
-    // Order-book prices come padded to a fixed decimal width ("432.200"); strip
-    // the non-significant trailing zeros (lossless).
-    price_series_result(&result)
+    // WS→HTTP (id 507, POST /quote/depth). Reshape the gateway proto-JSON back to
+    // the SDK `SecurityDepth` shape: `ask`/`bid` → `asks`/`bids`, drop the echoed
+    // `symbol` and the redundant `volume_str`. Order-book prices come padded to a
+    // fixed decimal width ("432.200"); strip the non-significant trailing zeros.
+    let client = mctx.create_http_client();
+    http_post_tool_reshape(
+        &client,
+        "/quote/depth",
+        serde_json::json!({ "symbol": p.symbol }),
+        None,
+        &[("ask", "asks"), ("bid", "bids")],
+        &["symbol", "volume_str"],
+        &[],
+        true,
+    )
+    .await
 }
 
 pub async fn brokers(
     mctx: &crate::tools::McpContext,
     p: SymbolParam,
 ) -> Result<CallToolResult, McpError> {
-    let ctx = mctx.get_quote_context().await;
-    let result = ctx.brokers(p.symbol).await.map_err(|e| {
-        mctx.evict_quote_context();
-        Error::longbridge(e)
-    })?;
-    tool_json(&result)
+    // WS→HTTP (id 508, POST /quote/brokers). SDK `SecurityBrokers` uses the same
+    // `ask_brokers`/`bid_brokers` field names as the proto-JSON, so only the echoed
+    // `symbol` needs dropping; broker rows carry no enum/timestamp fields.
+    let client = mctx.create_http_client();
+    http_post_tool_reshape(
+        &client,
+        "/quote/brokers",
+        serde_json::json!({ "symbol": p.symbol }),
+        None,
+        &[],
+        &["symbol"],
+        &[],
+        false,
+    )
+    .await
 }
 
 pub async fn participants(mctx: &crate::tools::McpContext) -> Result<CallToolResult, McpError> {
-    let ctx = mctx.get_quote_context().await;
-    let result = ctx.participants().await.map_err(|e| {
-        mctx.evict_quote_context();
-        Error::longbridge(e)
-    })?;
-    // `name_hk` is the Traditional-script twin of `name_cn` on every broker row.
-    let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;
-    crate::serialize::drop_keys(&mut value, &["name_hk"]);
-    tool_json(&value)
+    // WS→HTTP (id 509, POST /quote/participants). Unwrap the `participant_broker_numbers`
+    // container; the proto rows use `participant_name_*` — rename to the SDK's `name_*`,
+    // then drop `name_hk` (the Traditional-script twin of `name_cn` on every row).
+    let client = mctx.create_http_client();
+    http_post_tool_reshape(
+        &client,
+        "/quote/participants",
+        serde_json::json!({}),
+        Some("participant_broker_numbers"),
+        &[
+            ("participant_name_cn", "name_cn"),
+            ("participant_name_en", "name_en"),
+        ],
+        &["participant_name_hk"],
+        &[],
+        false,
+    )
+    .await
 }
 
 pub async fn trades(
     mctx: &crate::tools::McpContext,
     p: SymbolCountParam,
 ) -> Result<CallToolResult, McpError> {
-    let ctx = mctx.get_quote_context().await;
-    let result = ctx.trades(p.symbol, p.count).await.map_err(|e| {
-        mctx.evict_quote_context();
-        Error::longbridge(e)
-    })?;
-    // Trade prices come padded to a fixed decimal width ("431.000"); strip the
-    // non-significant trailing zeros (lossless). Up to 1000 trades per call.
-    price_series_result(&result)
-}
-
-/// Serialize an SDK market-data value (candlesticks/intraday/depth) and strip
-/// the fixed decimal padding upstream applies to prices (e.g. `"428.400"`) and
-/// `turnover` (e.g. `"…343.500"`). Lossless —
-/// [`crate::serialize::strip_trailing_zeros`] only removes non-significant zeros
-/// — and worthwhile because these are among the highest-volume responses.
-/// Object-rooted results (depth) keep their `structuredContent` via
-/// [`crate::tools::tool_result`]; array-rooted ones leave it unset.
-fn price_series_result<T>(result: &T) -> Result<CallToolResult, McpError>
-where
-    T: serde::Serialize,
-{
-    let json = crate::serialize::to_tool_json(result).map_err(Error::Serialize)?;
-    let mut value: serde_json::Value = serde_json::from_str(&json).map_err(Error::Serialize)?;
+    // WS→HTTP (id 510, POST /quote/trades). Unwrap `trades`, drop the echoed
+    // `symbol`, convert unix `timestamp`; map `direction` (int → SDK
+    // `TradeDirection` name) and `trade_session` (wire int → proto → SDK
+    // `TradeSession` name). Prices come padded to a fixed decimal width
+    // ("431.000"); strip the non-significant trailing zeros. Up to 1000 trades.
+    let client = mctx.create_http_client();
+    let mut value = http_post_value(
+        &client,
+        "/quote/trades",
+        serde_json::json!({ "symbol": p.symbol, "count": p.count }),
+        Some("trades"),
+        &[],
+        &["symbol"],
+        &["*.timestamp"],
+    )
+    .await?;
+    map_enum_path::<longbridge::quote::TradeDirection>(&mut value, &["*", "direction"]);
+    map_enum_path_via::<longbridge_proto::quote::TradeSession, longbridge::quote::TradeSession>(
+        &mut value,
+        &["*", "trade_session"],
+    );
     crate::serialize::strip_trailing_zeros(&mut value);
-    let out = serde_json::to_string(&value).map_err(Error::Serialize)?;
-    Ok(crate::tools::tool_result(out))
+    Ok(crate::tools::tool_result(
+        serde_json::to_string(&value).map_err(Error::Serialize)?,
+    ))
 }
 
 pub async fn intraday(
@@ -514,12 +714,20 @@ pub async fn intraday(
         Some(s) => parse::parse_trade_sessions(s)?,
         None => longbridge::quote::TradeSessions::Intraday,
     };
-    let ctx = mctx.get_quote_context().await;
-    let result = ctx.intraday(p.symbol, sessions).await.map_err(|e| {
-        mctx.evict_quote_context();
-        Error::longbridge(e)
-    })?;
-    price_series_result(&result)
+    // WS→HTTP (id 511, POST /quote/intraday). Unwrap `lines`, drop the redundant
+    // `volume_str`, convert unix `timestamp` to RFC3339, strip padded price zeros.
+    let client = mctx.create_http_client();
+    http_post_tool_reshape(
+        &client,
+        "/quote/intraday",
+        serde_json::json!({ "symbol": p.symbol, "trade_session": sessions as i32 }),
+        Some("lines"),
+        &[],
+        &["volume_str"],
+        &["*.timestamp"],
+        true,
+    )
+    .await
 }
 
 /// Upstream's own "symbol count out of limit" business code — seen firing
@@ -561,10 +769,37 @@ where
     }
 }
 
+/// Reshape a `/quote/candlesticks` or `/quote/history-candlesticks` raw response
+/// (candlestick list) to the SDK `Candlestick` shape: unwrap `candlesticks`, drop
+/// the redundant `volume_str`, convert unix `timestamp`, map `trade_session` int
+/// → SDK name, strip padded price/turnover trailing zeros.
+/// NOTE: the REST payload omits the SDK's `open_updated` flag — pending a
+/// gateway/backend addition (see verification report); not synthesized here.
+fn reshape_candlesticks(resp: &str) -> Result<CallToolResult, McpError> {
+    let transformed = crate::serialize::transform_json(resp.as_bytes()).map_err(Error::Serialize)?;
+    let mut value: serde_json::Value =
+        serde_json::from_str(&transformed).map_err(Error::Serialize)?;
+    if let Some(inner) = value.get_mut("candlesticks").map(serde_json::Value::take) {
+        value = inner;
+    }
+    crate::serialize::drop_keys(&mut value, &["volume_str"]);
+    crate::serialize::convert_unix_paths(&mut value, &["*.timestamp"]);
+    map_enum_path_via::<longbridge_proto::quote::TradeSession, longbridge::quote::TradeSession>(
+        &mut value,
+        &["*", "trade_session"],
+    );
+    crate::serialize::strip_trailing_zeros(&mut value);
+    Ok(crate::tools::tool_result(
+        serde_json::to_string(&value).map_err(Error::Serialize)?,
+    ))
+}
+
 pub async fn candlesticks(
     mctx: &crate::tools::McpContext,
     p: CandlesticksParam,
 ) -> Result<CallToolResult, McpError> {
+    // WS→HTTP (id 512, POST /quote/candlesticks). Preserve the 301607
+    // count-boundary retry around the HTTP call; reshape via `reshape_candlesticks`.
     validate_candlestick_count(p.count)?;
     let period = parse::parse_period(&p.period)?;
     let sessions = parse::parse_trade_sessions(&p.trade_sessions)?;
@@ -573,22 +808,34 @@ pub async fn candlesticks(
     } else {
         longbridge::quote::AdjustType::NoAdjust
     };
-    let ctx = mctx.get_quote_context().await;
-    let result = with_candlestick_count_boundary_retry(p.count, |count| {
-        ctx.candlesticks(p.symbol.clone(), period, count, adjust, sessions)
+    let client = mctx.create_http_client();
+    let resp = with_candlestick_count_boundary_retry(p.count, |count| {
+        http_post_raw(
+            &client,
+            "/quote/candlesticks",
+            serde_json::json!({
+                "symbol": p.symbol.clone(),
+                "period": period as i32,
+                "count": count,
+                "adjust_type": adjust as i32,
+                "trade_session": sessions as i32,
+            }),
+        )
     })
     .await
-    .map_err(|e| {
-        mctx.evict_quote_context();
-        Error::longbridge(*e)
-    })?;
-    price_series_result(&result)
+    .map_err(|e| Error::longbridge(*e))?;
+    reshape_candlesticks(&resp)
 }
 
 pub async fn history_candlesticks_by_offset(
     mctx: &crate::tools::McpContext,
     p: HistoryCandlesticksByOffsetParam,
 ) -> Result<CallToolResult, McpError> {
+    // WS→HTTP (id 521, POST /quote/history-candlesticks, query_type=QueryByOffset).
+    // Nested `offset_request` body; output reshaped via `reshape_candlesticks`.
+    // Preserves the 301607 count-boundary retry and the terminal-none degrade.
+    // NOTE: the nested request-body shape is per proto but not yet runtime-verified
+    // on a data-bearing symbol.
     validate_candlestick_count(p.count)?;
     let period = parse::parse_period(&p.period)?;
     let adjust = parse::parse_adjust_type(p.forward_adjust);
@@ -597,23 +844,37 @@ pub async fn history_candlesticks_by_offset(
         Some(ref s) => Some(parse::parse_primitive_datetime(s)?),
         None => None,
     };
-    let ctx = mctx.get_quote_context().await;
+    let (date_s, minute_s) = match time {
+        Some(t) => (
+            format!("{:04}{:02}{:02}", t.year(), t.month() as u8, t.day()),
+            format!("{:02}{:02}", t.hour(), t.minute()),
+        ),
+        None => (String::new(), String::new()),
+    };
+    let client = mctx.create_http_client();
     let outcome = with_candlestick_count_boundary_retry(p.count, |count| {
-        ctx.history_candlesticks_by_offset(
-            p.symbol.clone(),
-            period,
-            adjust,
-            p.forward,
-            time,
-            count,
-            sessions,
+        http_post_raw(
+            &client,
+            "/quote/history-candlesticks",
+            serde_json::json!({
+                "symbol": p.symbol.clone(),
+                "period": period as i32,
+                "adjust_type": adjust as i32,
+                "query_type": 1,
+                "offset_request": {
+                    "direction": if p.forward { 1 } else { 0 },
+                    "date": date_s.clone(),
+                    "minute": minute_s.clone(),
+                    "count": count,
+                },
+                "trade_session": sessions as i32,
+            }),
         )
     })
     .await;
-    let result = match outcome {
+    let resp = match outcome {
         Ok(v) => v,
         Err(e) => {
-            mctx.evict_quote_context();
             let err: McpError = Error::longbridge(*e).into();
             if let Some(ok) = crate::tools::terminal_none_ok("history_candlesticks_by_offset", &err)
             {
@@ -622,32 +883,45 @@ pub async fn history_candlesticks_by_offset(
             return Err(err);
         }
     };
-    price_series_result(&result)
+    reshape_candlesticks(&resp)
 }
 
 pub async fn history_candlesticks_by_date(
     mctx: &crate::tools::McpContext,
     p: HistoryCandlesticksByDateParam,
 ) -> Result<CallToolResult, McpError> {
+    // WS→HTTP (id 521, POST /quote/history-candlesticks, query_type=QueryByDate).
+    // Nested `date_request` body; output reshaped via `reshape_candlesticks`.
+    // NOTE: nested request-body shape is per proto, not yet runtime-verified.
     let period = parse::parse_period(&p.period)?;
     let adjust = parse::parse_adjust_type(p.forward_adjust);
     let sessions = parse::parse_trade_sessions(&p.trade_sessions)?;
-    let start = match p.start {
-        Some(ref s) => Some(parse::parse_date(s)?),
-        None => None,
+    let ymd = |d: time::Date| format!("{:04}{:02}{:02}", d.year(), d.month() as u8, d.day());
+    let start_s = match p.start {
+        Some(ref s) => ymd(parse::parse_date(s)?),
+        None => String::new(),
     };
-    let end = match p.end {
-        Some(ref s) => Some(parse::parse_date(s)?),
-        None => None,
+    let end_s = match p.end {
+        Some(ref s) => ymd(parse::parse_date(s)?),
+        None => String::new(),
     };
-    let ctx = mctx.get_quote_context().await;
-    let result = match ctx
-        .history_candlesticks_by_date(p.symbol, period, adjust, start, end, sessions)
-        .await
+    let client = mctx.create_http_client();
+    let resp = match http_post_raw(
+        &client,
+        "/quote/history-candlesticks",
+        serde_json::json!({
+            "symbol": p.symbol,
+            "period": period as i32,
+            "adjust_type": adjust as i32,
+            "query_type": 2,
+            "date_request": { "start_date": start_s, "end_date": end_s },
+            "trade_session": sessions as i32,
+        }),
+    )
+    .await
     {
         Ok(v) => v,
         Err(e) => {
-            mctx.evict_quote_context();
             let err: McpError = Error::longbridge(e).into();
             if let Some(ok) = crate::tools::terminal_none_ok("history_candlesticks_by_date", &err) {
                 return Ok(ok);
@@ -655,116 +929,253 @@ pub async fn history_candlesticks_by_date(
             return Err(err);
         }
     };
-    price_series_result(&result)
+    reshape_candlesticks(&resp)
 }
 
 pub async fn trading_days(
     mctx: &crate::tools::McpContext,
     p: MarketDateRangeParam,
 ) -> Result<CallToolResult, McpError> {
+    // WS→HTTP (id 517, POST /quote/markets/trading-days). Body: market as its
+    // canonical string ("HK"), begin/end as YYYYMMDD. Response fields are proto
+    // `trade_day`/`half_trade_day` (singular, YYYYMMDD) → rename to the SDK's
+    // `trade_days`/`half_trade_days` and reformat each date to YYYY-MM-DD.
     let market = parse::parse_market(&p.market)?;
     let start = parse::parse_date(&p.start)?;
     let end = parse::parse_date(&p.end)?;
-    let ctx = mctx.get_quote_context().await;
-    let result = ctx.trading_days(market, start, end).await.map_err(|e| {
-        mctx.evict_quote_context();
-        Error::longbridge(e)
-    })?;
-    tool_json(&result)
+    let market_str = serde_json::to_value(market)
+        .ok()
+        .and_then(|v| v.as_str().map(str::to_owned))
+        .unwrap_or_else(|| p.market.to_uppercase());
+    let ymd = |d: time::Date| format!("{:04}{:02}{:02}", d.year(), d.month() as u8, d.day());
+    let client = mctx.create_http_client();
+    let mut value = http_post_value(
+        &client,
+        "/quote/markets/trading-days",
+        serde_json::json!({ "market": market_str, "beg_day": ymd(start), "end_day": ymd(end) }),
+        None,
+        &[("trade_day", "trade_days"), ("half_trade_day", "half_trade_days")],
+        &[],
+        &[],
+    )
+    .await?;
+    for key in ["trade_days", "half_trade_days"] {
+        if let Some(arr) = value.get_mut(key).and_then(|a| a.as_array_mut()) {
+            for v in arr.iter_mut() {
+                if let Some(s) = v.as_str()
+                    && s.len() == 8 && s.chars().all(|c| c.is_ascii_digit()) {
+                        *v = serde_json::Value::String(format!(
+                            "{}-{}-{}",
+                            &s[0..4],
+                            &s[4..6],
+                            &s[6..8]
+                        ));
+                    }
+            }
+        }
+    }
+    tool_json(&value)
 }
 
 pub async fn option_chain_expiry_date_list(
     mctx: &crate::tools::McpContext,
     p: SymbolParam,
 ) -> Result<CallToolResult, McpError> {
-    let ctx = mctx.get_quote_context().await;
-    let dates = ctx
-        .option_chain_expiry_date_list(p.symbol)
-        .await
-        .map_err(|e| {
-            mctx.evict_quote_context();
-            Error::longbridge(e)
-        })?;
-    let strs: Vec<String> = dates
-        .into_iter()
-        .map(|d| {
-            d.format(time::macros::format_description!("[year]-[month]-[day]"))
-                .expect("failed to format date")
-        })
-        .collect();
-    tool_json(&strs)
+    // WS→HTTP (id 513, POST /quote/options/expiry-dates). Unwrap `expiry_date`
+    // and reformat each `YYYYMMDD` string to the SDK's `YYYY-MM-DD`.
+    let client = mctx.create_http_client();
+    let mut value = http_post_value(
+        &client,
+        "/quote/options/expiry-dates",
+        serde_json::json!({ "symbol": p.symbol }),
+        Some("expiry_date"),
+        &[],
+        &[],
+        &[],
+    )
+    .await?;
+    if let Some(arr) = value.as_array_mut() {
+        for v in arr.iter_mut() {
+            if let Some(s) = v.as_str()
+                && s.len() == 8 && s.chars().all(|c| c.is_ascii_digit()) {
+                    *v = serde_json::Value::String(format!("{}-{}-{}", &s[0..4], &s[4..6], &s[6..8]));
+                }
+        }
+    }
+    Ok(crate::tools::tool_result(
+        serde_json::to_string(&value).map_err(Error::Serialize)?,
+    ))
 }
 
 pub async fn option_chain_info_by_date(
     mctx: &crate::tools::McpContext,
     p: OptionChainByDateParam,
 ) -> Result<CallToolResult, McpError> {
+    // WS→HTTP (id 496, POST /quote/options/strikes). Unwrap `list`; map the
+    // string-code enums to the SDK names (`direction` C/P→Call/Put, `option_type`
+    // ""/W/Q→Monthly/Weekly/Quarterly, `standard_attr` ""/old→Normal/Old); reformat
+    // each `expiry_date` YYYYMMDD → YYYY-MM-DD. Backend is lb-gemini-app.
     let date = parse::parse_date(&p.date)?;
-    let ctx = mctx.get_quote_context().await;
-    let result = ctx
-        .option_chain_info_by_date(p.symbol, date, p.standard_only.unwrap_or(false))
-        .await
-        .map_err(|e| {
-            mctx.evict_quote_context();
-            Error::longbridge(e)
-        })?;
-    tool_json(&result)
+    let ymd = date
+        .format(time::macros::format_description!("[year][month][day]"))
+        .map_err(|e| Error::Other(e.to_string()))?;
+    let client = mctx.create_http_client();
+    let mut value = http_post_value(
+        &client,
+        "/quote/options/strikes",
+        serde_json::json!({
+            "symbol": p.symbol,
+            "expiry_date": ymd,
+            "standard_only": p.standard_only.unwrap_or(false),
+        }),
+        Some("list"),
+        &[],
+        &[],
+        &[],
+    )
+    .await?;
+    map_str_enum::<longbridge::quote::OptionDirection>(&mut value, &["*", "direction"]);
+    map_str_enum::<longbridge::quote::OptionExpiryCycleType>(&mut value, &["*", "option_type"]);
+    map_str_enum::<longbridge::quote::OptionStandardAttr>(&mut value, &["*", "standard_attr"]);
+    if let Some(arr) = value.as_array_mut() {
+        for it in arr.iter_mut() {
+            if let Some(ed) = it.get_mut("expiry_date")
+                && let Some(s) = ed.as_str()
+                    && s.len() == 8 && s.chars().all(|c| c.is_ascii_digit()) {
+                        *ed = serde_json::Value::String(format!(
+                            "{}-{}-{}",
+                            &s[0..4],
+                            &s[4..6],
+                            &s[6..8]
+                        ));
+                    }
+        }
+    }
+    Ok(crate::tools::tool_result(
+        serde_json::to_string(&value).map_err(Error::Serialize)?,
+    ))
 }
 
 pub async fn capital_flow(
     mctx: &crate::tools::McpContext,
     p: SymbolParam,
 ) -> Result<CallToolResult, McpError> {
-    let ctx = mctx.get_quote_context().await;
-    let result = ctx.capital_flow(p.symbol).await.map_err(|e| {
-        mctx.evict_quote_context();
-        Error::longbridge(e)
-    })?;
-    tool_json(&result)
+    // WS→HTTP (id 518, POST /quote/capital-flow). Unwrap `capital_flow_lines`,
+    // drop the echoed `symbol`, convert unix `timestamp` to RFC3339.
+    // NOTE: `inflow` currently comes back ~1e4 smaller than the WS value — the
+    // backend has confirmed this and will fix it (align REST to WS). Not scaled
+    // here on purpose, so nothing double-scales once the backend fix lands.
+    let client = mctx.create_http_client();
+    http_post_tool_reshape(
+        &client,
+        "/quote/capital-flow",
+        serde_json::json!({ "symbol": p.symbol }),
+        Some("capital_flow_lines"),
+        &[],
+        &["symbol"],
+        &["*.timestamp"],
+        false,
+    )
+    .await
 }
 
 pub async fn capital_distribution(
     mctx: &crate::tools::McpContext,
     p: SymbolParam,
 ) -> Result<CallToolResult, McpError> {
-    let ctx = mctx.get_quote_context().await;
-    let result = ctx.capital_distribution(p.symbol).await.map_err(|e| {
-        mctx.evict_quote_context();
-        Error::longbridge(e)
-    })?;
-    // Symbols with no capital-flow data (indices, some ETFs) don't error —
-    // upstream responds with a zero-filled record stamped at the Unix epoch.
-    // A real trading day is never actually reported at that instant, so it's
-    // a reliable "no data" signal distinct from a genuine all-zero day.
-    let data_available = result.timestamp.unix_timestamp() != 0;
-    let timestamp = result
-        .timestamp
-        .format(&time::format_description::well_known::Rfc3339)
-        .map_err(|e| Error::Other(e.to_string()))?;
-    let resp = output::CapitalDistributionResponse {
-        timestamp,
-        capital_in: output::CapitalDistribution {
-            large: result.capital_in.large.to_string(),
-            medium: result.capital_in.medium.to_string(),
-            small: result.capital_in.small.to_string(),
-        },
-        capital_out: output::CapitalDistribution {
-            large: result.capital_out.large.to_string(),
-            medium: result.capital_out.medium.to_string(),
-            small: result.capital_out.small.to_string(),
-        },
-        data_available,
-    };
-    tool_json(&resp)
+    // WS→HTTP (id 519, POST /quote/capital-distribution). Not container-wrapped;
+    // drop the echoed `symbol`. Preserve the existing "no data" semantics:
+    // symbols with no capital-flow data (indices, some ETFs) come back zero-filled
+    // and stamped at the Unix epoch, which is never a real trading instant.
+    // NOTE: large/medium/small currently arrive ~1e4 smaller than the WS value —
+    // the backend has confirmed this and will fix it (align REST to WS); not
+    // scaled here on purpose, so nothing double-scales once the fix lands.
+    let client = mctx.create_http_client();
+    let mut value = http_post_value(
+        &client,
+        "/quote/capital-distribution",
+        serde_json::json!({ "symbol": p.symbol }),
+        None,
+        &[],
+        &["symbol"],
+        &[],
+    )
+    .await?;
+    let raw_ts = value
+        .get("timestamp")
+        .and_then(|t| t.as_i64().or_else(|| t.as_str().and_then(|s| s.parse::<i64>().ok())));
+    let data_available = raw_ts.map(|n| n != 0).unwrap_or(false);
+    crate::serialize::convert_unix_paths(&mut value, &["timestamp"]);
+    // The backend sends `""` for a zero bucket; the SDK rendered that as `"0"`.
+    for group in ["capital_in", "capital_out"] {
+        if let Some(obj) = value.get_mut(group).and_then(|g| g.as_object_mut()) {
+            for k in ["large", "medium", "small"] {
+                if let Some(v) = obj.get_mut(k)
+                    && v.as_str() == Some("") {
+                        *v = serde_json::Value::String("0".to_string());
+                    }
+            }
+        }
+    }
+    if let Some(obj) = value.as_object_mut() {
+        obj.insert("data_available".to_string(), serde_json::Value::Bool(data_available));
+    }
+    tool_json(&value)
+}
+
+/// Format an `HHMM` integer (e.g. `930`) as the SDK's `"HH:MM:00.0"` time string
+/// (`"09:30:00.0"`). Leaves the value untouched if it is not an integer.
+fn hhmm_to_time(v: &serde_json::Value) -> serde_json::Value {
+    match v.as_i64() {
+        Some(n) => serde_json::Value::String(format!("{:02}:{:02}:00.0", n / 100, n % 100)),
+        None => v.clone(),
+    }
 }
 
 pub async fn trading_session(mctx: &crate::tools::McpContext) -> Result<CallToolResult, McpError> {
-    let ctx = mctx.get_quote_context().await;
-    let result = ctx.trading_session().await.map_err(|e| {
-        mctx.evict_quote_context();
-        Error::longbridge(e)
-    })?;
-    tool_json(&result)
+    // WS→HTTP (id 516, POST /quote/markets/trading-sessions). Unwrap
+    // `market_trade_session`; rename each market's inner `trade_session` array to
+    // `trade_sessions`; within each session rename `beg_time`→`begin_time`,
+    // convert the `HHMM` int times to `"HH:MM:00.0"`, and map the `trade_session`
+    // int (wire → proto → SDK `TradeSession` name).
+    let client = mctx.create_http_client();
+    let mut value = http_post_value(
+        &client,
+        "/quote/markets/trading-sessions",
+        serde_json::json!({}),
+        Some("market_trade_session"),
+        &[("trade_session", "trade_sessions")],
+        &[],
+        &[],
+    )
+    .await?;
+    if let Some(markets) = value.as_array_mut() {
+        for market in markets.iter_mut() {
+            let Some(sessions) = market
+                .get_mut("trade_sessions")
+                .and_then(|s| s.as_array_mut())
+            else {
+                continue;
+            };
+            for session in sessions.iter_mut() {
+                if let Some(obj) = session.as_object_mut() {
+                    if let Some(bt) = obj.remove("beg_time") {
+                        obj.insert("begin_time".to_string(), hhmm_to_time(&bt));
+                    }
+                    if let Some(et) = obj.get_mut("end_time") {
+                        *et = hhmm_to_time(et);
+                    }
+                }
+                map_enum_path_via::<
+                    longbridge_proto::quote::TradeSession,
+                    longbridge::quote::TradeSession,
+                >(session, &["trade_session"]);
+            }
+        }
+    }
+    Ok(crate::tools::tool_result(
+        serde_json::to_string(&value).map_err(Error::Serialize)?,
+    ))
 }
 
 pub async fn market_temperature(
@@ -829,15 +1240,21 @@ pub async fn filings(
 }
 
 pub async fn warrant_issuers(mctx: &crate::tools::McpContext) -> Result<CallToolResult, McpError> {
-    let ctx = mctx.get_quote_context().await;
-    let result = ctx.warrant_issuers().await.map_err(|e| {
-        mctx.evict_quote_context();
-        Error::longbridge(e)
-    })?;
-    // `name_hk` is the Traditional-script twin of `name_cn` on every issuer row.
-    let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;
-    crate::serialize::drop_keys(&mut value, &["name_hk"]);
-    tool_json(&value)
+    // WS→HTTP (id 514, POST /quote/warrants/issuers). Unwrap `issuer_info`, rename
+    // the proto `id` to the SDK's `issuer_id`, drop `name_hk` (Traditional-script
+    // twin of `name_cn` on every issuer row).
+    let client = mctx.create_http_client();
+    http_post_tool_reshape(
+        &client,
+        "/quote/warrants/issuers",
+        serde_json::json!({}),
+        Some("issuer_info"),
+        &[("id", "issuer_id")],
+        &["name_hk"],
+        &[],
+        false,
+    )
+    .await
 }
 
 pub async fn warrant_list(
@@ -884,27 +1301,50 @@ pub async fn warrant_list(
         })
         .transpose()?;
 
-    let ctx = mctx.get_quote_context().await;
-    let result = ctx
-        .warrant_list(
-            p.symbol,
-            sort_by,
-            sort_order,
-            warrant_types.as_deref(),
-            p.issuer.as_deref(),
-            expiry_dates.as_deref(),
-            price_types.as_deref(),
-            statuses.as_deref(),
-        )
-        .await
-        .map_err(|e| {
-            mctx.evict_quote_context();
-            Error::longbridge(e)
-        })?;
-    // Warrant analytics (premium, implied_volatility, delta, effective_leverage,
-    // leverage_ratio, balance_point, change_rate) serialize at ~17 significant
-    // digits; cap fractional precision at 6 across all 700+ rows.
-    let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;
+    // WS→HTTP (id 515, POST /quote/warrants). Nested `filter_config` (sort_by/
+    // sort_order/sort_offset/sort_count + optional type/issuer/expiry_date/
+    // price_type/status int arrays). Unwrap `warrant_list` (drops `total_count`),
+    // rename `change_val`→`change_value` & `type`→`warrant_type`, map the
+    // `warrant_type`/`status` ints to SDK enum names, `""`→null, round to 6 dp.
+    // NOTE: `name` differs by language (WS returns the code/EN name, REST the
+    // localized name) — request `language` mapping to be confirmed; and the
+    // filter-enum int encodings are per proto but only the no-filter path is
+    // runtime-verified so far.
+    let mut fc = serde_json::json!({
+        "sort_by": sort_by as i32,
+        "sort_order": sort_order as i32,
+        "sort_offset": 0,
+        "sort_count": 20,
+    });
+    if let Some(v) = &warrant_types {
+        fc["type"] = v.iter().map(|x| *x as i32).collect();
+    }
+    if let Some(v) = &p.issuer {
+        fc["issuer"] = v.clone().into();
+    }
+    if let Some(v) = &expiry_dates {
+        fc["expiry_date"] = v.iter().map(|x| *x as i32).collect();
+    }
+    if let Some(v) = &price_types {
+        fc["price_type"] = v.iter().map(|x| *x as i32).collect();
+    }
+    if let Some(v) = &statuses {
+        fc["status"] = v.iter().map(|x| *x as i32).collect();
+    }
+    let client = mctx.create_http_client();
+    let mut value = http_post_value(
+        &client,
+        "/quote/warrants",
+        serde_json::json!({ "symbol": p.symbol, "filter_config": fc, "language": 1 }),
+        Some("warrant_list"),
+        &[("change_val", "change_value"), ("type", "warrant_type")],
+        &[],
+        &[],
+    )
+    .await?;
+    map_enum_path::<longbridge::quote::WarrantType>(&mut value, &["*", "warrant_type"]);
+    map_enum_path::<longbridge::quote::WarrantStatus>(&mut value, &["*", "status"]);
+    crate::serialize::empty_str_to_null(&mut value);
     crate::serialize::round_decimals(&mut value, 6);
     tool_json(&value)
 }
@@ -937,20 +1377,44 @@ pub async fn calc_indexes(
         .iter()
         .map(|s| parse::parse_calc_index(s))
         .collect::<Result<_, _>>()?;
-    let ctx = mctx.get_quote_context().await;
-    let mut result = ctx.calc_indexes(p.symbols, indexes).await.map_err(|e| {
-        mctx.evict_quote_context();
-        Error::longbridge(e)
-    })?;
-
-    for r in &mut result {
-        normalize_greeks(r);
+    // WS→HTTP (id 520, POST /quote/calc-indexes). Body uses `symbols` (plural) +
+    // `calc_index` proto ints. Unwrap `security_calc_index`, rename `change_val`
+    // → `change_value`, drop `volume_str`. The backend fills unrequested fields
+    // with `""`; convert to null and strip so only requested indexes remain
+    // (matching the SDK's null-then-strip). vega/rho are ÷100 (normalize_greeks).
+    let index_ints: Vec<i32> = indexes
+        .iter()
+        .map(|i| longbridge_proto::quote::CalcIndex::from(*i) as i32)
+        .collect();
+    let client = mctx.create_http_client();
+    let mut value = http_post_value(
+        &client,
+        "/quote/calc-indexes",
+        serde_json::json!({ "symbols": p.symbols, "calc_index": index_ints }),
+        Some("security_calc_index"),
+        &[("change_val", "change_value")],
+        &["volume_str"],
+        &[],
+    )
+    .await?;
+    if let Some(arr) = value.as_array_mut() {
+        for row in arr.iter_mut() {
+            if let Some(obj) = row.as_object_mut() {
+                for k in ["vega", "rho"] {
+                    if let Some(s) = obj.get(k).and_then(|v| v.as_str()).filter(|s| !s.is_empty())
+                        && let Ok(d) = s.parse::<rust_decimal::Decimal>() {
+                            obj.insert(
+                                k.to_string(),
+                                serde_json::Value::String(
+                                    (d / rust_decimal::Decimal::ONE_HUNDRED).to_string(),
+                                ),
+                            );
+                        }
+                }
+            }
+        }
     }
-
-    // `SecurityCalcIndex` is a wide struct: every one of its ~40 index fields
-    // the caller did not request serializes as an explicit `null`. Drop those
-    // so a per-symbol array doesn't carry ~38 dead `"x": null` pairs per row.
-    let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;
+    crate::serialize::empty_str_to_null(&mut value);
     crate::serialize::strip_nulls(&mut value);
     tool_json(&value)
 }
@@ -964,15 +1428,6 @@ pub async fn calc_indexes(
 ///   divide by 100 for the per-unit value.
 /// - `rho`:   the API returns the value scaled by 100 (per 1% rate change);
 ///   divide by 100 for the per-unit value.
-fn normalize_greeks(r: &mut longbridge::quote::SecurityCalcIndex) {
-    if let Some(v) = r.vega.as_mut() {
-        *v /= rust_decimal::Decimal::ONE_HUNDRED;
-    }
-    if let Some(v) = r.rho.as_mut() {
-        *v /= rust_decimal::Decimal::ONE_HUNDRED;
-    }
-}
-
 pub async fn create_watchlist_group(
     mctx: &crate::tools::McpContext,
     p: CreateWatchlistGroupParam,
