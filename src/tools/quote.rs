@@ -514,6 +514,20 @@ pub async fn option_quote(
             return Err(err);
         }
     };
+    // The REST payload nests the option-specific fields (strike_price, direction,
+    // implied_volatility, underlying_symbol, …) under `option_extend`; the SDK
+    // `OptionQuote` carries them flat, so lift them to each row's top level.
+    if let Some(arr) = value.as_array_mut() {
+        for item in arr.iter_mut() {
+            if let Some(obj) = item.as_object_mut() {
+                if let Some(serde_json::Value::Object(ext)) = obj.remove("option_extend") {
+                    for (k, v) in ext {
+                        obj.insert(k, v);
+                    }
+                }
+            }
+        }
+    }
     map_enum_path::<longbridge::quote::TradeStatus>(&mut value, &["*", "trade_status"]);
 
     let greek_ints: Vec<i32> = [
@@ -604,6 +618,19 @@ pub async fn warrant_quote(
         &["*.timestamp"],
     )
     .await?;
+    // REST nests warrant-specific fields under `warrant_extend`; the SDK
+    // `WarrantQuote` carries them flat — lift them to each row's top level.
+    if let Some(arr) = value.as_array_mut() {
+        for item in arr.iter_mut() {
+            if let Some(obj) = item.as_object_mut() {
+                if let Some(serde_json::Value::Object(ext)) = obj.remove("warrant_extend") {
+                    for (k, v) in ext {
+                        obj.insert(k, v);
+                    }
+                }
+            }
+        }
+    }
     map_enum_path::<longbridge::quote::TradeStatus>(&mut value, &["*", "trade_status"]);
     crate::serialize::round_decimals(&mut value, 6);
     Ok(crate::tools::tool_result(
