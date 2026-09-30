@@ -527,6 +527,7 @@ mod authenticate;
 mod calendar;
 mod content;
 mod dca;
+mod fund;
 mod fundamental;
 mod grid;
 mod ipo;
@@ -1340,6 +1341,35 @@ const TOOL_ENDPOINTS: &[(&str, u8)] = &[
     ("financial_report_snapshot", V2),
     ("fund_holder", V2),
     ("fund_positions", V2),
+    // fund (mutual fund) channel — read-only.
+    ("fund_hot", V2),
+    ("fund_list", V2),
+    ("fund_filters", V2),
+    ("fund_detail", V2),
+    ("fund_analysis", V2),
+    ("fund_analysis_detail", V2),
+    ("fund_trend", V2),
+    ("fund_annual_returns", V2),
+    ("fund_quarterly_returns", V2),
+    ("fund_performance", V2),
+    ("fund_performance_comparison", V2),
+    ("fund_nav", V2),
+    ("fund_nav_history", V2),
+    ("fund_nav_range", V2),
+    ("fund_holdings", V2),
+    ("fund_stock_holdings", V2),
+    ("fund_position_overview", V2),
+    ("fund_position", V2),
+    ("fund_position_performance", V2),
+    ("fund_position_profits", V2),
+    ("fund_position_nav", V2),
+    ("fund_position_dividends", V2),
+    ("fund_orders", V2),
+    ("fund_order", V2),
+    ("fund_transactions", V2),
+    // fund order pre-trade validation places nothing, so it stays on /v2
+    // alongside estimate_max_purchase_quantity; the fund writes below do not.
+    ("fund_validate_order", V2),
     ("history_candlesticks_by_date", V2),
     ("history_candlesticks_by_offset", V2),
     ("history_executions", V2),
@@ -1432,6 +1462,8 @@ const TOOL_ENDPOINTS: &[(&str, u8)] = &[
     ("dca_stop", 0),
     ("dca_update", 0),
     ("deposits", 0),
+    ("fund_cancel_order", 0),
+    ("fund_submit_order", 0),
     ("grid_cancel", 0),
     ("grid_detail", 0),
     ("grid_list", 0),
@@ -2531,7 +2563,7 @@ impl Longbridge {
         title = "Fund Positions",
         annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = true),
         output_schema = schema_for::<output::FundPositionsResponse>(),
-        description = "Get current fund positions. Returns list[].fund_info[]{symbol, symbol_name, currency, holding_units, current_net_asset_value, cost_net_asset_value, net_asset_value_day}."
+        description = "Get current fund positions. Returns list[].fund_info[]{counter_id, symbol_name, currency, holding_units, current_net_asset_value, cost_net_asset_value, net_asset_value_day}. counter_id is the fund id (e.g. UT/FD/HK0000384492); its last /-separated segment is the ISIN."
     )]
     async fn fund_positions(
         &self,
@@ -3467,6 +3499,608 @@ impl Longbridge {
         let mctx = extract_context(&ctx)?;
         measured_tool_call("finance_calendar", format!("{p:?}"), || {
             calendar::finance_calendar(&mctx, p)
+        })
+        .await
+    }
+
+    // ── fund (mutual fund) channel — read-only ───────────────────────────────
+
+    /// Get hot-selling funds.
+    #[tool(
+        title = "Fund Hot List",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true
+        ),
+        description = "List hot-selling funds in the Longbridge fund channel. Each row carries the fund counter_id (e.g. UT/FD/HK0000384492) used by every other fund_* tool. No parameters."
+    )]
+    async fn fund_hot(&self, ctx: RequestContext<RoleServer>) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("fund_hot", String::new(), || fund::fund_hot(&mctx)).await
+    }
+
+    /// Get the fund list.
+    #[tool(
+        title = "Fund List",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true
+        ),
+        description = "Browse/screen funds. Optional filter (object from fund_filters), quick_ids, and time_interval. Each row carries the fund counter_id used by other fund_* tools."
+    )]
+    async fn fund_list(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<fund::FundListParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("fund_list", format!("{p:?}"), || fund::fund_list(&mctx, p)).await
+    }
+
+    /// Get fund list filter options.
+    #[tool(
+        title = "Fund Filters",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true
+        ),
+        description = "Get the filter options (filter object shape and quick-filter ids) accepted by fund_list. No parameters."
+    )]
+    async fn fund_filters(
+        &self,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("fund_filters", String::new(), || fund::fund_filters(&mctx)).await
+    }
+
+    /// Get fund detail.
+    #[tool(
+        title = "Fund Detail",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true
+        ),
+        description = "Get a single fund's profile and key figures. counter_id (e.g. UT/FD/HK0000384492) comes from fund_hot / fund_list."
+    )]
+    async fn fund_detail(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<fund::CounterIdParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("fund_detail", format!("{p:?}"), || {
+            fund::fund_detail(&mctx, p)
+        })
+        .await
+    }
+
+    /// Get fund analysis (level 1).
+    #[tool(
+        title = "Fund Analysis",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true
+        ),
+        description = "Get a fund's top-level analysis (risk/return summary). counter_id from fund_hot / fund_list; optional period selector."
+    )]
+    async fn fund_analysis(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<fund::CounterIdPeriodParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("fund_analysis", format!("{p:?}"), || {
+            fund::fund_analysis(&mctx, p)
+        })
+        .await
+    }
+
+    /// Get fund analysis detail (level 2).
+    #[tool(
+        title = "Fund Analysis Detail",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true
+        ),
+        description = "Get a fund's detailed analysis (deeper metrics behind fund_analysis). counter_id from fund_hot / fund_list; optional period selector."
+    )]
+    async fn fund_analysis_detail(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<fund::CounterIdPeriodParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("fund_analysis_detail", format!("{p:?}"), || {
+            fund::fund_analysis_detail(&mctx, p)
+        })
+        .await
+    }
+
+    /// Get fund trend chart.
+    #[tool(
+        title = "Fund Trend",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true
+        ),
+        description = "Get a fund's trend chart series. counter_id from fund_hot / fund_list; optional period selector."
+    )]
+    async fn fund_trend(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<fund::CounterIdPeriodParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("fund_trend", format!("{p:?}"), || {
+            fund::fund_trend(&mctx, p)
+        })
+        .await
+    }
+
+    /// Get fund annual returns.
+    #[tool(
+        title = "Fund Annual Returns",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true
+        ),
+        description = "Get a fund's per-year returns (paged). counter_id from fund_hot / fund_list; optional page / size."
+    )]
+    async fn fund_annual_returns(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<fund::CounterIdPageParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("fund_annual_returns", format!("{p:?}"), || {
+            fund::fund_annual_returns(&mctx, p)
+        })
+        .await
+    }
+
+    /// Get fund quarterly returns.
+    #[tool(
+        title = "Fund Quarterly Returns",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true
+        ),
+        description = "Get a fund's per-quarter returns (paged). counter_id from fund_hot / fund_list; optional page / size."
+    )]
+    async fn fund_quarterly_returns(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<fund::CounterIdPageParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("fund_quarterly_returns", format!("{p:?}"), || {
+            fund::fund_quarterly_returns(&mctx, p)
+        })
+        .await
+    }
+
+    /// Get fund daily performance.
+    #[tool(
+        title = "Fund Performance",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true
+        ),
+        description = "Get a fund's daily performance figures. counter_id from fund_hot / fund_list."
+    )]
+    async fn fund_performance(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<fund::CounterIdParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("fund_performance", format!("{p:?}"), || {
+            fund::fund_performance(&mctx, p)
+        })
+        .await
+    }
+
+    /// Get fund performance comparison.
+    #[tool(
+        title = "Fund Performance Comparison",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true
+        ),
+        description = "Compare a fund's performance against its benchmark/peers. counter_id from fund_hot / fund_list; optional period selector."
+    )]
+    async fn fund_performance_comparison(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<fund::CounterIdPeriodParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("fund_performance_comparison", format!("{p:?}"), || {
+            fund::fund_performance_comparison(&mctx, p)
+        })
+        .await
+    }
+
+    /// Get fund latest net value.
+    #[tool(
+        title = "Fund NAV",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true
+        ),
+        description = "Get a fund's latest net asset value (NAV). counter_id from fund_hot / fund_list."
+    )]
+    async fn fund_nav(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<fund::CounterIdParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("fund_nav", format!("{p:?}"), || fund::fund_nav(&mctx, p)).await
+    }
+
+    /// Get fund historical net value (paged).
+    #[tool(
+        title = "Fund NAV History",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true
+        ),
+        description = "Get a fund's historical NAV series, paged. counter_id from fund_hot / fund_list; optional page / size."
+    )]
+    async fn fund_nav_history(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<fund::CounterIdPageParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("fund_nav_history", format!("{p:?}"), || {
+            fund::fund_nav_history(&mctx, p)
+        })
+        .await
+    }
+
+    /// Get fund historical net value by relative range.
+    #[tool(
+        title = "Fund NAV Range",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true
+        ),
+        description = "Get a fund's historical NAV over a relative window. counter_id from fund_hot / fund_list; set month_before or year_before."
+    )]
+    async fn fund_nav_range(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<fund::CounterIdNavRangeParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("fund_nav_range", format!("{p:?}"), || {
+            fund::fund_nav_range(&mctx, p)
+        })
+        .await
+    }
+
+    /// Get a fund's top-10 holdings.
+    #[tool(
+        title = "Fund Holdings",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true
+        ),
+        description = "Get a fund's top-10 holdings. counter_id from fund_hot / fund_list; optional scene selector."
+    )]
+    async fn fund_holdings(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<fund::FundHoldingsParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("fund_holdings", format!("{p:?}"), || {
+            fund::fund_holdings(&mctx, p)
+        })
+        .await
+    }
+
+    /// Get the stocks held by a fund (reverse lookup).
+    #[tool(
+        title = "Fund Stock Holdings",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true
+        ),
+        description = "Reverse-lookup the individual stocks a fund holds. counter_id from fund_hot / fund_list; optional limit."
+    )]
+    async fn fund_stock_holdings(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<fund::FundStockHoldingsParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("fund_stock_holdings", format!("{p:?}"), || {
+            fund::fund_stock_holdings(&mctx, p)
+        })
+        .await
+    }
+
+    /// Get the user's fund positions overview.
+    #[tool(
+        title = "Fund Position Overview",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true
+        ),
+        description = "Get the signed-in user's fund positions overview (all held funds). Requires an authenticated token. No parameters."
+    )]
+    async fn fund_position_overview(
+        &self,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("fund_position_overview", String::new(), || {
+            fund::fund_position_overview(&mctx)
+        })
+        .await
+    }
+
+    /// Get a single held-fund position detail.
+    #[tool(
+        title = "Fund Position",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true
+        ),
+        description = "Get one held fund's position detail. Requires auth. counter_id from fund_position_overview / fund_hot / fund_list; optional start / end (YYYY-MM-DD)."
+    )]
+    async fn fund_position(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<fund::FundPositionParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("fund_position", format!("{p:?}"), || {
+            fund::fund_position(&mctx, p)
+        })
+        .await
+    }
+
+    /// Get a held-fund's performance figures.
+    #[tool(
+        title = "Fund Position Performance",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true
+        ),
+        description = "Get a held fund's performance figures. Requires auth. counter_id from fund_position_overview / fund_hot / fund_list."
+    )]
+    async fn fund_position_performance(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<fund::CounterIdParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("fund_position_performance", format!("{p:?}"), || {
+            fund::fund_position_performance(&mctx, p)
+        })
+        .await
+    }
+
+    /// Get a held-fund's cumulative-profit series.
+    #[tool(
+        title = "Fund Position Profits",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true
+        ),
+        description = "Get a held fund's cumulative-profit detail (paged). Requires auth. counter_id from fund_position_overview; optional start / end (YYYY-MM-DD), page / size."
+    )]
+    async fn fund_position_profits(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<fund::FundPositionProfitsParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("fund_position_profits", format!("{p:?}"), || {
+            fund::fund_position_profits(&mctx, p)
+        })
+        .await
+    }
+
+    /// Get a held-fund's net-value history.
+    #[tool(
+        title = "Fund Position NAV",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true
+        ),
+        description = "Get a held fund's NAV history over a relative window. Requires auth. counter_id from fund_position_overview; set month_before or year_before."
+    )]
+    async fn fund_position_nav(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<fund::CounterIdNavRangeParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("fund_position_nav", format!("{p:?}"), || {
+            fund::fund_position_nav(&mctx, p)
+        })
+        .await
+    }
+
+    /// Get a held-fund's dividend records.
+    #[tool(
+        title = "Fund Position Dividends",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true
+        ),
+        description = "Get a held fund's dividend records (paged). Requires auth. counter_id from fund_position_overview; optional currency, start / end (unix seconds), page / size."
+    )]
+    async fn fund_position_dividends(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<fund::FundPositionDividendsParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("fund_position_dividends", format!("{p:?}"), || {
+            fund::fund_position_dividends(&mctx, p)
+        })
+        .await
+    }
+
+    /// Get the user's fund orders (trade/execution records).
+    #[tool(
+        title = "Fund Orders",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true
+        ),
+        description = "List the user's fund orders / execution records. Requires auth. Optional counter_ids, actions, states, currency, start / end (unix seconds), page / size."
+    )]
+    async fn fund_orders(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<fund::FundOrdersParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("fund_orders", format!("{p:?}"), || {
+            fund::fund_orders(&mctx, p)
+        })
+        .await
+    }
+
+    /// Get a fund order detail.
+    #[tool(
+        title = "Fund Order Detail",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true
+        ),
+        description = "Get one fund order's detail by order_id (from fund_orders). Requires auth."
+    )]
+    async fn fund_order(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<fund::FundOrderParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("fund_order", format!("{p:?}"), || {
+            fund::fund_order(&mctx, p)
+        })
+        .await
+    }
+
+    /// Get the user's fund transactions (cash-flow records).
+    #[tool(
+        title = "Fund Transactions",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true
+        ),
+        description = "List the user's fund cash-flow records. Requires auth. Optional business_type, category, currencies, start / end (unix seconds), page / size."
+    )]
+    async fn fund_transactions(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<fund::FundTransactionsParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("fund_transactions", format!("{p:?}"), || {
+            fund::fund_transactions(&mctx, p)
+        })
+        .await
+    }
+
+    /// Validate a fund order (pre-trade check; places nothing).
+    #[tool(
+        title = "Validate Fund Order",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true
+        ),
+        description = "Pre-trade validation for a fund buy/sell order. Places NO order — it only checks the request against the fund channel and returns the validation result (fees, limits, estimated units/amount). Requires auth. counter_id from fund_hot / fund_list; action is buy or sell; currency e.g. HKD/USD; give either amount (cash) or units (shares)."
+    )]
+    async fn fund_validate_order(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<fund::FundValidateOrderParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("fund_validate_order", format!("{p:?}"), || {
+            fund::fund_validate_order(&mctx, p)
+        })
+        .await
+    }
+
+    /// Submit a fund buy/sell order.
+    #[tool(
+        title = "Submit Fund Order",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false,
+            open_world_hint = true
+        ),
+        description = "Submit a fund buy/sell order. DRY RUN unless execute is the confirmation_code from its own dry run: call once without execute, show the preview to the user, then re-call quoting the code only after they explicitly confirm. Requires auth. counter_id from fund_hot / fund_list; action is buy or sell; currency e.g. HKD/USD; give either amount (cash to invest) or units (shares to sell); is_sell_all=true redeems the whole position. Use fund_validate_order first for a safe pre-trade check."
+    )]
+    async fn fund_submit_order(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<fund::FundSubmitOrderParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("fund_submit_order", format!("{p:?}"), || {
+            fund::fund_submit_order(&mctx, p)
+        })
+        .await
+    }
+
+    /// Cancel a fund order.
+    #[tool(
+        title = "Cancel Fund Order",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = true,
+            open_world_hint = true
+        ),
+        description = "Cancel a fund order by order_id. DRY RUN unless execute is the confirmation_code from its own dry run: call once without execute, show the returned preview (which echoes the order being cancelled) to the user, then re-call quoting the code only after they explicitly confirm that exact order. Requires auth. order_id from fund_orders."
+    )]
+    async fn fund_cancel_order(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<fund::FundCancelOrderParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("fund_cancel_order", format!("{p:?}"), || {
+            fund::fund_cancel_order(&mctx, p)
         })
         .await
     }
@@ -5500,7 +6134,7 @@ impl Longbridge {
 
 #[tool_handler(
     name = "longbridge-mcp",
-    instructions = "Longbridge OpenAPI MCP — market data, trading, analysis. Order writes (submit_order, cancel_order, replace_order, grid_*) are two-step: call once without execute to get a confirmation_code, show the preview, then re-call with execute=code after the user confirms. On failure, tools return a JSON envelope with an `error_code` and a `recoverable` field: `reauth` (re-authenticate then retry), `backoff` (wait then retry), `fix_params` (fix arguments then retry), or `none` (do not retry; tell the user)."
+    instructions = "Longbridge OpenAPI MCP — market data, trading, analysis. Order writes (submit_order, cancel_order, replace_order, grid_*, fund_submit_order, fund_cancel_order) are two-step: call once without execute to get a confirmation_code, show the preview, then re-call with execute=code after the user confirms. On failure, tools return a JSON envelope with an `error_code` and a `recoverable` field: `reauth` (re-authenticate then retry), `backoff` (wait then retry), `fix_params` (fix arguments then retry), or `none` (do not retry; tell the user)."
 )]
 impl ServerHandler for Longbridge {
     // `get_info` mirrors the `#[tool_handler]` default tool metadata, plus the
@@ -5522,7 +6156,7 @@ impl ServerHandler for Longbridge {
             env!("CARGO_PKG_VERSION"),
         ))
         .with_instructions(
-            "Longbridge OpenAPI MCP — market data, trading, analysis. Order writes (submit_order, cancel_order, replace_order, grid_*) are two-step: call once without execute to get a confirmation_code, show the preview, then re-call with execute=code after the user confirms. On failure, tools return a JSON envelope with an `error_code` and a `recoverable` field: `reauth` (re-authenticate then retry), `backoff` (wait then retry), `fix_params` (fix arguments then retry), or `none` (do not retry; tell the user).",
+            "Longbridge OpenAPI MCP — market data, trading, analysis. Order writes (submit_order, cancel_order, replace_order, grid_*, fund_submit_order, fund_cancel_order) are two-step: call once without execute to get a confirmation_code, show the preview, then re-call with execute=code after the user confirms. On failure, tools return a JSON envelope with an `error_code` and a `recoverable` field: `reauth` (re-authenticate then retry), `backoff` (wait then retry), `fix_params` (fix arguments then retry), or `none` (do not retry; tell the user).",
         )
     }
 
@@ -6098,6 +6732,9 @@ mod tests {
             "submit_multileg_order",
             "cancel_order",
             "replace_order",
+            // Fund order write operations.
+            "fund_submit_order",
+            "fund_cancel_order",
             // IPO order management.
             "ipo_orders",
             "ipo_order_detail",

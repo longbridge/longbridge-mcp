@@ -4,7 +4,8 @@ version = "0.12.0"
 edition = "2024"
 
 [dependencies]
-longbridge = "5.1"
+# TODO: switch back to a crates.io release once the fund channel ships in a tagged openapi version.
+longbridge = { git = "https://github.com/longbridge/openapi.git", rev = "e0df4c1e8" }
 rust_decimal = "1"
 rmcp = { version = "1.4", features = [
     "server",
