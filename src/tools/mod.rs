@@ -674,24 +674,6 @@ pub struct McpContext {
     pub extra_headers: Vec<(String, String)>,
 }
 
-/// Server-side beacon endpoint. Quote operations flow over the WebSocket quote
-/// channel and never reach the HTTP access log; a request to this fake path lets
-/// the server record (and count) that a WS-backed quote tool ran. The path only
-/// needs to exist server-side to be logged.
-pub(crate) const QUOTE_CMD_PATH: &str = "/v1/quote/cmd";
-
-/// Send the tracking beacon over `client`. The (empty) body and any transport
-/// error are ignored — the server only needs the access-log entry. Extracted as
-/// its own awaitable function so the integration test can drive it against a
-/// local server deterministically.
-pub(crate) async fn send_quote_cmd(client: &longbridge::httpclient::HttpClient) {
-    let _ = client
-        .request(reqwest::Method::GET, QUOTE_CMD_PATH)
-        .response::<String>()
-        .send()
-        .await;
-}
-
 impl McpContext {
     /// This server's own identity as an RFC 9110 product token.
     const SELF_USER_AGENT: &'static str = concat!("longbridge-mcp/", env!("CARGO_PKG_VERSION"));
@@ -841,37 +823,24 @@ impl McpContext {
         client.header("user-agent", self.user_agent())
     }
 
-    /// Fire a best-effort `GET /v1/quote/cmd` so the server records a log entry
-    /// for this WS-backed quote operation. Quote traffic flows over the
-    /// WebSocket quote channel and is therefore invisible to HTTP access logs;
-    /// this ping makes the call countable server-side. It reuses an `HttpClient`
-    /// from [`create_http_client`], which already carries the `user-agent`, OAuth
-    /// token, forwarded headers, and the `x-mcp-tool` tool tag (see
-    /// [`CURRENT_TOOL`]). Fire-and-forget: spawned on the runtime with its result
-    /// and errors ignored, never blocking the call. The client is built
-    /// synchronously here (reading the task-local before spawning), so the spawn
-    /// not inheriting task-locals is fine.
-    fn track_quote_cmd(&self) {
-        let client = self.create_http_client();
-        tokio::spawn(async move { send_quote_cmd(&client).await });
-    }
-
-    /// Return the cached `QuoteContext` for this token, creating one on first
-    /// use. Also fires the WS beacon so the quote operation appears in
-    /// server-side access logs.
+    /// Build a `QuoteContext` for this request.
+    ///
+    /// Quote *data* is served over HTTP REST now; the only SDK methods still
+    /// reached through a `QuoteContext` (filings / market temperature /
+    /// security list / watchlist group CRUD / us-crypto overview) are themselves
+    /// HTTP-backed and never open the quote WebSocket — it connects lazily, and
+    /// only on a WS request, which these never issue. So there is nothing to
+    /// pool: create a fresh, lightweight context per call (its background task
+    /// idles without connecting and shuts down when the context drops).
     pub async fn get_quote_context(&self) -> longbridge::quote::QuoteContext {
-        self.track_quote_cmd();
-        // Pass a lazy closure: create_config() is only called on a cache miss.
-        // Cache hits avoid the Arc<Config> allocation entirely.
-        crate::ws_pool::get_or_init_quote(&self.token, || self.create_config()).await
+        let (ctx, _) = longbridge::quote::QuoteContext::new(self.create_config());
+        ctx
     }
 
-    /// Evict the cached `QuoteContext` for this token. Call this after any
-    /// Longbridge error on a quote API so the next request creates a fresh
-    /// WebSocket connection rather than reusing a broken one.
-    pub fn evict_quote_context(&self) {
-        crate::ws_pool::evict(&self.token);
-    }
+    /// No-op, retained so error paths can call it unconditionally: quote contexts
+    /// are no longer pooled (see [`get_quote_context`]), so there is nothing to
+    /// evict.
+    pub fn evict_quote_context(&self) {}
 
     /// Extracts `account_channel` from the JWT bearer token's `sub` claim.
     /// Falls back to `"lb"` when the token cannot be decoded.
@@ -6982,7 +6951,7 @@ mod tests {
 
 #[cfg(test)]
 mod quote_cmd_tests {
-    use super::{CURRENT_TOOL, McpContext, QUOTE_CMD_PATH, send_quote_cmd};
+    use super::{CURRENT_TOOL, McpContext};
     use std::time::Duration;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -7053,7 +7022,13 @@ mod quote_cmd_tests {
                 CURRENT_TOOL.sync_scope("depth", || mctx.create_http_client())
             });
 
-        send_quote_cmd(&client).await;
+        // Any GET through the client exercises the same header path; use an
+        // arbitrary path against the local capture server.
+        let _ = client
+            .request(reqwest::Method::GET, "/v1/ping")
+            .response::<String>()
+            .send()
+            .await;
 
         let request = tokio::time::timeout(Duration::from_secs(5), rx)
             .await
@@ -7063,8 +7038,8 @@ mod quote_cmd_tests {
 
         let request_line = request.lines().next().unwrap_or_default();
         assert!(
-            request_line.starts_with(&format!("GET {QUOTE_CMD_PATH}")),
-            "expected `GET {QUOTE_CMD_PATH}`, got request line: {request_line}"
+            request_line.starts_with("GET /v1/ping"),
+            "expected `GET /v1/ping`, got request line: {request_line}"
         );
         assert!(
             lower.contains("x-mcp-tool: depth"),
@@ -7097,26 +7072,18 @@ mod quote_cmd_tests {
     }
 
     /// Guard: every quote tool must obtain its `QuoteContext` via
-    /// `mctx.get_quote_context()` (which fires the `/v1/quote/cmd` beacon),
-    /// never `QuoteContext::new(...)` directly. The sole sanctioned constructor
-    /// call lives outside `src/tools`, so every tool file must
-    /// be free of `QuoteContext::new(`. This makes "every WS quote tool is
-    /// tracked" an enforced invariant: a new tool that constructs its own
-    /// `QuoteContext` fails this test.
+    /// `mctx.get_quote_context()`, never `QuoteContext::new(...)` directly, so all
+    /// quote access funnels through one place. The sole sanctioned constructor call
+    /// lives in `src/tools/mod.rs` (`get_quote_context`); every other file must be
+    /// free of `QuoteContext::new(`.
     #[test]
     fn quote_tools_use_tracking_context_constructor() {
         // Scan all of src/ so files outside src/tools/ (e.g. a future
         // src/subscriptions.rs) are also caught.
-        // Allowed construction sites:
-        //   - src/ws_pool.rs       — the sanctioned pool that wraps QuoteContext::new
-        //   - src/tools/mod.rs     — this file (defines get_quote_context; comments
-        //                            reference QuoteContext::new() in doc strings)
+        // Allowed construction site:
+        //   - src/tools/mod.rs — defines get_quote_context (the sole constructor).
         let src_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-        let allowed: std::collections::HashSet<_> = [
-            src_dir.join("ws_pool.rs"),
-            src_dir.join("tools").join("mod.rs"),
-        ]
-        .into();
+        let allowed: std::collections::HashSet<_> = [src_dir.join("tools").join("mod.rs")].into();
         let mut offenders = Vec::new();
         for file in rs_files(&src_dir) {
             if allowed.contains(&file) {
@@ -7131,10 +7098,9 @@ mod quote_cmd_tests {
         }
         assert!(
             offenders.is_empty(),
-            "QuoteContext::new() is only allowed in src/ws_pool.rs. \
-             All other code must use `mctx.get_quote_context()` so calls go \
-             through the connection pool and the /v1/quote/cmd beacon. \
-             Untracked constructor at:\n{}",
+            "QuoteContext::new() is only allowed in src/tools/mod.rs \
+             (get_quote_context). All other code must use \
+             `mctx.get_quote_context()`. Direct constructor at:\n{}",
             offenders.join("\n")
         );
     }

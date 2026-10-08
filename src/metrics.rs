@@ -1,6 +1,6 @@
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
-use prometheus::{Encoder, HistogramVec, IntCounterVec, IntGauge, Opts, Registry, TextEncoder};
+use prometheus::{Encoder, HistogramVec, IntCounterVec, Opts, Registry, TextEncoder};
 
 use std::sync::LazyLock;
 
@@ -88,29 +88,6 @@ static TOOL_CALL_DURATION: LazyLock<HistogramVec> = LazyLock::new(|| {
     histogram
 });
 
-static QUOTE_WS_POOL_EVENTS_TOTAL: LazyLock<IntCounterVec> = LazyLock::new(|| {
-    let counter = IntCounterVec::new(
-        Opts::new(
-            "mcp_quote_ws_pool_events_total",
-            "Quote WebSocket context pool events",
-        ),
-        &["event"],
-    )
-    .unwrap();
-    REGISTRY.register(Box::new(counter.clone())).unwrap();
-    counter
-});
-
-static QUOTE_WS_POOL_ENTRIES: LazyLock<IntGauge> = LazyLock::new(|| {
-    let gauge = IntGauge::new(
-        "mcp_quote_ws_pool_entries",
-        "Current cached quote WebSocket contexts in this process",
-    )
-    .unwrap();
-    REGISTRY.register(Box::new(gauge.clone())).unwrap();
-    gauge
-});
-
 static OAUTH_TOKEN_TOTAL: LazyLock<IntCounterVec> = LazyLock::new(|| {
     let counter = IntCounterVec::new(
         Opts::new(
@@ -194,16 +171,6 @@ pub fn record_oauth_token(grant_type: &str, result: &str) {
 /// `"success"`(上游 2xx)或 `"error"`。
 pub fn record_oauth_revoke(result: &str) {
     OAUTH_REVOKE_TOTAL.with_label_values(&[result]).inc();
-}
-
-pub fn record_quote_ws_pool_event(event: &str, count: u64) {
-    QUOTE_WS_POOL_EVENTS_TOTAL
-        .with_label_values(&[event])
-        .inc_by(count);
-}
-
-pub fn set_quote_ws_pool_entries(entries: usize) {
-    QUOTE_WS_POOL_ENTRIES.set(entries as i64);
 }
 
 pub async fn metrics_handler() -> impl IntoResponse {

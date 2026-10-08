@@ -465,6 +465,59 @@ pub(crate) fn drop_keys(value: &mut serde_json::Value, keys: &[&str]) {
     }
 }
 
+/// Rename object keys in `value`, in the given order. A missing `from` key is
+/// skipped. Applies to `value`'s own top level when it is an object, or to each
+/// element's top level when `value` is an array — but never recurses deeper, so
+/// a rename like `id` → `issuer_id` cannot accidentally touch a same-named field
+/// nested inside a row.
+///
+/// Used by the quote HTTP migration to reshape a gateway proto-JSON response
+/// (e.g. `ask`/`bid`, or per-row `id`) back to the pre-migration SDK-typed shape,
+/// so tool output stays stable.
+pub(crate) fn rename_keys(value: &mut serde_json::Value, renames: &[(&str, &str)]) {
+    match value {
+        serde_json::Value::Array(arr) => {
+            for el in arr.iter_mut() {
+                rename_keys_top(el, renames);
+            }
+        }
+        other => rename_keys_top(other, renames),
+    }
+}
+
+/// Recursively replace empty-string values (`""`) with `null`, at any depth and
+/// through arrays. The gateway proto-JSON sends `""` for an absent optional
+/// decimal/string; the SDK rendered those as `null`, so this lets a later
+/// `strip_nulls` drop them uniformly and keeps output shape stable.
+pub(crate) fn empty_str_to_null(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(map) => {
+            for v in map.values_mut() {
+                empty_str_to_null(v);
+            }
+        }
+        serde_json::Value::Array(arr) => {
+            for v in arr.iter_mut() {
+                empty_str_to_null(v);
+            }
+        }
+        serde_json::Value::String(s) if s.is_empty() => {
+            *value = serde_json::Value::Null;
+        }
+        _ => {}
+    }
+}
+
+fn rename_keys_top(value: &mut serde_json::Value, renames: &[(&str, &str)]) {
+    if let Some(map) = value.as_object_mut() {
+        for (from, to) in renames {
+            if let Some(v) = map.remove(*from) {
+                map.insert((*to).to_string(), v);
+            }
+        }
+    }
+}
+
 /// Recursively remove a `counter_id` / `counter_ids` entry from any object that
 /// also carries the equivalent `symbol` / `symbols`, at any depth and through
 /// arrays.
