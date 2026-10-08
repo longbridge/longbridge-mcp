@@ -13,7 +13,6 @@ mod serialize;
 #[cfg(test)]
 mod test_support;
 mod tools;
-mod ws_pool;
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
