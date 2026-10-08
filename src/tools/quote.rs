@@ -293,20 +293,21 @@ pub async fn static_info(
         if let Some(items) = arr.as_array_mut() {
             for it in items.iter_mut() {
                 if let Some(obj) = it.as_object_mut()
-                    && let Some(sd) = obj.get("stock_derivatives") {
-                        let bits: u8 = sd
-                            .as_array()
-                            .map(|a| {
-                                a.iter()
-                                    .filter_map(serde_json::Value::as_i64)
-                                    .fold(0u8, |acc, n| acc | (n as u8))
-                            })
-                            .unwrap_or(0);
-                        let dt = longbridge::quote::DerivativeType::from_bits_truncate(bits);
-                        if let Ok(v) = serde_json::to_value(dt) {
-                            obj.insert("stock_derivatives".to_string(), v);
-                        }
+                    && let Some(sd) = obj.get("stock_derivatives")
+                {
+                    let bits: u8 = sd
+                        .as_array()
+                        .map(|a| {
+                            a.iter()
+                                .filter_map(serde_json::Value::as_i64)
+                                .fold(0u8, |acc, n| acc | (n as u8))
+                        })
+                        .unwrap_or(0);
+                    let dt = longbridge::quote::DerivativeType::from_bits_truncate(bits);
+                    if let Ok(v) = serde_json::to_value(dt) {
+                        obj.insert("stock_derivatives".to_string(), v);
                     }
+                }
             }
         }
         if let serde_json::Value::Array(items) = arr {
@@ -391,9 +392,10 @@ where
     let Some((seg, rest)) = segments.split_first() else {
         if let Some(n) = value.as_i64()
             && let Ok(p) = P::try_from(n as i32)
-                && let Ok(v) = serde_json::to_value(S::from(p)) {
-                    *value = v;
-                }
+            && let Ok(v) = serde_json::to_value(S::from(p))
+        {
+            *value = v;
+        }
         return;
     };
     match value {
@@ -427,9 +429,10 @@ where
     let Some((seg, rest)) = segments.split_first() else {
         if let Some(s) = value.as_str()
             && let Ok(e) = s.parse::<E>()
-                && let Ok(v) = serde_json::to_value(e) {
-                    *value = v;
-                }
+            && let Ok(v) = serde_json::to_value(e)
+        {
+            *value = v;
+        }
         return;
     };
     match value {
@@ -519,11 +522,11 @@ pub async fn option_quote(
     // `OptionQuote` carries them flat, so lift them to each row's top level.
     if let Some(arr) = value.as_array_mut() {
         for item in arr.iter_mut() {
-            if let Some(obj) = item.as_object_mut() {
-                if let Some(serde_json::Value::Object(ext)) = obj.remove("option_extend") {
-                    for (k, v) in ext {
-                        obj.insert(k, v);
-                    }
+            if let Some(obj) = item.as_object_mut()
+                && let Some(serde_json::Value::Object(ext)) = obj.remove("option_extend")
+            {
+                for (k, v) in ext {
+                    obj.insert(k, v);
                 }
             }
         }
@@ -557,17 +560,22 @@ pub async fn option_quote(
             for g in arr.iter_mut() {
                 if let Some(obj) = g.as_object_mut() {
                     for k in ["vega", "rho"] {
-                        if let Some(s) = obj.get(k).and_then(|v| v.as_str()).filter(|s| !s.is_empty())
-                            && let Ok(d) = s.parse::<rust_decimal::Decimal>() {
-                                obj.insert(
-                                    k.to_string(),
-                                    serde_json::Value::String(
-                                        (d / rust_decimal::Decimal::ONE_HUNDRED).to_string(),
-                                    ),
-                                );
-                            }
+                        if let Some(s) = obj
+                            .get(k)
+                            .and_then(|v| v.as_str())
+                            .filter(|s| !s.is_empty())
+                            && let Ok(d) = s.parse::<rust_decimal::Decimal>()
+                        {
+                            obj.insert(
+                                k.to_string(),
+                                serde_json::Value::String(
+                                    (d / rust_decimal::Decimal::ONE_HUNDRED).to_string(),
+                                ),
+                            );
+                        }
                     }
-                    if let Some(sym) = obj.get("symbol").and_then(|s| s.as_str()).map(String::from) {
+                    if let Some(sym) = obj.get("symbol").and_then(|s| s.as_str()).map(String::from)
+                    {
                         let pick = |k: &str| obj.get(k).cloned().unwrap_or(serde_json::Value::Null);
                         by_symbol.insert(
                             sym,
@@ -585,7 +593,10 @@ pub async fn option_quote(
         }
         if let Some(arr) = value.as_array_mut() {
             for item in arr {
-                let sym = item.get("symbol").and_then(|s| s.as_str()).map(String::from);
+                let sym = item
+                    .get("symbol")
+                    .and_then(|s| s.as_str())
+                    .map(String::from);
                 if let (Some(sym), Some(obj)) = (sym, item.as_object_mut())
                     && let Some(g) = by_symbol.get(&sym).and_then(|v| v.as_object())
                 {
@@ -622,11 +633,11 @@ pub async fn warrant_quote(
     // `WarrantQuote` carries them flat — lift them to each row's top level.
     if let Some(arr) = value.as_array_mut() {
         for item in arr.iter_mut() {
-            if let Some(obj) = item.as_object_mut() {
-                if let Some(serde_json::Value::Object(ext)) = obj.remove("warrant_extend") {
-                    for (k, v) in ext {
-                        obj.insert(k, v);
-                    }
+            if let Some(obj) = item.as_object_mut()
+                && let Some(serde_json::Value::Object(ext)) = obj.remove("warrant_extend")
+            {
+                for (k, v) in ext {
+                    obj.insert(k, v);
                 }
             }
         }
@@ -803,7 +814,8 @@ where
 /// NOTE: the REST payload omits the SDK's `open_updated` flag — pending a
 /// gateway/backend addition (see verification report); not synthesized here.
 fn reshape_candlesticks(resp: &str) -> Result<CallToolResult, McpError> {
-    let transformed = crate::serialize::transform_json(resp.as_bytes()).map_err(Error::Serialize)?;
+    let transformed =
+        crate::serialize::transform_json(resp.as_bytes()).map_err(Error::Serialize)?;
     let mut value: serde_json::Value =
         serde_json::from_str(&transformed).map_err(Error::Serialize)?;
     if let Some(inner) = value.get_mut("candlesticks").map(serde_json::Value::take) {
@@ -981,7 +993,10 @@ pub async fn trading_days(
         "/quote/markets/trading-days",
         serde_json::json!({ "market": market_str, "beg_day": ymd(start), "end_day": ymd(end) }),
         None,
-        &[("trade_day", "trade_days"), ("half_trade_day", "half_trade_days")],
+        &[
+            ("trade_day", "trade_days"),
+            ("half_trade_day", "half_trade_days"),
+        ],
         &[],
         &[],
     )
@@ -990,14 +1005,16 @@ pub async fn trading_days(
         if let Some(arr) = value.get_mut(key).and_then(|a| a.as_array_mut()) {
             for v in arr.iter_mut() {
                 if let Some(s) = v.as_str()
-                    && s.len() == 8 && s.chars().all(|c| c.is_ascii_digit()) {
-                        *v = serde_json::Value::String(format!(
-                            "{}-{}-{}",
-                            &s[0..4],
-                            &s[4..6],
-                            &s[6..8]
-                        ));
-                    }
+                    && s.len() == 8
+                    && s.chars().all(|c| c.is_ascii_digit())
+                {
+                    *v = serde_json::Value::String(format!(
+                        "{}-{}-{}",
+                        &s[0..4],
+                        &s[4..6],
+                        &s[6..8]
+                    ));
+                }
             }
         }
     }
@@ -1024,9 +1041,11 @@ pub async fn option_chain_expiry_date_list(
     if let Some(arr) = value.as_array_mut() {
         for v in arr.iter_mut() {
             if let Some(s) = v.as_str()
-                && s.len() == 8 && s.chars().all(|c| c.is_ascii_digit()) {
-                    *v = serde_json::Value::String(format!("{}-{}-{}", &s[0..4], &s[4..6], &s[6..8]));
-                }
+                && s.len() == 8
+                && s.chars().all(|c| c.is_ascii_digit())
+            {
+                *v = serde_json::Value::String(format!("{}-{}-{}", &s[0..4], &s[4..6], &s[6..8]));
+            }
         }
     }
     Ok(crate::tools::tool_result(
@@ -1068,14 +1087,11 @@ pub async fn option_chain_info_by_date(
         for it in arr.iter_mut() {
             if let Some(ed) = it.get_mut("expiry_date")
                 && let Some(s) = ed.as_str()
-                    && s.len() == 8 && s.chars().all(|c| c.is_ascii_digit()) {
-                        *ed = serde_json::Value::String(format!(
-                            "{}-{}-{}",
-                            &s[0..4],
-                            &s[4..6],
-                            &s[6..8]
-                        ));
-                    }
+                && s.len() == 8
+                && s.chars().all(|c| c.is_ascii_digit())
+            {
+                *ed = serde_json::Value::String(format!("{}-{}-{}", &s[0..4], &s[4..6], &s[6..8]));
+            }
         }
     }
     Ok(crate::tools::tool_result(
@@ -1128,9 +1144,10 @@ pub async fn capital_distribution(
         &[],
     )
     .await?;
-    let raw_ts = value
-        .get("timestamp")
-        .and_then(|t| t.as_i64().or_else(|| t.as_str().and_then(|s| s.parse::<i64>().ok())));
+    let raw_ts = value.get("timestamp").and_then(|t| {
+        t.as_i64()
+            .or_else(|| t.as_str().and_then(|s| s.parse::<i64>().ok()))
+    });
     let data_available = raw_ts.map(|n| n != 0).unwrap_or(false);
     crate::serialize::convert_unix_paths(&mut value, &["timestamp"]);
     // The backend sends `""` for a zero bucket; the SDK rendered that as `"0"`.
@@ -1138,14 +1155,18 @@ pub async fn capital_distribution(
         if let Some(obj) = value.get_mut(group).and_then(|g| g.as_object_mut()) {
             for k in ["large", "medium", "small"] {
                 if let Some(v) = obj.get_mut(k)
-                    && v.as_str() == Some("") {
-                        *v = serde_json::Value::String("0".to_string());
-                    }
+                    && v.as_str() == Some("")
+                {
+                    *v = serde_json::Value::String("0".to_string());
+                }
             }
         }
     }
     if let Some(obj) = value.as_object_mut() {
-        obj.insert("data_available".to_string(), serde_json::Value::Bool(data_available));
+        obj.insert(
+            "data_available".to_string(),
+            serde_json::Value::Bool(data_available),
+        );
     }
     tool_json(&value)
 }
@@ -1428,15 +1449,19 @@ pub async fn calc_indexes(
         for row in arr.iter_mut() {
             if let Some(obj) = row.as_object_mut() {
                 for k in ["vega", "rho"] {
-                    if let Some(s) = obj.get(k).and_then(|v| v.as_str()).filter(|s| !s.is_empty())
-                        && let Ok(d) = s.parse::<rust_decimal::Decimal>() {
-                            obj.insert(
-                                k.to_string(),
-                                serde_json::Value::String(
-                                    (d / rust_decimal::Decimal::ONE_HUNDRED).to_string(),
-                                ),
-                            );
-                        }
+                    if let Some(s) = obj
+                        .get(k)
+                        .and_then(|v| v.as_str())
+                        .filter(|s| !s.is_empty())
+                        && let Ok(d) = s.parse::<rust_decimal::Decimal>()
+                    {
+                        obj.insert(
+                            k.to_string(),
+                            serde_json::Value::String(
+                                (d / rust_decimal::Decimal::ONE_HUNDRED).to_string(),
+                            ),
+                        );
+                    }
                 }
             }
         }

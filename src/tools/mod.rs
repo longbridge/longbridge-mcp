@@ -7083,8 +7083,7 @@ mod quote_cmd_tests {
         // Allowed construction site:
         //   - src/tools/mod.rs — defines get_quote_context (the sole constructor).
         let src_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-        let allowed: std::collections::HashSet<_> =
-            [src_dir.join("tools").join("mod.rs")].into();
+        let allowed: std::collections::HashSet<_> = [src_dir.join("tools").join("mod.rs")].into();
         let mut offenders = Vec::new();
         for file in rs_files(&src_dir) {
             if allowed.contains(&file) {

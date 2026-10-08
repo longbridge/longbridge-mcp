@@ -286,9 +286,10 @@ pub async fn http_post_value(
     // container field (e.g. `secu_quote`, `lines`); unwrap it so the tool root
     // matches the SDK's (array- or object-rooted) shape.
     if let Some(key) = unwrap
-        && let Some(inner) = value.get_mut(key).map(serde_json::Value::take) {
-            value = inner;
-        }
+        && let Some(inner) = value.get_mut(key).map(serde_json::Value::take)
+    {
+        value = inner;
+    }
     crate::serialize::rename_keys(&mut value, renames);
     convert_unix_paths(&mut value, unix_paths);
     crate::serialize::drop_keys(&mut value, drop);
