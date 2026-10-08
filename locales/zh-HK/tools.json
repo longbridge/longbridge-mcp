@@ -59,7 +59,7 @@
     },
     "fund_positions": {
       "title": "基金持倉",
-      "description": "查詢當前基金持倉，返回 list[].fund_info[]{symbol, symbol_name, currency, holding_units, current_net_asset_value, cost_net_asset_value, net_asset_value_day}"
+      "description": "查詢當前基金持倉，返回 list[].fund_info[]{counter_id, symbol_name, currency, holding_units, current_net_asset_value, cost_net_asset_value, net_asset_value_day}。counter_id 為基金 id（如 UT/FD/HK0000384492），其最後一個 / 後的欄位即 ISIN。"
     },
     "margin_ratio": {
       "title": "保證金比率",
@@ -1392,6 +1392,253 @@
         "begin_time": "查詢起始時間，UTC 時區，格式為 2006-01-02T15:04:05Z；留空則從最早可用資料開始",
         "end_time": "查詢結束時間，UTC 時區，格式為 2006-01-02T15:04:05Z；留空則返回最新資料",
         "limit": "返回事實數量上限。時間範圍內的事實超出該上限時，僅返回最新的 limit 條。預設 100"
+      }
+    },
+    "fund_hot": {
+      "title": "基金熱銷榜",
+      "description": "獲取長橋基金頻道的熱銷基金列表。每行包含供其他 fund_* 工具使用的基金 counter_id（如 UT/FD/HK0000384492）。無參數。"
+    },
+    "fund_list": {
+      "title": "基金列表",
+      "description": "瀏覽 / 篩選基金。可選 filter（來自 fund_filters 的物件）、quick_ids、time_interval。每行包含供其他 fund_* 工具使用的 counter_id。",
+      "properties": {
+        "filter": "服務端定義的篩選物件（見 fund_filters），省略則不過濾",
+        "quick_ids": "快捷篩選 id（來自 fund_filters）",
+        "time_interval": "每行包含的收益率時間區間（如 [\"1m\",\"1y\"]）"
+      }
+    },
+    "fund_filters": {
+      "title": "基金篩選項",
+      "description": "獲取 fund_list 支援的篩選項（filter 物件結構與快捷篩選 id）。無參數。"
+    },
+    "fund_detail": {
+      "title": "基金詳情",
+      "description": "獲取單一基金的概況與關鍵數據。counter_id 來自 fund_hot / fund_list。",
+      "properties": {
+        "counter_id": "基金 counter_id（如 UT/FD/HK0000384492），來自 fund_hot / fund_list"
+      }
+    },
+    "fund_analysis": {
+      "title": "基金分析",
+      "description": "獲取基金一級分析（風險 / 收益概覽）。counter_id 來自 fund_hot / fund_list；period 可選。",
+      "properties": {
+        "counter_id": "基金 counter_id（如 UT/FD/HK0000384492），來自 fund_hot / fund_list",
+        "period": "分析週期（服務端定義，如近 1 月 / 3 月 / 1 年），省略則用預設週期"
+      }
+    },
+    "fund_analysis_detail": {
+      "title": "基金分析詳情",
+      "description": "獲取基金二級分析（fund_analysis 背後的更細指標）。counter_id 來自 fund_hot / fund_list；period 可選。",
+      "properties": {
+        "counter_id": "基金 counter_id（如 UT/FD/HK0000384492），來自 fund_hot / fund_list",
+        "period": "分析週期（服務端定義，如近 1 月 / 3 月 / 1 年），省略則用預設週期"
+      }
+    },
+    "fund_trend": {
+      "title": "基金走勢",
+      "description": "獲取基金走勢圖數據。counter_id 來自 fund_hot / fund_list；period 可選。",
+      "properties": {
+        "counter_id": "基金 counter_id（如 UT/FD/HK0000384492），來自 fund_hot / fund_list",
+        "period": "分析週期（服務端定義，如近 1 月 / 3 月 / 1 年），省略則用預設週期"
+      }
+    },
+    "fund_annual_returns": {
+      "title": "基金年度收益",
+      "description": "獲取基金逐年收益（分頁）。counter_id 來自 fund_hot / fund_list；page / size 可選。",
+      "properties": {
+        "counter_id": "基金 counter_id（如 UT/FD/HK0000384492），來自 fund_hot / fund_list",
+        "page": "頁碼（從 1 開始），省略取第一頁",
+        "size": "每頁條數，省略用服務端預設"
+      }
+    },
+    "fund_quarterly_returns": {
+      "title": "基金季度收益",
+      "description": "獲取基金逐季收益（分頁）。counter_id 來自 fund_hot / fund_list；page / size 可選。",
+      "properties": {
+        "counter_id": "基金 counter_id（如 UT/FD/HK0000384492），來自 fund_hot / fund_list",
+        "page": "頁碼（從 1 開始），省略取第一頁",
+        "size": "每頁條數，省略用服務端預設"
+      }
+    },
+    "fund_performance": {
+      "title": "基金每日表現",
+      "description": "獲取基金每日表現數據。counter_id 來自 fund_hot / fund_list。",
+      "properties": {
+        "counter_id": "基金 counter_id（如 UT/FD/HK0000384492），來自 fund_hot / fund_list"
+      }
+    },
+    "fund_performance_comparison": {
+      "title": "基金業績對比",
+      "description": "將基金業績與基準 / 同類對比。counter_id 來自 fund_hot / fund_list；period 可選。",
+      "properties": {
+        "counter_id": "基金 counter_id（如 UT/FD/HK0000384492），來自 fund_hot / fund_list",
+        "period": "分析週期（服務端定義，如近 1 月 / 3 月 / 1 年），省略則用預設週期"
+      }
+    },
+    "fund_nav": {
+      "title": "基金最新淨值",
+      "description": "獲取基金最新淨值（NAV）。counter_id 來自 fund_hot / fund_list。",
+      "properties": {
+        "counter_id": "基金 counter_id（如 UT/FD/HK0000384492），來自 fund_hot / fund_list"
+      }
+    },
+    "fund_nav_history": {
+      "title": "基金歷史淨值",
+      "description": "獲取基金歷史淨值序列（分頁）。counter_id 來自 fund_hot / fund_list；page / size 可選。",
+      "properties": {
+        "counter_id": "基金 counter_id（如 UT/FD/HK0000384492），來自 fund_hot / fund_list",
+        "page": "頁碼（從 1 開始），省略取第一頁",
+        "size": "每頁條數，省略用服務端預設"
+      }
+    },
+    "fund_nav_range": {
+      "title": "基金淨值區間",
+      "description": "按相對時間區間獲取基金歷史淨值。counter_id 來自 fund_hot / fund_list；設定 month_before 或 year_before。",
+      "properties": {
+        "counter_id": "基金 counter_id（如 UT/FD/HK0000384492），來自 fund_hot / fund_list",
+        "month_before": "距今月數，與 year_before 互補，省略用預設區間",
+        "year_before": "距今年數"
+      }
+    },
+    "fund_holdings": {
+      "title": "基金持倉 Top10",
+      "description": "獲取基金前十大持倉。counter_id 來自 fund_hot / fund_list；scene 可選。",
+      "properties": {
+        "counter_id": "基金 counter_id（如 UT/FD/HK0000384492），來自 fund_hot / fund_list",
+        "scene": "持倉場景選擇（服務端定義，如股票 / 債券分佈），省略用預設"
+      }
+    },
+    "fund_stock_holdings": {
+      "title": "基金重倉個股",
+      "description": "反查基金持有的個股。counter_id 來自 fund_hot / fund_list；limit 可選。",
+      "properties": {
+        "counter_id": "基金 counter_id（如 UT/FD/HK0000384492），來自 fund_hot / fund_list",
+        "limit": "返回個股數量上限，省略用服務端預設"
+      }
+    },
+    "fund_position_overview": {
+      "title": "基金持倉總覽",
+      "description": "獲取登入用戶的基金持倉總覽（全部持有基金）。需已認證 token。無參數。"
+    },
+    "fund_position": {
+      "title": "基金持倉詳情",
+      "description": "獲取單一持有基金的持倉詳情。需認證。counter_id 來自 fund_position_overview / fund_hot / fund_list；start / end（yyyy-mm-dd）可選。",
+      "properties": {
+        "counter_id": "基金 counter_id（如 UT/FD/HK0000384492），來自 fund_hot / fund_list",
+        "start": "起始日期（yyyy-mm-dd），省略用預設區間",
+        "end": "結束日期（yyyy-mm-dd）"
+      }
+    },
+    "fund_position_performance": {
+      "title": "基金持倉表現",
+      "description": "獲取持有基金的表現數據。需認證。counter_id 來自 fund_position_overview / fund_hot / fund_list。",
+      "properties": {
+        "counter_id": "基金 counter_id（如 UT/FD/HK0000384492），來自 fund_hot / fund_list"
+      }
+    },
+    "fund_position_profits": {
+      "title": "基金持倉收益明細",
+      "description": "獲取持有基金的累計收益明細（分頁）。需認證。counter_id 來自 fund_position_overview；start / end（yyyy-mm-dd）、page / size 可選。",
+      "properties": {
+        "counter_id": "基金 counter_id（如 UT/FD/HK0000384492），來自 fund_hot / fund_list",
+        "start": "起始日期（yyyy-mm-dd），省略用預設區間",
+        "end": "結束日期（yyyy-mm-dd）",
+        "page": "頁碼（從 1 開始），省略取第一頁",
+        "size": "每頁條數，省略用服務端預設"
+      }
+    },
+    "fund_position_nav": {
+      "title": "基金持倉淨值歷史",
+      "description": "按相對區間獲取持有基金的淨值歷史。需認證。counter_id 來自 fund_position_overview；設定 month_before 或 year_before。",
+      "properties": {
+        "counter_id": "基金 counter_id（如 UT/FD/HK0000384492），來自 fund_hot / fund_list",
+        "month_before": "距今月數，與 year_before 互補，省略用預設區間",
+        "year_before": "距今年數"
+      }
+    },
+    "fund_position_dividends": {
+      "title": "基金持倉分紅",
+      "description": "獲取持有基金的分紅記錄（分頁）。需認證。counter_id 來自 fund_position_overview；currency、start / end（Unix 秒）、page / size 可選。",
+      "properties": {
+        "counter_id": "基金 counter_id（如 UT/FD/HK0000384492），來自 fund_hot / fund_list",
+        "currency": "幣種過濾（如 HKD、USD），省略則全部",
+        "start": "起始時間（Unix 秒），省略用預設區間",
+        "end": "結束時間（Unix 秒）",
+        "page": "頁碼（從 1 開始），省略取第一頁",
+        "size": "每頁條數，省略用服務端預設"
+      }
+    },
+    "fund_orders": {
+      "title": "基金訂單",
+      "description": "獲取用戶的基金訂單 / 成交記錄。需認證。可選 counter_ids、actions、states、currency、start / end（Unix 秒）、page / size。",
+      "properties": {
+        "counter_ids": "按基金 counter_id 過濾，省略則全部",
+        "actions": "按操作過濾，逗號分隔（如 buy,sell），省略則全部",
+        "states": "按訂單狀態過濾，逗號分隔，省略則全部",
+        "currency": "幣種過濾（如 HKD、USD），省略則全部",
+        "start": "起始時間（Unix 秒），省略用預設區間",
+        "end": "結束時間（Unix 秒）",
+        "page": "頁碼（從 1 開始），省略取第一頁",
+        "size": "每頁條數，省略用服務端預設"
+      }
+    },
+    "fund_order": {
+      "title": "基金訂單詳情",
+      "description": "按 order_id（來自 fund_orders）獲取單筆基金訂單詳情。需認證。",
+      "properties": {
+        "order_id": "基金訂單 id（來自 fund_orders）"
+      }
+    },
+    "fund_transactions": {
+      "title": "基金資金變動",
+      "description": "獲取用戶的基金資金變動記錄。需認證。可選 business_type、category、currencies、start / end（Unix 秒）、page / size。",
+      "properties": {
+        "business_type": "業務類型過濾（服務端定義），省略則全部",
+        "category": "類別過濾（服務端定義），省略則全部",
+        "currencies": "幣種過濾，逗號分隔（如 HKD,USD），省略則全部",
+        "start": "起始時間（Unix 秒），省略用預設區間",
+        "end": "結束時間（Unix 秒）",
+        "page": "頁碼（從 1 開始），省略取第一頁",
+        "size": "每頁條數，省略用服務端預設"
+      }
+    },
+    "fund_validate_order": {
+      "title": "校驗基金委託",
+      "description": "對基金買賣委託做下單前校驗。不會下單，只把請求發到基金通道做檢查並返回校驗結果（費用、限額、預估份額/金額）。需認證。counter_id 來自 fund_hot / fund_list；action 為 buy 或 sell；currency 如 HKD/USD；amount（現金）與 units（份額）二選一。",
+      "properties": {
+        "counter_id": "基金 counter_id（如 UT/FD/HK0000384492），來自 fund_hot / fund_list",
+        "action": "委託方向：buy（買入）或 sell（賣出）",
+        "currency": "委託幣種，如 HKD、USD",
+        "amount": "申購金額（投入現金）。按金額買入時使用；與 units 互斥",
+        "units": "贖回份額（賣出份額）。按份額賣出/買入時使用；與 amount 互斥",
+        "dividend_option": "分紅方式（服務端定義，如紅利再投或現金派發）",
+        "fund_source": "資金來源選擇（服務端定義），省略用預設",
+        "account_channel": "賬戶通道（服務端定義），省略用預設"
+      }
+    },
+    "fund_submit_order": {
+      "title": "提交基金委託",
+      "description": "提交基金買賣委託。【必須兩步確認】未傳本次試運行返回的 confirmation_code 時為 DRY RUN（試運行）：先不帶 execute 調用一次，把預覽完整展示給用戶，只有在用戶明確確認後才可再次調用並把該確認碼傳入 execute。需認證。counter_id 來自 fund_hot / fund_list；action 為 buy 或 sell；currency 如 HKD/USD；amount（投入現金）與 units（賣出份額）二選一；is_sell_all=true 全部贖回。可先用 fund_validate_order 做安全的下單前校驗。",
+      "properties": {
+        "counter_id": "基金 counter_id（如 UT/FD/HK0000384492），來自 fund_hot / fund_list",
+        "action": "委託方向：buy（買入）或 sell（賣出）",
+        "currency": "委託幣種，如 HKD、USD",
+        "amount": "申購金額（投入現金）。按金額買入時使用；與 units 互斥",
+        "units": "贖回份額（賣出份額）。按份額賣出/買入時使用；與 amount 互斥",
+        "dividend_option": "分紅方式（服務端定義，如紅利再投或現金派發）",
+        "fee": "費用金額，省略用服務端預設",
+        "is_sell_all": "是否全部賣出；用於全額贖回，會覆蓋 units",
+        "remark": "委託備註",
+        "trade_method": "交易方式選擇（服務端定義），省略用預設",
+        "execute": "本次試運行返回的 confirmation_code。省略（預設）表示 DRY RUN：只校驗並回顯請求，同時返回一個三位確認碼，不會發往基金通道。必須先不帶該參數調用一次，把預覽展示給用戶，待用戶明確確認後才可再次調用並回填該碼。確認碼由訂單本身推導而來，只對這一筆完全相同的請求生效——改動任何欄位即失效。不可自行決定回填。"
+      }
+    },
+    "fund_cancel_order": {
+      "title": "撤銷基金委託",
+      "description": "按 order_id 撤銷基金委託。【必須兩步確認】未傳本次試運行返回的 confirmation_code 時為 DRY RUN（試運行）：先不帶 execute 調用一次，把返回的預覽（會回顯本次要撤銷的委託）完整展示給用戶，只有在用戶明確確認這筆委託後才可再次調用並把該確認碼傳入 execute。需認證。order_id 來自 fund_orders。",
+      "properties": {
+        "order_id": "要撤銷的基金訂單 id（來自 fund_orders）",
+        "execute": "本次試運行返回的 confirmation_code。省略（預設）表示 DRY RUN：只校驗並回顯請求，同時返回一個三位確認碼，不會發往基金通道。必須先不帶該參數調用一次，把預覽展示給用戶，待用戶明確確認後才可再次調用並回填該碼。確認碼由訂單本身推導而來，只對這一筆完全相同的請求生效——改動任何欄位即失效。不可自行決定回填。"
       }
     }
   }

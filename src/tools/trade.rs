@@ -1287,7 +1287,7 @@ mod execute_gate_tests {
     /// Every tool that can move real money. Grid writes count: a live grid keeps
     /// placing orders on its own, so it is at least as consequential as a single
     /// order.
-    const GATED_TOOLS: [&str; 8] = [
+    const GATED_TOOLS: [&str; 10] = [
         "submit_order",
         "cancel_order",
         "replace_order",
@@ -1296,6 +1296,8 @@ mod execute_gate_tests {
         "grid_cancel",
         "grid_suspend",
         "grid_restart",
+        "fund_submit_order",
+        "fund_cancel_order",
     ];
 
     #[test]
@@ -1578,7 +1580,7 @@ mod tests {
     #[allow(clippy::too_many_arguments)]
     fn sdk_fund_positions_json(
         account_channel: &str,
-        symbol: &str,
+        counter_id: &str,
         symbol_name: &str,
         currency: &str,
         holding_units: &str,
@@ -1590,7 +1592,7 @@ mod tests {
             "list": [{
                 "account_channel": account_channel,
                 "fund_info": [{
-                    "symbol": symbol,
+                    "counter_id": counter_id,
                     "symbol_name": symbol_name,
                     "currency": currency,
                     "holding_units": holding_units,
@@ -1618,7 +1620,10 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&output).unwrap();
         let pos = &v["list"][0]["fund_info"][0];
 
-        assert_eq!(pos["symbol"], "HK0000038064", "symbol mismatch: {output}");
+        assert_eq!(
+            pos["counter_id"], "HK0000038064",
+            "counter_id mismatch: {output}"
+        );
         assert_eq!(
             pos["symbol_name"], "高腾微金美元货币基金A",
             "symbol_name mismatch: {output}"
