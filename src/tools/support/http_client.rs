@@ -244,6 +244,10 @@ pub async fn http_post_tool(
 /// POST `body` to `path` and return the raw response body as a `String`, or the
 /// underlying `longbridge::Error` (so callers can inspect `openapi_error_code()`,
 /// e.g. the candlestick count-boundary retry). No transform/reshape is applied.
+// Returns the un-boxed `longbridge::Error` deliberately: callers inspect
+// `openapi_error_code()`, and `with_candlestick_count_boundary_retry` requires a
+// `Future<Output = Result<_, longbridge::Error>>` (it boxes the error itself).
+#[allow(clippy::result_large_err)]
 pub async fn http_post_raw(
     client: &HttpClient,
     path: &str,
