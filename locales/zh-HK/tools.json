@@ -149,6 +149,18 @@
         "price": "委託價格（限價類委託需要）"
       }
     },
+    "estimate_multileg_available_quantity": {
+      "title": "多腿期權可交易信息估算",
+      "description": "在提交多腿期權組合訂單前，估算該組合的最大可交易數量及保證金變化，返回 {max_open_qty, unit_margin, initial_margin_change, maintenance_margin_change}。僅支持美股市場",
+      "properties": {
+        "side": "組合的買賣方向：`Buy`（買入）或 `Sell`（賣出）",
+        "order_type": "委託類型：`LO`（限價，需 submitted_price）或 `MO`（市價）",
+        "submitted_quantity": "組合數量（份數）",
+        "strategy": "策略：CoveredCall / CoveredPut / VerticalCallSpread / VerticalPutSpread / Collar / Straddle / Strangle / CalendarCallSpread / CalendarPutSpread",
+        "legs": "組合的各腿（按策略順序，期權或正股 symbol）",
+        "submitted_price": "整個組合的淨限價；LO 必填"
+      }
+    },
     "history_executions": {
       "title": "歷史成交",
       "description": "查詢指定日期區間內的全部成交記錄，按成交時間（trade_done_at）篩選並自動翻頁返回完整結果（不受每頁 1000 條截斷），trade_id 為穩定去重鍵。返回 executions[]{order_id, trade_id, symbol, side, quantity, price, trade_done_at}",

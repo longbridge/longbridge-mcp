@@ -354,6 +354,33 @@ fn default_order_type() -> String {
     "LO".to_string()
 }
 
+/// One leg of a multi-leg combination for the pre-trade estimate.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct EstimateMultiLegParam {
+    /// Option or underlying-stock symbol in `<CODE>.<MARKET>` format, e.g.
+    /// "QQQ260731C764000.US"
+    pub symbol: String,
+}
+
+/// Parameters for `estimate_multileg_available_quantity`.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct EstimateMultiLegQtyParam {
+    /// Buy or Sell — the direction of the strategy as a whole
+    pub side: String,
+    /// Order type: LO (Limit, requires submitted_price) or MO (Market)
+    pub order_type: String,
+    /// Number of strategy units (combinations) to estimate
+    pub submitted_quantity: String,
+    /// Strategy: CoveredCall / CoveredPut / VerticalCallSpread /
+    /// VerticalPutSpread / Collar / Straddle / Strangle / CalendarCallSpread /
+    /// CalendarPutSpread
+    pub strategy: String,
+    /// The legs of the combination, in strategy order (US options / underlying)
+    pub legs: Vec<EstimateMultiLegParam>,
+    /// Net limit price for the whole combination. Required for LO.
+    pub submitted_price: Option<String>,
+}
+
 /// Best-effort snapshot of the order a cancel/replace preview is about to touch,
 /// so the user can confirm it is the order they meant. A lookup failure must not
 /// break the dry run, so every error collapses to `null`.
@@ -1263,6 +1290,65 @@ pub async fn estimate_max_purchase_quantity(
     let (ctx, _) = TradeContext::new(mctx.create_config());
     let result = ctx
         .estimate_max_purchase_quantity(opts)
+        .await
+        .map_err(Error::longbridge)?;
+    tool_json(&result)
+}
+
+pub async fn estimate_multileg_available_quantity(
+    mctx: &crate::tools::McpContext,
+    p: EstimateMultiLegQtyParam,
+) -> Result<CallToolResult, McpError> {
+    use longbridge::Decimal;
+    use longbridge::trade::{
+        EstimateMultiLegAvailableQuantityOptions, EstimateMultiLegOrderLeg, MultiLegStrategy,
+        OrderSide, OrderType,
+    };
+    use std::str::FromStr;
+
+    if p.legs.is_empty() {
+        return Err(McpError::invalid_params(
+            "legs must not be empty: a multi-leg combination needs at least one leg",
+            None,
+        ));
+    }
+
+    let side_norm = match p.side.trim().to_ascii_lowercase().as_str() {
+        "buy" => "Buy".to_string(),
+        "sell" => "Sell".to_string(),
+        _ => p.side.trim().to_string(),
+    };
+    let side = side_norm
+        .parse::<OrderSide>()
+        .map_err(|e| McpError::invalid_params(format!("invalid side: {e}"), None))?;
+    let order_type = p
+        .order_type
+        .trim()
+        .to_ascii_uppercase()
+        .parse::<OrderType>()
+        .map_err(|e| McpError::invalid_params(format!("invalid order_type: {e}"), None))?;
+    let strategy = p
+        .strategy
+        .parse::<MultiLegStrategy>()
+        .map_err(|e| McpError::invalid_params(format!("invalid strategy: {e}"), None))?;
+    let quantity = Decimal::from_str(&p.submitted_quantity)
+        .map_err(|e| McpError::invalid_params(format!("invalid submitted_quantity: {e}"), None))?;
+
+    let legs = p
+        .legs
+        .into_iter()
+        .map(|leg| EstimateMultiLegOrderLeg::new(leg.symbol));
+    let mut opts =
+        EstimateMultiLegAvailableQuantityOptions::new(side, order_type, quantity, strategy, legs);
+    if let Some(ref price) = p.submitted_price {
+        opts = opts.submitted_price(Decimal::from_str(price).map_err(|e| {
+            McpError::invalid_params(format!("invalid submitted_price: {e}"), None)
+        })?);
+    }
+
+    let (ctx, _) = TradeContext::new(mctx.create_config());
+    let result = ctx
+        .estimate_multileg_available_quantity(opts)
         .await
         .map_err(Error::longbridge)?;
     tool_json(&result)

@@ -4,8 +4,9 @@ version = "0.13.1"
 edition = "2024"
 
 [dependencies]
-longbridge = "5.2"
-longbridge-proto = "5.2"
+# TODO: swap back to the released version once estimate_multileg ships in a crates.io release.
+longbridge = { git = "https://github.com/longbridge/openapi.git", rev = "5531779a468127649a73a0c81e8a9891a1739b15" }
+longbridge-proto = { git = "https://github.com/longbridge/openapi.git", rev = "5531779a468127649a73a0c81e8a9891a1739b15" }
 rust_decimal = "1"
 rmcp = { version = "1.4", features = [
     "server",
