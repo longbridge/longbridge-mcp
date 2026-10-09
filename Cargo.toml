@@ -4,8 +4,9 @@ version = "0.13.1"
 edition = "2024"
 
 [dependencies]
-longbridge = "5.2"
-longbridge-proto = "5.2"
+# TODO: swap back to the released version once the forex channel ships in a crates.io release.
+longbridge = { git = "https://github.com/longbridge/openapi.git", rev = "4ef2f7a3fc65b6fca2b57f5d5e0038ed7751f7fd" }
+longbridge-proto = { git = "https://github.com/longbridge/openapi.git", rev = "4ef2f7a3fc65b6fca2b57f5d5e0038ed7751f7fd" }
 rust_decimal = "1"
 rmcp = { version = "1.4", features = [
     "server",

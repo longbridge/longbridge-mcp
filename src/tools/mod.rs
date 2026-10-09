@@ -527,6 +527,7 @@ mod authenticate;
 mod calendar;
 mod content;
 mod dca;
+mod forex;
 mod fund;
 mod fundamental;
 mod grid;
@@ -1339,6 +1340,10 @@ const TOOL_ENDPOINTS: &[(&str, u8)] = &[
     // fund order pre-trade validation places nothing, so it stays on /v2
     // alongside estimate_max_purchase_quantity; the fund writes below do not.
     ("fund_validate_order", V2),
+    // Forex: quote locks a rate (no money moves) and order detail are reads, so
+    // both stay on /v2; forex_submit_order below moves cash and does not.
+    ("forex_quote", V2),
+    ("forex_order", V2),
     ("history_candlesticks_by_date", V2),
     ("history_candlesticks_by_offset", V2),
     ("history_executions", V2),
@@ -1433,6 +1438,7 @@ const TOOL_ENDPOINTS: &[(&str, u8)] = &[
     ("deposits", 0),
     ("fund_cancel_order", 0),
     ("fund_submit_order", 0),
+    ("forex_submit_order", 0),
     ("grid_cancel", 0),
     ("grid_detail", 0),
     ("grid_list", 0),
@@ -4074,6 +4080,73 @@ impl Longbridge {
         .await
     }
 
+    /// Get a forex quote.
+    #[tool(
+        title = "Forex Quote",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true
+        ),
+        description = "Get a currency-exchange quote. from/to are ISO 4217 currency codes (e.g. USD, HKD); give either amount (convert-out side) or target_amount (convert-in side) as a decimal string. Returns a quote_id (feed it to forex_submit_order), the locked rate, ccy_pair and expire_at (Unix ms). Requires auth."
+    )]
+    async fn forex_quote(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<forex::ForexQuoteParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("forex_quote", format!("{p:?}"), || {
+            forex::forex_quote(&mctx, p)
+        })
+        .await
+    }
+
+    /// Query a forex order.
+    #[tool(
+        title = "Forex Order",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true
+        ),
+        description = "Get a single forex (currency-exchange) order by client_order_id. Conversion is asynchronous, so poll this until state is terminal (success / failed). Returns state, rate, from_amount, to_amount and fail_reason. Requires auth."
+    )]
+    async fn forex_order(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<forex::ForexOrderParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("forex_order", format!("{p:?}"), || {
+            forex::forex_order(&mctx, p)
+        })
+        .await
+    }
+
+    /// Submit a forex order.
+    #[tool(
+        title = "Submit Forex Order",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false,
+            open_world_hint = true
+        ),
+        description = "Submit a currency-exchange order against a quote_id from forex_quote (it moves cash between two currencies in the account). DRY RUN unless execute is the confirmation_code from its own dry run: call once without execute, show the preview to the user, then re-call quoting the code only after they explicitly confirm. Acceptance only — conversion is asynchronous, so poll forex_order with the same client_order_id for the final state. Requires auth."
+    )]
+    async fn forex_submit_order(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<forex::ForexSubmitOrderParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("forex_submit_order", format!("{p:?}"), || {
+            forex::forex_submit_order(&mctx, p)
+        })
+        .await
+    }
+
     /// Get exchange rates.
     #[tool(
         title = "Exchange Rate",
@@ -6103,7 +6176,7 @@ impl Longbridge {
 
 #[tool_handler(
     name = "longbridge-mcp",
-    instructions = "Longbridge OpenAPI MCP — market data, trading, analysis. Order writes (submit_order, cancel_order, replace_order, grid_*, fund_submit_order, fund_cancel_order) are two-step: call once without execute to get a confirmation_code, show the preview, then re-call with execute=code after the user confirms. On failure, tools return a JSON envelope with an `error_code` and a `recoverable` field: `reauth` (re-authenticate then retry), `backoff` (wait then retry), `fix_params` (fix arguments then retry), or `none` (do not retry; tell the user)."
+    instructions = "Longbridge OpenAPI MCP — market data, trading, analysis. Order writes (submit_order, cancel_order, replace_order, grid_*, fund_submit_order, fund_cancel_order, forex_submit_order) are two-step: call once without execute to get a confirmation_code, show the preview, then re-call with execute=code after the user confirms. On failure, tools return a JSON envelope with an `error_code` and a `recoverable` field: `reauth` (re-authenticate then retry), `backoff` (wait then retry), `fix_params` (fix arguments then retry), or `none` (do not retry; tell the user)."
 )]
 impl ServerHandler for Longbridge {
     // `get_info` mirrors the `#[tool_handler]` default tool metadata, plus the
@@ -6125,7 +6198,7 @@ impl ServerHandler for Longbridge {
             env!("CARGO_PKG_VERSION"),
         ))
         .with_instructions(
-            "Longbridge OpenAPI MCP — market data, trading, analysis. Order writes (submit_order, cancel_order, replace_order, grid_*, fund_submit_order, fund_cancel_order) are two-step: call once without execute to get a confirmation_code, show the preview, then re-call with execute=code after the user confirms. On failure, tools return a JSON envelope with an `error_code` and a `recoverable` field: `reauth` (re-authenticate then retry), `backoff` (wait then retry), `fix_params` (fix arguments then retry), or `none` (do not retry; tell the user).",
+            "Longbridge OpenAPI MCP — market data, trading, analysis. Order writes (submit_order, cancel_order, replace_order, grid_*, fund_submit_order, fund_cancel_order, forex_submit_order) are two-step: call once without execute to get a confirmation_code, show the preview, then re-call with execute=code after the user confirms. On failure, tools return a JSON envelope with an `error_code` and a `recoverable` field: `reauth` (re-authenticate then retry), `backoff` (wait then retry), `fix_params` (fix arguments then retry), or `none` (do not retry; tell the user).",
         )
     }
 
@@ -6704,6 +6777,8 @@ mod tests {
             // Fund order write operations.
             "fund_submit_order",
             "fund_cancel_order",
+            // Forex order write operations.
+            "forex_submit_order",
             // IPO order management.
             "ipo_orders",
             "ipo_order_detail",
