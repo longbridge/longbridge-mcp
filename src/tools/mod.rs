@@ -1302,6 +1302,7 @@ const TOOL_ENDPOINTS: &[(&str, u8)] = &[
     ("delete_watchlist_group", V2),
     ("dividend_detail", V2),
     ("estimate_max_purchase_quantity", V2),
+    ("estimate_multileg_available_quantity", V2),
     ("etf_docs", V2),
     ("exchange_rate", V2),
     ("executive", V2),
@@ -1786,8 +1787,8 @@ use crate::tools::quote::{
     UpdateWatchlistGroupParam, WarrantListParam,
 };
 use crate::tools::trade::{
-    CashFlowParam, EstimateMaxQtyParam, HistoryOrdersParam, OrderDetailParam, ReplaceOrderParam,
-    SubmitMultiLegOrderParam, SubmitOrderParam,
+    CashFlowParam, EstimateMaxQtyParam, EstimateMultiLegQtyParam, HistoryOrdersParam,
+    OrderDetailParam, ReplaceOrderParam, SubmitMultiLegOrderParam, SubmitOrderParam,
 };
 
 #[tool_router(vis = "pub(crate)")]
@@ -2805,6 +2806,31 @@ impl Longbridge {
         measured_tool_call("estimate_max_purchase_quantity", format!("{p:?}"), || {
             trade::estimate_max_purchase_quantity(&mctx, p)
         })
+        .await
+    }
+
+    /// Estimate multi-leg option combination trading info.
+    #[tool(
+        title = "Estimate Multi-leg Option Trading Info",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = true
+        ),
+        description = "Estimate a US multi-leg option combination's maximum tradable quantity and margin impact before submitting. Returns {max_open_qty, unit_margin, initial_margin_change, maintenance_margin_change} (decimal strings). Required: side (Buy/Sell), order_type (e.g. LO), submitted_quantity, strategy (CoveredCall / VerticalCallSpread / Straddle / … ), and legs (each an option/underlying symbol); submitted_price is required for LO. US market only."
+    )]
+    async fn estimate_multileg_available_quantity(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<EstimateMultiLegQtyParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call(
+            "estimate_multileg_available_quantity",
+            format!("{p:?}"),
+            || trade::estimate_multileg_available_quantity(&mctx, p),
+        )
         .await
     }
 

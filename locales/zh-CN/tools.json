@@ -149,6 +149,18 @@
         "price": "委托价格（限价类委托需要）"
       }
     },
+    "estimate_multileg_available_quantity": {
+      "title": "多腿期权可交易信息估算",
+      "description": "在提交多腿期权组合订单前，估算该组合的最大可交易数量及保证金变化，返回 {max_open_qty, unit_margin, initial_margin_change, maintenance_margin_change}。仅支持美股市场",
+      "properties": {
+        "side": "组合的买卖方向：`Buy`（买入）或 `Sell`（卖出）",
+        "order_type": "委托类型：`LO`（限价，需 submitted_price）或 `MO`（市价）",
+        "submitted_quantity": "组合数量（份数）",
+        "strategy": "策略：CoveredCall / CoveredPut / VerticalCallSpread / VerticalPutSpread / Collar / Straddle / Strangle / CalendarCallSpread / CalendarPutSpread",
+        "legs": "组合的各腿（按策略顺序，期权或正股 symbol）",
+        "submitted_price": "整个组合的净限价；LO 必填"
+      }
+    },
     "history_executions": {
       "title": "历史成交",
       "description": "查询指定日期区间内的全部成交记录，按成交时间（trade_done_at）筛选并自动翻页返回完整结果（不受每页 1000 条截断），trade_id 为稳定去重键。返回 executions[]{order_id, trade_id, symbol, side, quantity, price, trade_done_at}",
