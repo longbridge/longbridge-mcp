@@ -34,7 +34,7 @@ time = { version = "0.3", features = [
     "parsing",
     "serde-human-readable",
 ] }
-reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "http2", "charset"] }
 tower = "0.5"
 tower-http = { version = "0.6", features = ["cors"] }
 prometheus = "0.13"
