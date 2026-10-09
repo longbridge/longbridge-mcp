@@ -10,8 +10,51 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
+  build-binaries:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - x86_64-unknown-linux-musl
+          - aarch64-unknown-linux-musl
+    steps:
+      - uses: actions/checkout@v4
+
+      # Host toolchain is used by `cross` (it mounts rustup into the build
+      # container), so edition-2024 support depends on this being current.
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Install cross
+        run: cargo install cross --locked
+
+      # musl builds are fully static; rustls means no OpenSSL to cross-compile.
+      - name: Build
+        run: cross build --release --locked --target ${{ matrix.target }}
+
+      - name: Package
+        run: |
+          dist="longbridge-mcp-${{ matrix.target }}"
+          mkdir -p "$dist"
+          cp "target/${{ matrix.target }}/release/longbridge-mcp" "$dist/"
+          cp README.md LICENSE "$dist/"
+          tar -cJf "$dist.tar.xz" "$dist"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: longbridge-mcp-${{ matrix.target }}.tar.xz
+          if-no-files-found: error
+
   release:
     runs-on: ubuntu-latest
+    needs: build-binaries
     permissions:
       contents: write
     steps:
@@ -32,9 +75,15 @@ jobs:
           echo "$LOG" >> "$GITHUB_OUTPUT"
           echo "EOF" >> "$GITHUB_OUTPUT"
 
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
       - uses: softprops/action-gh-release@v2
         with:
           body: ${{ steps.changelog.outputs.CHANGELOG }}
+          files: dist/*.tar.xz
 
   docker:
     runs-on: ubuntu-latest
