@@ -78,6 +78,9 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: dist
+          # Only the binary tarballs — exclude the `.dockerbuild` artifact that
+          # docker/build-push-action uploads, which otherwise fails this step.
+          pattern: "*-unknown-linux-musl"
           merge-multiple: true
 
       - uses: softprops/action-gh-release@v2
