@@ -2818,7 +2818,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Estimate a US multi-leg option combination's maximum tradable quantity and margin impact before submitting. Returns {max_open_qty, unit_margin, initial_margin_change, maintenance_margin_change} (decimal strings). Required: side (Buy/Sell), order_type (e.g. LO), submitted_quantity, strategy (CoveredCall / VerticalCallSpread / Straddle / … ), and legs (each an option/underlying symbol); submitted_price is required for LO. US market only."
+        description = "Estimate a US multi-leg option combination's maximum tradable quantity and margin impact before submitting. Returns {max_open_qty, unit_margin, initial_margin_change, maintenance_margin_change} (decimal strings). Required: side (Buy/Sell), order_type (e.g. LO), submitted_quantity, strategy (CoveredCall / CoveredPut / VerticalCallSpread / VerticalPutSpread / Collar / Straddle / Strangle / CalendarCallSpread / CalendarPutSpread; case-insensitive), and legs (each an option/underlying symbol); submitted_price is required for LO (rejected without it). US market only."
     )]
     async fn estimate_multileg_available_quantity(
         &self,
