@@ -5232,7 +5232,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Search news articles by keyword. Returns news_list[]{id, title, description, source_name, publish_at (RFC3339), score}. Paginate with score+publish_at_timestamp+id cursors."
+        description = "Search news articles by keyword. Returns an array of {id, title, excerpt, source_name, time (RFC3339), url}, most relevant first."
     )]
     async fn news_search(
         &self,
