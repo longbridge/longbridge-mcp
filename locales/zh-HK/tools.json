@@ -151,14 +151,14 @@
     },
     "estimate_multileg_available_quantity": {
       "title": "多腿期權可交易信息估算",
-      "description": "在提交多腿期權組合訂單前，估算該組合的最大可交易數量及保證金變化，返回 {max_open_qty, unit_margin, initial_margin_change, maintenance_margin_change}。僅支持美股市場",
+      "description": "在提交多腿期權組合訂單前，估算該組合的最大可交易數量及保證金變化，返回 {max_open_qty, unit_margin, initial_margin_change, maintenance_margin_change}（均為十進制字符串）：max_open_qty 為賬戶最多可開的組合份數；unit_margin 為每份組合所需資金（買入付權利金的組合為按市價計算的淨權利金，賣出/信用組合為保證金要求）；*_margin_change 為按 submitted_quantity 份計算的賬戶保證金變化（付權利金的組合為 0，佔用的是現金）。結果按當前市價計算，不使用 submitted_price。僅支持美股市場",
       "properties": {
         "side": "組合的買賣方向：`Buy`（買入）或 `Sell`（賣出）",
-        "order_type": "委託類型：`LO`（限價，必須傳 submitted_price）或 `MO`（市價）",
-        "submitted_quantity": "組合數量（份數）",
+        "order_type": "委託類型：`LO`（限價，必須傳 submitted_price）或 `MO`（市價，無需價格）。估算目前都按市價計算，沒有目標價時用 `MO`",
+        "submitted_quantity": "組合數量（份數），必須大於 0",
         "strategy": "策略：CoveredCall / CoveredPut / VerticalCallSpread / VerticalPutSpread / Collar / Straddle / Strangle / CalendarCallSpread / CalendarPutSpread（不區分大小寫）",
-        "legs": "組合的各腿（按策略順序，期權或正股 symbol）",
-        "submitted_price": "整個組合的淨限價；LO 必填"
+        "legs": "組合的各腿：期權 symbol，備兌類策略還需正股 symbol。腿的順序不影響結果，各腿角色由 strategy + side 決定（如買入 VerticalCallSpread = 買低行權價、賣高行權價）",
+        "submitted_price": "整個組合的淨限價；LO 必填，目前不參與估算"
       }
     },
     "history_executions": {
