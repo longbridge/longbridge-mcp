@@ -368,8 +368,9 @@ pub struct EstimateMultiLegParam {
 pub struct EstimateMultiLegQtyParam {
     /// Buy or Sell — the direction of the strategy as a whole
     pub side: String,
-    /// Order type: LO (Limit, requires submitted_price) or MO (Market, no
-    /// price). The estimate is currently computed from market prices either
+    /// Order type: LO (Limit) or MO (Market); ELO / ALO / AO are also
+    /// accepted. Limit types (LO / ELO / ALO) require submitted_price, MO / AO
+    /// don't. The estimate is currently computed from market prices either
     /// way, so use MO when you have no price in mind.
     pub order_type: String,
     /// Number of strategy units (combinations) to estimate; must be > 0
