@@ -652,7 +652,7 @@ pub struct RankListParam {
     /// Market override: "US" | "HK" | "CN" | "SG".
     /// Defaults to the market suffix in the key (e.g. "ib_hot_all-hk" → HK), then "US".
     pub market: Option<String>,
-    /// Number of results to return (default: 20)
+    /// Number of results to return (default: 20; capped by the board's own length, typically 50)
     pub size: Option<u32>,
     /// Whether to include related news articles (default: false)
     pub need_article: Option<bool>,
@@ -677,7 +677,9 @@ pub async fn rank_list(
         .filter(|m| matches!(m.as_str(), "US" | "HK" | "CN" | "SG"))
         .or_else(|| p.market.as_deref().map(|m| m.to_uppercase()))
         .unwrap_or_else(|| "US".to_string());
-    let size = p.size.unwrap_or(20).to_string();
+    // The endpoint takes no page-size parameter and always returns its full
+    // board (e.g. 50 rows), so `size` is applied here after the fetch.
+    let size = p.size.unwrap_or(20) as usize;
     let raw: String = client
         .request(Method::GET, "/v1/quote/market/rank/list")
         .query_params(vec![
@@ -685,7 +687,6 @@ pub async fn rank_list(
             ("delay_bmp", "false"),
             ("need_article", need_article.as_str()),
             ("market", key_market.as_str()),
-            ("size", size.as_str()),
         ])
         .response::<String>()
         .send()
@@ -693,8 +694,19 @@ pub async fn rank_list(
         .map_err(|e| Error::longbridge(e.into()))?;
     let json = transform_json(raw.as_bytes()).map_err(Error::Serialize)?;
     let mut value: serde_json::Value = serde_json::from_str(&json).map_err(Error::Serialize)?;
+    truncate_rank_list_rows(&mut value, size);
     trim_rank_list_rows(&mut value);
     tool_json(&value)
+}
+
+/// Keep only the first `size` rows of a `rank_list` response.
+fn truncate_rank_list_rows(value: &mut serde_json::Value, size: usize) {
+    if let Some(rows) = value
+        .get_mut("lists")
+        .and_then(serde_json::Value::as_array_mut)
+    {
+        rows.truncate(size);
+    }
 }
 
 /// Trim each `rank_list` row: gate the extended-session price/change on their
@@ -748,6 +760,19 @@ fn trim_rank_list_rows(value: &mut serde_json::Value) {
 #[cfg(test)]
 mod tests {
     use super::{hoist_intraday_prev_closes, trade_status_label};
+
+    #[test]
+    fn truncate_rank_list_keeps_first_rows() {
+        let rows: Vec<_> = (0..50)
+            .map(|i| serde_json::json!({"symbol": format!("S{i}.US")}))
+            .collect();
+        let mut v = serde_json::json!({"lists": rows});
+        super::truncate_rank_list_rows(&mut v, 2);
+        assert_eq!(
+            v["lists"],
+            serde_json::json!([{"symbol": "S0.US"}, {"symbol": "S1.US"}])
+        );
+    }
 
     #[test]
     fn trim_rank_list_gates_extended_prices_on_their_flags() {

@@ -1087,10 +1087,10 @@
     },
     "news_search": {
       "title": "新闻搜索",
-      "description": "按关键词搜索新闻文章，返回 news_list[]{id, title, description, source_name, publish_at（RFC3339 时间格式）, score}",
+      "description": "按关键词搜索新闻文章，按相关度排序，返回数组 [{id, title, excerpt, source_name, time（RFC3339 时间格式）, url}]",
       "properties": {
         "keyword": "搜索关键词",
-        "limit": "最多返回条数（默认 20）"
+        "limit": "最多返回条数（默认 20；上游最多返回 40 条）"
       }
     },
     "topic_search": {
@@ -1098,7 +1098,7 @@
       "description": "按关键词搜索社区帖子/话题，返回 id、作者、时间及摘要",
       "properties": {
         "keyword": "搜索关键词",
-        "limit": "最多返回条数（默认 20）"
+        "limit": "最多返回条数（默认 20；上游最多返回 30 条）"
       }
     },
     "financial_statement": {
@@ -1342,7 +1342,7 @@
       "properties": {
         "key": "榜单 key，来自 rank_categories 的 second_tags[].key，如 hot_all-us、hot_up-hk",
         "market": "市场覆盖：US/HK/CN/SG，默认从 key 后缀推断",
-        "size": "返回数量，默认 20",
+        "size": "返回数量，默认 20；不超过榜单本身的长度（通常为 50）",
         "need_article": "是否返回关联新闻，默认 false"
       }
     },

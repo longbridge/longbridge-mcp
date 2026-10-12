@@ -1087,10 +1087,10 @@
     },
     "news_search": {
       "title": "新聞搜尋",
-      "description": "按關鍵詞搜尋新聞文章，返回 news_list[]{id, title, description, source_name, publish_at（RFC3339 時間格式）, score}",
+      "description": "按關鍵詞搜尋新聞文章，按相關度排序，返回陣列 [{id, title, excerpt, source_name, time（RFC3339 時間格式）, url}]",
       "properties": {
         "keyword": "搜尋關鍵詞",
-        "limit": "最多返回條數（預設 20）"
+        "limit": "最多返回條數（預設 20；上游最多返回 40 條）"
       }
     },
     "topic_search": {
@@ -1098,7 +1098,7 @@
       "description": "按關鍵詞搜尋社區帖子/話題，返回 id、作者、時間及摘要",
       "properties": {
         "keyword": "搜尋關鍵詞",
-        "limit": "最多返回條數（預設 20）"
+        "limit": "最多返回條數（預設 20；上游最多返回 30 條）"
       }
     },
     "financial_statement": {
@@ -1342,7 +1342,7 @@
       "properties": {
         "key": "榜單 key，來自 rank_categories 的 second_tags[].key，如 hot_all-us、hot_up-hk",
         "market": "市場覆蓋：US/HK/CN/SG，預設從 key 後綴推斷",
-        "size": "返回數量，預設 20",
+        "size": "返回數量，預設 20；不超過榜單本身的長度（通常為 50）",
         "need_article": "是否返回關聯新聞，預設 false"
       }
     },

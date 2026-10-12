@@ -12,7 +12,7 @@ use crate::tools::support::text::truncate_chars;
 pub struct NewsSearchParam {
     /// Search keyword
     pub keyword: String,
-    /// Max results to return (default: 20)
+    /// Max results to return (default: 20; upstream returns at most 40)
     pub limit: Option<u32>,
 }
 
@@ -20,9 +20,11 @@ pub struct NewsSearchParam {
 pub struct TopicSearchParam {
     /// Search keyword
     pub keyword: String,
-    /// Max results to return (default: 20)
+    /// Max results to return (default: 20; upstream returns at most 30)
     pub limit: Option<u32>,
 }
+
+const DEFAULT_LIMIT: u32 = 20;
 
 fn strip_html(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
@@ -145,6 +147,13 @@ fn transform_topic_item(item: &serde_json::Value) -> serde_json::Value {
     serde_json::Value::Object(obj)
 }
 
+/// Upstream search RPCs take no page-size field (only the keyword and
+/// pagination cursors) and always return a fixed-size page, so `limit` is
+/// applied here after the fetch.
+fn effective_limit(limit: Option<u32>) -> usize {
+    limit.unwrap_or(DEFAULT_LIMIT) as usize
+}
+
 fn make_result(value: serde_json::Value) -> CallToolResult {
     let json = serde_json::to_string(&value).unwrap_or_default();
     // MCP requires `structuredContent` to be an object; array- or scalar-rooted
@@ -165,13 +174,8 @@ pub async fn news_search(
     p: NewsSearchParam,
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
-    let limit_str = p.limit.unwrap_or(20).to_string();
-    let raw = http_get_tool(
-        &client,
-        "/v1/search/news",
-        &[("k", p.keyword.as_str()), ("limit", limit_str.as_str())],
-    )
-    .await?;
+    let limit = effective_limit(p.limit);
+    let raw = http_get_tool(&client, "/v1/search/news", &[("k", p.keyword.as_str())]).await?;
     let json_str = raw
         .content
         .first()
@@ -182,7 +186,7 @@ pub async fn news_search(
         serde_json::from_str(json_str).map_err(crate::error::Error::Serialize)?;
     let items: Vec<serde_json::Value> = data["news_list"]
         .as_array()
-        .map(|arr| arr.iter().map(transform_news_item).collect())
+        .map(|arr| arr.iter().take(limit).map(transform_news_item).collect())
         .unwrap_or_default();
     Ok(make_result(serde_json::Value::Array(items)))
 }
@@ -193,13 +197,8 @@ pub async fn topic_search(
     p: TopicSearchParam,
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
-    let limit_str = p.limit.unwrap_or(20).to_string();
-    let raw = http_get_tool(
-        &client,
-        "/v1/search/topics",
-        &[("k", p.keyword.as_str()), ("limit", limit_str.as_str())],
-    )
-    .await?;
+    let limit = effective_limit(p.limit);
+    let raw = http_get_tool(&client, "/v1/search/topics", &[("k", p.keyword.as_str())]).await?;
     let json_str = raw
         .content
         .first()
@@ -210,14 +209,14 @@ pub async fn topic_search(
         serde_json::from_str(json_str).map_err(crate::error::Error::Serialize)?;
     let items: Vec<serde_json::Value> = data["topic_list"]
         .as_array()
-        .map(|arr| arr.iter().map(transform_topic_item).collect())
+        .map(|arr| arr.iter().take(limit).map(transform_topic_item).collect())
         .unwrap_or_default();
     Ok(make_result(serde_json::Value::Array(items)))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{transform_news_item, transform_topic_item};
+    use super::{effective_limit, transform_news_item, transform_topic_item};
 
     /// The upstream may send `publish_at_timestamp` as a JSON string; it must
     /// still produce a real `time`, not `1970-01-01T00:00:00Z` (the epoch-0
@@ -325,5 +324,20 @@ mod tests {
             obj.structured_content.is_some(),
             "object-rooted result should populate structuredContent"
         );
+    }
+
+    #[test]
+    fn limit_defaults_to_20_and_is_honored() {
+        assert_eq!(effective_limit(None), 20);
+        assert_eq!(effective_limit(Some(3)), 3);
+        let upstream: Vec<serde_json::Value> = (0..40)
+            .map(|i| serde_json::json!({"id": i.to_string()}))
+            .collect();
+        let taken: Vec<_> = upstream
+            .iter()
+            .take(effective_limit(Some(3)))
+            .map(transform_news_item)
+            .collect();
+        assert_eq!(taken.len(), 3);
     }
 }
