@@ -1589,6 +1589,32 @@
         "order_id": "基金訂單 id（來自 fund_orders）"
       }
     },
+    "forex_quote": {
+      "title": "外匯報價",
+      "description": "獲取貨幣兌換報價。from/to 為 ISO 4217 幣種代碼（如 USD、HKD）；amount（兌出金額）與 target_amount（兌入金額）二選一，均為十進制字串。返回 quote_id（用於 forex_submit_order）、鎖定匯率 rate、幣種對 ccy_pair 及失效時間 expire_at（Unix 毫秒）。需認證。",
+      "properties": {
+        "from": "兌出幣種，ISO 4217（如 USD）",
+        "to": "兌入幣種（如 HKD）",
+        "amount": "兌出金額（十進制字串，如 \"1000.00\"）；與 target_amount 互斥",
+        "target_amount": "兌入金額（十進制字串）；與 amount 互斥"
+      }
+    },
+    "forex_order": {
+      "title": "外匯訂單詳情",
+      "description": "按 client_order_id 查詢單筆貨幣兌換訂單。兌換為非同步完成，請輪詢直至狀態為終態（成功/失敗）。返回 state、rate、from_amount、to_amount、fail_reason。需認證。",
+      "properties": {
+        "client_order_id": "你在 forex_submit_order 中提交的訂單 id"
+      }
+    },
+    "forex_submit_order": {
+      "title": "提交外匯訂單",
+      "description": "針對 forex_quote 返回的 quote_id 提交貨幣兌換委託（在賬戶內把一種貨幣兌換為另一種）。【必須兩步確認】未傳本次試運行返回的 confirmation_code 時為 DRY RUN（試運行）：先不帶 execute 調用一次，把預覽完整展示給用戶，只有在用戶明確確認後才可再次調用並把該確認碼傳入 execute。僅表示受理——兌換為非同步完成，請用相同 client_order_id 輪詢 forex_order 獲取最終狀態。需認證。",
+      "properties": {
+        "quote_id": "forex_quote 返回的 quote_id（綁定鎖定匯率）",
+        "client_order_id": "你自定義的訂單 id，在你名下唯一（冪等鍵）",
+        "execute": "本次試運行返回的 confirmation_code。省略（預設）表示 DRY RUN：只校驗並回顯請求，同時返回一個三位確認碼，不會發往外匯通道。必須先不帶該參數調用一次，把預覽展示給用戶，待用戶明確確認後才可再次調用並回填該碼。確認碼只對這一筆完全相同的請求生效——改動任何欄位即失效。不可自行決定回填。"
+      }
+    },
     "fund_transactions": {
       "title": "基金資金變動",
       "description": "獲取用戶的基金資金變動記錄。需認證。可選 business_type、category、currencies、start / end（Unix 秒）、page / size。",

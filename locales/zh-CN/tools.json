@@ -1589,6 +1589,32 @@
         "order_id": "基金订单 id（来自 fund_orders）"
       }
     },
+    "forex_quote": {
+      "title": "外汇报价",
+      "description": "获取货币兑换报价。from/to 为 ISO 4217 币种代码（如 USD、HKD）；amount（兑出金额）与 target_amount（兑入金额）二选一，均为十进制字符串。返回 quote_id（用于 forex_submit_order）、锁定汇率 rate、币种对 ccy_pair 和失效时间 expire_at（Unix 毫秒）。需认证。",
+      "properties": {
+        "from": "兑出币种，ISO 4217（如 USD）",
+        "to": "兑入币种（如 HKD）",
+        "amount": "兑出金额（十进制字符串，如 \"1000.00\"）；与 target_amount 互斥",
+        "target_amount": "兑入金额（十进制字符串）；与 amount 互斥"
+      }
+    },
+    "forex_order": {
+      "title": "外汇订单详情",
+      "description": "按 client_order_id 查询单笔货币兑换订单。兑换为异步完成，请轮询直至状态为终态（成功/失败）。返回 state、rate、from_amount、to_amount、fail_reason。需认证。",
+      "properties": {
+        "client_order_id": "你在 forex_submit_order 中提交的订单 id"
+      }
+    },
+    "forex_submit_order": {
+      "title": "提交外汇订单",
+      "description": "针对 forex_quote 返回的 quote_id 提交货币兑换委托（在账户内把一种货币兑换为另一种）。【必须两步确认】未传本次试运行返回的 confirmation_code 时为 DRY RUN（试运行）：先不带 execute 调用一次，把预览完整展示给用户，只有在用户明确确认后才可再次调用并把该确认码传入 execute。仅表示受理——兑换为异步完成，请用相同 client_order_id 轮询 forex_order 获取最终状态。需认证。",
+      "properties": {
+        "quote_id": "forex_quote 返回的 quote_id（绑定锁定汇率）",
+        "client_order_id": "你自定义的订单 id，在你名下唯一（幂等键）",
+        "execute": "本次试运行返回的 confirmation_code。省略（默认）表示 DRY RUN：只校验并回显请求，同时返回一个三位确认码，不会发往外汇通道。必须先不带该参数调用一次，把预览展示给用户，待用户明确确认后才可再次调用并回填该码。确认码只对这一笔完全相同的请求生效——改动任何字段即失效。不可自行决定回填。"
+      }
+    },
     "fund_transactions": {
       "title": "基金资金变动",
       "description": "获取用户的基金资金变动记录。需认证。可选 business_type、category、currencies、start / end（Unix 秒）、page / size。",
