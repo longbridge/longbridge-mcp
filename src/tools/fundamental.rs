@@ -1405,7 +1405,8 @@ pub async fn valuation_comparison(
         ));
     }
     let result = ctx
-        .valuation_comparison(p.symbol, p.currency, peers)
+        // A lower-case code ("usd") silently returns an empty comparison.
+        .valuation_comparison(p.symbol, p.currency.trim().to_uppercase(), peers)
         .await
         .map_err(crate::error::Error::longbridge)?;
     // Valuation ratios arrive with ~16-19 fractional digits of bogus precision

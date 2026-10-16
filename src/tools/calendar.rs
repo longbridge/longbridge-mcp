@@ -108,6 +108,16 @@ fn merge_pages(pages: impl IntoIterator<Item = serde_json::Value>) -> serde_json
 /// Normalize `category`, accepting any capitalization and surrounding space.
 fn normalize_category(raw: &str) -> Result<String, McpError> {
     let lower = raw.trim().to_lowercase();
+    // Names models reach for first; seen in production as failed calls.
+    let lower = match lower.as_str() {
+        "earnings" | "earning" | "financial" | "financials" | "reports" => "report".to_string(),
+        "economic" | "economy" | "macro" | "macroeconomic" => "macrodata".to_string(),
+        "dividends" => "dividend".to_string(),
+        "splits" => "split".to_string(),
+        "ipos" => "ipo".to_string(),
+        "holiday" | "holidays" => "closed".to_string(),
+        _ => lower,
+    };
     if CATEGORIES.contains(&lower.as_str()) {
         Ok(lower)
     } else {
@@ -336,6 +346,25 @@ pub async fn finance_calendar(
 mod tests {
     use super::*;
 
+    #[test]
+    fn category_accepts_the_names_models_try_first() {
+        for (raw, want) in [
+            ("earnings", "report"),
+            ("Economic", "macrodata"),
+            ("holidays", "closed"),
+        ] {
+            assert_eq!(
+                normalize_category(raw).expect("an alias must resolve"),
+                want,
+                "{raw} must resolve to {want}"
+            );
+        }
+        assert!(
+            normalize_category("weather").is_err(),
+            "an unknown category is rejected"
+        );
+    }
+
     // ── next_date_of ────────────────────────────────────────────────────────
 
     #[test]
@@ -460,7 +489,7 @@ mod tests {
 
     #[test]
     fn normalize_category_rejects_unknown_value_and_lists_candidates() {
-        let err = normalize_category("financial").unwrap_err();
+        let err = normalize_category("weather").unwrap_err();
         assert!(
             err.message.contains("report") && err.message.contains("macrodata"),
             "error should list the accepted categories, got: {}",

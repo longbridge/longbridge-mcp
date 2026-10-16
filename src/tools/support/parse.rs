@@ -13,7 +13,26 @@ const PRIMITIVE_DATETIME_FORMAT: &[time::format_description::BorrowedFormatItem<
     time::macros::format_description!("[year]-[month]-[day]T[hour]:[minute]:[second]");
 
 pub fn parse_period(s: &str) -> Result<Period, McpError> {
-    match s.trim().to_lowercase().as_str() {
+    let lower = s.trim().to_lowercase();
+    // Common spellings from other APIs. "1m" stays one minute, so a month is
+    // only "1mo"/"monthly".
+    let canonical = match lower.as_str() {
+        "1d" | "d" | "daily" | "1day" => "day",
+        "1w" | "w" | "weekly" | "1week" => "week",
+        "1mo" | "mo" | "monthly" | "1month" => "month",
+        "1q" | "q" | "quarterly" => "quarter",
+        "1y" | "y" | "yearly" | "annual" => "year",
+        "1h" | "h" | "60min" | "hourly" => "60m",
+        "2h" => "120m",
+        "3h" => "180m",
+        "4h" => "240m",
+        "1min" => "1m",
+        "5min" => "5m",
+        "15min" => "15m",
+        "30min" => "30m",
+        other => other,
+    };
+    match canonical {
         "1m" => Ok(Period::OneMinute),
         "2m" => Ok(Period::TwoMinute),
         "3m" => Ok(Period::ThreeMinute),
@@ -54,8 +73,12 @@ pub fn parse_trade_sessions(s: &str) -> Result<TradeSessions, McpError> {
 }
 
 pub fn parse_market(s: &str) -> Result<Market, McpError> {
-    s.parse::<Market>()
-        .map_err(|e| McpError::invalid_params(format!("invalid market: {s} ({e})"), None))
+    s.trim().to_uppercase().parse::<Market>().map_err(|_| {
+        McpError::invalid_params(
+            format!("invalid market: '{s}', expected one of: US, HK, CN, SG"),
+            None,
+        )
+    })
 }
 
 pub fn parse_date(s: &str) -> Result<Date, McpError> {
@@ -283,6 +306,31 @@ mod tests {
     use super::*;
 
     #[test]
+    fn markets_and_periods_accept_common_spellings() {
+        assert!(
+            matches!(parse_market("us"), Ok(Market::US)),
+            "market case must not matter"
+        );
+        assert!(
+            parse_market("mars").is_err_and(|e| e.message.contains("US, HK, CN, SG")),
+            "an unknown market lists the valid ones"
+        );
+        assert!(matches!(parse_period("1d"), Ok(Period::Day)), "1d is a day");
+        assert!(
+            matches!(parse_period("1h"), Ok(Period::SixtyMinute)),
+            "1h is 60 minutes"
+        );
+        assert!(
+            matches!(parse_period("1m"), Ok(Period::OneMinute)),
+            "1m stays one minute"
+        );
+        assert!(
+            matches!(parse_period("monthly"), Ok(Period::Month)),
+            "monthly is a month"
+        );
+    }
+
+    #[test]
     fn calc_index_names_ignore_case_and_separators() {
         for name in ["PeTtmRatio", "pe_ttm_ratio", "pettmratio", "Pe-Ttm-Ratio"] {
             assert!(
@@ -337,7 +385,7 @@ mod tests {
 
     #[test]
     fn period_error_lists_the_accepted_values() {
-        let err = parse_period("daily").unwrap_err();
+        let err = parse_period("fortnight").unwrap_err();
         assert!(
             err.message.contains("day") && err.message.contains("week"),
             "error should list accepted periods, got: {}",

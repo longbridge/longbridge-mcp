@@ -12,7 +12,7 @@ use crate::tools::support::http_client::{
     http_get_tool, http_get_tool_dropping, http_get_tool_trimming_zeros, http_get_tool_unix,
     http_get_tool_unix_dropping,
 };
-use crate::tools::support::tolerant::tolerant_option_usize;
+use crate::tools::support::tolerant::{tolerant_option_csv, tolerant_option_usize};
 use crate::tools::tool_json;
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -582,9 +582,10 @@ fn next_params_schema(_: &mut rmcp::schemars::SchemaGenerator) -> rmcp::schemars
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct StockEventsParam {
-    /// Market filter: comma-separated list of markets to include.
-    /// Supported values: "HK", "US", "CN", "SG". Omit to return all markets.
-    /// Example: "HK,US"
+    /// Market filter: markets to include, as a comma-separated string ("HK,US")
+    /// or an array (["HK", "US"]). Supported values: "HK", "US", "CN", "SG".
+    /// Omit to return all markets.
+    #[serde(default, deserialize_with = "tolerant_option_csv")]
     pub markets: Option<String>,
     /// Sort order (default: "2"):
     ///   "0" = by time (most recent first)

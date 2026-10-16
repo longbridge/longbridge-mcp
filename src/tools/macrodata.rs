@@ -35,15 +35,15 @@ pub struct MacroeconomicParam {
 }
 
 fn parse_country(s: &str) -> Result<MacroeconomicCountry, McpError> {
-    match s {
+    match s.trim().to_uppercase().as_str() {
         "US" => Ok(MacroeconomicCountry::UnitedStates),
         "CN" => Ok(MacroeconomicCountry::China),
         "HK" => Ok(MacroeconomicCountry::HongKong),
         "EU" => Ok(MacroeconomicCountry::EuroZone),
         "JP" => Ok(MacroeconomicCountry::Japan),
         "SG" => Ok(MacroeconomicCountry::Singapore),
-        other => Err(McpError::invalid_params(
-            format!("invalid country '{other}'. Valid values: US, CN, HK, EU, JP, SG"),
+        _ => Err(McpError::invalid_params(
+            format!("invalid country '{s}'. Valid values: US, CN, HK, EU, JP, SG"),
             None,
         )),
     }

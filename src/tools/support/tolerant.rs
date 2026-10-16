@@ -145,6 +145,19 @@ where
     }
 }
 
+/// `Option<String>` holding a comma-separated list, which may also arrive as
+/// an array of strings; the array is joined with commas.
+pub fn tolerant_option_csv<'de, D>(d: D) -> Result<Option<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Ok(match Option::<VecOrString>::deserialize(d)? {
+        None => None,
+        Some(VecOrString::Str(s)) => Some(s),
+        Some(VecOrString::Vec(v)) => Some(v.join(",")),
+    })
+}
+
 /// `Option<Vec<i32>>` tolerant variant (used by `warrant_list.issuer`).
 pub fn tolerant_option_vec_i32<'de, D>(d: D) -> Result<Option<Vec<i32>>, D::Error>
 where
