@@ -11,7 +11,9 @@ use crate::error::Error;
 use crate::tools::support::dry_run;
 use crate::tools::support::http_client::http_get_tool;
 use crate::tools::support::parse;
-use crate::tools::support::tolerant::{tolerant_option_string, tolerant_string};
+use crate::tools::support::tolerant::{
+    tolerant_id_string, tolerant_option_string, tolerant_string,
+};
 use crate::tools::{tool_json, tool_result};
 
 pub use crate::tools::quote::SymbolParam;
@@ -20,7 +22,7 @@ pub use crate::tools::quote::SymbolParam;
 pub struct OrderDetailParam {
     /// Order ID to look up. A parent order ID, or (with is_attached=true) the
     /// ID of an attached take-profit / stop-loss leg.
-    #[serde(deserialize_with = "tolerant_string")]
+    #[serde(deserialize_with = "tolerant_id_string")]
     pub order_id: String,
     /// Set to true when order_id is the ID of an attached take-profit /
     /// stop-loss leg rather than a parent order. The response is then that leg
@@ -205,7 +207,7 @@ pub struct SubmitMultiLegOrderParam {
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ReplaceOrderParam {
     /// Order ID to replace (returned by submit_order or listed in today_orders / history_orders)
-    #[serde(deserialize_with = "tolerant_string")]
+    #[serde(deserialize_with = "tolerant_id_string")]
     pub order_id: String,
     /// New order quantity (number of shares)
     #[serde(deserialize_with = "tolerant_string")]
@@ -314,7 +316,7 @@ impl ReplaceOrderParam {
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct CancelOrderParam {
     /// Order ID to cancel (from today's orders or order history)
-    #[serde(deserialize_with = "tolerant_string")]
+    #[serde(deserialize_with = "tolerant_id_string")]
     pub order_id: String,
     /// Set to true to cancel an attached take-profit / stop-loss leg by its own
     /// order_id, leaving the parent order in place. Omit (or false) to cancel a
@@ -982,6 +984,63 @@ fn attached_replace_preview(p: &ReplaceOrderParam) -> serde_json::Value {
     })
 }
 
+/// What a `submit_order` confirmation code covers.
+fn submit_scope(p: &SubmitOrderParam) -> dry_run::Scope {
+    let mut scope = dry_run::Scope::order(
+        &p.side,
+        &p.symbol,
+        &p.submitted_quantity,
+        p.submitted_price.as_deref().unwrap_or(""),
+    );
+    // Every field the preview shows is part of what the user approves: a code
+    // confirmed for an LO Day order must not place an MO, a GTC, or one with
+    // another trigger or trail.
+    scope = scope
+        .and("type", &p.order_type)
+        .and("tif", &p.time_in_force);
+    scope = with_present(
+        scope,
+        &[
+            ("trigger", &p.trigger_price),
+            ("offset", &p.limit_offset),
+            ("trail_amount", &p.trailing_amount),
+            ("trail_percent", &p.trailing_percent),
+            ("expire", &p.expire_date),
+            ("rth", &p.outside_rth),
+        ],
+    );
+    // The protective legs are part of the order the user approves: a code
+    // confirmed for one take-profit/stop-loss pair must not place another.
+    if let Some(ref v) = p.attached_order_type {
+        scope = scope.and("attached", v);
+        scope = with_present(
+            scope,
+            &[
+                ("tp", &p.attached_profit_taker_price),
+                ("sl", &p.attached_stop_loss_price),
+                ("tp_limit", &p.attached_profit_taker_submit_price),
+                ("sl_limit", &p.attached_stop_loss_submit_price),
+                ("leg_tif", &p.attached_time_in_force),
+                ("leg_expire", &p.attached_expire_time),
+                ("leg_type", &p.attached_activate_order_type),
+                ("leg_rth", &p.attached_outside_rth),
+            ],
+        );
+    }
+    scope
+}
+
+/// Add a clause to `scope` for each field that is set, so a confirmation code
+/// covers every value the preview showed.
+fn with_present(mut scope: dry_run::Scope, fields: &[(&str, &Option<String>)]) -> dry_run::Scope {
+    for (label, value) in fields {
+        if let Some(value) = value {
+            scope = scope.and(label, value);
+        }
+    }
+    scope
+}
+
 /// Order types `submit_order` accepts, as the SDK spells them.
 const ORDER_TYPES: &[&str] = &[
     "LO", "ELO", "MO", "AO", "ALO", "ODD", "LIT", "MIT", "TSLPAMT", "TSLPPCT", "TSMAMT", "TSMPCT",
@@ -1145,23 +1204,7 @@ pub async fn submit_order(
         opts = opts.attached_params(attached_submit_params(&p, v)?);
     }
 
-    let mut scope = dry_run::Scope::order(
-        &p.side,
-        &p.symbol,
-        &p.submitted_quantity,
-        p.submitted_price.as_deref().unwrap_or(""),
-    );
-    // The protective legs are part of the order the user approves: a code
-    // confirmed for one take-profit/stop-loss pair must not place another.
-    if let Some(ref v) = p.attached_order_type {
-        scope = scope.and("attached", v);
-        if let Some(ref v) = p.attached_profit_taker_price {
-            scope = scope.and("tp", v);
-        }
-        if let Some(ref v) = p.attached_stop_loss_price {
-            scope = scope.and("sl", v);
-        }
-    }
+    let scope = submit_scope(&p);
     // Two-step by design: without a confirmation code this places nothing.
     let Some(code) = p.execute.clone() else {
         return dry_run::result(
@@ -1325,15 +1368,26 @@ pub async fn replace_order(
     if p.attached_cancel_all == Some(true) {
         scope = scope.and("cancel_attached", "true");
     }
-    if let Some(ref v) = p.attached_order_type {
-        scope = scope.and("attached", v);
-    }
-    if let Some(ref v) = p.attached_profit_taker_price {
-        scope = scope.and("tp", v);
-    }
-    if let Some(ref v) = p.attached_stop_loss_price {
-        scope = scope.and("sl", v);
-    }
+    scope = with_present(
+        scope,
+        &[
+            ("trigger", &p.trigger_price),
+            ("offset", &p.limit_offset),
+            ("trail_amount", &p.trailing_amount),
+            ("trail_percent", &p.trailing_percent),
+            ("attached", &p.attached_order_type),
+            ("tp_id", &p.attached_profit_taker_id),
+            ("sl_id", &p.attached_stop_loss_id),
+            ("tp", &p.attached_profit_taker_price),
+            ("sl", &p.attached_stop_loss_price),
+            ("tp_limit", &p.attached_profit_taker_submit_price),
+            ("sl_limit", &p.attached_stop_loss_submit_price),
+            ("leg_tif", &p.attached_time_in_force),
+            ("leg_expire", &p.attached_expire_time),
+            ("leg_type", &p.attached_activate_order_type),
+            ("leg_rth", &p.attached_outside_rth),
+        ],
+    );
     // Two-step by design: without a confirmation code this changes nothing.
     let Some(code) = p.execute.clone() else {
         let existing = preview_existing_order(mctx, &ctx, &p.order_id, false).await;
@@ -1702,7 +1756,34 @@ mod attached_order_tests {
 
 #[cfg(test)]
 mod tests {
-    use super::{ORDER_TYPES, SubmitOrderParam, canonical_choice, missing_order_fields};
+    use super::{
+        ORDER_TYPES, SubmitOrderParam, canonical_choice, missing_order_fields, submit_scope,
+    };
+
+    #[test]
+    fn a_confirmation_code_does_not_carry_over_to_a_changed_order() {
+        let base = serde_json::json!({"order_type": "LO", "submitted_price": "400"});
+        let code = submit_scope(&order(base.clone())).code();
+        for change in [
+            serde_json::json!({"order_type": "MO"}),
+            serde_json::json!({"time_in_force": "GTC"}),
+            serde_json::json!({"trigger_price": "380"}),
+            serde_json::json!({"outside_rth": "ANY_TIME"}),
+        ] {
+            let mut changed = base.clone();
+            if let (Some(c), Some(d)) = (changed.as_object_mut(), change.as_object()) {
+                c.extend(d.clone());
+            }
+            assert!(
+                submit_scope(&order(changed)).verify(&code).is_err(),
+                "a code for the LO Day preview must not place {change}"
+            );
+        }
+        assert!(
+            submit_scope(&order(base)).verify(&code).is_ok(),
+            "the same order must still verify"
+        );
+    }
 
     #[test]
     fn canonical_choice_ignores_case_and_lists_choices() {

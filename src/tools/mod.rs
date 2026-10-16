@@ -108,7 +108,9 @@ where
             // is not a client-visible failure: hand it the delay and record
             // nothing, so the retry's outcome is the one that gets counted.
             let deferred = match &result {
-                Err(err) if is_backoff(err) => BACKOFF_RETRY
+                // A per-tool no-data code (e.g. 2601500 on consensus) is
+                // terminal: retrying only delays the placeholder.
+                Err(err) if is_backoff(err) && !is_terminal_for(name, err) => BACKOFF_RETRY
                     .try_with(|slot| {
                         let delay =
                             backoff_delay(upstream_message_of(err).unwrap_or(err.message.as_ref()));
@@ -265,11 +267,15 @@ fn tool_error(name: &str, err: &McpError) -> CallToolResult {
 
     // A write that got no response may still have been executed upstream
     // (the order placed, the alert created); resending it could do it twice.
-    let (recoverable, hint) = if is_transport_error(err) && !is_read_only_tool(name) {
-        ("none", Some(UNCONFIRMED_WRITE_HINT))
-    } else {
-        (recoverable_of(err), error_hint(err))
-    };
+    // Only a rate limit proves the write was rejected unexecuted; a timeout or
+    // a 5xx (also classed "backoff" for reads) leaves it unknown.
+    let recoverable = recoverable_of(err);
+    let (recoverable, hint) =
+        if recoverable == "backoff" && !is_rate_limit(err) && !is_read_only_tool(name) {
+            ("none", Some(UNCONFIRMED_WRITE_HINT))
+        } else {
+            (recoverable, error_hint(err))
+        };
     let envelope = serde_json::json!({
         "error_code": error_code_of(err),
         "message": message,
@@ -285,8 +291,21 @@ const UNCONFIRMED_WRITE_HINT: &str = "Hint: the request got no response, so it m
      have taken effect upstream. Do NOT resend it: first check the current state (e.g. \
      today_orders for an order) and only retry if the change is not there.";
 
-fn is_transport_error(err: &McpError) -> bool {
-    err.message.to_lowercase().contains(TRANSPORT_ERROR)
+/// A rate-limit rejection (429xxx or its message text): the request was
+/// refused before doing anything, so even a write can be resent.
+fn is_rate_limit(err: &McpError) -> bool {
+    let msg = err.message.to_lowercase();
+    openapi_error_code_of(err).is_some_and(|c| (429_000..430_000).contains(&c))
+        || [
+            "rate limit",
+            "too frequent",
+            "区间调用上限",
+            "最小间隔",
+            "區間調用上限",
+            "最小間隔",
+        ]
+        .iter()
+        .any(|needle| msg.contains(needle))
 }
 
 /// Whether `name` is a registered read-only tool. Unknown names count as
@@ -1414,9 +1433,10 @@ fn parameter_summary(name: &str) -> String {
     }
 }
 
-/// Fix the one unambiguous shape mistake models make with array parameters:
-/// passing a single value (`"symbols": "AAPL.US"`) or a JSON-encoded array
-/// string (`"symbols": "[\"AAPL.US\"]"`). Anything else is left for the
+/// Fix the unambiguous shape mistakes models make with array parameters:
+/// passing a single value (`"symbols": "AAPL.US"`), a comma-separated list
+/// (`"AAPL.US, MSFT.US"`) or a JSON-encoded array string
+/// (`"symbols": "[\"AAPL.US\"]"`). Anything else is left for the
 /// deserializer to reject.
 fn coerce_array_arguments(name: &str, arguments: &mut serde_json::Map<String, serde_json::Value>) {
     let Some(tool) = cached_router().get(name) else {
@@ -1446,7 +1466,16 @@ fn coerce_array_arguments(name: &str, arguments: &mut serde_json::Map<String, se
         }
         *value = match serde_json::from_str::<serde_json::Value>(text) {
             Ok(parsed @ serde_json::Value::Array(_)) => parsed,
-            _ => serde_json::Value::Array(vec![serde_json::Value::String(text.clone())]),
+            // "AAPL.US, MSFT.US" is a list of two, not one bogus symbol; for a
+            // write (update_watchlist_group) one bogus entry could replace a
+            // whole group.
+            _ => serde_json::Value::Array(
+                text.split(',')
+                    .map(str::trim)
+                    .filter(|part| !part.is_empty())
+                    .map(|part| serde_json::Value::String(part.to_string()))
+                    .collect(),
+            ),
         };
     }
 }
@@ -8225,6 +8254,30 @@ mod tool_error_tests {
         let v: serde_json::Value = serde_json::from_str(&text_of(&tool_error("quote", &err)))
             .expect("the envelope must be JSON");
         assert_eq!(v["recoverable"], "backoff", "a read can be retried");
+
+        let server_error = McpError::internal_error(
+            "openapi error: code=500000: internal server error",
+            Some(serde_json::json!({ "openapi_error_code": 500000 })),
+        );
+        let v: serde_json::Value =
+            serde_json::from_str(&text_of(&tool_error("submit_order", &server_error)))
+                .expect("the envelope must be JSON");
+        assert_eq!(
+            v["recoverable"], "none",
+            "a 5xx on a write leaves its outcome unknown"
+        );
+
+        let rate_limited = McpError::internal_error(
+            "openapi error: code=429002: rate limit",
+            Some(serde_json::json!({ "openapi_error_code": 429002 })),
+        );
+        let v: serde_json::Value =
+            serde_json::from_str(&text_of(&tool_error("submit_order", &rate_limited)))
+                .expect("the envelope must be JSON");
+        assert_eq!(
+            v["recoverable"], "backoff",
+            "a rate-limited write was refused, so it can be resent"
+        );
     }
 
     #[test]
@@ -8387,6 +8440,17 @@ mod tool_error_tests {
             .clone();
         super::coerce_array_arguments("quote", &mut args);
         assert_eq!(args["symbols"], serde_json::json!(["AAPL.US", "700.HK"]));
+
+        let mut args = serde_json::json!({"symbols": "AAPL.US, MSFT.US"})
+            .as_object()
+            .unwrap()
+            .clone();
+        super::coerce_array_arguments("quote", &mut args);
+        assert_eq!(
+            args["symbols"],
+            serde_json::json!(["AAPL.US", "MSFT.US"]),
+            "a comma-separated list must become one element per symbol"
+        );
 
         // Scalars stay scalars.
         let mut args = serde_json::json!({"symbol": "AAPL.US"})

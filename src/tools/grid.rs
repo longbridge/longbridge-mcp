@@ -345,6 +345,11 @@ pub async fn grid_submit(
     let rule = build_rule(p.rule)?;
     let opts = SubmitGridOrderOptions::new(p.symbol.clone(), p.settlement_currency.clone(), rule);
     let rule_json = serde_json::to_value(&opts).unwrap_or_default();
+    // The whole rule the preview shows (bounds, grid count, order types) is
+    // what the user approves, not only quantity and base price.
+    let scope = scope
+        .and("currency", &p.settlement_currency)
+        .and("rule", &rule_json.to_string());
     // Two-step by design: without a confirmation code this submits nothing.
     let Some(code) = execute else {
         return dry_run::result(
@@ -376,7 +381,10 @@ pub async fn grid_replace(
     let rule = build_rule(p.rule)?;
     let opts = ReplaceGridOrderOptions::new(p.order_id.clone(), rule);
     let rule_json = serde_json::to_value(&opts).unwrap_or_default();
-    let scope = dry_run::Scope::on_order("grid replace", &p.order_id);
+    // The new rule is what the user approves: a code confirmed for one rule
+    // must not apply another to the same grid order.
+    let scope =
+        dry_run::Scope::on_order("grid replace", &p.order_id).and("rule", &rule_json.to_string());
     // Two-step by design: without a confirmation code this changes nothing.
     let Some(code) = execute else {
         return dry_run::result(

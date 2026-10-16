@@ -54,6 +54,28 @@ where
     StrOrNumber::deserialize(d).map(StrOrNumber::into_string)
 }
 
+/// An id that may arrive as a JSON number, but only one small enough to have
+/// survived a JavaScript client: integers past 2^53 are rounded by
+/// `JSON.parse` before they reach the server (1269569447752900608 arrives as
+/// 1269569447752900600, another order), so they are refused and the model is
+/// told to send the id as a string.
+pub fn tolerant_id_string<'de, D>(d: D) -> Result<String, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    const MAX_SAFE_INTEGER: u64 = (1 << 53) - 1;
+    match StrOrNumber::deserialize(d)? {
+        StrOrNumber::Str(s) => Ok(s),
+        StrOrNumber::Num(n) if n.as_u64().is_some_and(|v| v <= MAX_SAFE_INTEGER) => {
+            Ok(n.to_string())
+        }
+        StrOrNumber::Num(n) => Err(de::Error::custom(format!(
+            "id {n} is too large to pass as a JSON number without losing digits; pass it \
+             as a string, exactly as returned"
+        ))),
+    }
+}
+
 /// `Option<String>` tolerant variant of [`tolerant_string`].
 pub fn tolerant_option_string<'de, D>(d: D) -> Result<Option<String>, D::Error>
 where
@@ -281,6 +303,29 @@ mod tests {
         quantity: String,
         #[serde(default, deserialize_with = "tolerant_option_string")]
         price: Option<String>,
+    }
+
+    #[derive(Deserialize)]
+    struct Id {
+        #[serde(deserialize_with = "tolerant_id_string")]
+        order_id: String,
+    }
+
+    #[test]
+    fn large_numeric_ids_are_refused() {
+        let id: Id = serde_json::from_str(r#"{"order_id":"1269569447752900608"}"#)
+            .expect("a string id must parse");
+        assert_eq!(
+            id.order_id, "1269569447752900608",
+            "a string id is kept verbatim"
+        );
+        let id: Id =
+            serde_json::from_str(r#"{"order_id":12345}"#).expect("a small numeric id must parse");
+        assert_eq!(id.order_id, "12345", "a small id survives any client");
+        assert!(
+            serde_json::from_str::<Id>(r#"{"order_id":1269569447752900608}"#).is_err(),
+            "an id past 2^53 may already be rounded and must be refused"
+        );
     }
 
     #[test]

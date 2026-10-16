@@ -1629,10 +1629,26 @@ pub async fn update_watchlist_group(
     }
     if let Some(securities) = p.securities {
         req = req.securities(securities);
-        let mode = match p.mode.as_deref() {
+        // An unrecognized mode must not fall back to replace: "Add" used to
+        // wipe the group down to the securities meant to be added.
+        let mode = match p
+            .mode
+            .as_deref()
+            .map(|m| m.trim().to_lowercase())
+            .as_deref()
+        {
             Some("add") => SecuritiesUpdateMode::Add,
             Some("remove") => SecuritiesUpdateMode::Remove,
-            _ => SecuritiesUpdateMode::Replace,
+            None | Some("replace") => SecuritiesUpdateMode::Replace,
+            Some(_) => {
+                return Err(McpError::invalid_params(
+                    format!(
+                        "invalid mode: '{}', expected one of: add, remove, replace",
+                        p.mode.as_deref().unwrap_or_default()
+                    ),
+                    None,
+                ));
+            }
         };
         req = req.mode(mode);
     }
