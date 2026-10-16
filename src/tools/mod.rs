@@ -6354,7 +6354,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::discovery::ScreenerIndicatorsResponse>(),
-        description = "Get all available screener indicator keys with units and default value ranges. Technical indicators carry tech_values {tech_key: [{value, label}]} listing the accepted values (e.g. macd_day: period [day], category [goldenfork, deadcross, upzero, downzero]); pass one value per tech_key as tech_values in screener_search. Optional symbol (e.g. AAPL.US) narrows to stock-specific indicators. Returns groups[]{group_type, group_name, indicators[]{id, key, name, unit, places, category, default_range (per market: u_s/h_k/c_n/s_g), tech_values{tech_key: [{value, label}]}, tech_indicators[] (raw form of tech_values)}}."
+        description = "Get all available screener indicator keys with their units. Technical indicators carry tech_values {tech_key: [{value, label}]} listing the accepted values (e.g. macd_day: period [day], category [goldenfork, deadcross, upzero, downzero]); pass one value per tech_key as tech_values in screener_search. Optional symbol (e.g. AAPL.US) narrows to stock-specific indicators. Returns groups[]{group_type, group_name, indicators[]{id, key, name, unit, places, category, tech_values{tech_key: [{value, label}]}}}."
     )]
     async fn screener_indicators(
         &self,

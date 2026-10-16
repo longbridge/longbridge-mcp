@@ -1309,7 +1309,7 @@
     },
     "screener_indicators": {
       "title": "選股指標配置",
-      "description": "獲取全部可用選股指標的 key、單位和預設值域。技術指標帶 tech_values {tech_key: [{value, label}]}，列出可選取值（如 macd_day：period [day]、category [goldenfork, deadcross, upzero, downzero]）；在 screener_search 中按每個 tech_key 傳一個取值作為 tech_values。可選 symbol（如 AAPL.US）收窄為該股票適用的指標。返回 groups[]{group_type, group_name, indicators[]{id, key, name, unit, places, category, default_range（按市場：u_s/h_k/c_n/s_g）, tech_values{tech_key: [{value, label}]}, tech_indicators[]（tech_values 的原始形式）}}",
+      "description": "獲取全部可用選股指標的 key 和單位。技術指標帶 tech_values {tech_key: [{value, label}]}，列出可選取值（如 macd_day：period [day]、category [goldenfork, deadcross, upzero, downzero]）；在 screener_search 中按每個 tech_key 傳一個取值作為 tech_values。可選 symbol（如 AAPL.US）收窄為該股票適用的指標。返回 groups[]{group_type, group_name, indicators[]{id, key, name, unit, places, category, tech_values{tech_key: [{value, label}]}}}",
       "properties": {
         "symbol": "可選證券代碼，用於篩選該股票支援的指標，如 AAPL.US"
       }
@@ -1395,7 +1395,7 @@
         "symbol": "要查詢的證券代碼，例如 `AAPL.US` 或 `700.HK`",
         "begin_time": "查詢起始時間，UTC 時區，格式為 2006-01-02T15:04:05Z；留空則從最早可用資料開始",
         "end_time": "查詢結束時間，UTC 時區，格式為 2006-01-02T15:04:05Z；留空則返回最新資料",
-        "limit": "返回事實數量上限。時間範圍內的事實超出該上限時，僅返回最新的 limit 條。預設 100"
+        "limit": "返回事實數量上限。時間範圍內的事實超出該上限時，僅返回最新的 limit 條。預設 3（每條數 KB）；更早的可用 end_time 往前翻"
       }
     },
     "fund_hot": {

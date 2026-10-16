@@ -54,7 +54,7 @@ pub struct SecurityFactsParam {
     pub begin_time: Option<String>,
     /// The end time of the fact to be queried, formatted as 2006-01-02T15:04:05Z in UTC Timezone. If left empty, the query will default to retrieving the latest data.
     pub end_time: Option<String>,
-    /// The maximum number of facts to return. If the number of facts in the time range exceeds this limit, only the latest 'limit' facts will be returned. Defaults to 100.
+    /// The maximum number of facts to return. If the number of facts in the time range exceeds this limit, only the latest 'limit' facts will be returned. Defaults to 3 (each fact is several KB); page back with end_time for older ones.
     #[serde(default, deserialize_with = "tolerant_option_i32")]
     #[schemars(extend("default" = 100))]
     pub limit: Option<i32>,
@@ -130,6 +130,10 @@ pub async fn signal_detail(
 }
 
 /// `GET /v1/facts/security_facts` — the fact (catalyst) events behind signals.
+/// Facts `security_facts` returns when `limit` is omitted: at ~12KB each,
+/// three stay within one tool result.
+const DEFAULT_FACTS_LIMIT: i32 = 3;
+
 pub async fn security_facts(
     mctx: &crate::tools::McpContext,
     p: SecurityFactsParam,
@@ -140,7 +144,9 @@ pub async fn security_facts(
             symbol: p.symbol,
             begin_time: p.begin_time.as_deref().map(parse_rfc3339).transpose()?,
             end_time: p.end_time.as_deref().map(parse_rfc3339).transpose()?,
-            limit: p.limit,
+            // Each fact carries several KB of analysis, so the upstream default
+            // of 100 is ~1.2MB, far past what a client accepts in one result.
+            limit: Some(p.limit.unwrap_or(DEFAULT_FACTS_LIMIT)),
         })
         .await
         .map_err(Error::longbridge)?;

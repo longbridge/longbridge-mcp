@@ -149,7 +149,7 @@ def all_keys(value):
 # Description fields the probe accounts/symbols cannot show, with the reason.
 # Keep this short: an entry here is a field nobody has verified live.
 DESCRIPTION_UNOBSERVABLE = {
-    "company": {"detail_url", "market_cap", "top_rank_tags"},  # US-account variant
+    "company": {"detail_url", "market_cap", "top_rank_tags", "share_list", "ccy_symbol"},  # US-account variant
     "consensus": {"ai_summary"},  # US-account variant
     "valuation": {"ai_summary"},  # US-account variant
     "dividend": {"dividend_yield_ttm"},  # US-account variant
@@ -166,7 +166,9 @@ DESCRIPTION_UNOBSERVABLE = {
     "ipo_orders": {"order_id", "submitted_at", "total_amount"},
     # Upstream returned {chain: null, top: null} for every probe symbol.
     "industry_peers": {"stock_num", "ytd_chg"},
-    "screener_indicators": {"macd_day"},  # an example indicator key, not a field
+    # macd_day is an example indicator key; tech_key names the map key in
+    # tech_values{tech_key: [...]}, not a literal field.
+    "screener_indicators": {"macd_day", "tech_key"},
     # bid/ask arrays were empty for every probe; fields from the BrokerLevel the
     # handler builds.
     "brokers": {"broker_ids"},
@@ -233,11 +235,19 @@ def real_responses(client, name, probes, dump_dir):
         result = out.get("result") or {}
         if result.get("isError"):
             continue
-        text = (result.get("content") or [{}])[0].get("text", "")
-        try:
-            value = json.loads(text)
-        except ValueError:
+        # A trimmed result leads with a "[TRUNCATED ...]" notice block; the
+        # data is the block that parses as JSON.
+        value = None
+        for block in result.get("content") or []:
+            try:
+                value = json.loads(block.get("text", ""))
+                break
+            except ValueError:
+                continue
+        if value is None:
             continue
+        if isinstance(value, dict):
+            value.pop("_truncated", None)
         if isinstance(value, dict) and "error_code" in value and "note" in value:
             continue  # terminal no-access placeholder, not real data
         values.append(value)

@@ -682,6 +682,13 @@ fn strip_filter_prefix_from_indicators(
                             obj.insert("tech_values".to_string(), serde_json::Value::Object(tv));
                         }
                     }
+                    // `tech_indicators` is the raw form `tech_values` was just
+                    // built from, and `default_range` holds the app's preset
+                    // filter buckets per market: together 89% of the response
+                    // (62.6K of 70K), which pushed it past the size limit so
+                    // trimming dropped the technical-indicator groups entirely.
+                    obj.remove("tech_indicators");
+                    obj.remove("default_range");
                 }
             }
         }

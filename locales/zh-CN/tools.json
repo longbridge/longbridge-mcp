@@ -1309,7 +1309,7 @@
     },
     "screener_indicators": {
       "title": "选股指标配置",
-      "description": "获取全部可用选股指标的 key、单位及默认取值范围。技术指标带 tech_values {tech_key: [{value, label}]}，列出可接受的取值（如 macd_day：period [day]，category [goldenfork, deadcross, upzero, downzero]）；在 screener_search 中按每个 tech_key 传一个值作为 tech_values。可选 symbol（如 AAPL.US）收窄为该股票适用的指标。返回 groups[]{group_type, group_name, indicators[]{id, key, name, unit, places, category, default_range（按市场：u_s/h_k/c_n/s_g）, tech_values{tech_key: [{value, label}]}, tech_indicators[]（tech_values 的原始形式）}}",
+      "description": "获取全部可用选股指标的 key 及单位。技术指标带 tech_values {tech_key: [{value, label}]}，列出可接受的取值（如 macd_day：period [day]，category [goldenfork, deadcross, upzero, downzero]）；在 screener_search 中按每个 tech_key 传一个值作为 tech_values。可选 symbol（如 AAPL.US）收窄为该股票适用的指标。返回 groups[]{group_type, group_name, indicators[]{id, key, name, unit, places, category, tech_values{tech_key: [{value, label}]}}}",
       "properties": {
         "symbol": "可选证券代码，用于筛选该股票支持的指标，如 AAPL.US"
       }
@@ -1395,7 +1395,7 @@
         "symbol": "要查询的证券代码，例如 `AAPL.US` 或 `700.HK`",
         "begin_time": "查询起始时间，UTC 时区，格式为 2006-01-02T15:04:05Z；留空则从最早可用数据开始",
         "end_time": "查询结束时间，UTC 时区，格式为 2006-01-02T15:04:05Z；留空则返回最新数据",
-        "limit": "返回事实数量上限。时间范围内的事实超出该上限时，仅返回最新的 limit 条。默认 100"
+        "limit": "返回事实数量上限。时间范围内的事实超出该上限时，仅返回最新的 limit 条。默认 3（每条数 KB）；更早的可用 end_time 往前翻"
       }
     },
     "fund_hot": {
