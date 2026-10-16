@@ -30,7 +30,8 @@ pub struct SignalsParam {
     pub start_time: Option<String>,
     /// Filter records created at or before this time. ISO 8601 datetime with timezone. If omitted, no upper bound.
     pub end_time: Option<String>,
-    /// Maximum number of results to return. Defaults to 20.
+    /// Maximum number of results to return. Defaults to 5 (each signal is ~5KB);
+    /// page with offset for more.
     #[serde(default, deserialize_with = "tolerant_option_i32")]
     #[schemars(extend("default" = 20))]
     pub limit: Option<i32>,
@@ -76,7 +77,9 @@ pub async fn signals(
             catalyst_type: p.catalyst_type,
             start_time: p.start_time.as_deref().map(parse_rfc3339).transpose()?,
             end_time: p.end_time.as_deref().map(parse_rfc3339).transpose()?,
-            limit: p.limit,
+            // ~5KB per signal: the upstream default of 20 is ~100KB, past
+            // what a client accepts in one tool result.
+            limit: Some(p.limit.unwrap_or(DEFAULT_SIGNALS_LIMIT)),
             offset: p.offset,
         })
         .await
@@ -130,6 +133,9 @@ pub async fn signal_detail(
 }
 
 /// `GET /v1/facts/security_facts` — the fact (catalyst) events behind signals.
+/// Signals `signals` returns when `limit` is omitted (~5KB each).
+const DEFAULT_SIGNALS_LIMIT: i32 = 5;
+
 /// Facts `security_facts` returns when `limit` is omitted: at ~12KB each,
 /// three stay within one tool result.
 const DEFAULT_FACTS_LIMIT: i32 = 3;

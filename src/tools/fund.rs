@@ -187,7 +187,7 @@ pub struct FundTransactionsParam {
     pub end: Option<i64>,
     /// 1-based page number.
     pub page: Option<i32>,
-    /// Page size (rows per page).
+    /// Page size (rows per page, default 20).
     pub size: Option<i32>,
 }
 
@@ -618,9 +618,8 @@ pub async fn fund_transactions(
     if let Some(page) = p.page {
         opts = opts.page(page);
     }
-    if let Some(size) = p.size {
-        opts = opts.size(size);
-    }
+    // Without a size the upstream page was ~211KB, past one tool result.
+    opts = opts.size(p.size.unwrap_or(20));
     let data = context(mctx)
         .transactions(opts)
         .await

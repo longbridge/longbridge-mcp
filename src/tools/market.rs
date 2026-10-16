@@ -547,7 +547,7 @@ pub struct StockEventsParam {
     pub sort: Option<String>,
     /// Date to query in "YYYY-MM-DD" format. Omit for today's movers.
     pub date: Option<String>,
-    /// Number of events to return per page (default: 20, max: 100)
+    /// Number of events to return per page (default: 10, max: 100)
     pub limit: Option<u32>,
     /// Pagination cursor from previous response next_params field.
     /// Pass the entire next_params object returned by the previous call to get the next page.
@@ -562,7 +562,8 @@ pub async fn top_movers(
     p: StockEventsParam,
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
-    let limit = p.limit.unwrap_or(20);
+    // ~2.6KB per event: 20 was ~51KB, past one tool result.
+    let limit = p.limit.unwrap_or(10);
     let sort: u32 = p.sort.as_deref().unwrap_or("2").parse().unwrap_or(2);
     let markets: Vec<serde_json::Value> = p
         .markets
