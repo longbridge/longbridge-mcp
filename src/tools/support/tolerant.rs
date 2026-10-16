@@ -97,6 +97,10 @@ fn id_of<E: de::Error>(value: StrOrNumber) -> Result<String, E> {
         StrOrNumber::Num(n) if n.as_u64().is_some_and(|v| v <= MAX_SAFE_INTEGER) => {
             Ok(n.to_string())
         }
+        StrOrNumber::Num(n) if n.as_u64().is_none() => Err(E::custom(format!(
+            "expected a non-negative integer id, got {n}; pass it as a string, exactly as \
+             returned"
+        ))),
         StrOrNumber::Num(n) => Err(E::custom(format!(
             "id {n} is too large to pass as a JSON number without losing digits; pass it \
              as a string, exactly as returned"

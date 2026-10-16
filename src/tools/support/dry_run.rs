@@ -72,7 +72,8 @@ fn canonical(field: &str) -> String {
 ///
 /// Every field that changes what is traded is folded in (callers add them
 /// with [`Scope::and`]): a code confirmed for an LO Day order must not place
-/// an MO or a GTC. Free text that changes nothing traded, such as `remark`, is
+/// an MO or a GTC. What changes nothing traded, such as `remark` or a
+/// `client_request_id` the caller may only generate on execute, is
 /// left out, so a caller that drops it on the second call is not told its code
 /// is wrong for a difference nobody can see. Values are canonicalized, so
 /// "400" and "400.00" are one price.

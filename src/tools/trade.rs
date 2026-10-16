@@ -1031,7 +1031,10 @@ fn submit_scope(p: &SubmitOrderParam) -> dry_run::Scope {
         p.submitted_price.as_deref().unwrap_or(""),
     );
     // Every field that changes what is traded is part of what the user
-    // approves (`remark`, a free-text note, is deliberately left out): a code
+    // approves. `remark` (a note) and `client_request_id` (a caller-made
+    // idempotency key, often generated only on the execute call) change
+    // nothing traded and are left out, so adding them later is not a false
+    // rejection: a code
     // confirmed for an LO Day order must not place an MO, a GTC, or one with
     // another trigger or trail.
     scope = scope
@@ -1046,9 +1049,6 @@ fn submit_scope(p: &SubmitOrderParam) -> dry_run::Scope {
             ("trail_percent", &p.trailing_percent),
             ("expire", &p.expire_date),
             ("rth", &p.outside_rth),
-            // The idempotency key decides whether a resend is deduplicated,
-            // so executing under another key is not the approved request.
-            ("request_id", &p.client_request_id),
         ],
     );
     // The protective legs are part of the order the user approves: a code
@@ -1813,7 +1813,6 @@ mod tests {
             serde_json::json!({"time_in_force": "GTC"}),
             serde_json::json!({"trigger_price": "380"}),
             serde_json::json!({"outside_rth": "ANY_TIME"}),
-            serde_json::json!({"client_request_id": "another-key"}),
         ] {
             let mut changed = base.clone();
             if let (Some(c), Some(d)) = (changed.as_object_mut(), change.as_object()) {
@@ -1825,8 +1824,20 @@ mod tests {
             );
         }
         assert!(
-            submit_scope(&order(base)).verify(&code).is_ok(),
+            submit_scope(&order(base.clone())).verify(&code).is_ok(),
             "the same order must still verify"
+        );
+        let mut keyed = base;
+        if let Some(o) = keyed.as_object_mut() {
+            o.insert(
+                "client_request_id".into(),
+                serde_json::json!("key-made-on-execute"),
+            );
+            o.insert("remark".into(), serde_json::json!("note"));
+        }
+        assert!(
+            submit_scope(&order(keyed)).verify(&code).is_ok(),
+            "an idempotency key or remark added on execute must not reject the approved order"
         );
     }
 
