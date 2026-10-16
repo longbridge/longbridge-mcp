@@ -53,8 +53,8 @@
       "title": "资金流水",
       "description": "查询资金流水记录（出入金、派息等），返回 items[]{transaction_type, amount, currency, balance, created_at, remark}",
       "properties": {
-        "start_at": "起始时间（RFC3339 格式）",
-        "end_at": "结束时间（RFC3339 格式）"
+        "start_at": "起始时间：RFC3339（如 2026-09-01T00:00:00Z），或日期（yyyy-mm-dd，表示当天 UTC 0 点）",
+        "end_at": "结束时间：RFC3339（如 2026-09-30T23:59:59Z），或日期（yyyy-mm-dd，表示当天 UTC 结束）"
       }
     },
     "fund_positions": {
@@ -154,8 +154,8 @@
       "description": "获取指定日期区间内的全部成交记录，按成交时间（trade_done_at）筛选并自动翻页返回完整结果（不受每页 1000 条上限截断）。返回顶层数组 {order_id, trade_id, symbol, side, quantity, price, trade_done_at}；trade_id 为稳定去重键。start_at/end_at 为 RFC3339 格式",
       "properties": {
         "symbol": "按证券筛选（可选）",
-        "start_at": "起始时间（RFC3339 格式）",
-        "end_at": "结束时间（RFC3339 格式）",
+        "start_at": "起始时间：RFC3339（如 2026-09-01T00:00:00Z），或日期（yyyy-mm-dd，表示当天 UTC 0 点）",
+        "end_at": "结束时间：RFC3339（如 2026-09-30T23:59:59Z），或日期（yyyy-mm-dd，表示当天 UTC 结束）",
         "us_page": "仅限美股账户：页码（默认 1）。亚太账户忽略（区域由账户自动识别，无需传入）",
         "us_limit": "仅限美股账户：每页数量（默认 20）。亚太账户忽略"
       }
@@ -165,8 +165,8 @@
       "description": "查询指定日期区间内的历史委托（不含当日），返回 orders[]{order_id, symbol, side, status, quantity, price, submitted_at}。仅限美股账户：us_page、us_limit 通过独立的美股委托接口分页（默认每页 20 条，传 us_page 可翻页）",
       "properties": {
         "symbol": "按证券筛选（可选）",
-        "start_at": "起始时间（RFC3339 格式）",
-        "end_at": "结束时间（RFC3339 格式）",
+        "start_at": "起始时间：RFC3339（如 2026-09-01T00:00:00Z），或日期（yyyy-mm-dd，表示当天 UTC 0 点）",
+        "end_at": "结束时间：RFC3339（如 2026-09-30T23:59:59Z），或日期（yyyy-mm-dd，表示当天 UTC 结束）",
         "us_page": "仅限美股账户：页码（默认 1）。亚太账户忽略（区域由账户自动识别，无需传入）",
         "us_limit": "仅限美股账户：每页数量（默认 20）。亚太账户忽略（区域由账户自动识别，无需传入）"
       }
@@ -1025,7 +1025,7 @@
     },
     "trading_days": {
       "title": "交易日列表",
-      "description": "获取指定市场在日期区间内的交易日。market：HK/US/CN/SG。end 与 start 相差不得超过 40 天；更长的区间请拆成多次连续调用，每次不超过 40 天。返回 {trade_days: [date], half_trade_days: [date]}",
+      "description": "获取指定市场在日期区间内的交易日。market：HK/US/CN/SG。400 天以内的区间一次调用即可返回；更长的区间请拆分。返回 {trade_days: [date], half_trade_days: [date]}",
       "properties": {
         "market": "市场代码：HK、US、CN、SG",
         "start": "起始日期（`yyyy-mm-dd`）",
@@ -1378,7 +1378,7 @@
         "catalyst_type": "按触发信号的催化剂类型筛选，例如 News、Fundamental、Technical；省略则不限催化剂类型",
         "start_time": "筛选此时间之后创建的命中记录，ISO 8601 带时区格式，例如 2024-01-15T10:30:00Z；省略则不限下限",
         "end_time": "筛选此时间之前创建的命中记录，ISO 8601 带时区格式；省略则不限上限",
-        "limit": "返回结果数量上限，默认 5（每条约 5KB），更多用 offset 翻页",
+        "limit": "返回结果数量上限，最多 500，默认 5（每条约 5KB），更多用 offset 翻页",
         "offset": "分页跳过的条数，默认 0"
       }
     },

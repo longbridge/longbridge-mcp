@@ -10,7 +10,7 @@ use rmcp::serde::Deserialize;
 use crate::error::Error;
 use crate::tools::output::fact::{SecurityFactItem, SecurityFactsResponse};
 use crate::tools::output::signal::{SignalItem, SignalsResponse};
-use crate::tools::support::parse::parse_rfc3339;
+use crate::tools::support::parse::{parse_rfc3339, parse_rfc3339_end};
 use crate::tools::support::tolerant::tolerant_option_i32;
 use crate::tools::tool_json;
 
@@ -30,8 +30,8 @@ pub struct SignalsParam {
     pub start_time: Option<String>,
     /// Filter records created at or before this time. ISO 8601 datetime with timezone. If omitted, no upper bound.
     pub end_time: Option<String>,
-    /// Maximum number of results to return. Defaults to 5 (each signal is ~5KB);
-    /// page with offset for more.
+    /// Maximum number of results to return, at most 500. Defaults to 5 (each
+    /// signal is ~5KB); page with offset for more.
     #[serde(default, deserialize_with = "tolerant_option_i32")]
     #[schemars(extend("default" = 5))]
     pub limit: Option<i32>,
@@ -76,10 +76,15 @@ pub async fn signals(
             catalyst_name: p.catalyst_name,
             catalyst_type: p.catalyst_type,
             start_time: p.start_time.as_deref().map(parse_rfc3339).transpose()?,
-            end_time: p.end_time.as_deref().map(parse_rfc3339).transpose()?,
+            end_time: p.end_time.as_deref().map(parse_rfc3339_end).transpose()?,
             // ~5KB per signal: the upstream default of 20 is ~100KB, past
             // what a client accepts in one tool result.
-            limit: Some(p.limit.unwrap_or(DEFAULT_SIGNALS_LIMIT)),
+            // The upstream fails with an internal error past 500.
+            limit: Some(
+                p.limit
+                    .unwrap_or(DEFAULT_SIGNALS_LIMIT)
+                    .clamp(1, MAX_SIGNALS_LIMIT),
+            ),
             offset: p.offset,
         })
         .await
@@ -136,6 +141,10 @@ pub async fn signal_detail(
 /// Signals `signals` returns when `limit` is omitted (~5KB each).
 const DEFAULT_SIGNALS_LIMIT: i32 = 5;
 
+/// Largest `limit` the signals endpoint serves; above it the upstream answers
+/// with an internal error rather than a validation message.
+const MAX_SIGNALS_LIMIT: i32 = 500;
+
 /// Facts `security_facts` returns when `limit` is omitted: at ~12KB each,
 /// three stay within one tool result.
 const DEFAULT_FACTS_LIMIT: i32 = 3;
@@ -149,7 +158,7 @@ pub async fn security_facts(
         .security_facts(SecurityFactsOptions {
             symbol: p.symbol,
             begin_time: p.begin_time.as_deref().map(parse_rfc3339).transpose()?,
-            end_time: p.end_time.as_deref().map(parse_rfc3339).transpose()?,
+            end_time: p.end_time.as_deref().map(parse_rfc3339_end).transpose()?,
             // Each fact carries several KB of analysis, so the upstream default
             // of 100 is ~1.2MB, far past what a client accepts in one result.
             limit: Some(p.limit.unwrap_or(DEFAULT_FACTS_LIMIT)),

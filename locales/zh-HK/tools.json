@@ -53,8 +53,8 @@
       "title": "資金流水",
       "description": "查詢資金流水記錄（出入金、派息等），返回 items[]{transaction_type, amount, currency, balance, created_at, remark}",
       "properties": {
-        "start_at": "起始時間（RFC3339 時間格式）",
-        "end_at": "結束時間（RFC3339 時間格式）"
+        "start_at": "起始時間：RFC3339（如 2026-09-01T00:00:00Z），或日期（yyyy-mm-dd，表示當天 UTC 0 點）",
+        "end_at": "結束時間：RFC3339（如 2026-09-30T23:59:59Z），或日期（yyyy-mm-dd，表示當天 UTC 結束）"
       }
     },
     "fund_positions": {
@@ -154,8 +154,8 @@
       "description": "查詢指定日期區間內的全部成交記錄，按成交時間（trade_done_at）篩選並自動翻頁返回完整結果（不會在每頁 1000 條上限處截斷）。返回頂層數組 {order_id, trade_id, symbol, side, quantity, price, trade_done_at}；trade_id 為穩定的去重鍵。start_at/end_at 為 RFC3339 格式",
       "properties": {
         "symbol": "按證券篩選（可選）",
-        "start_at": "起始時間（RFC3339 時間格式）",
-        "end_at": "結束時間（RFC3339 時間格式）",
+        "start_at": "起始時間：RFC3339（如 2026-09-01T00:00:00Z），或日期（yyyy-mm-dd，表示當天 UTC 0 點）",
+        "end_at": "結束時間：RFC3339（如 2026-09-30T23:59:59Z），或日期（yyyy-mm-dd，表示當天 UTC 結束）",
         "us_page": "僅限美股賬戶：頁碼（預設 1）。亞太賬戶忽略（區域由賬戶自動識別，無需傳入）",
         "us_limit": "僅限美股賬戶：每頁數量（預設 20）。亞太賬戶忽略"
       }
@@ -165,8 +165,8 @@
       "description": "查詢指定日期區間內的歷史委託（不含當日），返回 orders[]{order_id, symbol, side, status, quantity, price, submitted_at}。僅限美股賬戶：us_page、us_limit 通過獨立的美股委託接口分頁（預設每頁 20 條，傳 us_page 可翻頁）",
       "properties": {
         "symbol": "按證券篩選（可選）",
-        "start_at": "起始時間（RFC3339 時間格式）",
-        "end_at": "結束時間（RFC3339 時間格式）",
+        "start_at": "起始時間：RFC3339（如 2026-09-01T00:00:00Z），或日期（yyyy-mm-dd，表示當天 UTC 0 點）",
+        "end_at": "結束時間：RFC3339（如 2026-09-30T23:59:59Z），或日期（yyyy-mm-dd，表示當天 UTC 結束）",
         "us_page": "僅限美股賬戶：頁碼（預設 1）。亞太賬戶忽略（區域由賬戶自動識別，無需傳入）",
         "us_limit": "僅限美股賬戶：每頁數量（預設 20）。亞太賬戶忽略（區域由賬戶自動識別，無需傳入）"
       }
@@ -1025,7 +1025,7 @@
     },
     "trading_days": {
       "title": "交易日列表",
-      "description": "獲取指定市場在日期區間內的交易日。market：HK/US/CN/SG。end 與 start 相差最多 40 天；更長的區間請拆成多次連續、每次不超過 40 天的調用。返回 {trade_days: [date], half_trade_days: [date]}",
+      "description": "獲取指定市場在日期區間內的交易日。market：HK/US/CN/SG。400 天以內的區間一次調用即可返回；更長的區間請拆分。返回 {trade_days: [date], half_trade_days: [date]}",
       "properties": {
         "market": "市場代碼：HK、US、CN、SG",
         "start": "起始日期（`yyyy-mm-dd`）",
@@ -1378,7 +1378,7 @@
         "catalyst_type": "按觸發訊號的催化劑類型篩選，例如 News、Fundamental、Technical；省略則不限催化劑類型",
         "start_time": "篩選此時間之後創建的命中記錄，ISO 8601 帶時區格式，例如 2024-01-15T10:30:00Z；省略則不限下限",
         "end_time": "篩選此時間之前創建的命中記錄，ISO 8601 帶時區格式；省略則不限上限",
-        "limit": "返回結果數量上限，預設 5（每條約 5KB），更多用 offset 翻頁",
+        "limit": "返回結果數量上限，最多 500，預設 5（每條約 5KB），更多用 offset 翻頁",
         "offset": "分頁跳過的條數，預設 0"
       }
     },

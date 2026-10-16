@@ -22,6 +22,7 @@ pub const MAX_RESPONSE_BYTES: usize = 36_000;
 /// One array that was cut to fit.
 struct Cut {
     path: String,
+    pointer: String,
     kept: usize,
     total: usize,
     kept_latest: bool,
@@ -90,6 +91,7 @@ pub fn limit(mut result: CallToolResult) -> (CallToolResult, bool) {
             Some(cut) => cut.kept = keep,
             None => cuts.push(Cut {
                 path: display,
+                pointer: path.clone(),
                 kept: keep,
                 total,
                 kept_latest: latest_last,
@@ -120,10 +122,24 @@ pub fn limit(mut result: CallToolResult) -> (CallToolResult, bool) {
     } else {
         summary = all;
     }
+    // Most tools that overflow take no range or count argument, so name the
+    // concrete _jq slice that returns the rest of the first cut array.
+    let rest = cuts.first().map_or_else(String::new, |c| {
+        let slice = if c.kept_latest {
+            format!("[:{}]", c.total - c.kept)
+        } else {
+            format!("[{}:]", c.kept)
+        };
+        format!(
+            " (e.g. _jq `{}{slice}` returns the rest of {})",
+            jq_path(&c.pointer),
+            c.path
+        )
+    });
     let note = format!(
         "[TRUNCATED — partial result, do not treat it as complete: {}. The full result was {} \
-         bytes, over the client's tool-result size limit. Narrow the request (shorter date \
-         range, a market filter, a smaller count) or select fields with _jq to get the rest.]",
+         bytes, over the client's tool-result size limit. If the tool takes a date range or \
+         count, narrow it; otherwise select fields or a slice with _jq{rest}.]",
         summary.join("; "),
         text.len()
     );
@@ -139,6 +155,27 @@ pub fn limit(mut result: CallToolResult) -> (CallToolResult, bool) {
     result.content = vec![Content::text(note), Content::text(value.to_string())];
     result.structured_content = None;
     (result, true)
+}
+
+/// The jq path for a pointer-like path: `/list/0/infos` → `.list[0].infos`,
+/// and the empty (root) path → `.`.
+fn jq_path(pointer: &str) -> String {
+    let mut out = String::new();
+    for segment in pointer.split('/').skip(1) {
+        if segment.parse::<usize>().is_ok() {
+            out.push_str(&format!("[{segment}]"));
+        } else if segment
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_')
+            && !segment.starts_with(|c: char| c.is_ascii_digit())
+        {
+            out.push('.');
+            out.push_str(segment);
+        } else {
+            out.push_str(&format!(".[{}]", serde_json::Value::from(segment)));
+        }
+    }
+    if out.is_empty() { ".".to_string() } else { out }
 }
 
 /// JSON-pointer-like path (`/list/0/infos`) of the array with the largest
@@ -274,6 +311,39 @@ fn ymd(year: &str, month: &str, day: &str) -> Option<i64> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn jq_path_turns_pointers_into_jq_paths() {
+        assert_eq!(jq_path(""), ".", "the root is `.`");
+        assert_eq!(jq_path("/items"), ".items", "a key is a field access");
+        assert_eq!(
+            jq_path("/list/b_s/indicators/4/values"),
+            ".list.b_s.indicators[4].values",
+            "an index is a bracket access"
+        );
+        assert_eq!(jq_path("/a-b"), r#".["a-b"]"#, "an odd key is quoted");
+    }
+
+    #[test]
+    fn notice_names_the_jq_slice_for_the_rest() {
+        let rows: Vec<_> = (0..2000)
+            .map(|i| json!({ "id": i, "name": "x".repeat(20) }))
+            .collect();
+        let (result, trimmed) = limit(CallToolResult::success(vec![Content::text(
+            json!({ "items": rows }).to_string(),
+        )]));
+        assert!(trimmed, "an oversized result must be trimmed");
+        let note = &result.content[0].as_text().expect("the note is text").text;
+        let kept = serde_json::from_str::<Value>(&result.content[1].as_text().expect("data").text)
+            .expect("the data must stay valid JSON")["items"]
+            .as_array()
+            .map(Vec::len)
+            .expect("items must stay an array");
+        assert!(
+            note.contains(&format!("_jq `.items[{kept}:]`")),
+            "the note must name the slice after the kept rows: {note}"
+        );
+    }
 
     fn text_of(result: &CallToolResult, i: usize) -> String {
         result.content[i].as_text().unwrap().text.clone()

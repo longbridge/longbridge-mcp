@@ -525,8 +525,8 @@ fn error_hint(err: &McpError) -> Option<&'static str> {
             .is_some_and(|m| m.to_lowercase().contains("too many query days"))
     {
         return Some(
-            "Hint: the date range is too long for this endpoint (trading_days allows end - start \
-             of at most 40 days). Split it into consecutive shorter ranges and call once per range.",
+            "Hint: the date range is too long for this endpoint. Split it into consecutive shorter \
+             ranges and call once per range.",
         );
     }
     if code == Some(310_010) || msg.contains("date range cannot exceed") {
@@ -2354,7 +2354,7 @@ impl Longbridge {
         title = "Trading Days",
         annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = true),
         output_schema = schema_for::<output::TradingDaysResponse>(),
-        description = "Get trading days for a market between dates. market: HK/US/CN/SG. end minus start must be at most 40 days; split longer ranges into consecutive calls of 40 days or fewer. Returns {trade_days: [date], half_trade_days: [date]}."
+        description = "Get trading days for a market between dates. market: HK/US/CN/SG. Ranges up to 400 days are fetched in one call; split longer ones. Returns {trade_days: [date], half_trade_days: [date]}."
     )]
     async fn trading_days(
         &self,
@@ -8148,7 +8148,7 @@ mod tool_error_tests {
             Some(serde_json::json!({ "openapi_error_code": 301600 })),
         );
         let hint = error_hint(&err).expect("301600 too many query days must carry a hint");
-        assert!(hint.contains("40 days") && hint.contains("Split"), "{hint}");
+        assert!(hint.contains("Split"), "{hint}");
     }
 
     #[test]

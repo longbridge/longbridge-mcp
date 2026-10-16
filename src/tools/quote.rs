@@ -999,6 +999,29 @@ fn keep_latest_bars(result: CallToolResult, count: usize) -> CallToolResult {
     crate::tools::tool_result(serde_json::Value::Array(bars).to_string())
 }
 
+/// Longest span (`end - start`) the trading-days endpoint accepts in one
+/// request; longer ranges fail with "too many query days".
+const TRADING_DAYS_WINDOW: i64 = 40;
+
+/// Longest span `trading_days` covers in one tool call, fetched as
+/// consecutive windows of [`TRADING_DAYS_WINDOW`] days.
+const TRADING_DAYS_MAX_SPAN: i64 = 400;
+
+/// Split `start..=end` into consecutive windows whose `end - start` is at most
+/// [`TRADING_DAYS_WINDOW`] days.
+fn trading_day_windows(start: time::Date, end: time::Date) -> Vec<(time::Date, time::Date)> {
+    let mut windows = Vec::new();
+    let mut from = start;
+    loop {
+        let to = (from + time::Duration::days(TRADING_DAYS_WINDOW)).min(end);
+        windows.push((from, to));
+        if to >= end {
+            return windows;
+        }
+        from = to + time::Duration::days(1);
+    }
+}
+
 pub async fn trading_days(
     mctx: &crate::tools::McpContext,
     p: MarketDateRangeParam,
@@ -1010,25 +1033,58 @@ pub async fn trading_days(
     let market = parse::parse_market(&p.market)?;
     let start = parse::parse_date(&p.start)?;
     let end = parse::parse_date(&p.end)?;
+    if end < start {
+        return Err(McpError::invalid_params(
+            format!("end ({end}) is before start ({start})"),
+            None,
+        ));
+    }
+    let span = (end - start).whole_days();
+    if span > TRADING_DAYS_MAX_SPAN {
+        return Err(McpError::invalid_params(
+            format!(
+                "date range spans {span} days; trading_days covers at most \
+                 {TRADING_DAYS_MAX_SPAN} days per call, so split it into consecutive ranges"
+            ),
+            None,
+        ));
+    }
     let market_str = serde_json::to_value(market)
         .ok()
         .and_then(|v| v.as_str().map(str::to_owned))
         .unwrap_or_else(|| p.market.to_uppercase());
     let ymd = |d: time::Date| format!("{:04}{:02}{:02}", d.year(), d.month() as u8, d.day());
     let client = mctx.create_http_client();
-    let mut value = http_post_value(
-        &client,
-        "/quote/markets/trading-days",
-        serde_json::json!({ "market": market_str, "beg_day": ymd(start), "end_day": ymd(end) }),
-        None,
-        &[
-            ("trade_day", "trade_days"),
-            ("half_trade_day", "half_trade_days"),
-        ],
-        &[],
-        &[],
-    )
-    .await?;
+    let mut merged = serde_json::Map::new();
+    for (from, to) in trading_day_windows(start, end) {
+        let value = http_post_value(
+            &client,
+            "/quote/markets/trading-days",
+            serde_json::json!({ "market": market_str, "beg_day": ymd(from), "end_day": ymd(to) }),
+            None,
+            &[
+                ("trade_day", "trade_days"),
+                ("half_trade_day", "half_trade_days"),
+            ],
+            &[],
+            &[],
+        )
+        .await?;
+        for key in ["trade_days", "half_trade_days"] {
+            let days = value
+                .get(key)
+                .and_then(serde_json::Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            let slot = merged
+                .entry(key)
+                .or_insert_with(|| serde_json::Value::Array(Vec::new()));
+            if let Some(arr) = slot.as_array_mut() {
+                arr.extend(days);
+            }
+        }
+    }
+    let mut value = serde_json::Value::Object(merged);
     for key in ["trade_days", "half_trade_days"] {
         if let Some(arr) = value.get_mut(key).and_then(|a| a.as_array_mut()) {
             for v in arr.iter_mut() {
@@ -1800,6 +1856,38 @@ mod tests {
     use serde_json::json;
 
     use super::normalize_extended_sessions;
+    use super::{TRADING_DAYS_WINDOW, trading_day_windows};
+
+    #[test]
+    fn trading_day_windows_cover_the_range_without_gaps_or_overlap() {
+        let start = time::macros::date!(2026 - 10 - 01);
+        let end = time::macros::date!(2027 - 12 - 31);
+        let windows = trading_day_windows(start, end);
+        assert_eq!(
+            windows.first().map(|w| w.0),
+            Some(start),
+            "must start at start"
+        );
+        assert_eq!(windows.last().map(|w| w.1), Some(end), "must end at end");
+        for w in &windows {
+            assert!(
+                (w.1 - w.0).whole_days() <= TRADING_DAYS_WINDOW,
+                "each window must fit the endpoint's span limit"
+            );
+        }
+        for pair in windows.windows(2) {
+            assert_eq!(
+                pair[1].0,
+                pair[0].1 + time::Duration::days(1),
+                "windows must be consecutive"
+            );
+        }
+        assert_eq!(
+            trading_day_windows(start, start),
+            vec![(start, start)],
+            "a one-day range is a single window"
+        );
+    }
 
     #[test]
     fn normalizes_sessions_string_last_done() {

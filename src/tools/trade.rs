@@ -312,9 +312,9 @@ pub struct CancelOrderParam {
 pub struct HistoryOrdersParam {
     /// Filter by symbol (optional)
     pub symbol: Option<String>,
-    /// Start time (RFC3339)
+    /// Start time: RFC3339 (e.g. 2026-09-01T00:00:00Z), or a date (yyyy-mm-dd) for the start of that day in UTC
     pub start_at: String,
-    /// End time (RFC3339)
+    /// End time: RFC3339 (e.g. 2026-09-30T23:59:59Z), or a date (yyyy-mm-dd) for the end of that day in UTC
     pub end_at: String,
     /// US accounts only: page number (default 1). Ignored for
     /// AP accounts (the region is inferred from the account — do not pass it).
@@ -326,9 +326,9 @@ pub struct HistoryOrdersParam {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct CashFlowParam {
-    /// Start time (RFC3339)
+    /// Start time: RFC3339 (e.g. 2026-09-01T00:00:00Z), or a date (yyyy-mm-dd) for the start of that day in UTC
     pub start_at: String,
-    /// End time (RFC3339)
+    /// End time: RFC3339 (e.g. 2026-09-30T23:59:59Z), or a date (yyyy-mm-dd) for the end of that day in UTC
     pub end_at: String,
 }
 
@@ -645,7 +645,7 @@ pub async fn history_orders(
     p: HistoryOrdersParam,
 ) -> Result<CallToolResult, McpError> {
     let start = parse::parse_rfc3339(&p.start_at)?;
-    let end = parse::parse_rfc3339(&p.end_at)?;
+    let end = parse::parse_rfc3339_end(&p.end_at)?;
     let (ctx, _) = TradeContext::new(mctx.create_config());
     if mctx.dc_region().await == longbridge::DcRegion::Us {
         let opts = longbridge::trade::GetUSHistoryOrders {
@@ -691,7 +691,7 @@ pub async fn history_executions(
     p: HistoryOrdersParam,
 ) -> Result<CallToolResult, McpError> {
     let start = parse::parse_rfc3339(&p.start_at)?;
-    let end = parse::parse_rfc3339(&p.end_at)?;
+    let end = parse::parse_rfc3339_end(&p.end_at)?;
 
     let (ctx, _) = TradeContext::new(mctx.create_config());
     // v3 `/trade/execution/all` filters by execution time and caps each page at
@@ -743,7 +743,7 @@ pub async fn cash_flow(
     p: CashFlowParam,
 ) -> Result<CallToolResult, McpError> {
     let start = parse::parse_rfc3339(&p.start_at)?;
-    let end = parse::parse_rfc3339(&p.end_at)?;
+    let end = parse::parse_rfc3339_end(&p.end_at)?;
     let opts = longbridge::trade::GetCashFlowOptions::new(start, end);
     let (ctx, _) = TradeContext::new(mctx.create_config());
     let result = ctx.cash_flow(opts).await.map_err(Error::longbridge)?;
