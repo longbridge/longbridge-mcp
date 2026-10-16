@@ -1752,6 +1752,7 @@ const TOOL_ENDPOINTS: &[(&str, u8)] = &[
     ("delete_watchlist_group", V2),
     ("dividend_detail", V2),
     ("estimate_max_purchase_quantity", V2),
+    ("estimate_multileg_available_quantity", V2),
     ("etf_docs", V2),
     ("exchange_rate", V2),
     ("executive", V2),
@@ -2140,8 +2141,8 @@ use crate::tools::quote::{
     UpdateWatchlistGroupParam, WarrantListParam,
 };
 use crate::tools::trade::{
-    CashFlowParam, EstimateMaxQtyParam, HistoryOrdersParam, OrderDetailParam, ReplaceOrderParam,
-    SubmitMultiLegOrderParam, SubmitOrderParam,
+    CashFlowParam, EstimateMaxQtyParam, EstimateMultiLegQtyParam, HistoryOrdersParam,
+    OrderDetailParam, ReplaceOrderParam, SubmitMultiLegOrderParam, SubmitOrderParam,
 };
 
 #[tool_router(vis = "pub(crate)")]
@@ -3159,6 +3160,31 @@ impl Longbridge {
         measured_tool_call("estimate_max_purchase_quantity", format!("{p:?}"), || {
             trade::estimate_max_purchase_quantity(&mctx, p)
         })
+        .await
+    }
+
+    /// Estimate multi-leg option combination trading info.
+    #[tool(
+        title = "Estimate Multi-leg Option Trading Info",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = true
+        ),
+        description = "Estimate a US multi-leg option combination's maximum tradable quantity and margin impact before submitting. Returns {max_open_qty, unit_margin, initial_margin_change, maintenance_margin_change} as decimal strings: max_open_qty = most combinations the account can open; unit_margin = funds per combination (net debit at market for debit combos, margin requirement for credit/short combos); *_margin_change = account margin change for submitted_quantity combinations (0 for debit combos, which consume cash instead). Values are computed from current market prices, not submitted_price. Required: side (Buy/Sell), order_type (LO or MO; ELO / ALO / AO also accepted),submitted_quantity (> 0), strategy (CoveredCall / CoveredPut / VerticalCallSpread / VerticalPutSpread / Collar / Straddle / Strangle / CalendarCallSpread / CalendarPutSpread; case-insensitive) and legs (option symbols, plus the underlying for covered strategies; order does not matter). submitted_price is required for limit types LO / ELO / ALO (rejected without it); use MO to estimate without a price. US market only."
+    )]
+    async fn estimate_multileg_available_quantity(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<EstimateMultiLegQtyParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call(
+            "estimate_multileg_available_quantity",
+            format!("{p:?}"),
+            || trade::estimate_multileg_available_quantity(&mctx, p),
+        )
         .await
     }
 

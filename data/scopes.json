@@ -191,6 +191,7 @@
         "dca_list",
         "dca_stats",
         "estimate_max_purchase_quantity",
+        "estimate_multileg_available_quantity",
         "fund_order",
         "fund_orders",
         "fund_transactions",

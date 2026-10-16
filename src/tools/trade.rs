@@ -384,6 +384,41 @@ fn default_order_type() -> String {
     "LO".to_string()
 }
 
+/// One leg of a multi-leg combination for the pre-trade estimate.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct EstimateMultiLegParam {
+    /// Option or underlying-stock symbol in `<CODE>.<MARKET>` format, e.g.
+    /// "QQQ270115C760000.US" (option) or "QQQ.US" (underlying, for
+    /// CoveredCall / CoveredPut / Collar)
+    pub symbol: String,
+}
+
+/// Parameters for `estimate_multileg_available_quantity`.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct EstimateMultiLegQtyParam {
+    /// Buy or Sell — the direction of the strategy as a whole
+    pub side: String,
+    /// Order type: LO (Limit) or MO (Market); ELO / ALO / AO are also
+    /// accepted. Limit types (LO / ELO / ALO) require submitted_price, MO / AO
+    /// don't. The estimate is currently computed from market prices either
+    /// way, so use MO when you have no price in mind.
+    pub order_type: String,
+    /// Number of strategy units (combinations) to estimate; must be > 0
+    pub submitted_quantity: String,
+    /// Strategy: CoveredCall / CoveredPut / VerticalCallSpread /
+    /// VerticalPutSpread / Collar / Straddle / Strangle / CalendarCallSpread /
+    /// CalendarPutSpread (case-insensitive; `_` / `-` are ignored)
+    pub strategy: String,
+    /// The legs of the combination (US options, plus the underlying stock for
+    /// covered strategies). Leg order does not matter: each leg's role is
+    /// derived from `strategy` + `side` (e.g. Buy VerticalCallSpread = long
+    /// the lower strike, short the higher strike)
+    pub legs: Vec<EstimateMultiLegParam>,
+    /// Net limit price for the whole combination. Required for limit order
+    /// types (LO); not currently used by the estimate itself.
+    pub submitted_price: Option<String>,
+}
+
 /// Best-effort snapshot of the order a cancel/replace preview is about to touch,
 /// so the user can confirm it is the order they meant. A lookup failure must not
 /// break the dry run, so every error collapses to `null`.
@@ -1467,6 +1502,154 @@ pub async fn estimate_max_purchase_quantity(
     tool_json(&result)
 }
 
+/// Multi-leg strategies accepted by `estimate_multileg_available_quantity`.
+const MULTILEG_STRATEGIES: &[&str] = &[
+    "CoveredCall",
+    "CoveredPut",
+    "VerticalCallSpread",
+    "VerticalPutSpread",
+    "Collar",
+    "Straddle",
+    "Strangle",
+    "CalendarCallSpread",
+    "CalendarPutSpread",
+];
+
+/// Parse a multi-leg strategy name leniently: case, `_`, `-` and spaces are
+/// ignored, so `vertical_call_spread` and `verticalCallSpread` both resolve to
+/// `VerticalCallSpread`. The error lists every valid value so a caller can
+/// self-correct.
+fn parse_multileg_strategy(s: &str) -> Result<longbridge::trade::MultiLegStrategy, McpError> {
+    let norm = |v: &str| {
+        v.chars()
+            .filter(|c| !matches!(c, '_' | '-' | ' '))
+            .collect::<String>()
+            .to_ascii_lowercase()
+    };
+    let wanted = norm(s);
+    MULTILEG_STRATEGIES
+        .iter()
+        .find(|name| norm(name) == wanted)
+        .and_then(|name| name.parse().ok())
+        .ok_or_else(|| {
+            McpError::invalid_params(
+                format!(
+                    "invalid strategy '{s}': expected one of {}",
+                    MULTILEG_STRATEGIES.join(", ")
+                ),
+                None,
+            )
+        })
+}
+
+/// Whether an order type is priced by `submitted_price` (limit-style orders).
+fn order_type_requires_price(order_type: longbridge::trade::OrderType) -> bool {
+    use longbridge::trade::OrderType;
+    matches!(
+        order_type,
+        OrderType::LO
+            | OrderType::ELO
+            | OrderType::ALO
+            | OrderType::ODD
+            | OrderType::SLO
+            | OrderType::LIT
+    )
+}
+
+/// Validate the tool arguments and build the SDK request.
+fn estimate_multileg_options(
+    p: EstimateMultiLegQtyParam,
+) -> Result<longbridge::trade::EstimateMultiLegAvailableQuantityOptions, McpError> {
+    use longbridge::Decimal;
+    use longbridge::trade::{
+        EstimateMultiLegAvailableQuantityOptions, EstimateMultiLegOrderLeg, OrderSide, OrderType,
+    };
+    use std::str::FromStr;
+
+    if p.legs.is_empty() {
+        return Err(McpError::invalid_params(
+            "legs must not be empty: a multi-leg combination needs at least one leg",
+            None,
+        ));
+    }
+
+    let side = match p.side.trim().to_ascii_lowercase().as_str() {
+        "buy" => OrderSide::Buy,
+        "sell" => OrderSide::Sell,
+        _ => {
+            return Err(McpError::invalid_params(
+                format!("invalid side '{}': expected Buy or Sell", p.side),
+                None,
+            ));
+        }
+    };
+    let order_type = p
+        .order_type
+        .trim()
+        .to_ascii_uppercase()
+        .parse::<OrderType>()
+        .map_err(|e| McpError::invalid_params(format!("invalid order_type: {e}"), None))?;
+    let strategy = parse_multileg_strategy(&p.strategy)?;
+    if order_type_requires_price(order_type) && p.submitted_price.is_none() {
+        return Err(McpError::invalid_params(
+            format!("submitted_price is required for order_type {order_type}"),
+            None,
+        ));
+    }
+    let quantity = Decimal::from_str(&p.submitted_quantity)
+        .map_err(|e| McpError::invalid_params(format!("invalid submitted_quantity: {e}"), None))?;
+    if quantity <= Decimal::ZERO {
+        return Err(McpError::invalid_params(
+            "submitted_quantity must be greater than 0",
+            None,
+        ));
+    }
+
+    let legs = p
+        .legs
+        .into_iter()
+        .map(|leg| EstimateMultiLegOrderLeg::new(leg.symbol));
+    let mut opts =
+        EstimateMultiLegAvailableQuantityOptions::new(side, order_type, quantity, strategy, legs);
+    if let Some(ref price) = p.submitted_price {
+        opts = opts.submitted_price(Decimal::from_str(price).map_err(|e| {
+            McpError::invalid_params(format!("invalid submitted_price: {e}"), None)
+        })?);
+    }
+    Ok(opts)
+}
+
+/// The gateway answers a strategy whose legs don't fit it (e.g. two calls sent
+/// as VerticalPutSpread) with an `i64::MAX` quantity and a zero margin instead
+/// of an error; never hand that to the caller as a real estimate.
+fn ensure_usable_estimate(
+    result: &longbridge::trade::EstimateMultiLegAvailableQuantityResponse,
+) -> Result<(), McpError> {
+    if result.max_open_qty >= longbridge::Decimal::from(i64::MAX) {
+        return Err(McpError::invalid_params(
+            "the legs do not form the given strategy (the server returned no usable \
+             estimate); check strategy, side and each leg's call/put type, strike and \
+             expiry",
+            None,
+        ));
+    }
+    Ok(())
+}
+
+pub async fn estimate_multileg_available_quantity(
+    mctx: &crate::tools::McpContext,
+    p: EstimateMultiLegQtyParam,
+) -> Result<CallToolResult, McpError> {
+    let opts = estimate_multileg_options(p)?;
+    let (ctx, _) = TradeContext::new(mctx.create_config());
+    let result = ctx
+        .estimate_multileg_available_quantity(opts)
+        .await
+        .map_err(Error::longbridge)?;
+    ensure_usable_estimate(&result)?;
+    tool_json(&result)
+}
+
 /// Get short margin deposit details for the current account.
 pub async fn short_margin(mctx: &crate::tools::McpContext) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
@@ -2091,5 +2274,108 @@ mod tests {
             serde_json::json!("1780925402"),
             "nested order_histories must survive: {value}"
         );
+    }
+}
+
+#[cfg(test)]
+mod estimate_multileg_tests {
+    use longbridge::trade::{MultiLegStrategy, OrderType};
+
+    use super::{
+        EstimateMultiLegParam, EstimateMultiLegQtyParam, ensure_usable_estimate,
+        estimate_multileg_options, order_type_requires_price, parse_multileg_strategy,
+    };
+
+    fn param(
+        side: &str,
+        order_type: &str,
+        qty: &str,
+        price: Option<&str>,
+    ) -> EstimateMultiLegQtyParam {
+        EstimateMultiLegQtyParam {
+            side: side.into(),
+            order_type: order_type.into(),
+            submitted_quantity: qty.into(),
+            strategy: "vertical_call_spread".into(),
+            legs: ["QQQ270115C760000.US", "QQQ270115C765000.US"]
+                .map(|symbol| EstimateMultiLegParam {
+                    symbol: symbol.into(),
+                })
+                .into(),
+            submitted_price: price.map(Into::into),
+        }
+    }
+
+    #[test]
+    fn options_validate_side_quantity_and_price() {
+        assert!(estimate_multileg_options(param("buy", "lo", "1", Some("1.5"))).is_ok());
+        assert!(estimate_multileg_options(param("SELL", "MO", "2", None)).is_ok());
+        // `Unknown` parses as an OrderSide variant but is not a real side.
+        let err = estimate_multileg_options(param("Unknown", "LO", "1", Some("1"))).unwrap_err();
+        assert!(err.message.contains("Buy or Sell"), "{}", err.message);
+        for qty in ["0", "-1"] {
+            let err = estimate_multileg_options(param("Buy", "LO", qty, Some("1"))).unwrap_err();
+            assert!(err.message.contains("greater than 0"), "{}", err.message);
+        }
+        let err = estimate_multileg_options(param("Buy", "LO", "1", None)).unwrap_err();
+        assert!(
+            err.message.contains("submitted_price is required"),
+            "{}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn rejects_sentinel_estimate() {
+        let parse = |qty: &str| -> longbridge::trade::EstimateMultiLegAvailableQuantityResponse {
+            serde_json::from_value(serde_json::json!({
+                "max_open_qty": qty,
+                "unit_margin": "0.00",
+                "initial_margin_change": "0.00",
+                "maintenance_margin_change": "0.00",
+            }))
+            .unwrap()
+        };
+        assert!(ensure_usable_estimate(&parse("9223372036854775807")).is_err());
+        assert!(ensure_usable_estimate(&parse("46003")).is_ok());
+    }
+
+    #[test]
+    fn strategy_parse_is_lenient() {
+        for s in [
+            "VerticalCallSpread",
+            "verticalcallspread",
+            "vertical_call_spread",
+            "Vertical-Call-Spread",
+            " verticalCallSpread",
+        ] {
+            assert_eq!(
+                parse_multileg_strategy(s).unwrap(),
+                MultiLegStrategy::VerticalCallSpread,
+                "{s}"
+            );
+        }
+        assert_eq!(
+            parse_multileg_strategy("calendar_put_spread").unwrap(),
+            MultiLegStrategy::CalendarPutSpread
+        );
+    }
+
+    #[test]
+    fn strategy_parse_error_lists_valid_values() {
+        let err = parse_multileg_strategy("IronCondor").unwrap_err();
+        assert!(err.message.contains("IronCondor"));
+        assert!(err.message.contains("VerticalCallSpread"));
+        assert!(err.message.contains("CalendarPutSpread"));
+        // `Unknown` is a placeholder variant, not a strategy a caller may send.
+        assert!(parse_multileg_strategy("Unknown").is_err());
+    }
+
+    #[test]
+    fn limit_order_types_require_price() {
+        assert!(order_type_requires_price(OrderType::LO));
+        assert!(order_type_requires_price(OrderType::ELO));
+        assert!(!order_type_requires_price(OrderType::MO));
+        assert!(!order_type_requires_price(OrderType::AO));
     }
 }
