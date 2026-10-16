@@ -3086,7 +3086,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::us_market::FinancialReportResponse>(),
-        description = "Get financial reports (income statement, balance sheet, cash flow). kind: IS/BS/CF/ALL. report_type: af (annual), saf (semi-annual), q1/q2/q3, qf (quarterly full). Returns {report, list: {i_s|b_s|c_f: {indicators: [{title, currency, has_yoy, accounts: [{name, field, percent, tip, industry_ranking, values: [{year, period, fp_end, value, yoy, ratio}]}]}]}}}. US accounts querying a .US symbol without kind are routed to a US-specific overview endpoint (is_list/bs_list/cf_list); passing kind explicitly always uses the generic path."
+        description = "Get financial reports (income statement, balance sheet, cash flow). kind: IS/BS/CF/ALL. report_type: af (annual), saf (semi-annual), q1/q2/q3, qf (quarterly full). Each line item carries its newest 8 periods by default; set periods for more. Returns {report, list: {i_s|b_s|c_f: {indicators: [{title, currency, has_yoy, accounts: [{name, field, percent, tip, industry_ranking, values: [{year, period, fp_end, value, yoy, ratio}]}]}]}}}. US accounts querying a .US symbol without kind are routed to a US-specific overview endpoint (is_list/bs_list/cf_list); passing kind explicitly always uses the generic path."
     )]
     async fn financial_report(
         &self,
@@ -3494,12 +3494,12 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::fundamental::OperatingResponse>(),
-        description = "Get company operating reviews by reporting period (HK stocks only; other markets return an empty list). Returns list[], newest first, of {id, report (e.g. saf), title, txt (management commentary / operating review), latest, financial{currency, indicators[]{field_name, indicator_name, indicator_value (display string with localized units), yoy (%)}}}."
+        description = "Get company operating reviews by reporting period (HK stocks only; other markets return an empty list). Returns list[], newest first (8 reports by default; set count for more), of {id, report (e.g. saf), title, txt (management commentary / operating review), latest, financial{currency, indicators[]{field_name, indicator_name, indicator_value (display string with localized units), yoy (%)}}}."
     )]
     async fn operating(
         &self,
         ctx: RequestContext<RoleServer>,
-        Parameters(p): Parameters<fundamental::SymbolParam>,
+        Parameters(p): Parameters<fundamental::OperatingParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
         measured_tool_call("operating", format!("{p:?}"), || {
@@ -3565,12 +3565,12 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::market::BrokerHoldingDetailResponse>(),
-        description = "Get the full broker holding list for a symbol (HK stocks only; sourced from HKEX CCASS participant disclosure). Returns {updated_at (disclosure date, e.g. \"2026.01.02\"), list[]{name, parti_number, shares{value, chg_1, chg_5, chg_20, chg_60}, ratio{value, chg_1, chg_5, chg_20, chg_60}, strong}}: shares held and the fraction of shares held (ratio, e.g. \"0.0108\"), each with its change over the last 1/5/20/60 days. Non-HK symbols return an empty list."
+        description = "Get the broker holding list for a symbol, largest holding first (50 brokers by default; set count for more; HK stocks only; sourced from HKEX CCASS participant disclosure). Returns {updated_at (disclosure date, e.g. \"2026.01.02\"), list[]{name, parti_number, shares{value, chg_1, chg_5, chg_20, chg_60}, ratio{value, chg_1, chg_5, chg_20, chg_60}, strong}}: shares held and the fraction of shares held (ratio, e.g. \"0.0108\"), each with its change over the last 1/5/20/60 days. Non-HK symbols return an empty list."
     )]
     async fn broker_holding_detail(
         &self,
         ctx: RequestContext<RoleServer>,
-        Parameters(p): Parameters<market::SymbolParam>,
+        Parameters(p): Parameters<market::BrokerHoldingDetailParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
         measured_tool_call("broker_holding_detail", format!("{p:?}"), || {
@@ -5642,7 +5642,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get daily valuation rank (PE/PB/PS/dividend yield industry percentile) for a security over a date range. start/end in yyyymmdd format. Returns {kline_type, max_num, pe, pb, ps, dvd}, each series a list of {timestamp, rank} (rank out of max_num)."
+        description = "Get daily valuation rank (PE/PB/PS/dividend yield industry percentile) for a security over a date range. start/end in yyyymmdd format; defaults to the last 30 days. Returns {kline_type, max_num, pe, pb, ps, dvd}, each series a list of {timestamp, rank} (rank out of max_num)."
     )]
     async fn valuation_rank(
         &self,

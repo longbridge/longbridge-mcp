@@ -25,6 +25,43 @@ pub struct FinancialReportParam {
     pub kind: Option<String>,
     /// Report period: "af" (annual), "saf" (semi-annual), "q1"/"q2"/"q3" (quarterly), "qf" (quarterly full)
     pub report_type: Option<String>,
+    /// Number of periods per line item, newest first. Defaults to 8; the
+    /// upstream returns up to ~46, too many to fit one tool result.
+    #[serde(default, deserialize_with = "tolerant_option_usize")]
+    #[schemars(extend("default" = 8))]
+    pub periods: Option<usize>,
+}
+
+/// Periods per line item `financial_report` returns when `periods` is omitted.
+const DEFAULT_REPORT_PERIODS: usize = 8;
+
+/// Keep the newest `periods` entries of every line item's `values` series in
+/// a `financial_report` response (the series are newest first).
+fn limit_report_periods(value: &mut serde_json::Value, periods: usize) {
+    let Some(list) = value
+        .get_mut("list")
+        .and_then(serde_json::Value::as_object_mut)
+    else {
+        return;
+    };
+    for statement in list.values_mut() {
+        let indicators = statement
+            .get_mut("indicators")
+            .and_then(serde_json::Value::as_array_mut);
+        for indicator in indicators.into_iter().flatten() {
+            let accounts = indicator
+                .get_mut("accounts")
+                .and_then(serde_json::Value::as_array_mut);
+            for account in accounts.into_iter().flatten() {
+                if let Some(values) = account
+                    .get_mut("values")
+                    .and_then(serde_json::Value::as_array_mut)
+                {
+                    values.truncate(periods);
+                }
+            }
+        }
+    }
 }
 
 pub async fn financial_report(
@@ -79,6 +116,10 @@ pub async fn financial_report(
     // Ratio-only metrics have an empty `yoy`, and each account carries empty
     // short_title/tip/industry_ranking/ranking_code/ratio display fields.
     crate::serialize::strip_empty_strings(&mut value);
+    limit_report_periods(
+        &mut value,
+        p.periods.unwrap_or(DEFAULT_REPORT_PERIODS).max(1),
+    );
     crate::tools::tool_json(&value)
 }
 
@@ -615,9 +656,23 @@ pub async fn invest_relation(
     .await
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct OperatingParam {
+    /// Security symbol, e.g. "700.HK". Use the canonical form — a padded code like "00700.HK" returns an empty record, not an error.
+    pub symbol: String,
+    /// Number of reports to return, newest first. Defaults to 8 (~1.6KB
+    /// each); the upstream returns up to 50.
+    #[serde(default, deserialize_with = "tolerant_option_usize")]
+    #[schemars(extend("default" = 8))]
+    pub count: Option<usize>,
+}
+
+/// Reports `operating` returns when `count` is omitted.
+const DEFAULT_OPERATING_COUNT: usize = 8;
+
 pub async fn operating(
     mctx: &crate::tools::McpContext,
-    p: SymbolParam,
+    p: OperatingParam,
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
     // `keywords` is always empty and `web_url` is a derivable community link.
@@ -639,6 +694,12 @@ pub async fn operating(
     // Each report's nested `financial` block carries empty symbol/name/region/
     // code/report/report_txt label fields; drop them.
     crate::serialize::strip_empty_strings(&mut value);
+    if let Some(list) = value
+        .get_mut("list")
+        .and_then(serde_json::Value::as_array_mut)
+    {
+        list.truncate(p.count.unwrap_or(DEFAULT_OPERATING_COUNT).max(1));
+    }
     crate::tools::tool_json(&value)
 }
 
@@ -656,9 +717,9 @@ pub struct FinancialStatementParam {
 pub struct ValuationRankParam {
     /// Security symbol, e.g. "AAPL.US"
     pub symbol: String,
-    /// Start date in yyyymmdd format (default: 30 days ago)
+    /// Start date in yyyymmdd (or yyyy-mm-dd) format (default: 30 days before end)
     pub start: Option<String>,
-    /// End date in yyyymmdd format (default: today)
+    /// End date in yyyymmdd (or yyyy-mm-dd) format (default: today)
     pub end: Option<String>,
 }
 
@@ -836,19 +897,53 @@ pub async fn financial_report_latest(
     .await
 }
 
+/// Days `valuation_rank` covers when `start` is omitted.
+const DEFAULT_VALUATION_RANK_DAYS: i64 = 30;
+
+/// Resolve `valuation_rank`'s range as `yyyymmdd` strings. The upstream
+/// ignores a lone `start_date` or `end_date` and returns its own one-year
+/// default, so both are always sent: `end` defaults to today (UTC) and
+/// `start` to 30 days before `end`.
+fn valuation_rank_range(
+    start: Option<&str>,
+    end: Option<&str>,
+) -> Result<(String, String), McpError> {
+    let parse = |s: &str| {
+        let compact: String = s.trim().chars().filter(|c| *c != '-').collect();
+        time::Date::parse(&compact, YYYYMMDD).map_err(|e| {
+            McpError::invalid_params(
+                format!("invalid date '{s}': {e}; expected yyyymmdd, e.g. 20260915"),
+                None,
+            )
+        })
+    };
+    let end = match end {
+        Some(e) => parse(e)?,
+        None => time::OffsetDateTime::now_utc().date(),
+    };
+    let start = match start {
+        Some(s) => parse(s)?,
+        None => end - time::Duration::days(DEFAULT_VALUATION_RANK_DAYS),
+    };
+    let fmt = |d: time::Date| format!("{:04}{:02}{:02}", d.year(), d.month() as u8, d.day());
+    Ok((fmt(start), fmt(end)))
+}
+
+const YYYYMMDD: &[time::format_description::BorrowedFormatItem<'_>] =
+    time::macros::format_description!("[year][month][day]");
+
 /// Get daily valuation rank (PE/PB/PS/dividend yield percentile) for a security.
 pub async fn valuation_rank(
     mctx: &crate::tools::McpContext,
     p: ValuationRankParam,
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
-    let mut params: Vec<(&str, &str)> = vec![("symbol", p.symbol.as_str())];
-    if let Some(ref s) = p.start {
-        params.push(("start_date", s.as_str()));
-    }
-    if let Some(ref e) = p.end {
-        params.push(("end_date", e.as_str()));
-    }
+    let (start, end) = valuation_rank_range(p.start.as_deref(), p.end.as_deref())?;
+    let params: Vec<(&str, &str)> = vec![
+        ("symbol", p.symbol.as_str()),
+        ("start_date", start.as_str()),
+        ("end_date", end.as_str()),
+    ];
     // Every pe/pb/ps/dvd row carries `total` == the top-level `max_num`.
     http_get_tool_unix_dropping(
         &client,
@@ -1322,7 +1417,41 @@ pub async fn valuation_comparison(
 
 #[cfg(test)]
 mod tests {
-    use super::{ShareholderDetailParam, limit_shareholder_periods, rating_part};
+    use super::{
+        ShareholderDetailParam, limit_report_periods, limit_shareholder_periods, rating_part,
+        valuation_rank_range,
+    };
+
+    #[test]
+    fn valuation_rank_range_always_sends_both_bounds() {
+        let (start, end) =
+            valuation_rank_range(None, Some("2026-10-15")).expect("a dashed end must parse");
+        assert_eq!(end, "20261015", "the end is normalized to yyyymmdd");
+        assert_eq!(
+            start, "20260915",
+            "the start defaults to 30 days before end"
+        );
+        let (start, _) =
+            valuation_rank_range(Some("20260101"), None).expect("a lone start must parse");
+        assert_eq!(start, "20260101", "an explicit start is kept");
+        assert!(
+            valuation_rank_range(Some("last week"), None).is_err(),
+            "free text is rejected"
+        );
+    }
+
+    #[test]
+    fn limit_report_periods_cuts_every_series() {
+        let mut v = serde_json::json!({"list": {"i_s": {"indicators": [{"accounts": [
+            {"values": [{"period": "Q2"}, {"period": "Q1"}, {"period": "Q4"}]}
+        ]}]}}});
+        limit_report_periods(&mut v, 2);
+        assert_eq!(
+            v["list"]["i_s"]["indicators"][0]["accounts"][0]["values"],
+            serde_json::json!([{"period": "Q2"}, {"period": "Q1"}]),
+            "the newest periods must be kept"
+        );
+    }
 
     #[test]
     fn limit_shareholder_periods_keeps_the_newest_segments() {

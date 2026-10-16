@@ -404,9 +404,10 @@
     },
     "broker_holding_detail": {
       "title": "券商持倉明細",
-      "description": "獲取指定證券完整的券商持倉列表（僅港股；數據來自港交所中央結算系統 CCASS 參與者披露）。返回 {updated_at（披露日期，如 \"2026.01.02\"）, list[]{name, parti_number, shares{value, chg_1, chg_5, chg_20, chg_60}, ratio{value, chg_1, chg_5, chg_20, chg_60}, strong}}：持股數及持股比例（ratio，如 \"0.0108\"），各自附近 1/5/20/60 日的變動。非港股返回空列表",
+      "description": "獲取指定證券的券商持倉列表，按持股數從大到小（預設 50 家，更多用 count 指定；僅港股；數據來自港交所中央結算系統 CCASS 參與者披露）。返回 {updated_at（披露日期，如 \"2026.01.02\"）, list[]{name, parti_number, shares{value, chg_1, chg_5, chg_20, chg_60}, ratio{value, chg_1, chg_5, chg_20, chg_60}, strong}}：持股數及持股比例（ratio，如 \"0.0108\"），各自附近 1/5/20/60 日的變動。非港股返回空列表",
       "properties": {
-        "symbol": "證券代碼，例如 `\"700.HK\"`。請用規範代碼，補零的代碼（如 \"00700.HK\"）會返回空記錄而非報錯"
+        "symbol": "證券代碼，例如 `\"700.HK\"`。請用規範代碼，補零的代碼（如 \"00700.HK\"）會返回空記錄而非報錯",
+        "count": "返回的券商數量，持股最多的在前。預設 50（每條約 230 字節），一隻股票可能有 400 多家"
       }
     },
     "brokers": {
@@ -543,11 +544,12 @@
     },
     "financial_report": {
       "title": "財務報表",
-      "description": "獲取財務報告（損益表、資產負債表、現金流量表）。kind：IS/BS/CF/ALL；report_type：af（年報）、saf（半年報）、q1/q2/q3、qf（季報全量）。返回 {report, list: {i_s|b_s|c_f: {indicators: [{title, currency, has_yoy, accounts: [{name, field, percent, tip, industry_ranking, values: [{year, period, fp_end, value, yoy, ratio}]}]}]}}}。美股賬戶在不傳 kind 的情況下查詢 `.US` 標的會路由到美股專屬概覽接口（is_list/bs_list/cf_list）；顯式傳入 kind 時始終走通用接口",
+      "description": "獲取財務報告（損益表、資產負債表、現金流量表）。kind：IS/BS/CF/ALL；report_type：af（年報）、saf（半年報）、q1/q2/q3、qf（季報全量）。每個科目預設返回最近 8 期，更多用 periods 指定。返回 {report, list: {i_s|b_s|c_f: {indicators: [{title, currency, has_yoy, accounts: [{name, field, percent, tip, industry_ranking, values: [{year, period, fp_end, value, yoy, ratio}]}]}]}}}。美股賬戶在不傳 kind 的情況下查詢 `.US` 標的會路由到美股專屬概覽接口（is_list/bs_list/cf_list）；顯式傳入 kind 時始終走通用接口",
       "properties": {
         "symbol": "證券代碼，例如 `\"AAPL.US\"`",
         "kind": "報表種類：`IS`（損益表）、`BS`（資產負債表）、`CF`（現金流量表）、`ALL`（預設全部）",
-        "report_type": "報告期：`af`（年度）、`saf`（半年度）、`q1` / `q2` / `q3`（季度）、`qf`（季度全量）"
+        "report_type": "報告期：`af`（年度）、`saf`（半年度）、`q1` / `q2` / `q3`（季度）、`qf`（季度全量）",
+        "periods": "每個科目返回的期數，最新在前。預設 8；上游最多約 46 期，一次放不下"
       }
     },
     "financial_report_key_metrics": {
@@ -830,9 +832,10 @@
     },
     "operating": {
       "title": "經營業績",
-      "description": "按報告期獲取公司經營回顧（僅港股；其他市場返回空列表）。返回 list[]（最新在前）{id, report（如 saf）, title, txt（管理層評論 / 經營回顧）, latest, financial{currency, indicators[]{field_name, indicator_name, indicator_value（帶本地化單位的顯示字符串）, yoy（%）}}}",
+      "description": "按報告期獲取公司經營回顧（僅港股；其他市場返回空列表）。返回 list[]（最新在前，預設 8 期，更多用 count 指定）{id, report（如 saf）, title, txt（管理層評論 / 經營回顧）, latest, financial{currency, indicators[]{field_name, indicator_name, indicator_value（帶本地化單位的顯示字符串）, yoy（%）}}}",
       "properties": {
-        "symbol": "證券代碼，例如 `\"700.HK\"`。請用規範代碼，補零的代碼（如 \"00700.HK\"）會返回空記錄而非報錯"
+        "symbol": "證券代碼，例如 `\"700.HK\"`。請用規範代碼，補零的代碼（如 \"00700.HK\"）會返回空記錄而非報錯",
+        "count": "返回的報告數量，最新在前。預設 8（每條約 1.6KB），上游最多 50"
       }
     },
     "option_chain_expiry_date_list": {
@@ -1121,11 +1124,11 @@
     },
     "valuation_rank": {
       "title": "估值分位",
-      "description": "獲取證券在指定日期區間內每日估值排名（PE/PB/PS/股息率的行業百分位）。start/end 格式為 yyyymmdd。返回 {kline_type, max_num, pe, pb, ps, dvd}，每個序列為 {timestamp, rank} 列表（rank 以 max_num 為滿分）",
+      "description": "獲取證券在指定日期區間內每日估值排名（PE/PB/PS/股息率的行業百分位）。start/end 格式為 yyyymmdd，預設近 30 天。返回 {kline_type, max_num, pe, pb, ps, dvd}，每個序列為 {timestamp, rank} 列表（rank 以 max_num 為滿分）",
       "properties": {
         "symbol": "證券代碼，例如 `\"AAPL.US\"`",
-        "start": "起始日期，yyyymmdd 格式（預設近 30 天）",
-        "end": "結束日期，yyyymmdd 格式（預設今日）"
+        "start": "起始日期，yyyymmdd（或 yyyy-mm-dd）格式（預設 end 之前 30 天）",
+        "end": "結束日期，yyyymmdd（或 yyyy-mm-dd）格式（預設今日）"
       }
     },
     "institution_rating_history": {

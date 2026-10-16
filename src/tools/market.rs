@@ -12,12 +12,47 @@ use crate::tools::support::http_client::{
     http_get_tool, http_get_tool_dropping, http_get_tool_trimming_zeros, http_get_tool_unix,
     http_get_tool_unix_dropping,
 };
+use crate::tools::support::tolerant::tolerant_option_usize;
 use crate::tools::tool_json;
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct SymbolParam {
     /// Security symbol, e.g. "700.HK". Use the canonical form — a padded code like "00700.HK" returns an empty record, not an error.
     pub symbol: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct BrokerHoldingDetailParam {
+    /// Security symbol, e.g. "700.HK". Use the canonical form — a padded code like "00700.HK" returns an empty record, not an error.
+    pub symbol: String,
+    /// Number of brokers to return, largest holding first. Defaults to 50
+    /// (~230 bytes each); a stock can have 400+.
+    #[serde(default, deserialize_with = "tolerant_option_usize")]
+    #[schemars(extend("default" = 50))]
+    pub count: Option<usize>,
+}
+
+/// Brokers `broker_holding_detail` returns when `count` is omitted.
+const DEFAULT_BROKER_COUNT: usize = 50;
+
+/// Sort `broker_holding_detail` rows by shares held, largest first, and keep
+/// `count`. The upstream order is unrelated to size (its first hundred-odd
+/// rows hold ~0%), so cutting it as-is dropped the major holders.
+fn top_broker_holdings(value: &mut serde_json::Value, count: usize) {
+    let Some(rows) = value
+        .get_mut("list")
+        .and_then(serde_json::Value::as_array_mut)
+    else {
+        return;
+    };
+    let shares = |row: &serde_json::Value| {
+        row.pointer("/shares/value")
+            .and_then(serde_json::Value::as_str)
+            .and_then(|s| s.parse::<f64>().ok())
+            .unwrap_or(0.0)
+    };
+    rows.sort_by(|a, b| shares(b).total_cmp(&shares(a)));
+    rows.truncate(count);
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -116,18 +151,28 @@ pub async fn broker_holding(
 
 pub async fn broker_holding_detail(
     mctx: &crate::tools::McpContext,
-    p: SymbolParam,
+    p: BrokerHoldingDetailParam,
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
     // The share-count delta fields (shares.chg_*) are integers padded with a
     // fake ".0000" fractional part across all rows; strip the trailing zeros
     // (lossless) — they are ~half the bytes of this ~100 KB payload.
-    http_get_tool_trimming_zeros(
+    let raw = http_get_tool_trimming_zeros(
         &client,
         "/v1/quote/broker-holding/detail",
         &[("symbol", p.symbol.as_str())],
     )
-    .await
+    .await?;
+    let Some(mut value) = raw
+        .content
+        .first()
+        .and_then(|c| c.as_text())
+        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t.text).ok())
+    else {
+        return Ok(raw);
+    };
+    top_broker_holdings(&mut value, p.count.unwrap_or(DEFAULT_BROKER_COUNT).max(1));
+    tool_json(&value)
 }
 
 pub async fn broker_holding_daily(
@@ -775,7 +820,30 @@ fn trim_rank_list_rows(value: &mut serde_json::Value) {
 
 #[cfg(test)]
 mod tests {
-    use super::{hoist_intraday_prev_closes, rank_key_and_market, trade_status_label};
+    use super::{
+        hoist_intraday_prev_closes, rank_key_and_market, top_broker_holdings, trade_status_label,
+    };
+
+    #[test]
+    fn top_broker_holdings_keeps_the_largest_holders() {
+        let mut v = serde_json::json!({"list": [
+            {"name": "small", "shares": {"value": "26000"}},
+            {"name": "big", "shares": {"value": "4200000000"}},
+            {"name": "mid", "shares": {"value": "1500000"}}
+        ]});
+        top_broker_holdings(&mut v, 2);
+        let names: Vec<_> = v["list"]
+            .as_array()
+            .expect("list stays an array")
+            .iter()
+            .map(|r| r["name"].clone())
+            .collect();
+        assert_eq!(
+            names,
+            ["big", "mid"],
+            "the largest holders must come first and survive the cut"
+        );
+    }
 
     #[test]
     fn rank_key_keeps_its_own_market_suffix() {
