@@ -1144,12 +1144,13 @@ pub async fn institutional_views(
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
     // The `tlist` price series arrives with ~19 fractional digits of bogus
-    // precision (e.g. "803.3032108278430037073"); cap it at 6 dp.
+    // precision (e.g. "803.3032108278430037073"); cap it at 6 dp. Both series
+    // carry unix-second dates.
     http_get_tool_unix_rounding(
         &client,
         "/v1/quote/ratings/institutional",
         &[("symbol", p.symbol.as_str())],
-        &["elist.*.date"],
+        &["elist.*.date", "tlist.*.date"],
         6,
     )
     .await

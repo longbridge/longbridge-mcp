@@ -40,11 +40,11 @@
     },
     "watchlist": {
       "title": "自选列表",
-      "description": "获取所有自选分组及其包含的证券，返回 groups[]{id, name, securities[]{symbol, name, watched_price, watched_at}}"
+      "description": "获取所有自选分组及其包含的证券，返回顶层分组数组 {id, name, securities[]{symbol, name, watched_price, watched_at, is_pinned}}"
     },
     "account_balance": {
       "title": "账户余额",
-      "description": "查询账户现金余额与资产概览，返回 balances[]{currency, total_cash, max_finance_amount, remaining_finance_amount, risk_level, margin_call}",
+      "description": "查询账户现金余额与资产概览，返回顶层数组 {currency, total_cash, net_assets, buy_power, max_finance_amount, remaining_finance_amount, risk_level, margin_call, init_margin, maintenance_margin, cash_infos[]{currency, available_cash, withdraw_cash, frozen_cash, settling_cash}}",
       "properties": {
         "currency": "按币种代码筛选（如 `\"USD\"`、`\"HKD\"`），省略则返回所有币种"
       }
@@ -102,7 +102,7 @@
     },
     "statement_list": {
       "title": "对账单列表",
-      "description": "列出可获取的账户对账单（日报/月报），返回 list[]{id, type, date, status}，用 id 调用 statement_export 下载",
+      "description": "列出可获取的账户对账单（日报/月报），返回 {list[]{dt（对账单日期，yyyymmdd）, file_key}}，用 file_key 调用 statement_export 下载",
       "properties": {
         "statement_type": "对账单类型：`\"daily\"`（默认，日报）或 `\"monthly\"`（月报）",
         "start_date": "起始日期（`yyyy-mm-dd`）。`daily` 默认 30 天前，`monthly` 默认 12 个月前",
@@ -375,7 +375,7 @@
     },
     "alert_list": {
       "title": "价格预警列表",
-      "description": "获取所有已配置的价格预警，返回 lists[]{symbol, indicators[]{id, condition, price, frequency, enabled, triggered_at}}"
+      "description": "获取所有已配置的价格预警，返回 {lists[]{symbol, name, market, price, chg, indicators[]{id, indicator_id, text（预警条件文字，如“价格涨到 250”）, value_map{price}, frequency, enabled, state}}}"
     },
     "anomaly": {
       "title": "市场异动",
@@ -516,7 +516,7 @@
     },
     "exchange_rate": {
       "title": "汇率",
-      "description": "获取全部支持币种的汇率，返回 list[]{from_currency, to_currency, rate, timestamp}，覆盖 USD/HKD/CNY/SGD 等"
+      "description": "获取全部支持币种的汇率，返回 {exchanges[]{base_currency, other_currency, average_rate}}：average_rate 为 1 单位 other_currency 折合的 base_currency（如 base USD、other HKD、0.12743 即 1 HKD = 0.12743 USD）"
     },
     "executive": {
       "title": "高管与董事",
@@ -878,7 +878,7 @@
     },
     "participants": {
       "title": "市场参与者",
-      "description": "获取港股市场参与者（券商）信息，返回 participants[]{broker_ids[], name_en, name_cn, name_hk}，用于解析经纪商队列数据"
+      "description": "获取港股市场参与者（券商）信息，返回顶层数组 {broker_ids[], name_en, name_cn}，用于解析经纪商队列数据"
     },
     "quote": {
       "title": "行情快照",
@@ -926,14 +926,14 @@
     },
     "sharelist_list": {
       "title": "分享股单列表",
-      "description": "列出用户自建及已订阅的社区分享股单，返回 lists[]{id, name, description, symbol_count, is_owner, follower_count}",
+      "description": "列出用户自建及已订阅的社区分享股单，返回 {sharelists[]（用户自建的股单）, subscribed_sharelists[]（用户订阅的股单）}，每项 {id, name, description, stocks_count, subscribers_count, subscribed, chg, this_year_chg, created_at, stocks, …}",
       "properties": {
         "count": "返回数量（默认 20）"
       }
     },
     "sharelist_popular": {
       "title": "热门分享股单",
-      "description": "获取热门/流行社区分享股单，返回 lists[]{id, name, description, symbol_count, follower_count, creator}，按热度排序",
+      "description": "获取热门/流行社区分享股单，返回 {sharelists[]{id, name, description, stocks_count, subscribers_count, chg, this_year_chg, creator{id, name, …}, stocks, …}}，按热度排序",
       "properties": {
         "count": "返回数量（默认 20）"
       }
@@ -1037,7 +1037,7 @@
     },
     "trading_session": {
       "title": "交易时段",
-      "description": "获取所有市场的交易时段安排，返回 market_sessions[]{market, trade_sessions[]{beg_time, end_time, trade_session_type}}"
+      "description": "获取所有市场的交易时段安排，返回顶层数组 {market, trade_sessions[]{begin_time, end_time, trade_session}}"
     },
     "valuation": {
       "title": "估值",
@@ -1055,7 +1055,7 @@
     },
     "warrant_issuers": {
       "title": "权证发行商",
-      "description": "获取港股窝轮/牛熊证发行商信息，返回 issuers[]{id, name_en, name_cn}，id 可用于 warrant_list 的发行商筛选"
+      "description": "获取港股窝轮/牛熊证发行商信息，返回顶层数组 {issuer_id, name_en, name_cn}，issuer_id 可用于 warrant_list 的发行商筛选"
     },
     "warrant_list": {
       "title": "权证列表",
@@ -1175,15 +1175,15 @@
     },
     "ipo_subscriptions": {
       "title": "IPO 认购列表",
-      "description": "列出港股和美股当前处于认购/预申请阶段的 IPO，返回 items[]{symbol, name, market, sub_start_date, sub_end_date, listing_date, issue_price, min_lot_size}"
+      "description": "列出港股和美股当前处于认购/预申请阶段的 IPO，返回 {hk, us}，各为 {list[]{symbol, code, name, issue_price, entrance_fee, min_sub_num, sub_end_date, remaining_day, share_planned, state, …}}"
     },
     "ipo_calendar": {
       "title": "IPO 日历",
-      "description": "显示 IPO 日历，返回 items[]{symbol, name, market, sub_start_date, sub_end_date, listing_date, status}，含即将上市及近期已上市的 IPO"
+      "description": "显示 IPO 日历，返回 {sub_num, win_num, preipo_num, ipo_num, timestamp, list[]{symbol, code, name, sub_date, sub_end_date, result_date, ipo_date, mart_date, state, state_stage, tags}}，含即将上市及近期已上市的 IPO"
     },
     "ipo_listed": {
       "title": "IPO 已上市列表",
-      "description": "列出港股和美股近期已上市的 IPO，返回 items[]{symbol, name, listing_date, issue_price, first_day_close, first_day_return, volume, market}",
+      "description": "列出港股和美股近期已上市的 IPO，返回 {hk, us}，各为 {total, list[]{symbol, code, name, description, ipo_date, listed_day, issue_price, prev_close, last_done, ipo_change, amount, …}}",
       "properties": {
         "page": "页码（默认 1）",
         "size": "每页条数（默认 20）"
@@ -1241,7 +1241,7 @@
     },
     "institutional_views": {
       "title": "机构观点月度时序",
-      "description": "获取机构评级月度分布时序，返回 months[]{date, buy, outperform, hold, underperform, sell, total}，用于评级趋势分析",
+      "description": "获取机构评级月度分布时序，返回 {elist[]{date, buy, over（跑赢）, hold, under（跑输）, sell, no_opinion, total}, tlist[]{date, close, high_price, low_price}}，从旧到新，用于评级趋势分析",
       "properties": {
         "symbol": "证券代码，例如 `\"AAPL.US\"`"
       }
@@ -1306,7 +1306,7 @@
     },
     "screener_search": {
       "title": "策略选股",
-      "description": "执行选股查询。market: US|HK|CN|SG（模式B必填；模式A使用策略内置市场）。模式A：传 strategy_id（来自 screener_recommend_strategies）自动运行策略。模式B：conditions=[{\"key\":\"KEY\",\"min\":\"10\",\"max\":\"50\",\"tech_values\":{}},...] 直接透传给 API。 extra_returns=[\"key\",...] 追加展示列；sort_by_key 指定排序字段；sort_order: asc|desc（默认 desc）；page: 从0开始（默认0）。返回 {total, items[]{symbol, name, indicators[]{key, name, value, unit}}}，每条结果默认包含 prevclose、prevchg、marketcap、salesgrowthyoy、pettm、pbmrq、industry 七列。基本面 key：pettm pbmrq roe roa netmargin salesgrowthyoy netincomegrowthyoy marketcap(亿) circulating_marketcap(亿) prevclose prevchg(%) divyld la epsttm netincome(亿) sales(亿) turnover_rate balance(万)。技术 key（tech_values 见 screener_indicators）：macd_day/week rsi_day/week kdj_day/week boll_day/week。注意：key 由平台动态维护，不确定时先调 screener_indicators 确认。",
+      "description": "执行选股查询。market: US|HK|CN|SG（模式B必填；模式A使用策略内置市场）。模式A：传 strategy_id（来自 screener_recommend_strategies）自动运行策略。模式B：conditions=[{\"key\":\"KEY\",\"min\":\"10\",\"max\":\"50\",\"tech_values\":{}},...] 直接透传给 API。 extra_returns=[\"key\",...] 追加展示列；sort_by_key 指定排序字段；sort_order: asc|desc（默认 desc）；page: 从0开始（默认0）。返回 {total, items[]{symbol, name, counter_id, indicators[]{key, value}}, legend{<key>: {name, unit}}}，每条结果默认包含 prevclose、prevchg、marketcap、salesgrowthyoy、pettm、pbmrq、industry 七列。基本面 key：pettm pbmrq roe roa netmargin salesgrowthyoy netincomegrowthyoy marketcap(亿) circulating_marketcap(亿) prevclose prevchg(%) divyld la epsttm netincome(亿) sales(亿) turnover_rate balance(万)。技术 key（tech_values 见 screener_indicators）：macd_day/week rsi_day/week kdj_day/week boll_day/week。注意：key 由平台动态维护，不确定时先调 screener_indicators 确认。",
       "properties": {
         "market": "市场：US/HK/CN/SG。模式B必填；模式A可不传（策略已内置市场）"
       }

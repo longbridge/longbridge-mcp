@@ -2230,7 +2230,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get HK market participant broker information. Returns participants[]{broker_ids[], name_en, name_cn, name_hk}. Use broker_ids to interpret broker queue data."
+        description = "Get HK market participant broker information. Returns a top-level array of {broker_ids[], name_en, name_cn}. Use broker_ids to interpret broker queue data."
     )]
     async fn participants(
         &self,
@@ -2465,7 +2465,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get trading session schedule for all markets. Returns market_sessions[]{market, trade_sessions[]{beg_time, end_time, trade_session_type}}."
+        description = "Get trading session schedule for all markets. Returns a top-level array of {market, trade_sessions[]{begin_time, end_time, trade_session}}."
     )]
     async fn trading_session(
         &self,
@@ -2563,7 +2563,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get all watchlist groups and their securities. Returns groups[]{id, name, securities[]{symbol, market, name, watched_price, watched_at}}."
+        description = "Get all watchlist groups and their securities. Returns a top-level array of groups {id, name, securities[]{symbol, name, watched_price, watched_at, is_pinned}}."
     )]
     async fn watchlist(&self, ctx: RequestContext<RoleServer>) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
@@ -2599,7 +2599,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get HK warrant issuer information. Returns issuers[]{id, name_en, name_cn}. Use id in warrant_list issuer filter."
+        description = "Get HK warrant issuer information. Returns a top-level array of {issuer_id, name_en, name_cn}. Pass issuer_id in warrant_list's issuer filter."
     )]
     async fn warrant_issuers(
         &self,
@@ -2763,7 +2763,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get account cash balance and asset summary. Returns balances[]{currency, total_cash, max_finance_amount, remaining_finance_amount, risk_level, margin_call}. Filter by currency (e.g. \"USD\", \"HKD\")."
+        description = "Get account cash balance and asset summary. Returns a top-level array of {currency, total_cash, net_assets, buy_power, max_finance_amount, remaining_finance_amount, risk_level, margin_call, init_margin, maintenance_margin, cash_infos[]{currency, available_cash, withdraw_cash, frozen_cash, settling_cash}}. Filter by currency (e.g. \"USD\", \"HKD\")."
     )]
     async fn account_balance(
         &self,
@@ -4351,7 +4351,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get exchange rates for all supported currencies. Returns list[]{from_currency, to_currency, rate, timestamp} covering USD, HKD, CNY, SGD and others."
+        description = "Get exchange rates for all supported currencies. Returns {exchanges[]{base_currency, other_currency, average_rate}}: average_rate is the value of 1 other_currency in base_currency (e.g. base USD, other HKD, 0.12743 = 1 HKD is 0.12743 USD)."
     )]
     async fn exchange_rate(
         &self,
@@ -4444,7 +4444,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::social::AlertListResponse>(),
-        description = "Get all configured price alerts. Returns lists[]{symbol, indicators[]{id, indicator_id, condition, price, frequency, enabled, triggered_at}}."
+        description = "Get all configured price alerts. Returns {lists[]{symbol, name, market, price, chg, indicators[]{id, indicator_id, text (the condition, e.g. \"价格涨到 250\"), value_map{price}, frequency, enabled, state}}}."
     )]
     async fn alert_list(
         &self,
@@ -4783,7 +4783,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::account::StatementListResponse>(),
-        description = "List available account statements (daily/monthly). Returns list[]{id, type (daily/monthly), date, status}. Use the id with statement_export to download."
+        description = "List available account statements (daily/monthly). Returns {list[]{dt (statement date, yyyymmdd), file_key}}. Pass file_key to statement_export to download."
     )]
     async fn statement_list(
         &self,
@@ -5290,7 +5290,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::discovery::SharelistListResponse>(),
-        description = "List user's own and subscribed community sharelists. Returns lists[]{id, name, description, symbol_count, is_owner, follower_count}."
+        description = "List user's own and subscribed community sharelists. Returns {sharelists[] (the user's own lists), subscribed_sharelists[] (lists the user subscribes to)}, each item {id, name, description, stocks_count, subscribers_count, subscribed, chg, this_year_chg, created_at, stocks, …}."
     )]
     async fn sharelist_list(
         &self,
@@ -5454,7 +5454,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::discovery::SharelistListResponse>(),
-        description = "Get popular/trending community sharelists. Returns lists[]{id, name, description, symbol_count, follower_count, creator} sorted by popularity."
+        description = "Get popular/trending community sharelists. Returns {sharelists[]{id, name, description, stocks_count, subscribers_count, chg, this_year_chg, creator{id, name, …}, stocks, …}} sorted by popularity."
     )]
     async fn sharelist_popular(
         &self,
@@ -5795,7 +5795,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::discovery::IpoSubscriptionsResponse>(),
-        description = "List IPO stocks in subscription/pre-filing stage (HK+US). Returns items[]{symbol, name, market, sub_start_date, sub_end_date, listing_date, issue_price, min_lot_size}."
+        description = "List IPO stocks in subscription/pre-filing stage (HK+US). Returns {hk, us}, each {list[]{symbol, code, name, issue_price, entrance_fee, min_sub_num, sub_end_date, remaining_day, share_planned, state, …}}."
     )]
     async fn ipo_subscriptions(
         &self,
@@ -5818,7 +5818,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::discovery::IpoCalendarResponse>(),
-        description = "Show the IPO calendar. Returns items[]{symbol, name, market, sub_start_date, sub_end_date, listing_date, status} for upcoming and recent IPOs."
+        description = "Show the IPO calendar. Returns {sub_num, win_num, preipo_num, ipo_num, timestamp, list[]{symbol, code, name, sub_date, sub_end_date, result_date, ipo_date, mart_date, state, state_stage, tags}} for upcoming and recent IPOs."
     )]
     async fn ipo_calendar(
         &self,
@@ -5838,7 +5838,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::discovery::IpoListedResponse>(),
-        description = "List recently listed IPO stocks (HK+US). Returns items[]{symbol, name, listing_date, issue_price, first_day_close, first_day_return, volume, market}."
+        description = "List recently listed IPO stocks (HK+US). Returns {hk, us}, each {total, list[]{symbol, code, name, description, ipo_date, listed_day, issue_price, prev_close, last_done, ipo_change, amount, …}}."
     )]
     async fn ipo_listed(
         &self,
@@ -5996,7 +5996,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::fundamental::InstitutionalViewsResponse>(),
-        description = "Get monthly institutional rating distribution timeline. Returns months[]{date, buy, outperform, hold, underperform, sell, total} for trend analysis."
+        description = "Get monthly institutional rating distribution timeline. Returns {elist[]{date, buy, over (outperform), hold, under (underperform), sell, no_opinion, total}, tlist[]{date, close, high_price, low_price}}, oldest first, for trend analysis."
     )]
     async fn institutional_views(
         &self,
@@ -6330,7 +6330,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::discovery::ScreenerSearchResponse>(),
-        description = "Screen stocks. market: US|HK|CN|SG (Mode B required; Mode A uses strategy's market). Mode A: strategy_id from screener_recommend_strategies — auto-runs saved strategy. Mode B: conditions=[{\"key\":\"KEY\",\"min\":\"10\",\"max\":\"50\",\"tech_values\":{}},...]. extra_returns=[\"key\",...] adds display-only columns. sort_by_key: key name to sort by; sort_order: asc|desc (default desc). page: 0-based (default 0). Returns {total, items[]{symbol, name, indicators[]{key, name, value, unit}}}. Fundamental keys: pettm pbmrq roe roa netmargin salesgrowthyoy netincomegrowthyoy marketcap(亿) circulating_marketcap(亿) prevclose prevchg(%) divyld la epsttm netincome(亿) sales(亿) turnover_rate balance(万). Technical keys (call screener_indicators for tech_values schema): macd_day/week rsi_day/week kdj_day/week boll_day/week."
+        description = "Screen stocks. market: US|HK|CN|SG (Mode B required; Mode A uses strategy's market). Mode A: strategy_id from screener_recommend_strategies — auto-runs saved strategy. Mode B: conditions=[{\"key\":\"KEY\",\"min\":\"10\",\"max\":\"50\",\"tech_values\":{}},...]. extra_returns=[\"key\",...] adds display-only columns. sort_by_key: key name to sort by; sort_order: asc|desc (default desc). page: 0-based (default 0). Returns {total, items[]{symbol, name, counter_id, indicators[]{key, value}}, legend{<key>: {name, unit}}}. Fundamental keys: pettm pbmrq roe roa netmargin salesgrowthyoy netincomegrowthyoy marketcap(亿) circulating_marketcap(亿) prevclose prevchg(%) divyld la epsttm netincome(亿) sales(亿) turnover_rate balance(万). Technical keys (call screener_indicators for tech_values schema): macd_day/week rsi_day/week kdj_day/week boll_day/week."
     )]
     async fn screener_search(
         &self,

@@ -29,6 +29,40 @@ enum VecI32OrString {
 }
 
 #[derive(Deserialize)]
+#[serde(untagged, expecting = "a string or a number, e.g. \"100\" or 100")]
+enum StrOrNumber {
+    Str(String),
+    Num(serde_json::Number),
+}
+
+impl StrOrNumber {
+    fn into_string(self) -> String {
+        match self {
+            StrOrNumber::Str(s) => s,
+            StrOrNumber::Num(n) => n.to_string(),
+        }
+    }
+}
+
+/// `String` that may arrive as a JSON number: quantities, prices and ids are
+/// declared as strings (exact decimals), but models often send `100` or
+/// `1.5`.
+pub fn tolerant_string<'de, D>(d: D) -> Result<String, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    StrOrNumber::deserialize(d).map(StrOrNumber::into_string)
+}
+
+/// `Option<String>` tolerant variant of [`tolerant_string`].
+pub fn tolerant_option_string<'de, D>(d: D) -> Result<Option<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Option::<StrOrNumber>::deserialize(d).map(|v| v.map(StrOrNumber::into_string))
+}
+
+#[derive(Deserialize)]
 #[serde(
     untagged,
     expecting = "an integer or a numeric string, e.g. 42 or \"42\""
@@ -222,6 +256,30 @@ mod tests {
     struct Ids {
         #[serde(default, deserialize_with = "tolerant_option_vec_i64")]
         ids: Option<Vec<i64>>,
+    }
+
+    #[derive(Deserialize)]
+    struct Qty {
+        #[serde(deserialize_with = "tolerant_string")]
+        quantity: String,
+        #[serde(default, deserialize_with = "tolerant_option_string")]
+        price: Option<String>,
+    }
+
+    #[test]
+    fn numbers_are_accepted_for_decimal_strings() {
+        let q: Qty =
+            serde_json::from_str(r#"{"quantity":100,"price":1.5}"#).expect("numbers must parse");
+        assert_eq!(q.quantity, "100", "an integer keeps its digits");
+        assert_eq!(q.price.as_deref(), Some("1.5"), "a float keeps its digits");
+        let q: Qty = serde_json::from_str(r#"{"quantity":"100"}"#).expect("strings must parse");
+        assert_eq!(q.price, None, "an omitted price stays None");
+        let q: Qty = serde_json::from_str(r#"{"quantity":1269569447752900608}"#)
+            .expect("a large id must parse");
+        assert_eq!(
+            q.quantity, "1269569447752900608",
+            "a 64-bit id must not lose precision"
+        );
     }
 
     #[test]
