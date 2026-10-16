@@ -429,6 +429,11 @@ fn matches_error_class(
 
 /// Actionable follow-up for the error classes users hit most, so the model can
 /// either fix the call itself or tell the user what to do.
+/// reqwest's text for a request that never got a response (connection reset,
+/// DNS or TLS failure, timeout). Transient: read-only tools retry it once, and
+/// the model is told to retry rather than give up.
+const TRANSPORT_ERROR: &str = "error sending request";
+
 fn error_hint(err: &McpError) -> Option<&'static str> {
     if err.code == rmcp::model::ErrorCode::INVALID_PARAMS {
         return Some(
@@ -438,6 +443,23 @@ fn error_hint(err: &McpError) -> Option<&'static str> {
 
     let code = openapi_error_code_of(err);
     let msg = err.message.to_lowercase();
+
+    if msg.contains(TRANSPORT_ERROR) {
+        return Some(
+            "Hint: a transient network error reaching Longbridge (the request got no \
+             response). Wait a moment and retry the same call.",
+        );
+    }
+    // 301600 is a generic invalid-request code, so this matches on the text.
+    if msg.contains("invalid symbol") || msg.contains("symbol not found") {
+        return Some(
+            "Hint: the symbol is not recognised. Use <CODE>.<MARKET> with market US, HK, SH, \
+             SZ or SG — e.g. AAPL.US, 700.HK, 600519.SH, D05.SG; indexes as .SPX.US / \
+             HSI.HK / STI.SG. Other markets (.TW, .JP, .KS, FX pairs, crypto) are not \
+             covered, and OTC tickers, delisted codes and expired options also fail; tell the \
+             user instead of retrying variants.",
+        );
+    }
 
     // Checked before the rate-limit class below: `openapi_error_code()` and
     // `dc_region_restricted()` are mutually exclusive on any given
@@ -640,6 +662,7 @@ fn recoverable_of(err: &McpError) -> &'static str {
                 "最小间隔",
                 "區間調用上限",
                 "最小間隔",
+                TRANSPORT_ERROR,
             ],
             numeric: &["429002", "429003"],
         },
@@ -8142,6 +8165,41 @@ mod tool_error_tests {
     }
 
     #[test]
+    fn a_transport_failure_is_retryable_and_says_so() {
+        let err = McpError::internal_error(
+            "longbridge: error sending request for url (https://openapi.longbridge.com/v1/x): client error (SendRequest)",
+            None,
+        );
+        assert_eq!(
+            super::recoverable_of(&err),
+            "backoff",
+            "a request with no response is transient"
+        );
+        assert!(
+            error_hint(&err).is_some_and(|h| h.contains("retry")),
+            "the hint must tell the model to retry"
+        );
+    }
+
+    #[test]
+    fn an_unknown_symbol_names_the_covered_markets() {
+        let err = McpError::internal_error(
+            "openapi error: code=301600: invalid symbol",
+            Some(serde_json::json!({ "openapi_error_code": 301600 })),
+        );
+        let hint = error_hint(&err).expect("an invalid symbol must carry a hint");
+        assert!(
+            hint.contains("US, HK, SH, SZ or SG") && hint.contains(".TW"),
+            "{hint}"
+        );
+        assert_eq!(
+            super::recoverable_of(&err),
+            "fix_params",
+            "it stays a parameter problem"
+        );
+    }
+
+    #[test]
     fn too_many_query_days_hints_at_splitting_the_range() {
         let err = McpError::internal_error(
             "openapi error: code=301600: too many query days",
@@ -8464,8 +8522,11 @@ mod tool_error_tests {
 
     #[test]
     fn ordinary_errors_get_no_hint() {
-        let err = McpError::internal_error("symbol not found", None);
-        assert!(error_hint(&err).is_none());
+        let err = McpError::internal_error("order already filled", None);
+        assert!(
+            error_hint(&err).is_none(),
+            "an error with no known remedy carries no hint"
+        );
     }
 
     #[tokio::test]

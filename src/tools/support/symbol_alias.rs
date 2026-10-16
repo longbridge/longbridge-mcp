@@ -1,6 +1,7 @@
 //! Rewrites common non-canonical symbol spellings to the form Longbridge
 //! accepts, before a tool call reaches upstream: US index aliases, zero-padded
-//! HK codes and Yahoo's `.SS` Shanghai suffix.
+//! HK codes, Yahoo's `.SS` Shanghai and `.SI` Singapore suffixes, and a
+//! leading dot on non-US index codes.
 //!
 //! Models reach for the Yahoo/Bloomberg spellings they have seen elsewhere —
 //! `SPX.US`, `^GSPC.US`, `.VIX`, bare `NDX` — and each one fails upstream with
@@ -51,6 +52,19 @@ pub fn canonical_listing(symbol: &str) -> Option<String> {
             format!("{}.HK", if unpadded.is_empty() { "0" } else { unpadded })
         }
         "SS" if code.bytes().all(|b| b.is_ascii_digit()) => format!("{code}.SH"),
+        // Yahoo's SGX suffix (D05.SI) is .SG here.
+        "SI" if !code.is_empty() && code.bytes().all(|b| b.is_ascii_alphanumeric()) => {
+            format!("{}.SG", code.to_ascii_uppercase())
+        }
+        // Only US indexes take a leading dot (.SPX.US); HK/SG/CN ones do not
+        // (HSI.HK, STI.SG), so `.HSI.HK` fails upstream.
+        "HK" | "SG" | "SH" | "SZ"
+            if code.len() > 1
+                && code.starts_with('.')
+                && code[1..].bytes().all(|b| b.is_ascii_alphanumeric()) =>
+        {
+            format!("{}.{market}", &code[1..])
+        }
         _ => return None,
     };
     (canonical != trimmed).then_some(canonical)
@@ -96,6 +110,32 @@ pub fn normalize_arguments(arguments: &mut serde_json::Map<String, Value>) -> us
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn rewrites_singapore_suffix_and_dotted_non_us_indexes() {
+        for (input, expected) in [
+            ("D05.SI", "D05.SG"),
+            ("g3b.si", "G3B.SG"),
+            (".HSI.HK", "HSI.HK"),
+            (".STI.SG", "STI.SG"),
+        ] {
+            assert_eq!(
+                canonical_listing(input).as_deref(),
+                Some(expected),
+                "{input}"
+            );
+        }
+        assert_eq!(
+            canonical_listing("HSI.HK"),
+            None,
+            "a canonical index is left alone"
+        );
+        assert_eq!(
+            canonical_listing(".SPX.US"),
+            None,
+            "a US index keeps its dot"
+        );
+    }
 
     #[test]
     fn rewrites_observed_index_spellings() {
