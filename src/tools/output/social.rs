@@ -125,8 +125,8 @@ pub struct NewsDetailResponse {
 /// Author of a news article.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct NewsAuthor {
-    /// Author ID (numeric string).
-    pub id: Option<String>,
+    /// Author member ID (numeric string).
+    pub member_id: Option<String>,
     /// Display name.
     pub name: Option<String>,
     /// Avatar URL.
@@ -238,8 +238,8 @@ pub struct AlertToggleResponse {
 
 /// Returned by `dca_list`. Upstream DCA plan-query payload forwarded after the
 /// standard transform; the `next_trd_date` unix field is converted to RFC3339.
-/// Subset of the wire payload — only documented fields are declared; all
-/// optional.
+/// Plan fields follow the SDK `DcaPlan` model of the same endpoint (the
+/// production sample had no plans); all optional.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct DcaListResponse {
     /// Recurring-investment (DCA) plans.
@@ -253,24 +253,57 @@ pub struct DcaPlan {
     /// Plan ID. Use with dca_update / dca_pause / dca_resume / dca_stop.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub plan_id: Option<String>,
-    /// Security symbol (e.g. "AAPL.US").
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub symbol: Option<String>,
-    /// Amount invested per cycle (decimal string).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub amount: Option<String>,
-    /// Settlement currency.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub currency: Option<String>,
-    /// Investment frequency (Daily / Weekly / Monthly).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub frequency: Option<String>,
     /// Plan status (Active / Suspended / Finished).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub status: Option<String>,
-    /// Next scheduled execution date (RFC3339; upstream `next_trd_date`).
+    /// Security symbol (e.g. "AAPL.US").
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub next_execution_date: Option<String>,
+    pub symbol: Option<String>,
+    /// Security name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stock_name: Option<String>,
+    /// Market code, e.g. "US" / "HK".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub market: Option<String>,
+    /// Amount invested per cycle (decimal string).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub per_invest_amount: Option<String>,
+    /// Investment frequency (Daily / Weekly / Fortnightly / Monthly).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub invest_frequency: Option<String>,
+    /// Day of week for weekly plans, e.g. "Mon".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub invest_day_of_week: Option<String>,
+    /// Day of month for monthly plans.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub invest_day_of_month: Option<String>,
+    /// Whether margin financing may be used.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub allow_margin_finance: Option<bool>,
+    /// Reminder lead time before execution, in hours.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub alter_hours: Option<String>,
+    /// Next scheduled execution date (RFC3339).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_trd_date: Option<String>,
+    /// Cumulative invested amount (decimal string).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cum_amount: Option<String>,
+    /// Number of completed investment cycles.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub issue_number: Option<i64>,
+    /// Average cost (decimal string).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub average_cost: Option<String>,
+    /// Cumulative profit/loss (decimal string).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cum_profit: Option<String>,
+    /// Creation time.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<String>,
+    /// Last update time.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<String>,
 }
 
 /// Returned by `dca_history`. Execution records for one DCA plan, forwarded
@@ -307,56 +340,43 @@ pub struct DcaExecution {
 }
 
 /// Returned by `dca_stats`. Aggregate DCA statistics forwarded after the
-/// standard transform. Subset of the wire payload — only documented fields are
-/// declared; all optional.
+/// standard transform; all optional.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct DcaStatsResponse {
     /// Total amount invested across plans (decimal string).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub total_invested: Option<String>,
-    /// Current total market value (decimal string).
+    pub total_amount: Option<String>,
+    /// Total profit/loss across plans (decimal string).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub total_value: Option<String>,
-    /// Total return (decimal string).
+    pub total_profit: Option<String>,
+    /// Number of active plans (integer string).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub total_return: Option<String>,
-    /// Overall return rate (decimal string).
+    pub active_count: Option<String>,
+    /// Number of suspended plans (integer string).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub return_rate: Option<String>,
-    /// Number of plans included.
+    pub suspended_count: Option<String>,
+    /// Number of finished plans (integer string).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub plan_count: Option<i64>,
-    /// Per-symbol breakdown.
+    pub finished_count: Option<String>,
+    /// Days until the next scheduled investment (integer string).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub items: Option<Vec<DcaStatsItem>>,
-}
-
-/// Per-symbol DCA statistics line.
-#[derive(Debug, Serialize, JsonSchema)]
-pub struct DcaStatsItem {
-    /// Security symbol.
+    pub rest_days: Option<String>,
+    /// Plans with the nearest upcoming execution (same shape as `dca_list`'s
+    /// `plans[]`).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub symbol: Option<String>,
-    /// Amount invested in this symbol (decimal string).
+    pub nearest_plans: Option<Vec<DcaPlan>>,
+    /// Market codes the account has DCA investments in, e.g. ["US"].
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub invested: Option<String>,
-    /// Current value of this symbol's position (decimal string).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub value: Option<String>,
-    /// Return rate for this symbol (decimal string).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub return_rate: Option<String>,
+    pub invested_markets: Option<Vec<String>>,
 }
 
 /// Returned by `dca_check`. DCA-eligibility result per queried symbol,
-/// forwarded after the standard transform (one item per queried symbol).
-/// Subset of the wire payload — only documented fields are
-/// declared; all optional.
+/// forwarded after the standard transform. Verified against live responses.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct DcaCheckResponse {
-    /// Per-symbol support results.
+    /// Per-symbol support results, in request order.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub items: Option<Vec<DcaCheckItem>>,
+    pub infos: Option<Vec<DcaCheckItem>>,
 }
 
 /// DCA-eligibility result for one symbol.
@@ -367,8 +387,8 @@ pub struct DcaCheckItem {
     pub symbol: Option<String>,
     /// Whether the symbol supports DCA recurring investment.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub support_dca: Option<bool>,
-    /// Reason when unsupported.
+    pub support_regular_saving: Option<bool>,
+    /// Upstream DCA plan-type code for the symbol's market (opaque integer).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub reason: Option<String>,
+    pub regular_saving_plan_type: Option<i64>,
 }

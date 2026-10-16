@@ -91,6 +91,11 @@ pub async fn ipo_subscriptions(
     };
     crate::serialize::drop_keys(&mut value, &["icon"]);
     crate::serialize::strip_empty_strings(&mut value);
+    // `sub_deadline` is the subscription cut-off as raw unix seconds.
+    crate::serialize::convert_unix_paths(
+        &mut value,
+        &["hk.list.*.sub_deadline", "us.list.*.sub_deadline"],
+    );
     let json = serde_json::to_string(&value).unwrap_or(combined);
     Ok(make_result(json))
 }

@@ -12,6 +12,11 @@ use crate::tools::support::parse;
 /// Maximum pages to fetch per request (matches CLI behaviour).
 const MAX_PAGES: usize = 20;
 
+/// Events per upstream page. A date bucket this full may continue on the next
+/// `offset` page of the same date (the date cursor alone skips the rest).
+const PAGE_SIZE: usize = 100;
+const PAGE_SIZE_STR: &str = "100";
+
 /// Accepted `category` values, in the order shown to callers on a bad input.
 const CATEGORIES: [&str; 6] = ["report", "dividend", "split", "ipo", "macrodata", "closed"];
 
@@ -78,7 +83,21 @@ fn merge_pages(pages: impl IntoIterator<Item = serde_json::Value>) -> serde_json
     let list: Vec<serde_json::Value> = groups
         .into_iter()
         .map(|(date, infos_map)| {
-            let infos: Vec<serde_json::Value> = infos_map.into_values().collect();
+            // Keep a stable, chronological order (the map has none).
+            let mut infos: Vec<serde_json::Value> = infos_map.into_values().collect();
+            infos.sort_by(|a, b| {
+                let key = |v: &serde_json::Value| {
+                    (
+                        match &v["datetime"] {
+                            serde_json::Value::String(s) => s.clone(),
+                            serde_json::Value::Null => String::new(),
+                            other => other.to_string(),
+                        },
+                        v["id"].as_str().unwrap_or_default().to_string(),
+                    )
+                };
+                key(a).cmp(&key(b))
+            });
             serde_json::json!({ "date": date, "infos": infos })
         })
         .collect();
@@ -89,6 +108,16 @@ fn merge_pages(pages: impl IntoIterator<Item = serde_json::Value>) -> serde_json
 /// Normalize `category`, accepting any capitalization and surrounding space.
 fn normalize_category(raw: &str) -> Result<String, McpError> {
     let lower = raw.trim().to_lowercase();
+    // Names models reach for first; seen in production as failed calls.
+    let lower = match lower.as_str() {
+        "earnings" | "earning" | "financial" | "financials" | "reports" => "report".to_string(),
+        "economic" | "economy" | "macro" | "macroeconomic" => "macrodata".to_string(),
+        "dividends" => "dividend".to_string(),
+        "splits" => "split".to_string(),
+        "ipos" => "ipo".to_string(),
+        "holiday" | "holidays" => "closed".to_string(),
+        _ => lower,
+    };
     if CATEGORIES.contains(&lower.as_str()) {
         Ok(lower)
     } else {
@@ -155,7 +184,7 @@ pub async fn finance_calendar(
             ("date_end", end.as_str()),
             ("types[]", category.as_str()),
             ("next", "later"),
-            ("count", "100"),
+            ("count", PAGE_SIZE_STR),
             ("offset", "0"),
         ];
         if let Some(ref m) = market_upper {
@@ -194,6 +223,82 @@ pub async fn finance_calendar(
         match next_date {
             Some(nd) if nd.as_str() <= end.as_str() && nd != current_date => current_date = nd,
             _ => break,
+        }
+    }
+
+    // A date with a full page of events may have more: the date cursor moves
+    // on to the next date and silently drops them (e.g. 122 US earnings on one
+    // day came back as 100). Page through such dates by offset.
+    let full_dates: Vec<String> = pages
+        .iter()
+        .flat_map(|page| page["list"].as_array().into_iter().flatten())
+        .filter(|bucket| {
+            bucket["infos"]
+                .as_array()
+                .is_some_and(|infos| infos.len() >= PAGE_SIZE)
+        })
+        .filter_map(|bucket| bucket["date"].as_str().map(str::to_string))
+        .collect();
+    'dates: for date in full_dates {
+        let mut offset = PAGE_SIZE;
+        loop {
+            if fetched >= MAX_PAGES {
+                partial_reason.get_or_insert_with(|| {
+                    format!("stopped after {MAX_PAGES} pages; {date} has more events than returned")
+                });
+                break 'dates;
+            }
+            let offset_s = offset.to_string();
+            let mut params: Vec<(&str, &str)> = vec![
+                ("date", date.as_str()),
+                ("date_end", date.as_str()),
+                ("types[]", category.as_str()),
+                ("next", "later"),
+                ("count", PAGE_SIZE_STR),
+                ("offset", offset_s.as_str()),
+            ];
+            if let Some(ref m) = market_upper {
+                params.push(("markets[]", m.as_str()));
+            }
+            let resp = mctx
+                .create_http_client()
+                .request(reqwest::Method::GET, "/v1/quote/finance_calendar")
+                .query_params(params)
+                .response::<String>()
+                .send()
+                .await;
+            let resp = match resp {
+                Ok(resp) => resp,
+                Err(e) => {
+                    let reason = sanitize_longbridge_error(&e.into());
+                    partial_reason.get_or_insert_with(|| {
+                        format!("upstream request failed paging {date}: {reason}; it has more events than returned")
+                    });
+                    break 'dates;
+                }
+            };
+            // Like a failed request, an unreadable extra page must not discard
+            // the pages already collected.
+            let Ok(raw) = serde_json::from_str::<serde_json::Value>(&resp) else {
+                partial_reason.get_or_insert_with(|| {
+                    format!("unreadable upstream page while paging {date}; it has more events than returned")
+                });
+                break 'dates;
+            };
+            fetched += 1;
+            let more = raw["list"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(|bucket| bucket["date"].as_str() == Some(date.as_str()))
+                .filter_map(|bucket| bucket["infos"].as_array())
+                .map(Vec::len)
+                .sum::<usize>();
+            pages.push(raw);
+            if more < PAGE_SIZE {
+                break;
+            }
+            offset += PAGE_SIZE;
         }
     }
 
@@ -240,6 +345,25 @@ pub async fn finance_calendar(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn category_accepts_the_names_models_try_first() {
+        for (raw, want) in [
+            ("earnings", "report"),
+            ("Economic", "macrodata"),
+            ("holidays", "closed"),
+        ] {
+            assert_eq!(
+                normalize_category(raw).expect("an alias must resolve"),
+                want,
+                "{raw} must resolve to {want}"
+            );
+        }
+        assert!(
+            normalize_category("weather").is_err(),
+            "an unknown category is rejected"
+        );
+    }
 
     // ── next_date_of ────────────────────────────────────────────────────────
 
@@ -365,7 +489,7 @@ mod tests {
 
     #[test]
     fn normalize_category_rejects_unknown_value_and_lists_candidates() {
-        let err = normalize_category("financial").unwrap_err();
+        let err = normalize_category("weather").unwrap_err();
         assert!(
             err.message.contains("report") && err.message.contains("macrodata"),
             "error should list the accepted categories, got: {}",

@@ -11,6 +11,9 @@ use crate::error::Error;
 use crate::tools::support::dry_run;
 use crate::tools::support::http_client::http_get_tool;
 use crate::tools::support::parse;
+use crate::tools::support::tolerant::{
+    tolerant_id_string, tolerant_option_id_string, tolerant_option_string, tolerant_string,
+};
 use crate::tools::{tool_json, tool_result};
 
 pub use crate::tools::quote::SymbolParam;
@@ -19,6 +22,7 @@ pub use crate::tools::quote::SymbolParam;
 pub struct OrderDetailParam {
     /// Order ID to look up. A parent order ID, or (with is_attached=true) the
     /// ID of an attached take-profit / stop-loss leg.
+    #[serde(deserialize_with = "tolerant_id_string")]
     pub order_id: String,
     /// Set to true when order_id is the ID of an attached take-profit /
     /// stop-loss leg rather than a parent order. The response is then that leg
@@ -86,18 +90,24 @@ pub struct SubmitOrderParam {
     /// Buy or Sell
     pub side: String,
     /// Order quantity (number of shares)
+    #[serde(deserialize_with = "tolerant_string")]
     pub submitted_quantity: String,
     /// Order validity: "Day" (Day Order, expires end of session), "GTC" (Good Til Canceled), "GTD" (Good Til Date, requires expire_date)
     pub time_in_force: String,
     /// Limit price. Required for: LO, ELO, ALO, ODD, LIT, SLO
+    #[serde(default, deserialize_with = "tolerant_option_string")]
     pub submitted_price: Option<String>,
     /// Trigger (activation) price. Required for: LIT, MIT, TSLPAMT, TSLPPCT
+    #[serde(default, deserialize_with = "tolerant_option_string")]
     pub trigger_price: Option<String>,
     /// Limit offset from the trailing stop price. Required for: TSLPAMT, TSLPPCT
+    #[serde(default, deserialize_with = "tolerant_option_string")]
     pub limit_offset: Option<String>,
     /// Trailing amount (absolute price distance). Required for TSLPAMT
+    #[serde(default, deserialize_with = "tolerant_option_string")]
     pub trailing_amount: Option<String>,
     /// Trailing percent as decimal (e.g. 0.05 = 5%). Required for TSLPPCT
+    #[serde(default, deserialize_with = "tolerant_option_string")]
     pub trailing_percent: Option<String>,
     /// Expiry date (yyyy-mm-dd). Required when time_in_force is GTD
     pub expire_date: Option<String>,
@@ -117,18 +127,23 @@ pub struct SubmitOrderParam {
     /// it.
     pub attached_order_type: Option<String>,
     /// Take-profit trigger price. Required for PROFIT_TAKER and BRACKET.
+    #[serde(default, deserialize_with = "tolerant_option_string")]
     pub attached_profit_taker_price: Option<String>,
     /// Stop-loss trigger price. Required for STOP_LOSS and BRACKET.
+    #[serde(default, deserialize_with = "tolerant_option_string")]
     pub attached_stop_loss_price: Option<String>,
     /// Limit price of the take-profit leg, for an LO attached_activate_order_type.
+    #[serde(default, deserialize_with = "tolerant_option_string")]
     pub attached_profit_taker_submit_price: Option<String>,
     /// Limit price of the stop-loss leg, for an LO attached_activate_order_type.
+    #[serde(default, deserialize_with = "tolerant_option_string")]
     pub attached_stop_loss_submit_price: Option<String>,
     /// Time-in-force of the attached leg: "Day" / "GTC" / "GTD". Defaults to
     /// the parent order's setting when omitted.
     pub attached_time_in_force: Option<String>,
     /// Expiry of the attached leg as a unix timestamp in seconds (e.g.
     /// "1767139200"). Required when attached_time_in_force is GTD.
+    #[serde(default, deserialize_with = "tolerant_option_string")]
     pub attached_expire_time: Option<String>,
     /// Order type the attached leg is submitted as once triggered, e.g. "LO"
     /// (then set the matching attached_*_submit_price) or "MO".
@@ -192,18 +207,25 @@ pub struct SubmitMultiLegOrderParam {
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ReplaceOrderParam {
     /// Order ID to replace (returned by submit_order or listed in today_orders / history_orders)
+    #[serde(deserialize_with = "tolerant_id_string")]
     pub order_id: String,
     /// New order quantity (number of shares)
+    #[serde(deserialize_with = "tolerant_string")]
     pub quantity: String,
     /// New limit price (for limit-style orders)
+    #[serde(default, deserialize_with = "tolerant_option_string")]
     pub price: Option<String>,
     /// New trigger (activation) price (for LIT / MIT / trailing-stop orders)
+    #[serde(default, deserialize_with = "tolerant_option_string")]
     pub trigger_price: Option<String>,
     /// New limit offset from the trailing stop price (for TSLPAMT / TSLPPCT)
+    #[serde(default, deserialize_with = "tolerant_option_string")]
     pub limit_offset: Option<String>,
     /// New trailing amount as absolute price distance (for TSLPAMT)
+    #[serde(default, deserialize_with = "tolerant_option_string")]
     pub trailing_amount: Option<String>,
     /// New trailing percent as decimal e.g. 0.05 = 5% (for TSLPPCT)
+    #[serde(default, deserialize_with = "tolerant_option_string")]
     pub trailing_percent: Option<String>,
     /// Set to true to cancel every attached take-profit / stop-loss leg of this
     /// order, leaving the order itself in place.
@@ -213,22 +235,29 @@ pub struct ReplaceOrderParam {
     pub attached_order_type: Option<String>,
     /// ID of the existing take-profit leg to update (from
     /// order_detail's attached_orders[]). Omit to add a new leg.
+    #[serde(default, deserialize_with = "tolerant_option_id_string")]
     pub attached_profit_taker_id: Option<String>,
     /// ID of the existing stop-loss leg to update (from order_detail's
     /// attached_orders[]). Omit to add a new leg.
+    #[serde(default, deserialize_with = "tolerant_option_id_string")]
     pub attached_stop_loss_id: Option<String>,
     /// New take-profit trigger price.
+    #[serde(default, deserialize_with = "tolerant_option_string")]
     pub attached_profit_taker_price: Option<String>,
     /// New stop-loss trigger price.
+    #[serde(default, deserialize_with = "tolerant_option_string")]
     pub attached_stop_loss_price: Option<String>,
     /// New limit price for the take-profit leg.
+    #[serde(default, deserialize_with = "tolerant_option_string")]
     pub attached_profit_taker_submit_price: Option<String>,
     /// New limit price for the stop-loss leg.
+    #[serde(default, deserialize_with = "tolerant_option_string")]
     pub attached_stop_loss_submit_price: Option<String>,
     /// New time-in-force for the attached leg: "Day" / "GTC" / "GTD".
     pub attached_time_in_force: Option<String>,
     /// New expiry for the attached leg as a unix timestamp in seconds.
     /// Required when attached_time_in_force is GTD.
+    #[serde(default, deserialize_with = "tolerant_option_string")]
     pub attached_expire_time: Option<String>,
     /// New order type for the triggered leg, e.g. "LO" or "MO".
     pub attached_activate_order_type: Option<String>,
@@ -287,6 +316,7 @@ impl ReplaceOrderParam {
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct CancelOrderParam {
     /// Order ID to cancel (from today's orders or order history)
+    #[serde(deserialize_with = "tolerant_id_string")]
     pub order_id: String,
     /// Set to true to cancel an attached take-profit / stop-loss leg by its own
     /// order_id, leaving the parent order in place. Omit (or false) to cancel a
@@ -312,9 +342,9 @@ pub struct CancelOrderParam {
 pub struct HistoryOrdersParam {
     /// Filter by symbol (optional)
     pub symbol: Option<String>,
-    /// Start time (RFC3339)
+    /// Start time: RFC3339 (e.g. 2026-09-01T00:00:00Z), or a date (yyyy-mm-dd) for the start of that day in UTC
     pub start_at: String,
-    /// End time (RFC3339)
+    /// End time: RFC3339 (e.g. 2026-09-30T23:59:59Z), or a date (yyyy-mm-dd) for the end of that day in UTC
     pub end_at: String,
     /// US accounts only: page number (default 1). Ignored for
     /// AP accounts (the region is inferred from the account — do not pass it).
@@ -326,9 +356,9 @@ pub struct HistoryOrdersParam {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct CashFlowParam {
-    /// Start time (RFC3339)
+    /// Start time: RFC3339 (e.g. 2026-09-01T00:00:00Z), or a date (yyyy-mm-dd) for the start of that day in UTC
     pub start_at: String,
-    /// End time (RFC3339)
+    /// End time: RFC3339 (e.g. 2026-09-30T23:59:59Z), or a date (yyyy-mm-dd) for the end of that day in UTC
     pub end_at: String,
 }
 
@@ -368,8 +398,9 @@ async fn preview_existing_order(
     is_attached: bool,
 ) -> serde_json::Value {
     if mctx.dc_region().await == longbridge::DcRegion::Us {
-        let Ok(result) = ctx.us_order_detail(order_id.to_string()).await else {
-            return serde_json::Value::Null;
+        let result = match ctx.us_order_detail(order_id.to_string()).await {
+            Ok(result) => result,
+            Err(e) => return order_lookup_failed(&e.to_string()),
         };
         let Ok(mut value) = serde_json::to_value(&result) else {
             return serde_json::Value::Null;
@@ -385,8 +416,19 @@ async fn preview_existing_order(
     }
     match ctx.order_detail(opts).await {
         Ok(result) => serde_json::to_value(&result).unwrap_or(serde_json::Value::Null),
-        Err(_) => serde_json::Value::Null,
+        Err(e) => order_lookup_failed(&e.to_string()),
     }
+}
+
+/// What a cancel/replace preview shows when the order could not be looked
+/// up: a bare `null` read as "nothing to worry about", so say why and what to
+/// check before the user is asked to confirm.
+fn order_lookup_failed(reason: &str) -> serde_json::Value {
+    serde_json::json!({
+        "lookup_failed": reason,
+        "note": "This order could not be found. Check the order_id with today_orders or \
+                 history_orders before asking the user to confirm.",
+    })
 }
 
 pub async fn account_balance(
@@ -645,7 +687,7 @@ pub async fn history_orders(
     p: HistoryOrdersParam,
 ) -> Result<CallToolResult, McpError> {
     let start = parse::parse_rfc3339(&p.start_at)?;
-    let end = parse::parse_rfc3339(&p.end_at)?;
+    let end = parse::parse_rfc3339_end(&p.end_at)?;
     let (ctx, _) = TradeContext::new(mctx.create_config());
     if mctx.dc_region().await == longbridge::DcRegion::Us {
         let opts = longbridge::trade::GetUSHistoryOrders {
@@ -691,7 +733,7 @@ pub async fn history_executions(
     p: HistoryOrdersParam,
 ) -> Result<CallToolResult, McpError> {
     let start = parse::parse_rfc3339(&p.start_at)?;
-    let end = parse::parse_rfc3339(&p.end_at)?;
+    let end = parse::parse_rfc3339_end(&p.end_at)?;
 
     let (ctx, _) = TradeContext::new(mctx.create_config());
     // v3 `/trade/execution/all` filters by execution time and caps each page at
@@ -743,7 +785,7 @@ pub async fn cash_flow(
     p: CashFlowParam,
 ) -> Result<CallToolResult, McpError> {
     let start = parse::parse_rfc3339(&p.start_at)?;
-    let end = parse::parse_rfc3339(&p.end_at)?;
+    let end = parse::parse_rfc3339_end(&p.end_at)?;
     let opts = longbridge::trade::GetCashFlowOptions::new(start, end);
     let (ctx, _) = TradeContext::new(mctx.create_config());
     let result = ctx.cash_flow(opts).await.map_err(Error::longbridge)?;
@@ -942,6 +984,173 @@ fn attached_replace_preview(p: &ReplaceOrderParam) -> serde_json::Value {
     })
 }
 
+/// What a `replace_order` confirmation code covers.
+fn replace_scope(p: &ReplaceOrderParam) -> dry_run::Scope {
+    let mut scope =
+        dry_run::Scope::replace(&p.order_id, &p.quantity, p.price.as_deref().unwrap_or(""));
+    // Cancelling or repricing the protective legs changes what the user is
+    // agreeing to, so a code confirmed for one set of legs must not apply to
+    // another.
+    // Any explicit value is sent (it marks the request as an attached-leg
+    // change), so any explicit value is part of what was approved.
+    if let Some(cancel_all) = p.attached_cancel_all {
+        scope = scope.and("cancel_attached", if cancel_all { "true" } else { "false" });
+    }
+    scope = with_present(
+        scope,
+        &[
+            ("trigger", &p.trigger_price),
+            ("offset", &p.limit_offset),
+            ("trail_amount", &p.trailing_amount),
+            ("trail_percent", &p.trailing_percent),
+            ("attached", &p.attached_order_type),
+            ("tp_id", &p.attached_profit_taker_id),
+            ("sl_id", &p.attached_stop_loss_id),
+            ("tp", &p.attached_profit_taker_price),
+            ("sl", &p.attached_stop_loss_price),
+            ("tp_limit", &p.attached_profit_taker_submit_price),
+            ("sl_limit", &p.attached_stop_loss_submit_price),
+            ("leg_tif", &p.attached_time_in_force),
+            ("leg_expire", &p.attached_expire_time),
+            ("leg_type", &p.attached_activate_order_type),
+            ("leg_rth", &p.attached_outside_rth),
+            ("main_id", &p.attached_main_id),
+            ("leg_qty", &p.attached_quantity),
+            ("leg_market_price", &p.attached_market_price),
+        ],
+    );
+    scope
+}
+
+/// What a `submit_order` confirmation code covers.
+fn submit_scope(p: &SubmitOrderParam) -> dry_run::Scope {
+    let mut scope = dry_run::Scope::order(
+        &p.side,
+        &p.symbol,
+        &p.submitted_quantity,
+        p.submitted_price.as_deref().unwrap_or(""),
+    );
+    // Every field that changes what is traded is part of what the user
+    // approves. `remark` (a note) and `client_request_id` (a caller-made
+    // idempotency key, often generated only on the execute call) change
+    // nothing traded and are left out, so adding them later is not a false
+    // rejection: a code
+    // confirmed for an LO Day order must not place an MO, a GTC, or one with
+    // another trigger or trail.
+    scope = scope
+        .and("type", &p.order_type)
+        .and("tif", &p.time_in_force);
+    scope = with_present(
+        scope,
+        &[
+            ("trigger", &p.trigger_price),
+            ("offset", &p.limit_offset),
+            ("trail_amount", &p.trailing_amount),
+            ("trail_percent", &p.trailing_percent),
+            ("expire", &p.expire_date),
+            ("rth", &p.outside_rth),
+        ],
+    );
+    // The protective legs are part of the order the user approves: a code
+    // confirmed for one take-profit/stop-loss pair must not place another.
+    if let Some(ref v) = p.attached_order_type {
+        scope = scope.and("attached", v);
+        scope = with_present(
+            scope,
+            &[
+                ("tp", &p.attached_profit_taker_price),
+                ("sl", &p.attached_stop_loss_price),
+                ("tp_limit", &p.attached_profit_taker_submit_price),
+                ("sl_limit", &p.attached_stop_loss_submit_price),
+                ("leg_tif", &p.attached_time_in_force),
+                ("leg_expire", &p.attached_expire_time),
+                ("leg_type", &p.attached_activate_order_type),
+                ("leg_rth", &p.attached_outside_rth),
+            ],
+        );
+    }
+    scope
+}
+
+/// Add a clause to `scope` for each field that is set, so a confirmation code
+/// covers every value the preview showed.
+fn with_present(mut scope: dry_run::Scope, fields: &[(&str, &Option<String>)]) -> dry_run::Scope {
+    for (label, value) in fields {
+        if let Some(value) = value {
+            scope = scope.and(label, value);
+        }
+    }
+    scope
+}
+
+/// Order types `submit_order` accepts, as the SDK spells them.
+const ORDER_TYPES: &[&str] = &[
+    "LO", "ELO", "MO", "AO", "ALO", "ODD", "LIT", "MIT", "TSLPAMT", "TSLPPCT", "TSMAMT", "TSMPCT",
+    "SLO",
+];
+
+/// `outside_rth` values, as the SDK spells them.
+const OUTSIDE_RTH: &[&str] = &["RTH_ONLY", "ANY_TIME", "OVERNIGHT", "OPTION_PRE_MARKET"];
+
+/// The canonical spelling of `value` among `choices`, ignoring case, `_`, `-`
+/// and spaces; an unknown value lists the choices.
+fn canonical_choice(field: &str, value: &str, choices: &[&str]) -> Result<String, McpError> {
+    let key = |s: &str| {
+        s.chars()
+            .filter(|c| !matches!(c, '_' | '-' | ' '))
+            .collect::<String>()
+            .to_lowercase()
+    };
+    let wanted = key(value);
+    choices
+        .iter()
+        .find(|c| key(c) == wanted)
+        .map(|c| (*c).to_string())
+        .ok_or_else(|| {
+            McpError::invalid_params(
+                format!(
+                    "invalid {field}: '{value}', expected one of: {}",
+                    choices.join(", ")
+                ),
+                None,
+            )
+        })
+}
+
+/// Fields an order type cannot be placed without, per the `order_type` docs.
+/// Checked before the dry run so a preview the user confirms is one the
+/// exchange can accept, rather than failing only on execute.
+fn missing_order_fields(p: &SubmitOrderParam) -> Vec<&'static str> {
+    let order_type = p.order_type.trim().to_uppercase();
+    let mut required: Vec<(&'static str, bool)> = Vec::new();
+    if matches!(
+        order_type.as_str(),
+        "LO" | "ELO" | "ALO" | "ODD" | "LIT" | "SLO"
+    ) {
+        required.push(("submitted_price", p.submitted_price.is_some()));
+    }
+    if matches!(order_type.as_str(), "LIT" | "MIT") {
+        required.push(("trigger_price", p.trigger_price.is_some()));
+    }
+    if order_type == "TSLPAMT" {
+        required.push(("trailing_amount", p.trailing_amount.is_some()));
+    }
+    if order_type == "TSLPPCT" {
+        required.push(("trailing_percent", p.trailing_percent.is_some()));
+    }
+    if matches!(order_type.as_str(), "TSLPAMT" | "TSLPPCT") {
+        required.push(("limit_offset", p.limit_offset.is_some()));
+    }
+    if p.time_in_force.trim().eq_ignore_ascii_case("GTD") {
+        required.push(("expire_date", p.expire_date.is_some()));
+    }
+    required
+        .into_iter()
+        .filter(|(_, present)| !present)
+        .map(|(field, _)| field)
+        .collect()
+}
+
 pub async fn submit_order(
     mctx: &crate::tools::McpContext,
     p: SubmitOrderParam,
@@ -952,6 +1161,15 @@ pub async fn submit_order(
     };
     use std::str::FromStr;
 
+    // Normalize the enum spellings up front ("buy" → "Buy", "lo" → "LO") so
+    // the preview, the confirmation scope and the order all use one form.
+    let mut p = p;
+    p.order_type = canonical_choice("order_type", &p.order_type, ORDER_TYPES)?;
+    p.side = canonical_choice("side", &p.side, &["Buy", "Sell"])?;
+    p.time_in_force = canonical_choice("time_in_force", &p.time_in_force, &["Day", "GTC", "GTD"])?;
+    if let Some(rth) = p.outside_rth.take() {
+        p.outside_rth = Some(canonical_choice("outside_rth", &rth, OUTSIDE_RTH)?);
+    }
     let order_type = p
         .order_type
         .parse::<OrderType>()
@@ -966,6 +1184,19 @@ pub async fn submit_order(
         .time_in_force
         .parse::<TimeInForceType>()
         .map_err(|e| McpError::invalid_params(format!("invalid time_in_force: {e}"), None))?;
+
+    let missing = missing_order_fields(&p);
+    if !missing.is_empty() {
+        return Err(McpError::invalid_params(
+            format!(
+                "{} {} order requires {}",
+                p.order_type,
+                p.time_in_force,
+                missing.join(", ")
+            ),
+            None,
+        ));
+    }
 
     let mut opts = SubmitOrderOptions::new(p.symbol.clone(), order_type, side, quantity, tif);
 
@@ -1015,23 +1246,7 @@ pub async fn submit_order(
         opts = opts.attached_params(attached_submit_params(&p, v)?);
     }
 
-    let mut scope = dry_run::Scope::order(
-        &p.side,
-        &p.symbol,
-        &p.submitted_quantity,
-        p.submitted_price.as_deref().unwrap_or(""),
-    );
-    // The protective legs are part of the order the user approves: a code
-    // confirmed for one take-profit/stop-loss pair must not place another.
-    if let Some(ref v) = p.attached_order_type {
-        scope = scope.and("attached", v);
-        if let Some(ref v) = p.attached_profit_taker_price {
-            scope = scope.and("tp", v);
-        }
-        if let Some(ref v) = p.attached_stop_loss_price {
-            scope = scope.and("sl", v);
-        }
-    }
+    let scope = submit_scope(&p);
     // Two-step by design: without a confirmation code this places nothing.
     let Some(code) = p.execute.clone() else {
         return dry_run::result(
@@ -1187,23 +1402,7 @@ pub async fn replace_order(
         opts = opts.attached_params(attached_replace_params(&p)?);
     }
     let (ctx, _) = TradeContext::new(mctx.create_config());
-    let mut scope =
-        dry_run::Scope::replace(&p.order_id, &p.quantity, p.price.as_deref().unwrap_or(""));
-    // Cancelling or repricing the protective legs changes what the user is
-    // agreeing to, so a code confirmed for one set of legs must not apply to
-    // another.
-    if p.attached_cancel_all == Some(true) {
-        scope = scope.and("cancel_attached", "true");
-    }
-    if let Some(ref v) = p.attached_order_type {
-        scope = scope.and("attached", v);
-    }
-    if let Some(ref v) = p.attached_profit_taker_price {
-        scope = scope.and("tp", v);
-    }
-    if let Some(ref v) = p.attached_stop_loss_price {
-        scope = scope.and("sl", v);
-    }
+    let scope = replace_scope(&p);
     // Two-step by design: without a confirmation code this changes nothing.
     let Some(code) = p.execute.clone() else {
         let existing = preview_existing_order(mctx, &ctx, &p.order_id, false).await;
@@ -1572,7 +1771,145 @@ mod attached_order_tests {
 
 #[cfg(test)]
 mod tests {
+    use super::{
+        ORDER_TYPES, ReplaceOrderParam, SubmitOrderParam, canonical_choice, missing_order_fields,
+        replace_scope, submit_scope,
+    };
+
+    #[test]
+    fn a_replace_code_does_not_carry_over_to_another_leg_change() {
+        let replace = |extra: serde_json::Value| -> ReplaceOrderParam {
+            let mut base = serde_json::json!({
+                "order_id": "1", "quantity": "100", "attached_order_type": "STOP_LOSS",
+                "attached_stop_loss_id": "9", "attached_quantity": "100"
+            });
+            if let (Some(b), Some(e)) = (base.as_object_mut(), extra.as_object()) {
+                b.extend(e.clone());
+            }
+            serde_json::from_value(base).expect("the test replace must deserialize")
+        };
+        let code = replace_scope(&replace(serde_json::json!({}))).code();
+        for change in [
+            serde_json::json!({"attached_quantity": "1000"}),
+            serde_json::json!({"attached_main_id": "2"}),
+            serde_json::json!({"attached_market_price": "10"}),
+            serde_json::json!({"attached_cancel_all": false}),
+        ] {
+            assert!(
+                replace_scope(&replace(change.clone()))
+                    .verify(&code)
+                    .is_err(),
+                "a code for the previewed leg change must not apply {change}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_confirmation_code_does_not_carry_over_to_a_changed_order() {
+        let base = serde_json::json!({"order_type": "LO", "submitted_price": "400"});
+        let code = submit_scope(&order(base.clone())).code();
+        for change in [
+            serde_json::json!({"order_type": "MO"}),
+            serde_json::json!({"time_in_force": "GTC"}),
+            serde_json::json!({"trigger_price": "380"}),
+            serde_json::json!({"outside_rth": "ANY_TIME"}),
+        ] {
+            let mut changed = base.clone();
+            if let (Some(c), Some(d)) = (changed.as_object_mut(), change.as_object()) {
+                c.extend(d.clone());
+            }
+            assert!(
+                submit_scope(&order(changed)).verify(&code).is_err(),
+                "a code for the LO Day preview must not place {change}"
+            );
+        }
+        assert!(
+            submit_scope(&order(base.clone())).verify(&code).is_ok(),
+            "the same order must still verify"
+        );
+        let mut keyed = base;
+        if let Some(o) = keyed.as_object_mut() {
+            o.insert(
+                "client_request_id".into(),
+                serde_json::json!("key-made-on-execute"),
+            );
+            o.insert("remark".into(), serde_json::json!("note"));
+        }
+        assert!(
+            submit_scope(&order(keyed)).verify(&code).is_ok(),
+            "an idempotency key or remark added on execute must not reject the approved order"
+        );
+    }
+
+    #[test]
+    fn canonical_choice_ignores_case_and_lists_choices() {
+        assert_eq!(
+            canonical_choice("side", "buy", &["Buy", "Sell"]).expect("buy is a side"),
+            "Buy",
+            "case must not matter"
+        );
+        assert_eq!(
+            canonical_choice("order_type", "lo", ORDER_TYPES).expect("lo is an order type"),
+            "LO",
+            "order types are upper-cased"
+        );
+        assert_eq!(
+            canonical_choice("outside_rth", "any time", super::OUTSIDE_RTH)
+                .expect("any time is valid"),
+            "ANY_TIME",
+            "separators must not matter"
+        );
+        let err =
+            canonical_choice("side", "long", &["Buy", "Sell"]).expect_err("long is not a side");
+        assert!(
+            err.message.contains("expected one of: Buy, Sell"),
+            "{}",
+            err.message
+        );
+    }
     use crate::serialize::to_tool_json;
+
+    fn order(extra: serde_json::Value) -> SubmitOrderParam {
+        let mut base = serde_json::json!({
+            "symbol": "700.HK", "side": "Buy", "submitted_quantity": 100, "time_in_force": "Day"
+        });
+        if let (Some(b), Some(e)) = (base.as_object_mut(), extra.as_object()) {
+            b.extend(e.clone());
+        }
+        serde_json::from_value(base).expect("the test order must deserialize")
+    }
+
+    #[test]
+    fn missing_order_fields_follow_the_order_type() {
+        assert_eq!(
+            missing_order_fields(&order(serde_json::json!({"order_type": "LO"}))),
+            ["submitted_price"],
+            "a limit order needs a price"
+        );
+        assert!(
+            missing_order_fields(&order(
+                serde_json::json!({"order_type": "LO", "submitted_price": 1.5})
+            ))
+            .is_empty(),
+            "a priced limit order is complete"
+        );
+        assert!(
+            missing_order_fields(&order(serde_json::json!({"order_type": "MO"}))).is_empty(),
+            "a market order needs no price"
+        );
+        assert_eq!(
+            missing_order_fields(&order(serde_json::json!({"order_type": "TSLPPCT"}))),
+            ["trailing_percent", "limit_offset"],
+            "a trailing order needs its trail and offset"
+        );
+        assert_eq!(
+            missing_order_fields(&order(
+                serde_json::json!({"order_type": "MO", "time_in_force": "GTD"})
+            )),
+            ["expire_date"],
+            "a GTD order needs an expiry"
+        );
+    }
 
     /// Simulate the raw JSON that the Longbridge SDK's `FundPositionsResponse`
     /// would produce after serde serialization, then verify that `to_tool_json`

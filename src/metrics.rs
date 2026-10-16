@@ -131,6 +131,125 @@ static TOOL_TERMINAL_DEGRADED_TOTAL: LazyLock<IntCounterVec> = LazyLock::new(|| 
     counter
 });
 
+static TOOL_JQ_ERRORS_TOTAL: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    let counter = IntCounterVec::new(
+        Opts::new(
+            "mcp_tool_jq_errors_total",
+            "Tool calls whose `_jq` response filter failed (stage=compile|runtime). \
+             Returned to the client as isError:true but NOT counted in \
+             mcp_tool_call_errors_total, because the filter runs outside the \
+             measured tool body.",
+        ),
+        &["tool_name", "stage", "client"],
+    )
+    .unwrap();
+    REGISTRY.register(Box::new(counter.clone())).unwrap();
+    counter
+});
+
+static TOOL_BACKOFF_RETRIES_TOTAL: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    let counter = IntCounterVec::new(
+        Opts::new(
+            "mcp_tool_backoff_retries_total",
+            "Read-only tool calls retried once by the server after an upstream \
+             rate-limit (backoff-class) error. The first, retried attempt is not \
+             counted in mcp_tool_call_errors_total.",
+        ),
+        &["tool_name", "client"],
+    )
+    .unwrap();
+    REGISTRY.register(Box::new(counter.clone())).unwrap();
+    counter
+});
+
+static AUTH_EXPIRED_TOTAL: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    let counter = IntCounterVec::new(
+        Opts::new(
+            "mcp_auth_expired_total",
+            "MCP requests rejected (or, on /agent, downgraded to unauthenticated) \
+             because the bearer JWT had expired",
+        ),
+        &["client"],
+    )
+    .unwrap();
+    REGISTRY.register(Box::new(counter.clone())).unwrap();
+    counter
+});
+
+/// Record a request whose bearer token had expired. `client` is a
+/// [`classify_client`] bucket (the HTTP layer has no `CURRENT_CLIENT` yet).
+pub fn record_auth_expired(client: &str) {
+    AUTH_EXPIRED_TOTAL.with_label_values(&[client]).inc();
+}
+
+static TOOL_RESPONSE_BYTES: LazyLock<HistogramVec> = LazyLock::new(|| {
+    let histogram = HistogramVec::new(
+        prometheus::HistogramOpts::new(
+            "mcp_tool_response_bytes",
+            "Size of the result text a tool call returned, before any size trimming. Clients \
+             cap a single tool result (Claude Code: 25k tokens), so the upper buckets are calls \
+             that would fail client-side without trimming.",
+        )
+        .buckets(vec![
+            1_000.0,
+            4_000.0,
+            16_000.0,
+            60_000.0,
+            100_000.0,
+            250_000.0,
+            1_000_000.0,
+        ]),
+        &["tool_name", "client"],
+    )
+    .unwrap();
+    REGISTRY.register(Box::new(histogram.clone())).unwrap();
+    histogram
+});
+
+static TOOL_RESPONSE_TRUNCATED_TOTAL: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    let counter = IntCounterVec::new(
+        Opts::new(
+            "mcp_tool_response_truncated_total",
+            "Tool results trimmed to the server's size limit before being returned",
+        ),
+        &["tool_name", "client"],
+    )
+    .unwrap();
+    REGISTRY.register(Box::new(counter.clone())).unwrap();
+    counter
+});
+
+/// Record a tool result's size, and whether it had to be trimmed.
+pub fn record_response_size(tool_name: &str, bytes: usize, truncated: bool) {
+    let client = CURRENT_CLIENT.try_with(|c| *c).unwrap_or("unknown");
+    TOOL_RESPONSE_BYTES
+        .with_label_values(&[tool_name, client])
+        .observe(bytes as f64);
+    if truncated {
+        TOOL_RESPONSE_TRUNCATED_TOTAL
+            .with_label_values(&[tool_name, client])
+            .inc();
+    }
+}
+
+/// Record a failed `_jq` filter. `stage` is `"compile"` (the expression was
+/// rejected before the tool ran) or `"runtime"` (the tool ran but the filter
+/// failed on its response).
+pub fn record_jq_error(tool_name: &str, stage: &str) {
+    let client = CURRENT_CLIENT.try_with(|c| *c).unwrap_or("unknown");
+    TOOL_JQ_ERRORS_TOTAL
+        .with_label_values(&[tool_name, stage, client])
+        .inc();
+}
+
+/// Record a server-side retry of a read-only tool after a rate-limit error.
+pub fn record_backoff_retry(tool_name: &str) {
+    let client = CURRENT_CLIENT.try_with(|c| *c).unwrap_or("unknown");
+    TOOL_BACKOFF_RETRIES_TOTAL
+        .with_label_values(&[tool_name, client])
+        .inc();
+}
+
 /// Record a tool call that resolved to a terminal degraded result (e.g. 301604
 /// no quote access, 301607 with zero history quota). These are deliberately not
 /// counted as errors so `mcp_tool_call_errors_total` reflects actionable

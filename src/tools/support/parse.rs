@@ -13,7 +13,26 @@ const PRIMITIVE_DATETIME_FORMAT: &[time::format_description::BorrowedFormatItem<
     time::macros::format_description!("[year]-[month]-[day]T[hour]:[minute]:[second]");
 
 pub fn parse_period(s: &str) -> Result<Period, McpError> {
-    match s.trim().to_lowercase().as_str() {
+    let lower = s.trim().to_lowercase();
+    // Common spellings from other APIs. "1m" stays one minute, so a month is
+    // only "1mo"/"monthly".
+    let canonical = match lower.as_str() {
+        "1d" | "d" | "daily" | "1day" => "day",
+        "1w" | "w" | "weekly" | "1week" => "week",
+        "1mo" | "mo" | "monthly" | "1month" => "month",
+        "1q" | "q" | "quarterly" => "quarter",
+        "1y" | "y" | "yearly" | "annual" => "year",
+        "1h" | "h" | "60min" | "hourly" => "60m",
+        "2h" => "120m",
+        "3h" => "180m",
+        "4h" => "240m",
+        "1min" => "1m",
+        "5min" => "5m",
+        "15min" => "15m",
+        "30min" => "30m",
+        other => other,
+    };
+    match canonical {
         "1m" => Ok(Period::OneMinute),
         "2m" => Ok(Period::TwoMinute),
         "3m" => Ok(Period::ThreeMinute),
@@ -54,8 +73,12 @@ pub fn parse_trade_sessions(s: &str) -> Result<TradeSessions, McpError> {
 }
 
 pub fn parse_market(s: &str) -> Result<Market, McpError> {
-    s.parse::<Market>()
-        .map_err(|e| McpError::invalid_params(format!("invalid market: {s} ({e})"), None))
+    s.trim().to_uppercase().parse::<Market>().map_err(|_| {
+        McpError::invalid_params(
+            format!("invalid market: '{s}', expected one of: US, HK, CN, SG"),
+            None,
+        )
+    })
 }
 
 pub fn parse_date(s: &str) -> Result<Date, McpError> {
@@ -63,9 +86,39 @@ pub fn parse_date(s: &str) -> Result<Date, McpError> {
         .map_err(|e| McpError::invalid_params(format!("invalid date '{s}': {e}"), None))
 }
 
+/// Parse the start of a time range: an RFC3339 datetime, or a bare
+/// `yyyy-mm-dd` date read as the start of that day in UTC.
 pub fn parse_rfc3339(s: &str) -> Result<time::OffsetDateTime, McpError> {
+    parse_datetime_or_date(s, time::Time::MIDNIGHT)
+}
+
+/// Parse the end of a time range: an RFC3339 datetime, or a bare
+/// `yyyy-mm-dd` date read as the end of that day in UTC, so the day is
+/// included.
+pub fn parse_rfc3339_end(s: &str) -> Result<time::OffsetDateTime, McpError> {
+    parse_datetime_or_date(s, time::macros::time!(23:59:59))
+}
+
+fn parse_datetime_or_date(
+    s: &str,
+    time_of_day: time::Time,
+) -> Result<time::OffsetDateTime, McpError> {
+    let s = s.trim();
     time::OffsetDateTime::parse(s, &time::format_description::well_known::Rfc3339)
-        .map_err(|e| McpError::invalid_params(format!("invalid RFC3339 datetime '{s}': {e}"), None))
+        .or_else(|e| {
+            Date::parse(s, DATE_FORMAT)
+                .map(|d| d.with_time(time_of_day).assume_utc())
+                .map_err(|_| e)
+        })
+        .map_err(|e| {
+            McpError::invalid_params(
+                format!(
+                    "invalid datetime '{s}': {e}; expected RFC3339 such as \
+                     2026-09-01T00:00:00Z, or a date such as 2026-09-01"
+                ),
+                None,
+            )
+        })
 }
 
 pub fn parse_primitive_datetime(s: &str) -> Result<time::PrimitiveDateTime, McpError> {
@@ -120,53 +173,72 @@ pub fn parse_sort_order_type(s: &str) -> Result<SortOrderType, McpError> {
     }
 }
 
+/// Every calc index `calc_indexes` accepts, by its canonical name.
+const CALC_INDEXES: &[(&str, CalcIndex)] = &[
+    ("LastDone", CalcIndex::LastDone),
+    ("ChangeValue", CalcIndex::ChangeValue),
+    ("ChangeRate", CalcIndex::ChangeRate),
+    ("Volume", CalcIndex::Volume),
+    ("Turnover", CalcIndex::Turnover),
+    ("YtdChangeRate", CalcIndex::YtdChangeRate),
+    ("TurnoverRate", CalcIndex::TurnoverRate),
+    ("TotalMarketValue", CalcIndex::TotalMarketValue),
+    ("CapitalFlow", CalcIndex::CapitalFlow),
+    ("Amplitude", CalcIndex::Amplitude),
+    ("VolumeRatio", CalcIndex::VolumeRatio),
+    ("PeTtmRatio", CalcIndex::PeTtmRatio),
+    ("PbRatio", CalcIndex::PbRatio),
+    ("DividendRatioTtm", CalcIndex::DividendRatioTtm),
+    ("FiveDayChangeRate", CalcIndex::FiveDayChangeRate),
+    ("TenDayChangeRate", CalcIndex::TenDayChangeRate),
+    ("HalfYearChangeRate", CalcIndex::HalfYearChangeRate),
+    ("FiveMinutesChangeRate", CalcIndex::FiveMinutesChangeRate),
+    ("ExpiryDate", CalcIndex::ExpiryDate),
+    ("StrikePrice", CalcIndex::StrikePrice),
+    ("UpperStrikePrice", CalcIndex::UpperStrikePrice),
+    ("LowerStrikePrice", CalcIndex::LowerStrikePrice),
+    ("OutstandingQty", CalcIndex::OutstandingQty),
+    ("OutstandingRatio", CalcIndex::OutstandingRatio),
+    ("Premium", CalcIndex::Premium),
+    ("ItmOtm", CalcIndex::ItmOtm),
+    ("ImpliedVolatility", CalcIndex::ImpliedVolatility),
+    ("WarrantDelta", CalcIndex::WarrantDelta),
+    ("CallPrice", CalcIndex::CallPrice),
+    ("ToCallPrice", CalcIndex::ToCallPrice),
+    ("EffectiveLeverage", CalcIndex::EffectiveLeverage),
+    ("LeverageRatio", CalcIndex::LeverageRatio),
+    ("ConversionRatio", CalcIndex::ConversionRatio),
+    ("BalancePoint", CalcIndex::BalancePoint),
+    ("OpenInterest", CalcIndex::OpenInterest),
+    ("Delta", CalcIndex::Delta),
+    ("Gamma", CalcIndex::Gamma),
+    ("Theta", CalcIndex::Theta),
+    ("Vega", CalcIndex::Vega),
+    ("Rho", CalcIndex::Rho),
+];
+
+/// Parse a calc index name. Case, `_`, `-` and spaces are ignored, so
+/// "pe_ttm_ratio" and "peTtmRatio" both mean `PeTtmRatio`.
 pub fn parse_calc_index(s: &str) -> Result<CalcIndex, McpError> {
-    match s {
-        "LastDone" => Ok(CalcIndex::LastDone),
-        "ChangeValue" => Ok(CalcIndex::ChangeValue),
-        "ChangeRate" => Ok(CalcIndex::ChangeRate),
-        "Volume" => Ok(CalcIndex::Volume),
-        "Turnover" => Ok(CalcIndex::Turnover),
-        "YtdChangeRate" => Ok(CalcIndex::YtdChangeRate),
-        "TurnoverRate" => Ok(CalcIndex::TurnoverRate),
-        "TotalMarketValue" => Ok(CalcIndex::TotalMarketValue),
-        "CapitalFlow" => Ok(CalcIndex::CapitalFlow),
-        "Amplitude" => Ok(CalcIndex::Amplitude),
-        "VolumeRatio" => Ok(CalcIndex::VolumeRatio),
-        "PeTtmRatio" => Ok(CalcIndex::PeTtmRatio),
-        "PbRatio" => Ok(CalcIndex::PbRatio),
-        "DividendRatioTtm" => Ok(CalcIndex::DividendRatioTtm),
-        "FiveDayChangeRate" => Ok(CalcIndex::FiveDayChangeRate),
-        "TenDayChangeRate" => Ok(CalcIndex::TenDayChangeRate),
-        "HalfYearChangeRate" => Ok(CalcIndex::HalfYearChangeRate),
-        "FiveMinutesChangeRate" => Ok(CalcIndex::FiveMinutesChangeRate),
-        "ExpiryDate" => Ok(CalcIndex::ExpiryDate),
-        "StrikePrice" => Ok(CalcIndex::StrikePrice),
-        "UpperStrikePrice" => Ok(CalcIndex::UpperStrikePrice),
-        "LowerStrikePrice" => Ok(CalcIndex::LowerStrikePrice),
-        "OutstandingQty" => Ok(CalcIndex::OutstandingQty),
-        "OutstandingRatio" => Ok(CalcIndex::OutstandingRatio),
-        "Premium" => Ok(CalcIndex::Premium),
-        "ItmOtm" => Ok(CalcIndex::ItmOtm),
-        "ImpliedVolatility" => Ok(CalcIndex::ImpliedVolatility),
-        "WarrantDelta" => Ok(CalcIndex::WarrantDelta),
-        "CallPrice" => Ok(CalcIndex::CallPrice),
-        "ToCallPrice" => Ok(CalcIndex::ToCallPrice),
-        "EffectiveLeverage" => Ok(CalcIndex::EffectiveLeverage),
-        "LeverageRatio" => Ok(CalcIndex::LeverageRatio),
-        "ConversionRatio" => Ok(CalcIndex::ConversionRatio),
-        "BalancePoint" => Ok(CalcIndex::BalancePoint),
-        "OpenInterest" => Ok(CalcIndex::OpenInterest),
-        "Delta" => Ok(CalcIndex::Delta),
-        "Gamma" => Ok(CalcIndex::Gamma),
-        "Theta" => Ok(CalcIndex::Theta),
-        "Vega" => Ok(CalcIndex::Vega),
-        "Rho" => Ok(CalcIndex::Rho),
-        _ => Err(McpError::invalid_params(
-            format!("invalid calc_index: {s}"),
-            None,
-        )),
-    }
+    let wanted: String = s
+        .chars()
+        .filter(|c| !matches!(c, '_' | '-' | ' '))
+        .collect::<String>()
+        .to_lowercase();
+    CALC_INDEXES
+        .iter()
+        .find(|(name, _)| name.to_lowercase() == wanted)
+        .map(|(_, index)| *index)
+        .ok_or_else(|| {
+            let names: Vec<&str> = CALC_INDEXES.iter().map(|(name, _)| *name).collect();
+            McpError::invalid_params(
+                format!(
+                    "invalid calc_index: '{s}', expected one of: {}",
+                    names.join(", ")
+                ),
+                None,
+            )
+        })
 }
 
 pub fn parse_security_list_category(s: &str) -> Result<SecurityListCategory, McpError> {
@@ -234,6 +306,74 @@ mod tests {
     use super::*;
 
     #[test]
+    fn markets_and_periods_accept_common_spellings() {
+        assert!(
+            matches!(parse_market("us"), Ok(Market::US)),
+            "market case must not matter"
+        );
+        assert!(
+            parse_market("mars").is_err_and(|e| e.message.contains("US, HK, CN, SG")),
+            "an unknown market lists the valid ones"
+        );
+        assert!(matches!(parse_period("1d"), Ok(Period::Day)), "1d is a day");
+        assert!(
+            matches!(parse_period("1h"), Ok(Period::SixtyMinute)),
+            "1h is 60 minutes"
+        );
+        assert!(
+            matches!(parse_period("1m"), Ok(Period::OneMinute)),
+            "1m stays one minute"
+        );
+        assert!(
+            matches!(parse_period("monthly"), Ok(Period::Month)),
+            "monthly is a month"
+        );
+    }
+
+    #[test]
+    fn calc_index_names_ignore_case_and_separators() {
+        for name in ["PeTtmRatio", "pe_ttm_ratio", "pettmratio", "Pe-Ttm-Ratio"] {
+            assert!(
+                matches!(parse_calc_index(name), Ok(CalcIndex::PeTtmRatio)),
+                "{name} must parse as PeTtmRatio"
+            );
+        }
+        let err = parse_calc_index("Beta").expect_err("Beta is not a calc index");
+        assert!(
+            err.message.contains("expected one of: LastDone"),
+            "the error must list the valid names: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn range_bounds_accept_a_bare_date() {
+        let start = parse_rfc3339("2026-09-01").expect("a date must parse as a start");
+        let end = parse_rfc3339_end("2026-09-01").expect("a date must parse as an end");
+        assert_eq!(
+            start.unix_timestamp(),
+            1_788_220_800,
+            "start is 00:00:00 UTC"
+        );
+        assert_eq!(
+            end.unix_timestamp() - start.unix_timestamp(),
+            86_399,
+            "end is the last second of the same day"
+        );
+        let full =
+            parse_rfc3339_end("2026-09-01T08:00:00+08:00").expect("RFC3339 must still parse");
+        assert_eq!(
+            full.unix_timestamp(),
+            start.unix_timestamp(),
+            "an explicit offset is honored"
+        );
+        assert!(
+            parse_rfc3339("yesterday").is_err(),
+            "free text must still be rejected"
+        );
+    }
+
+    #[test]
     fn period_is_case_insensitive_and_trims() {
         assert!(matches!(parse_period("Day").unwrap(), Period::Day));
         assert!(matches!(
@@ -245,7 +385,7 @@ mod tests {
 
     #[test]
     fn period_error_lists_the_accepted_values() {
-        let err = parse_period("daily").unwrap_err();
+        let err = parse_period("fortnight").unwrap_err();
         assert!(
             err.message.contains("day") && err.message.contains("week"),
             "error should list accepted periods, got: {}",

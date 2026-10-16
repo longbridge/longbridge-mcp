@@ -15,7 +15,8 @@ pub struct MacroeconomicIndicatorsParam {
     pub country: Option<String>,
     /// Pagination offset, default 0.
     pub offset: Option<i32>,
-    /// Maximum number of indicators to return (default 100, max 1000).
+    /// Maximum number of indicators to return (default 30, max 1000); narrow
+    /// with keyword/country rather than paging through all of them.
     pub limit: Option<i32>,
 }
 
@@ -34,15 +35,15 @@ pub struct MacroeconomicParam {
 }
 
 fn parse_country(s: &str) -> Result<MacroeconomicCountry, McpError> {
-    match s {
+    match s.trim().to_uppercase().as_str() {
         "US" => Ok(MacroeconomicCountry::UnitedStates),
         "CN" => Ok(MacroeconomicCountry::China),
         "HK" => Ok(MacroeconomicCountry::HongKong),
         "EU" => Ok(MacroeconomicCountry::EuroZone),
         "JP" => Ok(MacroeconomicCountry::Japan),
         "SG" => Ok(MacroeconomicCountry::Singapore),
-        other => Err(McpError::invalid_params(
-            format!("invalid country '{other}'. Valid values: US, CN, HK, EU, JP, SG"),
+        _ => Err(McpError::invalid_params(
+            format!("invalid country '{s}'. Valid values: US, CN, HK, EU, JP, SG"),
             None,
         )),
     }
@@ -69,7 +70,8 @@ pub async fn macrodata_indicators(
     let country = p.country.as_deref().map(parse_country).transpose()?;
     let ctx = FundamentalContext::new(mctx.create_config());
     let result = ctx
-        .macroeconomic_indicators(country, p.keyword, p.offset, p.limit)
+        // ~1KB per indicator: the upstream default of 100 is ~95KB.
+        .macroeconomic_indicators(country, p.keyword, p.offset, p.limit.or(Some(30)))
         .await
         .map_err(Error::longbridge)?;
     let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;

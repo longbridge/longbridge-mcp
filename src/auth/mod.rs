@@ -1,3 +1,4 @@
+pub mod jwt;
 pub mod metadata;
 pub mod middleware;
 mod oauth_proxy;
@@ -465,6 +466,77 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// snake_case identifiers (`last_done`, `published_at`) in `text`: the
+    /// field and parameter names translations keep verbatim in English.
+    fn identifiers(text: &str) -> HashSet<String> {
+        text.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+            .filter(|word| {
+                word.contains('_')
+                    && word.starts_with(|c: char| c.is_ascii_lowercase())
+                    && word.split('_').all(|part| {
+                        !part.is_empty()
+                            && part
+                                .chars()
+                                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+                    })
+            })
+            .map(str::to_string)
+            .collect()
+    }
+
+    /// A translated description must not name a field the English one does
+    /// not: when an English description is corrected (a field renamed or
+    /// dropped) and its translation is not, this fails. Every field the
+    /// translation names must appear in the English description, among the
+    /// tool's parameters, or be another tool's name.
+    #[test]
+    fn locale_descriptions_only_name_fields_the_english_one_names() {
+        let live = crate::tools::list_tools();
+        let tool_names: HashSet<String> = live.iter().map(|t| t.name.to_string()).collect();
+        let mut stale = Vec::new();
+        for (code, raw) in [
+            ("zh-CN", include_str!("../../locales/zh-CN/tools.json")),
+            ("zh-HK", include_str!("../../locales/zh-HK/tools.json")),
+        ] {
+            let parsed: serde_json::Value =
+                serde_json::from_str(raw).expect("locale file must be valid JSON");
+            let tools = parsed["tools"]
+                .as_object()
+                .expect("locale file must have a `tools` object");
+            for tool in &live {
+                let Some(translated) = tools
+                    .get(tool.name.as_ref())
+                    .and_then(|t| t["description"].as_str())
+                else {
+                    continue;
+                };
+                let english = tool.description.as_deref().unwrap_or_default();
+                let mut known = identifiers(english);
+                if let Some(props) = tool
+                    .input_schema
+                    .get("properties")
+                    .and_then(|p| p.as_object())
+                {
+                    known.extend(props.keys().cloned());
+                }
+                let mut unknown: Vec<String> = identifiers(translated)
+                    .into_iter()
+                    .filter(|id| !known.contains(id) && !tool_names.contains(id))
+                    .collect();
+                if !unknown.is_empty() {
+                    unknown.sort();
+                    stale.push(format!("[{code}] {}: {}", tool.name, unknown.join(", ")));
+                }
+            }
+        }
+        assert!(
+            stale.is_empty(),
+            "translated descriptions name fields their English description does not (update the \
+             translation):\n{}",
+            stale.join("\n")
+        );
     }
 
     /// Every scope locale file must cover the same English scope `name`s as

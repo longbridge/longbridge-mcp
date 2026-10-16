@@ -9,11 +9,11 @@
 //! this repo's development. Every field is `Option<T>`; nothing here is
 //! marked required, since upstream may omit or add fields and, for the
 //! multi-shape tools, only one of the alternative shapes is present per
-//! response. The generic (non-US) `financial_statement`/`financial_report`
-//! paths are assumed to share the same list/fields envelope as the
-//! confirmed US shape (per the existing code comment that the US and
-//! generic paths share report-period vocabulary) — this has not been
-//! independently re-verified against a live HK/generic call in this pass.
+//! response. The generic (non-US-account) `financial_report` shape was
+//! checked against live production responses; the generic
+//! `financial_statement` envelope (`report`/`list`/`empty_fields`) was
+//! confirmed, but its `list[]` items were empty in every sample and are
+//! modeled on the US-account shape.
 
 use rmcp::schemars::JsonSchema;
 use rmcp::serde::Serialize;
@@ -31,7 +31,8 @@ pub struct FinancialReportField {
     /// Row value. Empty string when not released/applicable.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub value: Option<String>,
-    /// Value type hint, e.g. "bignumber".
+    /// Value type hint, e.g. "bignumber". US-account responses only; the
+    /// generic `financial_statement` path drops it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub value_type: Option<String>,
     /// Year-over-year change. Empty string when not applicable.
@@ -43,7 +44,8 @@ pub struct FinancialReportField {
     /// Indentation/hierarchy level (1 = section header).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub level: Option<i32>,
-    /// Display order within the period.
+    /// Display order within the period. US-account responses only; the
+    /// generic `financial_statement` path drops it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub display_order: Option<i32>,
 }
@@ -94,31 +96,33 @@ pub struct FinancialStatementKind {
 
 /// Returned by `financial_statement`.
 ///
-/// Two mutually-exclusive shapes: `kind=ALL` (default) returns
-/// `income_statement`/`balance_sheet`/`cash_flow`; a single `kind` (IS/BS/CF)
-/// returns the `currency`/`report`/`empty_fields`/`list` fields directly at
-/// the root instead.
+/// Generic path (every non-US-account call): `report`/`list`/`empty_fields`
+/// (plus `currency` when non-empty) at the root, for any `kind`. US accounts
+/// querying a `.US` symbol: a single `kind` (IS/BS/CF) returns the same root
+/// fields, while `kind=ALL` (default) is fanned out and returns
+/// `income_statement`/`balance_sheet`/`cash_flow` instead.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct FinancialStatementResponse {
-    /// Present when `kind=ALL` (default).
+    /// US-account `.US` calls with `kind=ALL` (default) only.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub income_statement: Option<FinancialStatementKind>,
-    /// Present when `kind=ALL` (default).
+    /// US-account `.US` calls with `kind=ALL` (default) only.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub balance_sheet: Option<FinancialStatementKind>,
-    /// Present when `kind=ALL` (default).
+    /// US-account `.US` calls with `kind=ALL` (default) only.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cash_flow: Option<FinancialStatementKind>,
-    /// Present when a single `kind` (IS/BS/CF) is requested.
+    /// Reporting currency, e.g. "USD". Omitted when empty.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub currency: Option<String>,
-    /// Present when a single `kind` (IS/BS/CF) is requested.
+    /// Report period code, e.g. "af", "qf".
     #[serde(skip_serializing_if = "Option::is_none")]
     pub report: Option<String>,
-    /// Present when a single `kind` (IS/BS/CF) is requested.
+    /// Field keys with no data across every period in `list`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub empty_fields: Option<Vec<String>>,
-    /// Present when a single `kind` (IS/BS/CF) is requested.
+    /// Periods, most recent first. Generic-path rows omit empty strings
+    /// (e.g. section-header `value`/`yoy`/`field`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub list: Option<Vec<FinancialStatementPeriod>>,
 }
@@ -137,94 +141,198 @@ pub struct FinancialReportKeyMetricsResponse {
     pub list: Option<Vec<FinancialStatementPeriod>>,
 }
 
-/// One period in `financial_report`'s `is_list`/`bs_list`/`cf_list`.
+/// Period metadata in `financial_report`'s `is_list`/`bs_list`/`cf_list`
+/// (US-account path only).
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct FinancialReportPeriodMeta {
+    /// Period start date.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub start_date: Option<String>,
+    /// Period end date.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub end_date: Option<String>,
+    /// Period label.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub report_txt: Option<String>,
 }
 
-/// One period in `financial_report`'s `is_list` (income statement summary).
+/// One period in `financial_report`'s `is_list` (income statement summary;
+/// US-account path only).
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct FinancialReportIncomePeriod {
+    /// Revenue.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub revenue: Option<String>,
+    /// Net income.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub net_income: Option<String>,
+    /// Net margin.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub net_margin: Option<String>,
+    /// Period metadata.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub report: Option<FinancialReportPeriodMeta>,
 }
 
-/// One period in `financial_report`'s `bs_list` (balance sheet summary).
+/// One period in `financial_report`'s `bs_list` (balance sheet summary;
+/// US-account path only).
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct FinancialReportBalancePeriod {
+    /// Debt-to-assets ratio.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub debt_assets_ratio: Option<String>,
+    /// Total assets.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub total_assets: Option<String>,
+    /// Total liabilities.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub total_liabilities: Option<String>,
+    /// Period metadata.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub report: Option<FinancialReportPeriodMeta>,
 }
 
-/// One period in `financial_report`'s `cf_list` (cash flow summary).
+/// One period in `financial_report`'s `cf_list` (cash flow summary;
+/// US-account path only).
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct FinancialReportCashFlowPeriod {
+    /// Operating cash flow.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub operating: Option<String>,
+    /// Investing cash flow.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub investing: Option<String>,
+    /// Financing cash flow.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub financing: Option<String>,
+    /// Period metadata.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub report: Option<FinancialReportPeriodMeta>,
+}
+
+/// One period value of a `financial_report` account (generic path).
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct FinancialReportValue {
+    /// Fiscal year.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub year: Option<i32>,
+    /// Fiscal period end as a unix-seconds string.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fp_end: Option<String>,
+    /// Period label, e.g. "Q2 2026", "FY 2025".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub period: Option<String>,
+    /// Value (decimal string; a percentage when the account's `percent` is
+    /// true).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub value: Option<String>,
+    /// Year-over-year change in percent (decimal string, up to 6 dp). Absent
+    /// when the indicator has no YoY.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub yoy: Option<String>,
+    /// Upstream-defined ratio shown for some accounts (decimal string).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ratio: Option<String>,
+}
+
+/// One account (line item) of a `financial_report` indicator.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct FinancialReportAccount {
+    /// Localized display name, e.g. "总资产(HKD)".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Account key, e.g. "TotalAssets", "EPS".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub field: Option<String>,
+    /// Localized explanatory note, when available.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tip: Option<String>,
+    /// Rank within the industry as "rank/total", e.g. "4/99", when available.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub industry_ranking: Option<String>,
+    /// Ranking metric key, e.g. "roe", when `industry_ranking` is present.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ranking_code: Option<String>,
+    /// Whether `values[].value` is a percentage.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub percent: Option<bool>,
+    /// Values per period, most recent first.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub values: Option<Vec<FinancialReportValue>>,
+}
+
+/// One indicator group of a `financial_report` statement section, e.g.
+/// "ROE" or "资产与负债".
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct FinancialReportIndicator {
+    /// Localized indicator title.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// Whether the accounts carry `yoy` values.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub has_yoy: Option<bool>,
+    /// Reporting currency, e.g. "HKD".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub currency: Option<String>,
+    /// Line items in this indicator.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub accounts: Option<Vec<FinancialReportAccount>>,
+}
+
+/// One statement section of `financial_report`'s generic `list`.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct FinancialReportSection {
+    /// Indicator groups in this statement.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub indicators: Option<Vec<FinancialReportIndicator>>,
+}
+
+/// `financial_report`'s generic `list`, keyed by statement kind. Only the
+/// sections for the requested `kind` are present (all three for ALL).
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct FinancialReportSections {
+    /// Income statement.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub i_s: Option<FinancialReportSection>,
+    /// Balance sheet.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub b_s: Option<FinancialReportSection>,
+    /// Cash flow statement.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub c_f: Option<FinancialReportSection>,
 }
 
 /// Returned by `financial_report`.
 ///
-/// US-routed shape (no `kind` passed, `.US` symbol, US account — confirmed
-/// via live staging call): `ccy_symbol`/`report_type`/`is_list`/`bs_list`/
-/// `cf_list`. When `kind` is passed explicitly (any account) the generic
-/// path is used instead, assumed to share `financial_statement`'s
-/// `currency`/`report`/`empty_fields`/`list` envelope — not independently
-/// re-verified against a live call in this pass.
+/// Two mutually-exclusive shapes. Generic path (every non-US account, and any
+/// account passing `kind` explicitly; confirmed via live production calls):
+/// `report` plus `list{i_s, b_s, c_f}`, each section holding
+/// `indicators[]{title, has_yoy, currency, accounts[]{..., values[]}}`.
+/// US-account path (no `kind`, `.US` symbol, US account; confirmed via a live
+/// staging call): `ccy_symbol`/`report_type`/`is_list`/`bs_list`/`cf_list`.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct FinancialReportResponse {
-    /// US-routed shape only.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub ccy_symbol: Option<String>,
-    /// US-routed shape only.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub report_type: Option<String>,
-    /// US-routed shape only.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub is_list: Option<Vec<FinancialReportIncomePeriod>>,
-    /// US-routed shape only.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub bs_list: Option<Vec<FinancialReportBalancePeriod>>,
-    /// US-routed shape only.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cf_list: Option<Vec<FinancialReportCashFlowPeriod>>,
-    /// Generic path only (kind passed explicitly). Assumed, not
-    /// independently re-verified in this pass.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub currency: Option<String>,
-    /// Generic path only.
+    /// Generic path only. Report period code, e.g. "af", "qf".
     #[serde(skip_serializing_if = "Option::is_none")]
     pub report: Option<String>,
-    /// Generic path only.
+    /// Generic path only. Statement sections keyed by kind.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub empty_fields: Option<Vec<String>>,
-    /// Generic path only.
+    pub list: Option<FinancialReportSections>,
+    /// US-account path only. Currency symbol, e.g. "$".
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub list: Option<Vec<FinancialStatementPeriod>>,
+    pub ccy_symbol: Option<String>,
+    /// US-account path only. Report type.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub report_type: Option<String>,
+    /// US-account path only. Income statement summary per period.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub is_list: Option<Vec<FinancialReportIncomePeriod>>,
+    /// US-account path only. Balance sheet summary per period.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bs_list: Option<Vec<FinancialReportBalancePeriod>>,
+    /// US-account path only. Cash flow summary per period.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cf_list: Option<Vec<FinancialReportCashFlowPeriod>>,
 }
 
 /// One category's realized P&L in `profit_analysis_realized`.

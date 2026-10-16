@@ -5,7 +5,9 @@ use rmcp::schemars::JsonSchema;
 use rmcp::serde::Deserialize;
 
 use crate::error::Error;
-use crate::tools::support::tolerant::{tolerant_option_i32, tolerant_option_vec_string};
+use crate::tools::support::tolerant::{
+    tolerant_option_i32, tolerant_option_usize, tolerant_option_vec_string,
+};
 use crate::tools::tool_json;
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -13,6 +15,20 @@ pub struct SymbolParam {
     /// Security symbol, e.g. "700.HK". Use the canonical form — a padded code like "00700.HK" returns an empty record, not an error.
     pub symbol: String,
 }
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct NewsParam {
+    /// Security symbol, e.g. "700.HK". Use the canonical form — a padded code like "00700.HK" returns an empty record, not an error.
+    pub symbol: String,
+    /// Number of articles to return, newest first. Defaults to 20 (~700 bytes
+    /// each); the upstream returns about 50.
+    #[serde(default, deserialize_with = "tolerant_option_usize")]
+    #[schemars(extend("default" = 20))]
+    pub count: Option<usize>,
+}
+
+/// Articles `news` returns when `count` is omitted.
+const DEFAULT_NEWS_COUNT: usize = 20;
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct TopicIdParam {
@@ -59,7 +75,7 @@ pub struct TopicRepliesParam {
 
 pub async fn news(
     mctx: &crate::tools::McpContext,
-    p: SymbolParam,
+    p: NewsParam,
 ) -> Result<CallToolResult, McpError> {
     let ctx = ContentContext::new(mctx.create_config());
     let result = ctx.news(p.symbol).await.map_err(Error::longbridge)?;
@@ -67,7 +83,24 @@ pub async fn news(
     // markup in their description; rewrite it to the readable ticker.
     let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;
     crate::serialize::strip_cashtags_in_field(&mut value, "description");
+    sort_newest_first(&mut value);
+    if let Some(items) = value.as_array_mut() {
+        items.truncate(p.count.unwrap_or(DEFAULT_NEWS_COUNT).max(1));
+    }
     tool_json(&value)
+}
+
+/// Order a news array newest first. Upstream mixes the order (01:41, 01:15,
+/// 03:57), and a model reading "the latest news" takes the first entries.
+/// RFC 3339 UTC timestamps sort correctly as strings.
+fn sort_newest_first(value: &mut serde_json::Value) {
+    if let Some(items) = value.as_array_mut() {
+        items.sort_by(|a, b| {
+            let at =
+                |v: &serde_json::Value| v["published_at"].as_str().unwrap_or_default().to_string();
+            at(b).cmp(&at(a))
+        });
+    }
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -228,4 +261,31 @@ pub async fn topic_create_reply(
         .await
         .map_err(Error::longbridge)?;
     tool_json(&result)
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn news_is_sorted_newest_first() {
+        let mut v = serde_json::json!([
+            {"published_at": "2026-10-16T01:41:16Z"},
+            {"published_at": "2026-10-16T01:15:11Z"},
+            {"published_at": "2026-10-16T03:57:28Z"}
+        ]);
+        super::sort_newest_first(&mut v);
+        let order: Vec<&str> = v
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|n| n["published_at"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            order,
+            [
+                "2026-10-16T03:57:28Z",
+                "2026-10-16T01:41:16Z",
+                "2026-10-16T01:15:11Z"
+            ]
+        );
+    }
 }

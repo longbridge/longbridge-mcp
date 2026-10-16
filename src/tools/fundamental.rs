@@ -9,6 +9,7 @@ use crate::tools::support::http_client::{
     http_get_tool, http_get_tool_dropping, http_get_tool_rounding, http_get_tool_unix,
     http_get_tool_unix_dropping, http_get_tool_unix_rounding,
 };
+use crate::tools::support::tolerant::{tolerant_i64, tolerant_option_usize};
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct SymbolParam {
@@ -24,6 +25,43 @@ pub struct FinancialReportParam {
     pub kind: Option<String>,
     /// Report period: "af" (annual), "saf" (semi-annual), "q1"/"q2"/"q3" (quarterly), "qf" (quarterly full)
     pub report_type: Option<String>,
+    /// Number of periods per line item, newest first. Defaults to 8; the
+    /// upstream returns up to ~46, too many to fit one tool result.
+    #[serde(default, deserialize_with = "tolerant_option_usize")]
+    #[schemars(extend("default" = 8))]
+    pub periods: Option<usize>,
+}
+
+/// Periods per line item `financial_report` returns when `periods` is omitted.
+const DEFAULT_REPORT_PERIODS: usize = 8;
+
+/// Keep the newest `periods` entries of every line item's `values` series in
+/// a `financial_report` response (the series are newest first).
+fn limit_report_periods(value: &mut serde_json::Value, periods: usize) {
+    let Some(list) = value
+        .get_mut("list")
+        .and_then(serde_json::Value::as_object_mut)
+    else {
+        return;
+    };
+    for statement in list.values_mut() {
+        let indicators = statement
+            .get_mut("indicators")
+            .and_then(serde_json::Value::as_array_mut);
+        for indicator in indicators.into_iter().flatten() {
+            let accounts = indicator
+                .get_mut("accounts")
+                .and_then(serde_json::Value::as_array_mut);
+            for account in accounts.into_iter().flatten() {
+                if let Some(values) = account
+                    .get_mut("values")
+                    .and_then(serde_json::Value::as_array_mut)
+                {
+                    values.truncate(periods);
+                }
+            }
+        }
+    }
 }
 
 pub async fn financial_report(
@@ -78,6 +116,10 @@ pub async fn financial_report(
     // Ratio-only metrics have an empty `yoy`, and each account carries empty
     // short_title/tip/industry_ranking/ranking_code/ratio display fields.
     crate::serialize::strip_empty_strings(&mut value);
+    limit_report_periods(
+        &mut value,
+        p.periods.unwrap_or(DEFAULT_REPORT_PERIODS).max(1),
+    );
     crate::tools::tool_json(&value)
 }
 
@@ -128,6 +170,21 @@ fn trim_institution_rating(value: &mut serde_json::Value) {
     if let Some(inst) = value.get_mut("instratings").and_then(|v| v.as_object_mut()) {
         inst.remove("evaluate");
         inst.remove("ccy_symbol");
+    }
+    // `instratings.target`/`change` arrive with ~20 fractional digits
+    // ("662.22667109829671694968"); prices here never need more than 3.
+    crate::serialize::round_decimals(value, 3);
+    // An open-ended window comes back as end_date "0" (not a unix time);
+    // make it null so it is not read as 1970-01-01.
+    for block in ["evaluate", "target"] {
+        if let Some(end) = value
+            .get_mut("analyst")
+            .and_then(|a| a.get_mut(block))
+            .and_then(|b| b.get_mut("end_date"))
+            && end.as_str() == Some("0")
+        {
+            *end = serde_json::Value::Null;
+        }
     }
 }
 
@@ -599,9 +656,23 @@ pub async fn invest_relation(
     .await
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct OperatingParam {
+    /// Security symbol, e.g. "700.HK". Use the canonical form — a padded code like "00700.HK" returns an empty record, not an error.
+    pub symbol: String,
+    /// Number of reports to return, newest first. Defaults to 8 (~1.6KB
+    /// each); the upstream returns up to 50.
+    #[serde(default, deserialize_with = "tolerant_option_usize")]
+    #[schemars(extend("default" = 8))]
+    pub count: Option<usize>,
+}
+
+/// Reports `operating` returns when `count` is omitted.
+const DEFAULT_OPERATING_COUNT: usize = 8;
+
 pub async fn operating(
     mctx: &crate::tools::McpContext,
-    p: SymbolParam,
+    p: OperatingParam,
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
     // `keywords` is always empty and `web_url` is a derivable community link.
@@ -623,6 +694,12 @@ pub async fn operating(
     // Each report's nested `financial` block carries empty symbol/name/region/
     // code/report/report_txt label fields; drop them.
     crate::serialize::strip_empty_strings(&mut value);
+    if let Some(list) = value
+        .get_mut("list")
+        .and_then(serde_json::Value::as_array_mut)
+    {
+        list.truncate(p.count.unwrap_or(DEFAULT_OPERATING_COUNT).max(1));
+    }
     crate::tools::tool_json(&value)
 }
 
@@ -640,9 +717,9 @@ pub struct FinancialStatementParam {
 pub struct ValuationRankParam {
     /// Security symbol, e.g. "AAPL.US"
     pub symbol: String,
-    /// Start date in yyyymmdd format (default: 30 days ago)
+    /// Start date in yyyymmdd (or yyyy-mm-dd) format (default: 30 days before end)
     pub start: Option<String>,
-    /// End date in yyyymmdd format (default: today)
+    /// End date in yyyymmdd (or yyyy-mm-dd) format (default: today)
     pub end: Option<String>,
 }
 
@@ -820,19 +897,53 @@ pub async fn financial_report_latest(
     .await
 }
 
+/// Days `valuation_rank` covers when `start` is omitted.
+const DEFAULT_VALUATION_RANK_DAYS: i64 = 30;
+
+/// Resolve `valuation_rank`'s range as `yyyymmdd` strings. The upstream
+/// ignores a lone `start_date` or `end_date` and returns its own one-year
+/// default, so both are always sent: `end` defaults to today (UTC) and
+/// `start` to 30 days before `end`.
+fn valuation_rank_range(
+    start: Option<&str>,
+    end: Option<&str>,
+) -> Result<(String, String), McpError> {
+    let parse = |s: &str| {
+        let compact: String = s.trim().chars().filter(|c| *c != '-').collect();
+        time::Date::parse(&compact, YYYYMMDD).map_err(|e| {
+            McpError::invalid_params(
+                format!("invalid date '{s}': {e}; expected yyyymmdd, e.g. 20260915"),
+                None,
+            )
+        })
+    };
+    let end = match end {
+        Some(e) => parse(e)?,
+        None => time::OffsetDateTime::now_utc().date(),
+    };
+    let start = match start {
+        Some(s) => parse(s)?,
+        None => end - time::Duration::days(DEFAULT_VALUATION_RANK_DAYS),
+    };
+    let fmt = |d: time::Date| format!("{:04}{:02}{:02}", d.year(), d.month() as u8, d.day());
+    Ok((fmt(start), fmt(end)))
+}
+
+const YYYYMMDD: &[time::format_description::BorrowedFormatItem<'_>] =
+    time::macros::format_description!("[year][month][day]");
+
 /// Get daily valuation rank (PE/PB/PS/dividend yield percentile) for a security.
 pub async fn valuation_rank(
     mctx: &crate::tools::McpContext,
     p: ValuationRankParam,
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
-    let mut params: Vec<(&str, &str)> = vec![("symbol", p.symbol.as_str())];
-    if let Some(ref s) = p.start {
-        params.push(("start_date", s.as_str()));
-    }
-    if let Some(ref e) = p.end {
-        params.push(("end_date", e.as_str()));
-    }
+    let (start, end) = valuation_rank_range(p.start.as_deref(), p.end.as_deref())?;
+    let params: Vec<(&str, &str)> = vec![
+        ("symbol", p.symbol.as_str()),
+        ("start_date", start.as_str()),
+        ("end_date", end.as_str()),
+    ];
     // Every pe/pb/ps/dvd row carries `total` == the top-level `max_num`.
     http_get_tool_unix_dropping(
         &client,
@@ -1033,12 +1144,13 @@ pub async fn institutional_views(
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
     // The `tlist` price series arrives with ~19 fractional digits of bogus
-    // precision (e.g. "803.3032108278430037073"); cap it at 6 dp.
+    // precision (e.g. "803.3032108278430037073"); cap it at 6 dp. Both series
+    // carry unix-second dates.
     http_get_tool_unix_rounding(
         &client,
         "/v1/quote/ratings/institutional",
         &[("symbol", p.symbol.as_str())],
-        &["elist.*.date"],
+        &["elist.*.date", "tlist.*.date"],
         6,
     )
     .await
@@ -1156,6 +1268,25 @@ pub async fn financial_report_snapshot(
 pub struct ShareholderTopParam {
     /// Security symbol, e.g. "AAPL.US"
     pub symbol: String,
+    /// Number of reporting periods to return, newest first: the "最新"
+    /// (latest) snapshot, then quarters. Defaults to 4 (~4KB each); up to 15.
+    #[serde(default, deserialize_with = "tolerant_option_usize")]
+    #[schemars(extend("default" = 4))]
+    pub periods: Option<usize>,
+}
+
+/// Periods `shareholder_top` returns when `periods` is omitted: all 15 run
+/// ~63KB, past what a client accepts in one tool result.
+const DEFAULT_SHAREHOLDER_PERIODS: usize = 4;
+
+/// Keep the newest `periods` segments of a `shareholder_top` response, in both
+/// `info[]` and the parallel `periods[]` label list.
+fn limit_shareholder_periods(value: &mut serde_json::Value, periods: usize) {
+    for key in ["info", "periods"] {
+        if let Some(arr) = value.get_mut(key).and_then(serde_json::Value::as_array_mut) {
+            arr.truncate(periods.max(1));
+        }
+    }
 }
 
 /// Drop the per-holder `period` (== the enclosing `info[].period` on every row)
@@ -1200,6 +1331,7 @@ pub async fn shareholder_top(
     let mut value: serde_json::Value =
         serde_json::from_str(&json).map_err(crate::error::Error::Serialize)?;
     trim_shareholder_top(&mut value);
+    limit_shareholder_periods(&mut value, p.periods.unwrap_or(DEFAULT_SHAREHOLDER_PERIODS));
     crate::tools::tool_json(&value)
 }
 
@@ -1207,7 +1339,9 @@ pub async fn shareholder_top(
 pub struct ShareholderDetailParam {
     /// Security symbol, e.g. "AAPL.US"
     pub symbol: String,
-    /// Shareholder object_id from shareholder_top tool
+    /// Shareholder object_id from shareholder_top tool. `shareholder_top`
+    /// returns it as a string; either a number or a numeric string is accepted.
+    #[serde(deserialize_with = "tolerant_i64")]
     pub object_id: i64,
 }
 
@@ -1231,10 +1365,15 @@ pub struct ValuationComparisonParam {
     pub symbol: String,
     /// Currency: "USD" | "HKD" | "CNY"
     pub currency: String,
-    /// Comparison symbols, comma-separated, max 4, e.g. "MSFT.US,GOOGL.US".
+    /// Comparison symbols, comma-separated, max 5, e.g. "MSFT.US,GOOGL.US".
     /// Note: pending backend support — currently server auto-selects industry peers.
     pub comparison_symbols: Option<String>,
 }
+
+/// Peers `valuation_comparison` accepts alongside the primary symbol: the
+/// upstream caps the request at 6 counter ids in total (verified live: 5 peers
+/// are accepted, 6 fail with "allCounterIDs quantity is greater than 6").
+const MAX_COMPARISON_SYMBOLS: usize = 5;
 
 pub async fn valuation_comparison(
     mctx: &crate::tools::McpContext,
@@ -1245,12 +1384,29 @@ pub async fn valuation_comparison(
     // required `comparison_counter_ids` conversion internally (and converts
     // history dates to RFC 3339).
     let ctx = longbridge::fundamental::FundamentalContext::new(mctx.create_config());
-    let peers = p
-        .comparison_symbols
-        .as_deref()
-        .map(|syms| syms.split(',').map(|s| s.trim().to_string()).collect());
+    let peers: Option<Vec<String>> = p.comparison_symbols.as_deref().map(|syms| {
+        syms.split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect()
+    });
+    // The upstream rejects too many counter ids with an opaque HTTP 500
+    // ("allCounterIDs quantity is greater than 6").
+    if let Some(count) = peers
+        .as_ref()
+        .map(Vec::len)
+        .filter(|n| *n > MAX_COMPARISON_SYMBOLS)
+    {
+        return Err(McpError::invalid_params(
+            format!(
+                "comparison_symbols has {count} symbols; at most {MAX_COMPARISON_SYMBOLS} are allowed"
+            ),
+            Some(serde_json::json!({ "error_code": "too_many_symbols" })),
+        ));
+    }
     let result = ctx
-        .valuation_comparison(p.symbol, p.currency, peers)
+        // A lower-case code ("usd") silently returns an empty comparison.
+        .valuation_comparison(p.symbol, p.currency.trim().to_uppercase(), peers)
         .await
         .map_err(crate::error::Error::longbridge)?;
     // Valuation ratios arrive with ~16-19 fractional digits of bogus precision
@@ -1263,9 +1419,80 @@ pub async fn valuation_comparison(
 
 #[cfg(test)]
 mod tests {
-    use super::rating_part;
+    use super::{
+        ShareholderDetailParam, limit_report_periods, limit_shareholder_periods, rating_part,
+        valuation_rank_range,
+    };
+
+    #[test]
+    fn valuation_rank_range_always_sends_both_bounds() {
+        let (start, end) =
+            valuation_rank_range(None, Some("2026-10-15")).expect("a dashed end must parse");
+        assert_eq!(end, "20261015", "the end is normalized to yyyymmdd");
+        assert_eq!(
+            start, "20260915",
+            "the start defaults to 30 days before end"
+        );
+        let (start, _) =
+            valuation_rank_range(Some("20260101"), None).expect("a lone start must parse");
+        assert_eq!(start, "20260101", "an explicit start is kept");
+        assert!(
+            valuation_rank_range(Some("last week"), None).is_err(),
+            "free text is rejected"
+        );
+    }
+
+    #[test]
+    fn limit_report_periods_cuts_every_series() {
+        let mut v = serde_json::json!({"list": {"i_s": {"indicators": [{"accounts": [
+            {"values": [{"period": "Q2"}, {"period": "Q1"}, {"period": "Q4"}]}
+        ]}]}}});
+        limit_report_periods(&mut v, 2);
+        assert_eq!(
+            v["list"]["i_s"]["indicators"][0]["accounts"][0]["values"],
+            serde_json::json!([{"period": "Q2"}, {"period": "Q1"}]),
+            "the newest periods must be kept"
+        );
+    }
+
+    #[test]
+    fn limit_shareholder_periods_keeps_the_newest_segments() {
+        let mut v = serde_json::json!({
+            "periods": ["最新", "Q2 2026", "Q1 2026"],
+            "info": [{"period": "最新"}, {"period": "Q2 2026"}, {"period": "Q1 2026"}]
+        });
+        limit_shareholder_periods(&mut v, 2);
+        assert_eq!(
+            v["periods"],
+            serde_json::json!(["最新", "Q2 2026"]),
+            "the period labels must be cut in step with info"
+        );
+        assert_eq!(
+            v["info"].as_array().map(Vec::len),
+            Some(2),
+            "info must keep two segments"
+        );
+        limit_shareholder_periods(&mut v, 0);
+        assert_eq!(
+            v["info"].as_array().map(Vec::len),
+            Some(1),
+            "zero must still keep the latest segment"
+        );
+    }
     use rmcp::ErrorData as McpError;
     use rmcp::model::Content;
+
+    #[test]
+    fn shareholder_detail_accepts_the_string_object_id_from_shareholder_top() {
+        let p: ShareholderDetailParam =
+            serde_json::from_value(serde_json::json!({"symbol": "700.HK", "object_id": "452583"}))
+                .expect("a numeric string object_id must deserialize");
+        assert_eq!(p.object_id, 452583, "the string must parse to the same id");
+        let p: ShareholderDetailParam =
+            serde_json::from_value(serde_json::json!({"symbol": "700.HK", "object_id": 452583}))
+                .expect("a numeric object_id must still deserialize");
+        assert_eq!(p.object_id, 452583, "a number must pass through unchanged");
+    }
 
     #[test]
     fn trim_institution_rating_detail_keeps_target_date_and_rounds() {
@@ -1316,6 +1543,28 @@ mod tests {
             "evaluate.list date is preserved"
         );
         assert_eq!(v["ccy_symbol"], "HK$", "currency symbol kept");
+    }
+
+    #[test]
+    fn trim_institution_rating_rounds_targets_and_nulls_open_end_dates() {
+        let mut v = serde_json::json!({
+            "analyst": {
+                "evaluate": {"buy": 32, "end_date": "0"},
+                "target": {"highest_price": "887.628", "end_date": "0"}
+            },
+            "instratings": {"target": "662.22667109829671694968", "change": "58.50327216330702"}
+        });
+        super::trim_institution_rating(&mut v);
+        assert_eq!(v["instratings"]["target"], "662.227");
+        assert_eq!(v["instratings"]["change"], "58.503");
+        assert!(
+            v["analyst"]["evaluate"]["end_date"].is_null(),
+            "an open-ended evaluate window must be null, not \"0\""
+        );
+        assert!(
+            v["analyst"]["target"]["end_date"].is_null(),
+            "an open-ended target window must be null, not \"0\""
+        );
     }
 
     #[test]

@@ -169,10 +169,10 @@ pub struct OptionChainByDateParam {
 pub struct WarrantListParam {
     /// Underlying symbol, e.g. "700.HK"
     pub symbol: String,
-    /// Sort field: LastDone, ChangeRate, ChangeValue, Volume, Turnover, ExpiryDate, StrikePrice, UpperStrikePrice, LowerStrikePrice, OutstandingQuantity, OutstandingRatio, Premium, ItmOtm, ImpliedVolatility, Delta
-    pub sort_by: String,
-    /// Sort order: Ascending or Descending
-    pub sort_order: String,
+    /// Sort field (default Volume): LastDone, ChangeRate, ChangeValue, Volume, Turnover, ExpiryDate, StrikePrice, UpperStrikePrice, LowerStrikePrice, OutstandingQuantity, OutstandingRatio, Premium, ItmOtm, ImpliedVolatility, Delta
+    pub sort_by: Option<String>,
+    /// Sort order: Ascending or Descending (default Descending)
+    pub sort_order: Option<String>,
     /// Filter by warrant type (optional): "Call", "Put", "Bull", "Bear", "Inline"
     #[serde(default, deserialize_with = "tolerant_option_vec_string")]
     pub warrant_type: Option<Vec<String>>,
@@ -936,6 +936,7 @@ pub async fn history_candlesticks_by_date(
     let adjust = parse::parse_adjust_type(p.forward_adjust);
     let sessions = parse::parse_trade_sessions(&p.trade_sessions)?;
     let ymd = |d: time::Date| format!("{:04}{:02}{:02}", d.year(), d.month() as u8, d.day());
+    let unbounded = p.start.is_none() && p.end.is_none();
     let start_s = match p.start {
         Some(ref s) => ymd(parse::parse_date(s)?),
         None => String::new(),
@@ -968,7 +969,57 @@ pub async fn history_candlesticks_by_date(
             return Err(err);
         }
     };
-    reshape_candlesticks(&resp)
+    let result = reshape_candlesticks(&resp)?;
+    // With no range, upstream returns ~1000 bars (~170k chars), past what MCP
+    // clients accept for one tool result. Keep the newest, like `candlesticks`.
+    Ok(if unbounded {
+        keep_latest_bars(result, DEFAULT_UNBOUNDED_BARS)
+    } else {
+        result
+    })
+}
+
+/// Bars `history_candlesticks_by_date` returns when called without a range.
+const DEFAULT_UNBOUNDED_BARS: usize = 100;
+
+/// Keep the last `count` entries of an ascending candlestick array result.
+fn keep_latest_bars(result: CallToolResult, count: usize) -> CallToolResult {
+    let Some(serde_json::Value::Array(mut bars)) = result
+        .content
+        .first()
+        .and_then(|c| c.as_text())
+        .and_then(|t| serde_json::from_str(&t.text).ok())
+    else {
+        return result;
+    };
+    if bars.len() <= count {
+        return result;
+    }
+    bars.drain(..bars.len() - count);
+    crate::tools::tool_result(serde_json::Value::Array(bars).to_string())
+}
+
+/// Longest span (`end - start`) the trading-days endpoint accepts in one
+/// request; longer ranges fail with "too many query days".
+const TRADING_DAYS_WINDOW: i64 = 40;
+
+/// Longest span `trading_days` covers in one tool call, fetched as
+/// consecutive windows of [`TRADING_DAYS_WINDOW`] days.
+const TRADING_DAYS_MAX_SPAN: i64 = 400;
+
+/// Split `start..=end` into consecutive windows whose `end - start` is at most
+/// [`TRADING_DAYS_WINDOW`] days.
+fn trading_day_windows(start: time::Date, end: time::Date) -> Vec<(time::Date, time::Date)> {
+    let mut windows = Vec::new();
+    let mut from = start;
+    loop {
+        let to = (from + time::Duration::days(TRADING_DAYS_WINDOW)).min(end);
+        windows.push((from, to));
+        if to >= end {
+            return windows;
+        }
+        from = to + time::Duration::days(1);
+    }
 }
 
 pub async fn trading_days(
@@ -982,25 +1033,58 @@ pub async fn trading_days(
     let market = parse::parse_market(&p.market)?;
     let start = parse::parse_date(&p.start)?;
     let end = parse::parse_date(&p.end)?;
+    if end < start {
+        return Err(McpError::invalid_params(
+            format!("end ({end}) is before start ({start})"),
+            None,
+        ));
+    }
+    let span = (end - start).whole_days();
+    if span > TRADING_DAYS_MAX_SPAN {
+        return Err(McpError::invalid_params(
+            format!(
+                "date range spans {span} days; trading_days covers at most \
+                 {TRADING_DAYS_MAX_SPAN} days per call, so split it into consecutive ranges"
+            ),
+            None,
+        ));
+    }
     let market_str = serde_json::to_value(market)
         .ok()
         .and_then(|v| v.as_str().map(str::to_owned))
         .unwrap_or_else(|| p.market.to_uppercase());
     let ymd = |d: time::Date| format!("{:04}{:02}{:02}", d.year(), d.month() as u8, d.day());
     let client = mctx.create_http_client();
-    let mut value = http_post_value(
-        &client,
-        "/quote/markets/trading-days",
-        serde_json::json!({ "market": market_str, "beg_day": ymd(start), "end_day": ymd(end) }),
-        None,
-        &[
-            ("trade_day", "trade_days"),
-            ("half_trade_day", "half_trade_days"),
-        ],
-        &[],
-        &[],
-    )
-    .await?;
+    let mut merged = serde_json::Map::new();
+    for (from, to) in trading_day_windows(start, end) {
+        let value = http_post_value(
+            &client,
+            "/quote/markets/trading-days",
+            serde_json::json!({ "market": market_str, "beg_day": ymd(from), "end_day": ymd(to) }),
+            None,
+            &[
+                ("trade_day", "trade_days"),
+                ("half_trade_day", "half_trade_days"),
+            ],
+            &[],
+            &[],
+        )
+        .await?;
+        for key in ["trade_days", "half_trade_days"] {
+            let days = value
+                .get(key)
+                .and_then(serde_json::Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            let slot = merged
+                .entry(key)
+                .or_insert_with(|| serde_json::Value::Array(Vec::new()));
+            if let Some(arr) = slot.as_array_mut() {
+                arr.extend(days);
+            }
+        }
+    }
+    let mut value = serde_json::Value::Object(merged);
     for key in ["trade_days", "half_trade_days"] {
         if let Some(arr) = value.get_mut(key).and_then(|a| a.as_array_mut()) {
             for v in arr.iter_mut() {
@@ -1047,10 +1131,33 @@ pub async fn option_chain_expiry_date_list(
                 *v = serde_json::Value::String(format!("{}-{}-{}", &s[0..4], &s[4..6], &s[6..8]));
             }
         }
+        // Upstream still lists recently expired dates; a model picking the
+        // first one would query an expired chain. Keep the exchange's today
+        // onward.
+        let today = exchange_today(&p.symbol, time::OffsetDateTime::now_utc());
+        drop_expired(arr, &today);
     }
     Ok(crate::tools::tool_result(
         serde_json::to_string(&value).map_err(Error::Serialize)?,
     ))
+}
+
+/// Today's date (`YYYY-MM-DD`) at the symbol's exchange, from its suffix:
+/// UTC+8 for HK / mainland / SG, UTC-5 for US (EST; during US daylight time
+/// this only keeps an expired date an hour longer, never drops today's),
+/// UTC otherwise.
+fn exchange_today(symbol: &str, now: time::OffsetDateTime) -> String {
+    let hours = match symbol.rsplit_once('.').map(|(_, m)| m.to_ascii_uppercase()) {
+        Some(m) if matches!(m.as_str(), "HK" | "SH" | "SZ" | "SG") => 8,
+        Some(m) if m == "US" => -5,
+        _ => 0,
+    };
+    (now + time::Duration::hours(hours)).date().to_string()
+}
+
+/// Remove `YYYY-MM-DD` dates earlier than `today` (same format).
+fn drop_expired(dates: &mut Vec<serde_json::Value>, today: &str) {
+    dates.retain(|d| d.as_str().is_none_or(|d| d >= today));
 }
 
 pub async fn option_chain_info_by_date(
@@ -1309,8 +1416,10 @@ pub async fn warrant_list(
     mctx: &crate::tools::McpContext,
     p: WarrantListParam,
 ) -> Result<CallToolResult, McpError> {
-    let sort_by = parse::parse_warrant_sort_by(&p.sort_by)?;
-    let sort_order = parse::parse_sort_order_type(&p.sort_order)?;
+    // Default to the most-traded warrants first, the usual "list the
+    // warrants on X" intent.
+    let sort_by = parse::parse_warrant_sort_by(p.sort_by.as_deref().unwrap_or("Volume"))?;
+    let sort_order = parse::parse_sort_order_type(p.sort_order.as_deref().unwrap_or("Descending"))?;
 
     let warrant_types: Option<Vec<_>> = p
         .warrant_type
@@ -1520,10 +1629,27 @@ pub async fn update_watchlist_group(
     }
     if let Some(securities) = p.securities {
         req = req.securities(securities);
-        let mode = match p.mode.as_deref() {
+        // An unrecognized mode must not fall back to replace: "Add" used to
+        // wipe the group down to the securities meant to be added.
+        let mode = match p
+            .mode
+            .as_deref()
+            .map(|m| m.trim().to_lowercase())
+            .as_deref()
+        {
             Some("add") => SecuritiesUpdateMode::Add,
             Some("remove") => SecuritiesUpdateMode::Remove,
-            _ => SecuritiesUpdateMode::Replace,
+            // An empty string is how strict-schema clients fill an unused field.
+            None | Some("" | "replace") => SecuritiesUpdateMode::Replace,
+            Some(_) => {
+                return Err(McpError::invalid_params(
+                    format!(
+                        "invalid mode: '{}', expected one of: add, remove, replace",
+                        p.mode.as_deref().unwrap_or_default()
+                    ),
+                    None,
+                ));
+            }
         };
         req = req.mode(mode);
     }
@@ -1720,9 +1846,67 @@ pub async fn option_volume_daily(
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn exchange_today_follows_the_exchange_clock() {
+        // 2026-10-15 20:00 UTC is already 10-16 in Hong Kong, still 10-15 in New York.
+        let now = time::macros::datetime!(2026-10-15 20:00 UTC);
+        assert_eq!(super::exchange_today("700.HK", now), "2026-10-16");
+        assert_eq!(super::exchange_today("NVDA.US", now), "2026-10-15");
+        assert_eq!(super::exchange_today("XYZ", now), "2026-10-15");
+    }
+
+    #[test]
+    fn expired_option_dates_are_dropped() {
+        let mut dates = vec![
+            serde_json::json!("2026-10-12"),
+            serde_json::json!("2026-10-16"),
+            serde_json::json!("2026-10-23"),
+        ];
+        super::drop_expired(&mut dates, "2026-10-16");
+        assert_eq!(
+            dates,
+            vec![
+                serde_json::json!("2026-10-16"),
+                serde_json::json!("2026-10-23")
+            ]
+        );
+    }
     use serde_json::json;
 
     use super::normalize_extended_sessions;
+    use super::{TRADING_DAYS_WINDOW, trading_day_windows};
+
+    #[test]
+    fn trading_day_windows_cover_the_range_without_gaps_or_overlap() {
+        let start = time::macros::date!(2026 - 10 - 01);
+        let end = time::macros::date!(2027 - 12 - 31);
+        let windows = trading_day_windows(start, end);
+        assert_eq!(
+            windows.first().map(|w| w.0),
+            Some(start),
+            "must start at start"
+        );
+        assert_eq!(windows.last().map(|w| w.1), Some(end), "must end at end");
+        for w in &windows {
+            assert!(
+                (w.1 - w.0).whole_days() <= TRADING_DAYS_WINDOW,
+                "each window must fit the endpoint's span limit"
+            );
+        }
+        for pair in windows.windows(2) {
+            assert_eq!(
+                pair[1].0,
+                pair[0].1 + time::Duration::days(1),
+                "windows must be consecutive"
+            );
+        }
+        assert_eq!(
+            trading_day_windows(start, start),
+            vec![(start, start)],
+            "a one-day range is a single window"
+        );
+    }
 
     #[test]
     fn normalizes_sessions_string_last_done() {
