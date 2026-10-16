@@ -192,7 +192,21 @@ pub struct HistoryMarketTemperatureResponse {
     pub granularity: String,
     /// Per-period samples in chronological order.
     #[serde(rename = "list")]
-    pub records: Vec<MarketTemperatureResponse>,
+    pub records: Vec<MarketTemperatureRecord>,
+}
+
+/// One `history_market_temperature` sample. Unlike `market_temperature` it
+/// carries no `description`.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct MarketTemperatureRecord {
+    /// Temperature value (0-100).
+    pub temperature: i32,
+    /// Market valuation indicator (0-100).
+    pub valuation: i32,
+    /// Market sentiment indicator (0-100).
+    pub sentiment: i32,
+    /// Sample timestamp (RFC3339).
+    pub timestamp: String,
 }
 
 /// Returned by `capital_distribution`.

@@ -180,7 +180,8 @@ pub async fn broker_holding_daily(
     p: BrokerHoldingDailyParam,
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
-    http_get_tool(
+    // `chg` is an integer share delta padded with a fake ".0000"; strip it.
+    http_get_tool_trimming_zeros(
         &client,
         "/v1/quote/broker-holding/daily",
         &[

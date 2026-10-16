@@ -145,37 +145,36 @@ pub struct BrokerHoldingMetric {
     pub chg_60: Option<String>,
 }
 
-/// Returned by `broker_holding_daily`. Wraps an `items` array of the daily
-/// holding history for one broker in an HK stock. Subset of the wire response.
+/// Returned by `broker_holding_daily`: one broker's daily holding history in
+/// an HK stock, newest first.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct BrokerHoldingDailyResponse {
     /// Daily holding history entries.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub items: Option<Vec<BrokerHoldingDailyItem>>,
+    pub list: Option<Vec<BrokerHoldingDailyItem>>,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct BrokerHoldingDailyItem {
-    /// Disclosure date (yyyy-mm-dd).
+    /// Disclosure date, e.g. "2026.10.15".
     #[serde(skip_serializing_if = "Option::is_none")]
     pub date: Option<String>,
     /// Shares held by this broker on that date.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub holding_quantity: Option<String>,
+    pub holding: Option<String>,
     /// Change in shares held versus the prior day.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub holding_change: Option<String>,
-    /// Holding as a ratio of total issued shares.
+    pub chg: Option<String>,
+    /// Holding as a fraction of issued shares (0.3236 = 32.36%).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub holding_ratio: Option<String>,
+    pub ratio: Option<String>,
 }
 
-/// Returned by `anomaly`. Wraps a `changes` array of unusual price/volume
-/// alerts plus an `all_off` flag. Subset of the wire response — the
-/// description marks `changes[]` as having further undocumented fields.
+/// Returned by `anomaly`: recent unusual price/volume alerts plus an
+/// `all_off` flag.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct AnomalyResponse {
-    /// Anomaly alert entries.
+    /// Anomaly alert entries, newest first.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub changes: Option<Vec<AnomalyChange>>,
     /// Whether anomaly alerting is globally off for the market.
@@ -185,18 +184,30 @@ pub struct AnomalyResponse {
 
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct AnomalyChange {
+    /// Alert id.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
     /// Security symbol, e.g. "700.HK".
     #[serde(skip_serializing_if = "Option::is_none")]
     pub symbol: Option<String>,
     /// Display name of the security.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
-    /// Price change rate (decimal ratio).
+    /// Alert kind code.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub change_rate: Option<String>,
-    /// Traded volume associated with the anomaly.
+    pub alert_type: Option<i64>,
+    /// Alert kind label, e.g. "急速拉升" (rapid rise).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub volume: Option<String>,
+    pub alert_name: Option<String>,
+    /// When the alert fired (RFC3339).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub alert_time: Option<String>,
+    /// Values behind the alert as display strings, e.g. ["+2.04%"].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub change_values: Option<Vec<String>>,
+    /// Direction: 1 bullish, 2 bearish.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub emotion: Option<i64>,
 }
 
 /// Returned by `short_trades`. Wraps a unified `data` array of daily short-sale
@@ -391,9 +402,6 @@ pub struct RankListItem {
     /// Industry/sector name.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub industry: Option<String>,
-    /// Short company introduction.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub intro: Option<String>,
 }
 
 /// Returned by `finance_calendar`. Wraps a `list` array of date buckets, each

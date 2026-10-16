@@ -624,41 +624,22 @@ pub struct SharelistListResponse {
     pub subscribed_sharelists: Option<Vec<SharelistSummary>>,
 }
 
-/// A single constituent of a sharelist detail. Subset of upstream fields;
-/// quote fields are stringified by the transform pipeline.
-#[derive(Debug, Serialize, JsonSchema)]
-pub struct SharelistConstituent {
-    /// Security symbol, e.g. "AAPL.US".
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub symbol: Option<String>,
-    /// Display name of the security.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-    /// Latest traded price (stringified decimal).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub last_done: Option<String>,
-    /// Change rate (stringified decimal / percentage).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub change_rate: Option<String>,
-}
-
-/// Returned by `sharelist_detail`. Subset of the upstream detail payload: list
-/// metadata plus the constituent rows. Additional quote and subscription
-/// fields may be present but are not enumerated here.
+/// Returned by `sharelist_detail`: the list itself, the user's relation to
+/// it, and per-constituent topics. Constituents carry no prices.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct SharelistDetailResponse {
-    /// Sharelist ID.
+    /// The list: id, name, description, stocks_count, subscribers_count, chg, this_year_chg, creator and its stocks[]{symbol, name, market, code, intro, …} (no prices; pass the symbols to quote).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub id: Option<String>,
-    /// List name.
+    pub sharelist: Option<serde_json::Value>,
+    /// The user's relation to the list: {self, subscription, official, industry}.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-    /// List description.
+    pub scopes: Option<serde_json::Value>,
+    /// Discussion topics per constituent; passthrough.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-    /// Constituent securities with quote snapshots.
+    pub stock_topics: Option<serde_json::Value>,
+    /// Watchlist group the list is synced to, or null.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub constituents: Option<Vec<SharelistConstituent>>,
+    pub group: Option<serde_json::Value>,
 }
 
 /// Returned by `sharelist_create`. The created sharelist object; documented

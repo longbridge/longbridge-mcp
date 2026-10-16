@@ -51,7 +51,7 @@
     },
     "cash_flow": {
       "title": "資金流水",
-      "description": "查詢資金流水記錄（出入金、派息等），返回 items[]{transaction_type, amount, currency, balance, created_at, remark}",
+      "description": "查詢資金流水記錄（出入金、派息等），返回 頂層數組 {transaction_flow_name, direction（In/Out）, business_type, balance（發生金額）, currency, business_time, symbol, description}",
       "properties": {
         "start_at": "起始時間：RFC3339（如 2026-09-01T00:00:00Z），或日期（yyyy-mm-dd，表示當天 UTC 0 點）",
         "end_at": "結束時間：RFC3339（如 2026-09-30T23:59:59Z），或日期（yyyy-mm-dd，表示當天 UTC 結束）"
@@ -379,7 +379,7 @@
     },
     "anomaly": {
       "title": "市場異動",
-      "description": "獲取市場異動提醒（價量異常變動）。market: HK/US/CN/SG。symbol: 可選，篩選特定股票。count: 返回數量（預設 50，最多 100）。返回 changes[]{symbol, name, change_rate, volume, ...}, all_off。",
+      "description": "獲取市場異動提醒（價量異常變動）。market: HK/US/CN/SG。symbol: 可選，篩選特定股票。count: 返回數量（預設 50，最多 100）。返回 {changes[]{id, symbol, name, alert_type, alert_name, alert_time, change_values[], emotion (1 看多 / 2 看空)}, all_off}。",
       "properties": {
         "market": "市場代碼：HK、US、CN、SG",
         "symbol": "可選證券代碼，如 AAPL.US 或 700.HK，篩選特定股票的異動",
@@ -396,7 +396,7 @@
     },
     "broker_holding_daily": {
       "title": "券商持倉（日度）",
-      "description": "獲取指定券商（broker_id）對某證券的逐日持倉歷史，返回 items[]{date, holding_quantity, holding_change, holding_ratio}",
+      "description": "獲取指定券商（broker_id）對某證券的逐日持倉歷史，返回 {list[]{date, holding（持股數）, chg（較前一日變動）, ratio（佔已發行股份比例）}}，最新在前",
       "properties": {
         "symbol": "證券代碼，例如 `\"700.HK\"`。請用規範代碼，補零的代碼（如 \"00700.HK\"）會返回空記錄而非報錯",
         "broker_id": "券商參與者編號"
@@ -730,7 +730,7 @@
     },
     "history_market_temperature": {
       "title": "歷史市場溫度",
-      "description": "獲取指定市場在日期區間內的市場溫度歷史時間序列（每次調用最多 3 年），返回 {type, list[]{temperature, description, valuation, sentiment, timestamp}}",
+      "description": "獲取指定市場在日期區間內的市場溫度歷史時間序列（每次調用最多 3 年），返回 {type, list[]{temperature, valuation, sentiment, timestamp}}",
       "properties": {
         "market": "市場代碼：HK、US、CN、SG",
         "start": "起始日期（`yyyy-mm-dd`）",
@@ -821,7 +821,7 @@
     },
     "news_detail": {
       "title": "資訊詳情",
-      "description": "按 id 獲取單篇資訊的完整內容（id 來自 news / news_search）。返回 {id, title, description, body (Markdown), url, author{id,name,avatar}, images[], comments_count, likes_count, shares_count, published_at, tickers[]}",
+      "description": "按 id 獲取單篇資訊的完整內容（id 來自 news / news_search）。返回 {id, title, description, body (Markdown), url, author{member_id, name}, images[], comments_count, likes_count, shares_count, published_at, tickers[]}",
       "properties": {
         "id": "資訊文章 ID（數字），例如 \"7123456789012345678\"。可從 news 或 news_search 獲取"
       }
@@ -919,7 +919,7 @@
     },
     "sharelist_detail": {
       "title": "分享股單詳情",
-      "description": "按 id 獲取社區分享股單詳情，返回 {id, name, description, constituents[]{symbol, name, last_done, change_rate}, 訂閱狀態}",
+      "description": "按 id 獲取社區分享股單詳情，返回 {sharelist{id, name, description, stocks_count, subscribers_count, chg, this_year_chg, creator, stocks[]{symbol, name, market, code, intro, …}}, scopes{self, subscription, official, industry}, stock_topics, group}。成分股不含價格，請把 symbol 傳給 quote",
       "properties": {
         "id": "分享股單 ID"
       }
@@ -997,7 +997,7 @@
     },
     "topic_detail": {
       "title": "討論詳情",
-      "description": "按 topic_id 獲取討論詳情，返回 {id, title, content, author, created_at, like_count, comment_count, symbols[]}",
+      "description": "按 topic_id 獲取討論詳情，返回 {id, title, description, body, author{member_id, name, avatar}, tickers[], hashtags, images[], likes_count, comments_count, shares_count, views_count, created_at, updated_at, detail_url, topic_type}",
       "properties": {
         "topic_id": "討論 ID"
       }
@@ -1020,7 +1020,7 @@
     },
     "trades": {
       "title": "最近成交",
-      "description": "獲取最近逐筆成交（最多 1000 條），返回 trades[]{price, volume, timestamp, trade_type, direction}",
+      "description": "獲取最近逐筆成交（最多 1000 條），返回 頂層數組 {price, volume, timestamp, trade_type, direction, trade_session}",
       "properties": {
         "symbol": "證券代碼",
         "count": "返回的最大條數（最多 1000）"
@@ -1257,7 +1257,7 @@
     },
     "industry_peers": {
       "title": "行業同業分組樹",
-      "description": "獲取行業分組的層級同業樹，接受來自 industry_rank 的行業 symbol（如 IN00258.US），返回 chain{name, symbol, stock_num, chg, ytd_chg, next[...]} 和 top{name, market}",
+      "description": "獲取行業分組的層級同業樹，接受來自 industry_rank 的行業 symbol（如 IN00258.US），返回 chain{name, symbol, code, industry_id, sharelist_id, stock_num, chg, ytd_chg, next[...]} 和 top{name, industry_id}",
       "properties": {
         "symbol": "來自 industry_rank 的行業 symbol，例如 `\"IN00258.US\"`；也接受 BK counter_id 形式（`\"BK/US/IN00258\"`）"
       }
@@ -1346,7 +1346,7 @@
     },
     "rank_list": {
       "title": "熱度榜股票列表",
-      "description": "按熱度榜 key 獲取股票排名列表。key 來自 rank_categories 的 second_tags[].key（如 hot_all-us、hot_up-hk、trade_heat-us）。market: 從 key 後綴推斷或顯式傳入。size: 返回數量（預設 20）。返回 lists[]{symbol, name, last_done, chg(小數), inflow, market_cap, pre_post_price, pre_post_chg, amplitude, turnover_rate, volume_rate, five_day_chg, ten_day_chg, twenty_day_chg, this_year_chg, industry, intro}, updated_at。",
+      "description": "按熱度榜 key 獲取股票排名列表。key 來自 rank_categories 的 second_tags[].key（如 hot_all-us、hot_up-hk、trade_heat-us）。market: 從 key 後綴推斷或顯式傳入。size: 返回數量（預設 20）。返回 lists[]{symbol, name, last_done, chg(小數), inflow, market_cap, pre_post_price, pre_post_chg, amplitude, turnover_rate, volume_rate, five_day_chg, ten_day_chg, twenty_day_chg, this_year_chg, industry}, updated_at。",
       "properties": {
         "key": "榜單 key，來自 rank_categories 的 second_tags[].key，如 hot_all-us、hot_up-hk；不帶市場後綴的 key（如 hot_all）會按 market 補全",
         "market": "市場覆蓋：US/HK/CN/SG；key 自帶市場後綴時以後綴為準，否則預設 US",

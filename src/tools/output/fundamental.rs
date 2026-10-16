@@ -1649,8 +1649,6 @@ pub struct InstitutionalViewsTarget {
 /// Returned by `industry_peers`. A hierarchical sub-sector tree (`chain`)
 /// plus the originating industry group (`top`). Both are null when the
 /// symbol is not an industry symbol.
-///
-/// Not yet verified against a populated live response.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct IndustryPeersResponse {
     /// Root node of the sub-sector tree.
@@ -1667,6 +1665,15 @@ pub struct IndustryPeersNode {
     /// Node name.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// Industry code.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
+    /// Industry id.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub industry_id: Option<String>,
+    /// Sharelist of the sub-sector's stocks; pass to sharelist_detail.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sharelist_id: Option<String>,
     /// Node identifier, an industry symbol such as `"IN00258.US"`. Pass
     /// it back to `industry_peers` to walk into the sub-sector.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1691,9 +1698,9 @@ pub struct IndustryPeersTop {
     /// Industry group name.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
-    /// Market code.
+    /// Industry id.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub market: Option<String>,
+    pub industry_id: Option<String>,
 }
 
 /// Returned by `financial_report_snapshot`. Headline results (`fo_*`) and

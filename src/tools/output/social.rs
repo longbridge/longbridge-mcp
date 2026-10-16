@@ -125,8 +125,8 @@ pub struct NewsDetailResponse {
 /// Author of a news article.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct NewsAuthor {
-    /// Author ID (numeric string).
-    pub id: Option<String>,
+    /// Author member ID (numeric string).
+    pub member_id: Option<String>,
     /// Display name.
     pub name: Option<String>,
     /// Avatar URL.

@@ -2249,7 +2249,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get recent trades (max 1000). Returns trades[]{price, volume, timestamp, trade_type, direction} for the symbol."
+        description = "Get recent trades (max 1000). Returns a top-level array of {price, volume, timestamp, trade_type, direction, trade_session} for the symbol."
     )]
     async fn trades(
         &self,
@@ -2502,7 +2502,7 @@ impl Longbridge {
         title = "Historical Market Temperature",
         annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = true),
         output_schema = schema_for::<output::HistoryMarketTemperatureResponse>(),
-        description = "Get historical market temperature time series for a market and date range (at most 3 years per call). Returns {type, list[]{temperature, description, valuation, sentiment, timestamp}}."
+        description = "Get historical market temperature time series for a market and date range (at most 3 years per call). Returns {type, list[]{temperature, valuation, sentiment, timestamp}}."
     )]
     async fn history_market_temperature(
         &self,
@@ -2975,7 +2975,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get cash flow records (deposits, withdrawals, dividends). Returns items[]{transaction_type, amount, currency, balance, created_at, remark}. start_at/end_at in RFC3339."
+        description = "Get cash flow records (deposits, withdrawals, dividends). Returns a top-level array of {transaction_flow_name, direction (In/Out), business_type, balance (the amount moved), currency, business_time, symbol, description}. start_at/end_at: RFC3339 or yyyy-mm-dd."
     )]
     async fn cash_flow(
         &self,
@@ -3589,7 +3589,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::market::BrokerHoldingDailyResponse>(),
-        description = "Get daily holding history for a specific broker (by broker_id) in a symbol (HK stocks only; sourced from HKEX CCASS participant disclosure). Returns items[]{date, holding_quantity, holding_change, holding_ratio}."
+        description = "Get daily holding history for a specific broker (by broker_id) in a symbol (HK stocks only; sourced from HKEX CCASS participant disclosure). Returns {list[]{date (e.g. \"2026.10.15\"), holding (shares held), chg (change vs the prior day), ratio (fraction of issued shares)}}, newest first."
     )]
     async fn broker_holding_daily(
         &self,
@@ -3682,7 +3682,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::market::AnomalyResponse>(),
-        description = "Get market anomaly alerts (unusual price/volume changes). market: HK/US/CN/SG. symbol: optional, filter to a specific stock. count: results per page (default 50, max 100). Returns changes[]{symbol, name, change_rate, volume, ...}, all_off."
+        description = "Get market anomaly alerts (unusual price/volume changes). market: HK/US/CN/SG. symbol: optional, filter to a specific stock. count: results per page (default 50, max 100). Returns {changes[]{id, symbol, name, alert_type, alert_name (e.g. rapid rise), alert_time, change_values[] (display strings, e.g. \"+2.04%\"), emotion (1 bullish, 2 bearish)}, all_off}."
     )]
     async fn anomaly(
         &self,
@@ -4644,7 +4644,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::social::NewsDetailResponse>(),
-        description = "Get one news article's full detail by id (from news/news_search). Returns {id, title, description, body (Markdown), url, author{id,name,avatar}, images[], comments_count, likes_count, shares_count, published_at, tickers[]}."
+        description = "Get one news article's full detail by id (from news/news_search). Returns {id, title, description, body (Markdown), url, author{member_id, name}, images[], comments_count, likes_count, shares_count, published_at, tickers[]}."
     )]
     async fn news_detail(
         &self,
@@ -4688,7 +4688,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::social::TopicDetailResponse>(),
-        description = "Get discussion topic detail by topic_id. Returns {id, title, content, author, created_at, like_count, comment_count, symbols[]}."
+        description = "Get discussion topic detail by topic_id. Returns {id, title, description, body, author{member_id, name, avatar}, tickers[], hashtags, images[], likes_count, comments_count, shares_count, views_count, created_at, updated_at, detail_url, topic_type}."
     )]
     async fn topic_detail(
         &self,
@@ -5314,7 +5314,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::discovery::SharelistDetailResponse>(),
-        description = "Get community sharelist detail by id. Returns {id, name, description, constituents[]{symbol, name, last_done, change_rate}, quote data, subscription status}."
+        description = "Get community sharelist detail by id. Returns {sharelist{id, name, description, stocks_count, subscribers_count, chg, this_year_chg, creator, stocks[]{symbol, name, market, code, intro, …}}, scopes{self, subscription, official, industry}, stock_topics, group}. Constituents carry no prices: pass their symbols to quote."
     )]
     async fn sharelist_detail(
         &self,
@@ -6043,7 +6043,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::fundamental::IndustryPeersResponse>(),
-        description = "Hierarchical sub-sector tree for an industry group. Accepts an industry symbol from industry_rank (e.g. IN00258.US). Returns chain{name,symbol,stock_num,chg,ytd_chg,next[{...}]} and top{name,market}. Each node shows stock count, daily change, and YTD change."
+        description = "Hierarchical sub-sector tree for an industry group. Accepts an industry symbol from industry_rank (e.g. IN00258.US). Returns chain{name, symbol, code, industry_id, sharelist_id, stock_num, chg, ytd_chg, next[{...}]} and top{name, industry_id}. Each node shows stock count, daily change, and YTD change."
     )]
     async fn industry_peers(
         &self,
@@ -6234,7 +6234,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::market::RankListResponse>(),
-        description = "Get ranked stock list by leaderboard tab key. key: from rank_categories second_tags[].key (e.g. \"hot_all-us\", \"hot_up-hk\", \"trade_heat-us\"). market: inferred from key suffix (-us/-hk) or pass explicitly. size: results (default 20). Returns lists[]{symbol, name, last_done, chg(decimal), inflow, market_cap, pre_post_price, pre_post_chg, amplitude, turnover_rate, volume_rate, five_day_chg, ten_day_chg, twenty_day_chg, this_year_chg, industry, intro}, updated_at."
+        description = "Get ranked stock list by leaderboard tab key. key: from rank_categories second_tags[].key (e.g. \"hot_all-us\", \"hot_up-hk\", \"trade_heat-us\"). market: inferred from key suffix (-us/-hk) or pass explicitly. size: results (default 20). Returns lists[]{symbol, name, last_done, chg(decimal), inflow, market_cap, pre_post_price, pre_post_chg, amplitude, turnover_rate, volume_rate, five_day_chg, ten_day_chg, twenty_day_chg, this_year_chg, industry}, updated_at."
     )]
     async fn rank_list(
         &self,
