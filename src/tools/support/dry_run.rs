@@ -70,11 +70,12 @@ fn canonical(field: &str) -> String {
 /// site cannot get the field order wrong, and so a mismatch can be explained by
 /// showing two strings rather than two opaque digests.
 ///
-/// The fields are deliberately few — the symbol, the side, the size and the
-/// price are what a user reads off a preview and what a wrong order would get
-/// wrong. Folding in the optional extras would buy very little and risk the
-/// failure this gate can least afford: a caller that drops `remark` on the
-/// second call being told its code is wrong, for a difference nobody can see.
+/// Every field that changes what is traded is folded in (callers add them
+/// with [`Scope::and`]): a code confirmed for an LO Day order must not place
+/// an MO or a GTC. Free text that changes nothing traded, such as `remark`, is
+/// left out, so a caller that drops it on the second call is not told its code
+/// is wrong for a difference nobody can see. Values are canonicalized, so
+/// "400" and "400.00" are one price.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Scope(String);
 
@@ -118,13 +119,41 @@ impl Scope {
     /// `buy 100 700.HK @ 400 + tp 450` — an extra clause folded into a scope
     /// built by one of the constructors above.
     ///
-    /// For what changes the order rather than how it is worded: the trigger
-    /// prices of an attached take-profit / stop-loss leg are read off the
-    /// preview like any other price, and a code confirmed for one pair must not
-    /// execute another. Adding no clause leaves the scope byte-identical, so a
-    /// plain order keeps the code it always had.
+    /// For what changes the order rather than how it is worded: the order
+    /// type, time in force, triggers and attached-leg prices are read off the
+    /// preview like any other price, and a code confirmed for one set must
+    /// not execute another.
     pub fn and(self, label: &str, value: &str) -> Self {
         Self(format!("{} + {} {}", self.0, label, canonical(value)))
+    }
+
+    /// Fold in a structured value (e.g. a grid rule) with every leaf
+    /// canonicalized like [`Scope::and`]'s, so `"400"` and `"400.0"` inside it
+    /// do not make one rule look like two.
+    pub fn and_json(self, label: &str, value: &serde_json::Value) -> Self {
+        fn canonical_leaves(value: &serde_json::Value) -> serde_json::Value {
+            match value {
+                serde_json::Value::String(s) => serde_json::Value::String(canonical(s)),
+                serde_json::Value::Number(n) => {
+                    serde_json::Value::String(canonical(&n.to_string()))
+                }
+                serde_json::Value::Array(items) => {
+                    serde_json::Value::Array(items.iter().map(canonical_leaves).collect())
+                }
+                serde_json::Value::Object(map) => serde_json::Value::Object(
+                    map.iter()
+                        .map(|(k, v)| (k.clone(), canonical_leaves(v)))
+                        .collect(),
+                ),
+                other => other.clone(),
+            }
+        }
+        Self(format!(
+            "{} + {} {}",
+            self.0,
+            label,
+            canonical_leaves(value)
+        ))
     }
 
     /// `grid submit 100 700.HK @ 449` — a grid strategy.
@@ -203,6 +232,20 @@ pub fn result(scope: &Scope, preview: serde_json::Value) -> Result<CallToolResul
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn and_json_treats_equal_decimals_as_one_value() {
+        let base = Scope::on_order("grid replace", "1");
+        let a = base
+            .clone()
+            .and_json("rule", &serde_json::json!({"upper": "400", "n": 10}));
+        let b = base
+            .clone()
+            .and_json("rule", &serde_json::json!({"upper": "400.0", "n": "10"}));
+        assert_eq!(a, b, "400 and 400.0 are one price");
+        let c = base.and_json("rule", &serde_json::json!({"upper": "410", "n": 10}));
+        assert_ne!(a, c, "a different bound is a different rule");
+    }
 
     /// One order, written every way a caller might reasonably send it.
     ///

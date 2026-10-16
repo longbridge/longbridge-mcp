@@ -287,9 +287,10 @@ fn tool_error(name: &str, err: &McpError) -> CallToolResult {
 }
 
 /// Hint for a write tool whose request got no response.
-const UNCONFIRMED_WRITE_HINT: &str = "Hint: the request got no response, so it may or may not \
-     have taken effect upstream. Do NOT resend it: first check the current state (e.g. \
-     today_orders for an order) and only retry if the change is not there.";
+const UNCONFIRMED_WRITE_HINT: &str = "Hint: this write ended without a confirmed result (no \
+     response, a timeout or a server error), so it may or may not have taken effect upstream. \
+     Do NOT resend it: first check the current state (e.g. today_orders for an order) and only \
+     retry if the change is not there.";
 
 /// A rate-limit rejection (429xxx or its message text): the request was
 /// refused before doing anything, so even a write can be resent.
@@ -1469,13 +1470,20 @@ fn coerce_array_arguments(name: &str, arguments: &mut serde_json::Map<String, se
             // "AAPL.US, MSFT.US" is a list of two, not one bogus symbol; for a
             // write (update_watchlist_group) one bogus entry could replace a
             // whole group.
-            _ => serde_json::Value::Array(
-                text.split(',')
+            _ => {
+                let parts: Vec<serde_json::Value> = text
+                    .split(',')
                     .map(str::trim)
                     .filter(|part| !part.is_empty())
                     .map(|part| serde_json::Value::String(part.to_string()))
-                    .collect(),
-            ),
+                    .collect();
+                // "," names nothing; an empty list could replace a whole
+                // watchlist group, so leave it for the deserializer to reject.
+                if parts.is_empty() {
+                    continue;
+                }
+                serde_json::Value::Array(parts)
+            }
         };
     }
 }

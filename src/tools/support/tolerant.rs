@@ -63,13 +63,41 @@ pub fn tolerant_id_string<'de, D>(d: D) -> Result<String, D::Error>
 where
     D: Deserializer<'de>,
 {
-    const MAX_SAFE_INTEGER: u64 = (1 << 53) - 1;
-    match StrOrNumber::deserialize(d)? {
+    id_of(StrOrNumber::deserialize(d)?)
+}
+
+/// `Option<String>` variant of [`tolerant_id_string`].
+pub fn tolerant_option_id_string<'de, D>(d: D) -> Result<Option<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Option::<StrOrNumber>::deserialize(d)?
+        .map(id_of)
+        .transpose()
+}
+
+/// A numeric id as `i64`, refusing JSON numbers past 2^53 for the same reason
+/// as [`tolerant_id_string`].
+pub fn tolerant_id_i64<'de, D>(d: D) -> Result<i64, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let id = id_of(StrOrNumber::deserialize(d)?)?;
+    id.trim()
+        .parse::<i64>()
+        .map_err(|_| de::Error::custom(format!("expected a numeric id, got {id:?}")))
+}
+
+/// Largest integer a JavaScript client passes through unchanged.
+const MAX_SAFE_INTEGER: u64 = (1 << 53) - 1;
+
+fn id_of<E: de::Error>(value: StrOrNumber) -> Result<String, E> {
+    match value {
         StrOrNumber::Str(s) => Ok(s),
         StrOrNumber::Num(n) if n.as_u64().is_some_and(|v| v <= MAX_SAFE_INTEGER) => {
             Ok(n.to_string())
         }
-        StrOrNumber::Num(n) => Err(de::Error::custom(format!(
+        StrOrNumber::Num(n) => Err(E::custom(format!(
             "id {n} is too large to pass as a JSON number without losing digits; pass it \
              as a string, exactly as returned"
         ))),
@@ -309,6 +337,23 @@ mod tests {
     struct Id {
         #[serde(deserialize_with = "tolerant_id_string")]
         order_id: String,
+    }
+
+    #[derive(Deserialize)]
+    struct FundId {
+        #[serde(deserialize_with = "tolerant_id_i64")]
+        order_id: i64,
+    }
+
+    #[test]
+    fn large_numeric_i64_ids_are_refused() {
+        let id: FundId =
+            serde_json::from_str(r#"{"order_id":"13501376"}"#).expect("a string id must parse");
+        assert_eq!(id.order_id, 13501376, "a string id parses");
+        assert!(
+            serde_json::from_str::<FundId>(r#"{"order_id":1269569447752900608}"#).is_err(),
+            "a numeric id past 2^53 must be refused"
+        );
     }
 
     #[test]

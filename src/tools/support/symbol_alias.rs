@@ -63,7 +63,9 @@ pub fn canonical_listing(symbol: &str) -> Option<String> {
                 && code.starts_with('.')
                 && code[1..].bytes().all(|b| b.is_ascii_alphanumeric()) =>
         {
-            format!("{}.{market}", &code[1..])
+            let undotted = format!("{}.{market}", &code[1..]);
+            // `.00700.HK` still needs its padding removed.
+            canonical_listing(&undotted).unwrap_or(undotted)
         }
         _ => return None,
     };
@@ -118,6 +120,7 @@ mod tests {
             ("g3b.si", "G3B.SG"),
             (".HSI.HK", "HSI.HK"),
             (".STI.SG", "STI.SG"),
+            (".00700.HK", "700.HK"),
         ] {
             assert_eq!(
                 canonical_listing(input).as_deref(),

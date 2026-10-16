@@ -12,7 +12,7 @@ use crate::tools::support::dry_run;
 use crate::tools::support::http_client::http_get_tool;
 use crate::tools::support::parse;
 use crate::tools::support::tolerant::{
-    tolerant_id_string, tolerant_option_string, tolerant_string,
+    tolerant_id_string, tolerant_option_id_string, tolerant_option_string, tolerant_string,
 };
 use crate::tools::{tool_json, tool_result};
 
@@ -235,11 +235,11 @@ pub struct ReplaceOrderParam {
     pub attached_order_type: Option<String>,
     /// ID of the existing take-profit leg to update (from
     /// order_detail's attached_orders[]). Omit to add a new leg.
-    #[serde(default, deserialize_with = "tolerant_option_string")]
+    #[serde(default, deserialize_with = "tolerant_option_id_string")]
     pub attached_profit_taker_id: Option<String>,
     /// ID of the existing stop-loss leg to update (from order_detail's
     /// attached_orders[]). Omit to add a new leg.
-    #[serde(default, deserialize_with = "tolerant_option_string")]
+    #[serde(default, deserialize_with = "tolerant_option_id_string")]
     pub attached_stop_loss_id: Option<String>,
     /// New take-profit trigger price.
     #[serde(default, deserialize_with = "tolerant_option_string")]
@@ -984,6 +984,44 @@ fn attached_replace_preview(p: &ReplaceOrderParam) -> serde_json::Value {
     })
 }
 
+/// What a `replace_order` confirmation code covers.
+fn replace_scope(p: &ReplaceOrderParam) -> dry_run::Scope {
+    let mut scope =
+        dry_run::Scope::replace(&p.order_id, &p.quantity, p.price.as_deref().unwrap_or(""));
+    // Cancelling or repricing the protective legs changes what the user is
+    // agreeing to, so a code confirmed for one set of legs must not apply to
+    // another.
+    // Any explicit value is sent (it marks the request as an attached-leg
+    // change), so any explicit value is part of what was approved.
+    if let Some(cancel_all) = p.attached_cancel_all {
+        scope = scope.and("cancel_attached", if cancel_all { "true" } else { "false" });
+    }
+    scope = with_present(
+        scope,
+        &[
+            ("trigger", &p.trigger_price),
+            ("offset", &p.limit_offset),
+            ("trail_amount", &p.trailing_amount),
+            ("trail_percent", &p.trailing_percent),
+            ("attached", &p.attached_order_type),
+            ("tp_id", &p.attached_profit_taker_id),
+            ("sl_id", &p.attached_stop_loss_id),
+            ("tp", &p.attached_profit_taker_price),
+            ("sl", &p.attached_stop_loss_price),
+            ("tp_limit", &p.attached_profit_taker_submit_price),
+            ("sl_limit", &p.attached_stop_loss_submit_price),
+            ("leg_tif", &p.attached_time_in_force),
+            ("leg_expire", &p.attached_expire_time),
+            ("leg_type", &p.attached_activate_order_type),
+            ("leg_rth", &p.attached_outside_rth),
+            ("main_id", &p.attached_main_id),
+            ("leg_qty", &p.attached_quantity),
+            ("leg_market_price", &p.attached_market_price),
+        ],
+    );
+    scope
+}
+
 /// What a `submit_order` confirmation code covers.
 fn submit_scope(p: &SubmitOrderParam) -> dry_run::Scope {
     let mut scope = dry_run::Scope::order(
@@ -992,7 +1030,8 @@ fn submit_scope(p: &SubmitOrderParam) -> dry_run::Scope {
         &p.submitted_quantity,
         p.submitted_price.as_deref().unwrap_or(""),
     );
-    // Every field the preview shows is part of what the user approves: a code
+    // Every field that changes what is traded is part of what the user
+    // approves (`remark`, a free-text note, is deliberately left out): a code
     // confirmed for an LO Day order must not place an MO, a GTC, or one with
     // another trigger or trail.
     scope = scope
@@ -1007,6 +1046,9 @@ fn submit_scope(p: &SubmitOrderParam) -> dry_run::Scope {
             ("trail_percent", &p.trailing_percent),
             ("expire", &p.expire_date),
             ("rth", &p.outside_rth),
+            // The idempotency key decides whether a resend is deduplicated,
+            // so executing under another key is not the approved request.
+            ("request_id", &p.client_request_id),
         ],
     );
     // The protective legs are part of the order the user approves: a code
@@ -1360,34 +1402,7 @@ pub async fn replace_order(
         opts = opts.attached_params(attached_replace_params(&p)?);
     }
     let (ctx, _) = TradeContext::new(mctx.create_config());
-    let mut scope =
-        dry_run::Scope::replace(&p.order_id, &p.quantity, p.price.as_deref().unwrap_or(""));
-    // Cancelling or repricing the protective legs changes what the user is
-    // agreeing to, so a code confirmed for one set of legs must not apply to
-    // another.
-    if p.attached_cancel_all == Some(true) {
-        scope = scope.and("cancel_attached", "true");
-    }
-    scope = with_present(
-        scope,
-        &[
-            ("trigger", &p.trigger_price),
-            ("offset", &p.limit_offset),
-            ("trail_amount", &p.trailing_amount),
-            ("trail_percent", &p.trailing_percent),
-            ("attached", &p.attached_order_type),
-            ("tp_id", &p.attached_profit_taker_id),
-            ("sl_id", &p.attached_stop_loss_id),
-            ("tp", &p.attached_profit_taker_price),
-            ("sl", &p.attached_stop_loss_price),
-            ("tp_limit", &p.attached_profit_taker_submit_price),
-            ("sl_limit", &p.attached_stop_loss_submit_price),
-            ("leg_tif", &p.attached_time_in_force),
-            ("leg_expire", &p.attached_expire_time),
-            ("leg_type", &p.attached_activate_order_type),
-            ("leg_rth", &p.attached_outside_rth),
-        ],
-    );
+    let scope = replace_scope(&p);
     // Two-step by design: without a confirmation code this changes nothing.
     let Some(code) = p.execute.clone() else {
         let existing = preview_existing_order(mctx, &ctx, &p.order_id, false).await;
@@ -1757,8 +1772,37 @@ mod attached_order_tests {
 #[cfg(test)]
 mod tests {
     use super::{
-        ORDER_TYPES, SubmitOrderParam, canonical_choice, missing_order_fields, submit_scope,
+        ORDER_TYPES, ReplaceOrderParam, SubmitOrderParam, canonical_choice, missing_order_fields,
+        replace_scope, submit_scope,
     };
+
+    #[test]
+    fn a_replace_code_does_not_carry_over_to_another_leg_change() {
+        let replace = |extra: serde_json::Value| -> ReplaceOrderParam {
+            let mut base = serde_json::json!({
+                "order_id": "1", "quantity": "100", "attached_order_type": "STOP_LOSS",
+                "attached_stop_loss_id": "9", "attached_quantity": "100"
+            });
+            if let (Some(b), Some(e)) = (base.as_object_mut(), extra.as_object()) {
+                b.extend(e.clone());
+            }
+            serde_json::from_value(base).expect("the test replace must deserialize")
+        };
+        let code = replace_scope(&replace(serde_json::json!({}))).code();
+        for change in [
+            serde_json::json!({"attached_quantity": "1000"}),
+            serde_json::json!({"attached_main_id": "2"}),
+            serde_json::json!({"attached_market_price": "10"}),
+            serde_json::json!({"attached_cancel_all": false}),
+        ] {
+            assert!(
+                replace_scope(&replace(change.clone()))
+                    .verify(&code)
+                    .is_err(),
+                "a code for the previewed leg change must not apply {change}"
+            );
+        }
+    }
 
     #[test]
     fn a_confirmation_code_does_not_carry_over_to_a_changed_order() {
@@ -1769,6 +1813,7 @@ mod tests {
             serde_json::json!({"time_in_force": "GTC"}),
             serde_json::json!({"trigger_price": "380"}),
             serde_json::json!({"outside_rth": "ANY_TIME"}),
+            serde_json::json!({"client_request_id": "another-key"}),
         ] {
             let mut changed = base.clone();
             if let (Some(c), Some(d)) = (changed.as_object_mut(), change.as_object()) {

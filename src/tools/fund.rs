@@ -20,7 +20,7 @@ use rmcp::serde::Deserialize;
 
 use crate::error::Error;
 use crate::tools::support::dry_run;
-use crate::tools::support::tolerant::{tolerant_i64, tolerant_option_vec_i64};
+use crate::tools::support::tolerant::{tolerant_id_i64, tolerant_option_vec_i64};
 use crate::tools::{McpContext, tool_json};
 
 /// Build a [`FundContext`] for this request.
@@ -172,7 +172,7 @@ pub struct FundOrdersParam {
 pub struct FundOrderParam {
     /// Fund order id (from `fund_orders`, which returns it as a string; a
     /// number or a numeric string is accepted).
-    #[serde(deserialize_with = "tolerant_i64")]
+    #[serde(deserialize_with = "tolerant_id_i64")]
     pub order_id: i64,
 }
 
@@ -264,7 +264,7 @@ pub struct FundSubmitOrderParam {
 pub struct FundCancelOrderParam {
     /// Fund order id to cancel (from `fund_orders`, which returns it as a
     /// string; a number or a numeric string is accepted).
-    #[serde(deserialize_with = "tolerant_i64")]
+    #[serde(deserialize_with = "tolerant_id_i64")]
     pub order_id: i64,
     /// The `confirmation_code` from this order's dry run. WITHOUT IT NOTHING IS
     /// SENT.

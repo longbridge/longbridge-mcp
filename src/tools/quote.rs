@@ -1639,7 +1639,8 @@ pub async fn update_watchlist_group(
         {
             Some("add") => SecuritiesUpdateMode::Add,
             Some("remove") => SecuritiesUpdateMode::Remove,
-            None | Some("replace") => SecuritiesUpdateMode::Replace,
+            // An empty string is how strict-schema clients fill an unused field.
+            None | Some("" | "replace") => SecuritiesUpdateMode::Replace,
             Some(_) => {
                 return Err(McpError::invalid_params(
                     format!(
