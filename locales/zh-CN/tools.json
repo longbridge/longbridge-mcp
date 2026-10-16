@@ -814,9 +814,10 @@
     },
     "news": {
       "title": "资讯",
-      "description": "获取证券的最新新闻，返回顶层数组（无包装对象）{id, title, description, url, published_at, comments_count, likes_count, shares_count}",
+      "description": "获取证券的最新新闻，按时间从新到旧（默认 20 条，更多用 count 指定），返回顶层数组（无包装对象）{id, title, description, url, published_at, comments_count, likes_count, shares_count}",
       "properties": {
-        "symbol": "证券代码，例如 `\"700.HK\"`。请用规范代码，补零的代码（如 \"00700.HK\"）会返回空记录而非报错"
+        "symbol": "证券代码，例如 `\"700.HK\"`。请用规范代码，补零的代码（如 \"00700.HK\"）会返回空记录而非报错",
+        "count": "返回的文章数量，从新到旧。默认 20（每条约 700 字节），上游约返回 50 条"
       }
     },
     "news_detail": {

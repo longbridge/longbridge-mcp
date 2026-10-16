@@ -814,9 +814,10 @@
     },
     "news": {
       "title": "資訊",
-      "description": "獲取證券相關最新新聞，返回頂層數組（無外層物件）{id, title, description, url, published_at, comments_count, likes_count, shares_count}",
+      "description": "獲取證券相關最新新聞，按時間從新到舊（預設 20 條，更多用 count 指定），返回頂層數組（無外層物件）{id, title, description, url, published_at, comments_count, likes_count, shares_count}",
       "properties": {
-        "symbol": "證券代碼，例如 `\"700.HK\"`。請用規範代碼，補零的代碼（如 \"00700.HK\"）會返回空記錄而非報錯"
+        "symbol": "證券代碼，例如 `\"700.HK\"`。請用規範代碼，補零的代碼（如 \"00700.HK\"）會返回空記錄而非報錯",
+        "count": "返回的文章數量，從新到舊。預設 20（每條約 700 字節），上游約返回 50 條"
       }
     },
     "news_detail": {

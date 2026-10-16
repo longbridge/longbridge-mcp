@@ -4709,12 +4709,12 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get latest news articles for a symbol. Returns a top-level array (no wrapper object) of {id, title, description, url, published_at, comments_count, likes_count, shares_count}."
+        description = "Get latest news articles for a symbol, newest first (20 by default; set count for more). Returns a top-level array (no wrapper object) of {id, title, description, url, published_at, comments_count, likes_count, shares_count}."
     )]
     async fn news(
         &self,
         ctx: RequestContext<RoleServer>,
-        Parameters(p): Parameters<content::SymbolParam>,
+        Parameters(p): Parameters<content::NewsParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
         measured_tool_call("news", format!("{p:?}"), || content::news(&mctx, p)).await

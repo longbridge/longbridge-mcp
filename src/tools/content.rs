@@ -5,7 +5,9 @@ use rmcp::schemars::JsonSchema;
 use rmcp::serde::Deserialize;
 
 use crate::error::Error;
-use crate::tools::support::tolerant::{tolerant_option_i32, tolerant_option_vec_string};
+use crate::tools::support::tolerant::{
+    tolerant_option_i32, tolerant_option_usize, tolerant_option_vec_string,
+};
 use crate::tools::tool_json;
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -13,6 +15,20 @@ pub struct SymbolParam {
     /// Security symbol, e.g. "700.HK". Use the canonical form — a padded code like "00700.HK" returns an empty record, not an error.
     pub symbol: String,
 }
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct NewsParam {
+    /// Security symbol, e.g. "700.HK". Use the canonical form — a padded code like "00700.HK" returns an empty record, not an error.
+    pub symbol: String,
+    /// Number of articles to return, newest first. Defaults to 20 (~700 bytes
+    /// each); the upstream returns about 50.
+    #[serde(default, deserialize_with = "tolerant_option_usize")]
+    #[schemars(extend("default" = 20))]
+    pub count: Option<usize>,
+}
+
+/// Articles `news` returns when `count` is omitted.
+const DEFAULT_NEWS_COUNT: usize = 20;
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct TopicIdParam {
@@ -59,7 +75,7 @@ pub struct TopicRepliesParam {
 
 pub async fn news(
     mctx: &crate::tools::McpContext,
-    p: SymbolParam,
+    p: NewsParam,
 ) -> Result<CallToolResult, McpError> {
     let ctx = ContentContext::new(mctx.create_config());
     let result = ctx.news(p.symbol).await.map_err(Error::longbridge)?;
@@ -68,6 +84,9 @@ pub async fn news(
     let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;
     crate::serialize::strip_cashtags_in_field(&mut value, "description");
     sort_newest_first(&mut value);
+    if let Some(items) = value.as_array_mut() {
+        items.truncate(p.count.unwrap_or(DEFAULT_NEWS_COUNT).max(1));
+    }
     tool_json(&value)
 }
 
