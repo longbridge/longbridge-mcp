@@ -263,14 +263,40 @@ fn tool_error(name: &str, err: &McpError) -> CallToolResult {
         return result;
     }
 
+    // A write that got no response may still have been executed upstream
+    // (the order placed, the alert created); resending it could do it twice.
+    let (recoverable, hint) = if is_transport_error(err) && !is_read_only_tool(name) {
+        ("none", Some(UNCONFIRMED_WRITE_HINT))
+    } else {
+        (recoverable_of(err), error_hint(err))
+    };
     let envelope = serde_json::json!({
         "error_code": error_code_of(err),
         "message": message,
-        "recoverable": recoverable_of(err),
-        "hint": error_hint(err),
+        "recoverable": recoverable,
+        "hint": hint,
         "data": serde_json::Value::Null,
     });
     CallToolResult::error(vec![Content::text(envelope.to_string())])
+}
+
+/// Hint for a write tool whose request got no response.
+const UNCONFIRMED_WRITE_HINT: &str = "Hint: the request got no response, so it may or may not \
+     have taken effect upstream. Do NOT resend it: first check the current state (e.g. \
+     today_orders for an order) and only retry if the change is not there.";
+
+fn is_transport_error(err: &McpError) -> bool {
+    err.message.to_lowercase().contains(TRANSPORT_ERROR)
+}
+
+/// Whether `name` is a registered read-only tool. Unknown names count as
+/// writes, the cautious side.
+fn is_read_only_tool(name: &str) -> bool {
+    cached_router()
+        .get(name)
+        .and_then(|tool| tool.annotations.as_ref())
+        .and_then(|annotations| annotations.read_only_hint)
+        == Some(true)
 }
 
 /// `(requested, limit)` when `err` is 301607 "history candlestick symbol count
@@ -6566,11 +6592,7 @@ impl ServerHandler for Longbridge {
         // The scope wraps `jq::call` too, so a failed `_jq` filter is labelled
         // with the same client as the tool call it belongs to.
         let tool_name = request.name.to_string();
-        let retryable = cached_router()
-            .get(request.name.as_ref())
-            .and_then(|tool| tool.annotations.as_ref())
-            .and_then(|annotations| annotations.read_only_hint)
-            == Some(true);
+        let retryable = is_read_only_tool(request.name.as_ref());
         let call = jq::call(request, |request| async move {
             use rmcp::handler::server::tool::ToolCallContext;
             let name = request.name.clone();
@@ -8179,6 +8201,30 @@ mod tool_error_tests {
             error_hint(&err).is_some_and(|h| h.contains("retry")),
             "the hint must tell the model to retry"
         );
+    }
+
+    #[test]
+    fn a_write_with_no_response_is_not_retried() {
+        let err = McpError::internal_error(
+            "longbridge: error sending request for url (https://openapi.longbridge.com/v1/trade/order): client error (SendRequest)",
+            None,
+        );
+        let v: serde_json::Value =
+            serde_json::from_str(&text_of(&tool_error("submit_order", &err)))
+                .expect("the envelope must be JSON");
+        assert_eq!(
+            v["recoverable"], "none",
+            "an unconfirmed write must not be resent"
+        );
+        assert!(
+            v["hint"]
+                .as_str()
+                .is_some_and(|h| h.contains("Do NOT resend")),
+            "the hint must warn against resending: {v}"
+        );
+        let v: serde_json::Value = serde_json::from_str(&text_of(&tool_error("quote", &err)))
+            .expect("the envelope must be JSON");
+        assert_eq!(v["recoverable"], "backoff", "a read can be retried");
     }
 
     #[test]

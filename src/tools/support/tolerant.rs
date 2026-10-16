@@ -153,6 +153,10 @@ where
 {
     Ok(match Option::<VecOrString>::deserialize(d)? {
         None => None,
+        // A JSON-encoded array ("[\"US\",\"HK\"]") is joined like a real one.
+        Some(VecOrString::Str(s)) if s.trim_start().starts_with('[') => {
+            Some(parse_json_vec::<String, _>(&s)?.join(","))
+        }
         Some(VecOrString::Str(s)) => Some(s),
         Some(VecOrString::Vec(v)) => Some(v.join(",")),
     })
