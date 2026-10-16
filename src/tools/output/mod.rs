@@ -164,9 +164,9 @@ pub struct FundPosition {
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct TradingDaysResponse {
     /// Full trading days in the requested range (yyyy-mm-dd).
-    pub trading_days: Vec<String>,
+    pub trade_days: Vec<String>,
     /// Half-day trading sessions in the requested range (yyyy-mm-dd).
-    pub half_trading_days: Vec<String>,
+    pub half_trade_days: Vec<String>,
 }
 
 /// Returned by `market_temperature`.
@@ -252,6 +252,7 @@ pub struct BrokersResponse {
     pub ask_brokers: Vec<BrokerLevel>,
 }
 
+/// One price level in `brokers`' `bid_brokers[]` / `ask_brokers[]`.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct BrokerLevel {
     /// Position number (1-based, depth ordering).

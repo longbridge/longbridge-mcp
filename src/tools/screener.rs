@@ -169,12 +169,88 @@ fn conditions_schema(_: &mut rmcp::schemars::SchemaGenerator) -> rmcp::schemars:
                 },
                 "tech_values": {
                     "type": "string",
-                    "description": "Technical-indicator params as a JSON string (empty string for fundamental keys):\nmacd_day/week: {\"category\":\"goldenfork\"|\"deadcross\",\"period\":\"day\"|\"week\"}\nrsi_day/week: {\"value_type\":\"overbought\"|\"oversold\"}\nkdj_day/week: {\"category\":\"goldenfork\"|\"deadcross\"}\nboll_day/week: {\"category\":\"breakthrough_up\"|\"breakthrough_down\"}"
+                    "description": "Technical-indicator params as a JSON string (empty string for fundamental keys). Every technical key needs a category; period is filled from the key suffix (_day/_week) when omitted:\nmacd_day/week: {\"category\":\"goldenfork\"|\"deadcross\"|\"upzero\"|\"downzero\"}\nkdj_day/week, rsi_day/week: {\"category\":\"goldenfork\"|\"deadcross\"}\nboll_day/week: {\"category\":\"riseupperband\"|\"fallbelowband\"|\"risemiddleband\"|\"fallmiddleband\"}"
                 }
             },
             "required": ["key"]
         }
     })
+}
+
+/// Technical screener indicators and the `category` values each accepts, as
+/// served by `screener_indicators` (verified live). Each exists as `<name>_day`
+/// and `<name>_week`, and the upstream also requires a `period` equal to that
+/// suffix — omitting it fails with an opaque HTTP 500 (`not have period`).
+const TECH_INDICATORS: &[(&str, &[&str])] = &[
+    ("macd", &["goldenfork", "deadcross", "upzero", "downzero"]),
+    ("kdj", &["goldenfork", "deadcross"]),
+    ("rsi", &["goldenfork", "deadcross"]),
+    (
+        "boll",
+        &[
+            "riseupperband",
+            "fallbelowband",
+            "risemiddleband",
+            "fallmiddleband",
+        ],
+    ),
+];
+
+/// Upstream code for a rejected screener request; the gateway masks the real
+/// reason (bad key, missing technical param) as HTTP 500.
+const SCREENER_REJECTED_CODE: i64 = 2_301_500;
+
+/// Complete and check `tech_values` for a technical-indicator condition,
+/// before the request goes upstream where a mistake only comes back as a 500.
+/// `key` carries the `filter_` prefix. Non-technical keys pass through as-is.
+///
+/// A missing category is rejected (upstream always requires one). A category
+/// outside [`TECH_INDICATORS`] is still sent — the list could lag behind
+/// upstream — but is pushed onto `suspects` so a 2301500 rejection can name it.
+fn check_tech_values(
+    key: &str,
+    tech_values: Option<serde_json::Value>,
+    suspects: &mut Vec<String>,
+) -> Result<Option<serde_json::Value>, McpError> {
+    let bare = key.strip_prefix("filter_").unwrap_or(key);
+    let Some((name, period)) = bare.rsplit_once('_') else {
+        return Ok(tech_values);
+    };
+    let Some((_, categories)) = TECH_INDICATORS.iter().find(|(n, _)| *n == name) else {
+        return Ok(tech_values);
+    };
+    if !matches!(period, "day" | "week") {
+        return Ok(tech_values);
+    }
+    let mut values = match tech_values {
+        None => serde_json::Map::new(),
+        Some(serde_json::Value::Object(map)) => map,
+        Some(other) => {
+            return Err(McpError::invalid_params(
+                format!("tech_values for `{bare}` must be a JSON object, got {other}"),
+                Some(serde_json::json!({ "error_code": "invalid_tech_values" })),
+            ));
+        }
+    };
+    let Some(category) = values.get("category").and_then(|v| v.as_str()) else {
+        return Err(McpError::invalid_params(
+            format!(
+                "`{bare}` needs tech_values.category, one of: {}",
+                categories.join(", ")
+            ),
+            Some(serde_json::json!({ "error_code": "invalid_tech_values" })),
+        ));
+    };
+    if !categories.contains(&category) {
+        suspects.push(format!(
+            "`{bare}` category \"{category}\" is not one of the known values ({})",
+            categories.join(", ")
+        ));
+    }
+    values
+        .entry("period")
+        .or_insert_with(|| serde_json::Value::String(period.to_string()));
+    Ok(Some(serde_json::Value::Object(values)))
 }
 
 /// Normalise a `tech_values` input into the object the screener API expects.
@@ -211,11 +287,11 @@ pub struct ScreenerSearchParam {
     ///   circulating_marketcap(亿)  prevclose  prevchg(%)
     ///   divyld  la  epsttm  netincome(亿)  sales(亿)  turnover_rate  balance(万)
     ///
-    /// Technical indicator keys (tech_values required; call screener_indicators for schema):
-    ///   macd_day/week  → {"category":"goldenfork"|"deadcross","period":"day"|"week"}
-    ///   rsi_day/week   → {"value_type":"overbought"|"oversold"}
-    ///   kdj_day/week   → {"category":"goldenfork"|"deadcross"}
-    ///   boll_day/week  → {"category":"breakthrough_up"|"breakthrough_down"}
+    /// Technical indicator keys (tech_values with a category required; period
+    /// defaults to the key suffix):
+    ///   macd_day/week          → {"category":"goldenfork"|"deadcross"|"upzero"|"downzero"}
+    ///   kdj_day/week, rsi_*    → {"category":"goldenfork"|"deadcross"}
+    ///   boll_day/week          → {"category":"riseupperband"|"fallbelowband"|"risemiddleband"|"fallmiddleband"}
     // Schema is emitted inline (not via ScreenerCondition's `$ref`) and keeps
     // `tech_values` as a JSON string so the manifest stays OpenAI-function-calling
     // compatible (no `$defs`/`$ref`, no free-form object).
@@ -247,6 +323,7 @@ pub async fn screener_search(
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
 
+    let mut suspects: Vec<String> = Vec::new();
     let (market, filters, returns) = if let Some(ref sid) = p.strategy_id {
         // Mode A: fetch strategy and build filters/returns automatically
         let strategy_path = format!("/v1/quote/ai/screener/strategy/{sid}");
@@ -342,7 +419,7 @@ pub async fn screener_search(
             // the documented fields. OpenAI strict mode sends every property,
             // filling unused ones with empty strings, so treat "" as absent.
             let mut f = serde_json::Map::new();
-            f.insert("key".to_string(), serde_json::Value::String(key));
+            f.insert("key".to_string(), serde_json::Value::String(key.clone()));
             if let Some(min) = cond.min.as_deref().filter(|s| !s.trim().is_empty()) {
                 f.insert(
                     "min".to_string(),
@@ -355,7 +432,8 @@ pub async fn screener_search(
                     serde_json::Value::String(max.to_string()),
                 );
             }
-            if let Some(tech_values) = cond.tech_values.as_ref().and_then(normalize_tech_values) {
+            let tech_values = cond.tech_values.as_ref().and_then(normalize_tech_values);
+            if let Some(tech_values) = check_tech_values(&key, tech_values, &mut suspects)? {
                 f.insert("tech_values".to_string(), tech_values);
             }
             filters.push(serde_json::Value::Object(f));
@@ -420,13 +498,36 @@ pub async fn screener_search(
         "size": p.size.unwrap_or(20),
     });
 
-    let resp: String = client
+    let resp: String = match client
         .request(Method::POST, "/v1/quote/ai/screener/search")
         .body(longbridge::httpclient::Json(body))
         .response::<String>()
         .send()
         .await
-        .map_err(|e| Error::longbridge(e.into()))?;
+    {
+        Ok(resp) => resp,
+        Err(e) => {
+            let err: McpError = Error::longbridge(e.into()).into();
+            if crate::tools::openapi_error_code_of(&err) != Some(SCREENER_REJECTED_CODE) {
+                return Err(err);
+            }
+            let mut message = String::from(
+                "The screener rejected these filters (2301500). Usual causes: a key that is not \
+                 an indicator key from screener_indicators (e.g. `pb`, `name`, `symbol` are not \
+                 keys; use `pbmrq`), also in extra_returns/sort_by_key; or a technical key whose \
+                 tech_values are invalid. Call screener_indicators for the valid keys and values.",
+            );
+            if !suspects.is_empty() {
+                message.push_str(" Likely culprit: ");
+                message.push_str(&suspects.join("; "));
+                message.push('.');
+            }
+            return Err(McpError::invalid_params(
+                message,
+                Some(serde_json::json!({ "error_code": "screener_rejected" })),
+            ));
+        }
+    };
 
     let json = crate::serialize::transform_json(resp.as_bytes()).map_err(Error::Serialize)?;
     // Strip the filter_ prefix from indicators[].key (consistent with
@@ -594,6 +695,62 @@ fn strip_filter_prefix_from_indicators(
 #[cfg(test)]
 mod tests {
     use super::postprocess_search_results;
+
+    #[test]
+    fn technical_conditions_get_their_period_and_a_checked_category() {
+        let mut suspects = Vec::new();
+        let filled = super::check_tech_values(
+            "filter_rsi_day",
+            Some(serde_json::json!({"category": "goldenfork"})),
+            &mut suspects,
+        )
+        .unwrap();
+        assert_eq!(
+            filled,
+            Some(serde_json::json!({"category": "goldenfork", "period": "day"}))
+        );
+        assert!(
+            suspects.is_empty(),
+            "a known category is not a suspect: {suspects:?}"
+        );
+
+        // The value_type form the old docs advertised has no category: rejected
+        // locally with the valid categories, instead of an upstream 500.
+        let err = super::check_tech_values(
+            "filter_rsi_week",
+            Some(serde_json::json!({"value_type": "oversold"})),
+            &mut suspects,
+        )
+        .unwrap_err();
+        assert!(
+            err.message.contains("goldenfork, deadcross"),
+            "{}",
+            err.message
+        );
+
+        // An unknown category is still sent (the list may lag upstream), but
+        // recorded so an upstream rejection can name it.
+        let sent = super::check_tech_values(
+            "filter_boll_day",
+            Some(serde_json::json!({"category": "breakthrough_up"})),
+            &mut suspects,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(sent["period"], "day");
+        assert!(
+            suspects.len() == 1 && suspects[0].contains("riseupperband"),
+            "{suspects:?}"
+        );
+    }
+
+    #[test]
+    fn fundamental_conditions_pass_through_untouched() {
+        for key in ["filter_marketcap", "filter_pettm", "filter_turnover_rate"] {
+            let checked = super::check_tech_values(key, None, &mut Vec::new()).unwrap();
+            assert_eq!(checked, None, "{key}");
+        }
+    }
 
     #[test]
     fn postprocess_hoists_legend_strips_prefix_and_rounds() {

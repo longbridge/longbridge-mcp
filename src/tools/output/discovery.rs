@@ -171,13 +171,16 @@ pub struct IpoOrderItem {
     pub submitted_at: Option<String>,
 }
 
-/// One side of the IPO orders feed (active or historical). The documented
-/// portion is `orders[]`.
+/// One side of the IPO orders feed (active or historical): `orders[]`, plus
+/// `has_more` on the paginated history feed.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct IpoOrdersFeed {
     /// IPO order entries (documented subset of upstream fields).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub orders: Option<Vec<IpoOrderItem>>,
+    /// Whether more history pages exist (history feed only).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub has_more: Option<bool>,
 }
 
 /// Returned by `ipo_orders`. Active orders and order history combined under an
@@ -397,36 +400,110 @@ pub struct ScreenerSearchResponse {
     pub items: Option<Vec<ScreenerResultItem>>,
 }
 
-/// Default value range for a screener indicator.
+/// One preset value range for a screener indicator in one market.
 #[derive(Debug, Serialize, JsonSchema)]
-pub struct ScreenerIndicatorRange {
-    /// Default lower bound (string).
+pub struct ScreenerIndicatorRangeItem {
+    /// Preset ID.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<i64>,
+    /// Preset display label.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Lower bound (string, in the indicator's `unit`); empty when unbounded.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub min: Option<String>,
-    /// Default upper bound (string).
+    /// Upper bound (string, in the indicator's `unit`); empty when unbounded.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max: Option<String>,
 }
 
+/// Preset value ranges for one market.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct ScreenerIndicatorMarketRange {
+    /// Preset ranges.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub items: Option<Vec<ScreenerIndicatorRangeItem>>,
+}
+
+/// Default value ranges for a screener indicator, keyed by market. Empty
+/// object when the indicator has no presets.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct ScreenerIndicatorRange {
+    /// Mainland China (A-share) presets.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub c_n: Option<ScreenerIndicatorMarketRange>,
+    /// Hong Kong presets.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub h_k: Option<ScreenerIndicatorMarketRange>,
+    /// Singapore presets.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub s_g: Option<ScreenerIndicatorMarketRange>,
+    /// US presets.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub u_s: Option<ScreenerIndicatorMarketRange>,
+}
+
+/// One selectable option of a technical-indicator parameter.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct ScreenerTechItem {
+    /// Option display label.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub item_name: Option<String>,
+    /// Option value.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub item_value: Option<String>,
+    /// Whether this option is the default.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default: Option<bool>,
+}
+
+/// One parameter of a technical indicator (e.g. period, signal category).
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct ScreenerTechIndicator {
+    /// Parameter display name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tech_name: Option<String>,
+    /// Parameter key; also the key in the indicator's `tech_values`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tech_key: Option<String>,
+    /// Upstream parameter category code.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tech_category: Option<i64>,
+    /// Selectable options.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tech_items: Option<Vec<ScreenerTechItem>>,
+    /// Upstream key prefix.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tech_prefix: Option<String>,
+}
+
 /// A single screener indicator's metadata. The `filter_` prefix is stripped
 /// from `key` by the tool. `tech_values`, when present, is a synthesized schema
-/// (`{tech_key: [{value, label}, ...]}`) describing the options a technical
-/// indicator accepts.
+/// (`{tech_key: [{value, label}, ...]}`) built from `tech_indicators`.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct ScreenerIndicator {
-    /// Indicator ID.
+    /// Indicator ID (negative for the built-in market/industry scope filters).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub id: Option<String>,
+    pub id: Option<i64>,
     /// Indicator key (without the `filter_` prefix).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub key: Option<String>,
     /// Indicator display name.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
-    /// Value unit, where applicable.
+    /// Value unit; empty when unitless.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub unit: Option<String>,
-    /// Default value range for the indicator.
+    /// Number of decimal places for display.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub places: Option<i64>,
+    /// Upstream indicator category code.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub category: Option<i64>,
+    /// Technical-indicator parameters; empty for non-technical indicators.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tech_indicators: Option<Vec<ScreenerTechIndicator>>,
+    /// Default value ranges per market.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_range: Option<ScreenerIndicatorRange>,
     /// For technical indicators: synthesized schema of accepted option values,
@@ -438,6 +515,9 @@ pub struct ScreenerIndicator {
 /// A named group of screener indicators.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct ScreenerIndicatorGroup {
+    /// Group type identifier, e.g. "range", "ScaleFinancials".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub group_type: Option<String>,
     /// Group display name.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub group_name: Option<String>,

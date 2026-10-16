@@ -936,6 +936,7 @@ pub async fn history_candlesticks_by_date(
     let adjust = parse::parse_adjust_type(p.forward_adjust);
     let sessions = parse::parse_trade_sessions(&p.trade_sessions)?;
     let ymd = |d: time::Date| format!("{:04}{:02}{:02}", d.year(), d.month() as u8, d.day());
+    let unbounded = p.start.is_none() && p.end.is_none();
     let start_s = match p.start {
         Some(ref s) => ymd(parse::parse_date(s)?),
         None => String::new(),
@@ -968,7 +969,34 @@ pub async fn history_candlesticks_by_date(
             return Err(err);
         }
     };
-    reshape_candlesticks(&resp)
+    let result = reshape_candlesticks(&resp)?;
+    // With no range, upstream returns ~1000 bars (~170k chars), past what MCP
+    // clients accept for one tool result. Keep the newest, like `candlesticks`.
+    Ok(if unbounded {
+        keep_latest_bars(result, DEFAULT_UNBOUNDED_BARS)
+    } else {
+        result
+    })
+}
+
+/// Bars `history_candlesticks_by_date` returns when called without a range.
+const DEFAULT_UNBOUNDED_BARS: usize = 100;
+
+/// Keep the last `count` entries of an ascending candlestick array result.
+fn keep_latest_bars(result: CallToolResult, count: usize) -> CallToolResult {
+    let Some(serde_json::Value::Array(mut bars)) = result
+        .content
+        .first()
+        .and_then(|c| c.as_text())
+        .and_then(|t| serde_json::from_str(&t.text).ok())
+    else {
+        return result;
+    };
+    if bars.len() <= count {
+        return result;
+    }
+    bars.drain(..bars.len() - count);
+    crate::tools::tool_result(serde_json::Value::Array(bars).to_string())
 }
 
 pub async fn trading_days(
@@ -1047,10 +1075,33 @@ pub async fn option_chain_expiry_date_list(
                 *v = serde_json::Value::String(format!("{}-{}-{}", &s[0..4], &s[4..6], &s[6..8]));
             }
         }
+        // Upstream still lists recently expired dates; a model picking the
+        // first one would query an expired chain. Keep the exchange's today
+        // onward.
+        let today = exchange_today(&p.symbol, time::OffsetDateTime::now_utc());
+        drop_expired(arr, &today);
     }
     Ok(crate::tools::tool_result(
         serde_json::to_string(&value).map_err(Error::Serialize)?,
     ))
+}
+
+/// Today's date (`YYYY-MM-DD`) at the symbol's exchange, from its suffix:
+/// UTC+8 for HK / mainland / SG, UTC-5 for US (EST; during US daylight time
+/// this only keeps an expired date an hour longer, never drops today's),
+/// UTC otherwise.
+fn exchange_today(symbol: &str, now: time::OffsetDateTime) -> String {
+    let hours = match symbol.rsplit_once('.').map(|(_, m)| m.to_ascii_uppercase()) {
+        Some(m) if matches!(m.as_str(), "HK" | "SH" | "SZ" | "SG") => 8,
+        Some(m) if m == "US" => -5,
+        _ => 0,
+    };
+    (now + time::Duration::hours(hours)).date().to_string()
+}
+
+/// Remove `YYYY-MM-DD` dates earlier than `today` (same format).
+fn drop_expired(dates: &mut Vec<serde_json::Value>, today: &str) {
+    dates.retain(|d| d.as_str().is_none_or(|d| d >= today));
 }
 
 pub async fn option_chain_info_by_date(
@@ -1720,6 +1771,32 @@ pub async fn option_volume_daily(
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn exchange_today_follows_the_exchange_clock() {
+        // 2026-10-15 20:00 UTC is already 10-16 in Hong Kong, still 10-15 in New York.
+        let now = time::macros::datetime!(2026-10-15 20:00 UTC);
+        assert_eq!(super::exchange_today("700.HK", now), "2026-10-16");
+        assert_eq!(super::exchange_today("NVDA.US", now), "2026-10-15");
+        assert_eq!(super::exchange_today("XYZ", now), "2026-10-15");
+    }
+
+    #[test]
+    fn expired_option_dates_are_dropped() {
+        let mut dates = vec![
+            serde_json::json!("2026-10-12"),
+            serde_json::json!("2026-10-16"),
+            serde_json::json!("2026-10-23"),
+        ];
+        super::drop_expired(&mut dates, "2026-10-16");
+        assert_eq!(
+            dates,
+            vec![
+                serde_json::json!("2026-10-16"),
+                serde_json::json!("2026-10-23")
+            ]
+        );
+    }
     use serde_json::json;
 
     use super::normalize_extended_sessions;

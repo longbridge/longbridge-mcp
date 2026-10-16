@@ -42,6 +42,9 @@ pub struct GridOrderSummary {
     /// Display name of the security.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stock_name: Option<String>,
+    /// Market code, e.g. "HK" / "US".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub market: Option<String>,
     /// Order status.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub status: Option<String>,
@@ -197,9 +200,26 @@ pub struct GridSymbolInfoResponse {
     /// (price range, decimal strings) and bid_size (tick step within the range).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bid_sizes: Option<Vec<GridBidSizeRule>>,
-    /// Channel / authorization info: strategy grant flag, RTH support, currencies.
+    /// Channel / authorization info.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub channel_info: Option<serde_json::Value>,
+    pub channel_info: Option<GridChannelInfo>,
+}
+
+/// Channel / authorization info from `grid_symbol_info.channel_info`.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct GridChannelInfo {
+    /// Whether the grid-strategy authorization has been granted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub strategy_granted: Option<bool>,
+    /// Whether the regular-trading-hours toggle is supported.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub support_rth: Option<bool>,
+    /// Trading currency, e.g. "HKD".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub currency: Option<String>,
+    /// Supported settlement currencies.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub settlement_currency: Option<Vec<String>>,
 }
 
 /// One price-step rule row from `grid_symbol_info.bid_sizes`.

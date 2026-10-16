@@ -58,62 +58,91 @@ pub struct MarketStatusEntry {
     pub delay_timestamp: Option<String>,
 }
 
-/// Returned by `broker_holding`. Wraps an `items` array of top broker holdings
-/// for an HK stock (HKEX CCASS participant disclosure). Subset of the wire
-/// response.
+/// Returned by `broker_holding`. Top HKEX CCASS participants by net
+/// shareholding change over the requested period (rct_1/rct_5/rct_20/rct_60),
+/// split into net buyers and net sellers. Empty arrays for non-HK symbols.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct BrokerHoldingResponse {
-    /// Top broker holding entries for the requested period.
+    /// Participants with the largest net increase in holding.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub items: Option<Vec<BrokerHoldingItem>>,
+    pub buy: Option<Vec<BrokerHoldingItem>>,
+    /// Participants with the largest net decrease in holding.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sell: Option<Vec<BrokerHoldingItem>>,
+    /// Disclosure date of the data, e.g. "2026.01.02" (not RFC3339).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<String>,
 }
 
+/// One participant row in `broker_holding`'s `buy[]` / `sell[]`.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct BrokerHoldingItem {
-    /// Broker (participant) name.
+    /// Participant (broker) name.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub broker_name: Option<String>,
-    /// Shares held by this broker.
+    pub name: Option<String>,
+    /// CCASS participant number, e.g. "B01451". Pass as `broker_id` to
+    /// `broker_holding_daily`.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub holding_quantity: Option<String>,
-    /// Change in shares held over the period.
+    pub parti_number: Option<String>,
+    /// Net change in shares held over the period (integer string; negative
+    /// for sellers).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub holding_change: Option<String>,
-    /// Holding as a ratio of total issued shares.
+    pub chg: Option<String>,
+    /// Upstream highlight flag.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub holding_ratio: Option<String>,
+    pub strong: Option<bool>,
 }
 
-/// Returned by `broker_holding_detail`. Wraps an `items` array of the full
-/// broker holding list for an HK stock (HKEX CCASS participant disclosure).
-/// Subset of the wire response.
+/// Returned by `broker_holding_detail`. Full HKEX CCASS participant holding
+/// list for an HK stock. Empty `list` for non-HK symbols.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct BrokerHoldingDetailResponse {
-    /// Full broker holding detail entries.
+    /// One row per participant.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub items: Option<Vec<BrokerHoldingDetailItem>>,
+    pub list: Option<Vec<BrokerHoldingDetailItem>>,
+    /// Disclosure date of the data, e.g. "2026.01.02" (not RFC3339).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<String>,
 }
 
+/// One participant row in `broker_holding_detail`'s `list[]`.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct BrokerHoldingDetailItem {
-    /// Broker (participant) number.
+    /// Participant (broker) name.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub broker_id: Option<String>,
-    /// Broker (participant) name.
+    pub name: Option<String>,
+    /// CCASS participant number. Pass as `broker_id` to `broker_holding_daily`.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub broker_name: Option<String>,
-    /// Shares held by this broker.
+    pub parti_number: Option<String>,
+    /// Holding ratio (fraction of shares, e.g. "0.0108") and its changes.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub holding_quantity: Option<String>,
-    /// Holding as a ratio of total issued shares.
+    pub ratio: Option<BrokerHoldingMetric>,
+    /// Shares held and their changes (integer strings).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub holding_ratio: Option<String>,
-    /// Change in shares held.
+    pub shares: Option<BrokerHoldingMetric>,
+    /// Upstream highlight flag.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub holding_change: Option<String>,
-    /// Disclosure date (yyyy-mm-dd).
+    pub strong: Option<bool>,
+}
+
+/// A holding metric with its change over trailing windows.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct BrokerHoldingMetric {
+    /// Current value (decimal string).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub date: Option<String>,
+    pub value: Option<String>,
+    /// Change over the 1-day window (cf. `broker_holding` period rct_1).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chg_1: Option<String>,
+    /// Change over the 5-day window (cf. `broker_holding` period rct_5).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chg_5: Option<String>,
+    /// Change over the 20-day window (cf. `broker_holding` period rct_20).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chg_20: Option<String>,
+    /// Change over the 60-day window (cf. `broker_holding` period rct_60).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chg_60: Option<String>,
 }
 
 /// Returned by `broker_holding_daily`. Wraps an `items` array of the daily

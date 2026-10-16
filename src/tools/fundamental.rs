@@ -129,6 +129,21 @@ fn trim_institution_rating(value: &mut serde_json::Value) {
         inst.remove("evaluate");
         inst.remove("ccy_symbol");
     }
+    // `instratings.target`/`change` arrive with ~20 fractional digits
+    // ("662.22667109829671694968"); prices here never need more than 3.
+    crate::serialize::round_decimals(value, 3);
+    // An open-ended window comes back as end_date "0" (not a unix time);
+    // make it null so it is not read as 1970-01-01.
+    for block in ["evaluate", "target"] {
+        if let Some(end) = value
+            .get_mut("analyst")
+            .and_then(|a| a.get_mut(block))
+            .and_then(|b| b.get_mut("end_date"))
+            && end.as_str() == Some("0")
+        {
+            *end = serde_json::Value::Null;
+        }
+    }
 }
 
 pub async fn institution_rating(
@@ -1231,10 +1246,15 @@ pub struct ValuationComparisonParam {
     pub symbol: String,
     /// Currency: "USD" | "HKD" | "CNY"
     pub currency: String,
-    /// Comparison symbols, comma-separated, max 4, e.g. "MSFT.US,GOOGL.US".
+    /// Comparison symbols, comma-separated, max 5, e.g. "MSFT.US,GOOGL.US".
     /// Note: pending backend support — currently server auto-selects industry peers.
     pub comparison_symbols: Option<String>,
 }
+
+/// Peers `valuation_comparison` accepts alongside the primary symbol: the
+/// upstream caps the request at 6 counter ids in total (verified live: 5 peers
+/// are accepted, 6 fail with "allCounterIDs quantity is greater than 6").
+const MAX_COMPARISON_SYMBOLS: usize = 5;
 
 pub async fn valuation_comparison(
     mctx: &crate::tools::McpContext,
@@ -1245,10 +1265,26 @@ pub async fn valuation_comparison(
     // required `comparison_counter_ids` conversion internally (and converts
     // history dates to RFC 3339).
     let ctx = longbridge::fundamental::FundamentalContext::new(mctx.create_config());
-    let peers = p
-        .comparison_symbols
-        .as_deref()
-        .map(|syms| syms.split(',').map(|s| s.trim().to_string()).collect());
+    let peers: Option<Vec<String>> = p.comparison_symbols.as_deref().map(|syms| {
+        syms.split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect()
+    });
+    // The upstream rejects too many counter ids with an opaque HTTP 500
+    // ("allCounterIDs quantity is greater than 6").
+    if let Some(count) = peers
+        .as_ref()
+        .map(Vec::len)
+        .filter(|n| *n > MAX_COMPARISON_SYMBOLS)
+    {
+        return Err(McpError::invalid_params(
+            format!(
+                "comparison_symbols has {count} symbols; at most {MAX_COMPARISON_SYMBOLS} are allowed"
+            ),
+            Some(serde_json::json!({ "error_code": "too_many_symbols" })),
+        ));
+    }
     let result = ctx
         .valuation_comparison(p.symbol, p.currency, peers)
         .await
@@ -1316,6 +1352,28 @@ mod tests {
             "evaluate.list date is preserved"
         );
         assert_eq!(v["ccy_symbol"], "HK$", "currency symbol kept");
+    }
+
+    #[test]
+    fn trim_institution_rating_rounds_targets_and_nulls_open_end_dates() {
+        let mut v = serde_json::json!({
+            "analyst": {
+                "evaluate": {"buy": 32, "end_date": "0"},
+                "target": {"highest_price": "887.628", "end_date": "0"}
+            },
+            "instratings": {"target": "662.22667109829671694968", "change": "58.50327216330702"}
+        });
+        super::trim_institution_rating(&mut v);
+        assert_eq!(v["instratings"]["target"], "662.227");
+        assert_eq!(v["instratings"]["change"], "58.503");
+        assert!(
+            v["analyst"]["evaluate"]["end_date"].is_null(),
+            "an open-ended evaluate window must be null, not \"0\""
+        );
+        assert!(
+            v["analyst"]["target"]["end_date"].is_null(),
+            "an open-ended target window must be null, not \"0\""
+        );
     }
 
     #[test]
