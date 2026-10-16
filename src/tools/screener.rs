@@ -114,7 +114,7 @@ pub async fn screener_user_strategies(
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ScreenerStrategyParam {
-    /// Strategy ID from screener_recommend_strategies or screener_user_strategies screeners[].id
+    /// Strategy ID from screener_recommend_strategies or screener_user_strategies strategys[].id
     pub id: String,
 }
 
@@ -275,7 +275,7 @@ pub struct ScreenerSearchParam {
     /// Mode B: required — determines which market to screen.
     pub market: Option<String>,
 
-    /// Mode A — Strategy ID from screener_recommend_strategies screeners[].id.
+    /// Mode A — Strategy ID from screener_recommend_strategies strategys[].id.
     /// The tool auto-fetches the strategy and builds filters. Omit for Mode B.
     pub strategy_id: Option<String>,
 

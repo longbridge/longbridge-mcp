@@ -169,10 +169,10 @@ pub struct OptionChainByDateParam {
 pub struct WarrantListParam {
     /// Underlying symbol, e.g. "700.HK"
     pub symbol: String,
-    /// Sort field: LastDone, ChangeRate, ChangeValue, Volume, Turnover, ExpiryDate, StrikePrice, UpperStrikePrice, LowerStrikePrice, OutstandingQuantity, OutstandingRatio, Premium, ItmOtm, ImpliedVolatility, Delta
-    pub sort_by: String,
-    /// Sort order: Ascending or Descending
-    pub sort_order: String,
+    /// Sort field (default Volume): LastDone, ChangeRate, ChangeValue, Volume, Turnover, ExpiryDate, StrikePrice, UpperStrikePrice, LowerStrikePrice, OutstandingQuantity, OutstandingRatio, Premium, ItmOtm, ImpliedVolatility, Delta
+    pub sort_by: Option<String>,
+    /// Sort order: Ascending or Descending (default Descending)
+    pub sort_order: Option<String>,
     /// Filter by warrant type (optional): "Call", "Put", "Bull", "Bear", "Inline"
     #[serde(default, deserialize_with = "tolerant_option_vec_string")]
     pub warrant_type: Option<Vec<String>>,
@@ -1416,8 +1416,10 @@ pub async fn warrant_list(
     mctx: &crate::tools::McpContext,
     p: WarrantListParam,
 ) -> Result<CallToolResult, McpError> {
-    let sort_by = parse::parse_warrant_sort_by(&p.sort_by)?;
-    let sort_order = parse::parse_sort_order_type(&p.sort_order)?;
+    // Default to the most-traded warrants first, the usual "list the
+    // warrants on X" intent.
+    let sort_by = parse::parse_warrant_sort_by(p.sort_by.as_deref().unwrap_or("Volume"))?;
+    let sort_order = parse::parse_sort_order_type(p.sort_order.as_deref().unwrap_or("Descending"))?;
 
     let warrant_types: Option<Vec<_>> = p
         .warrant_type

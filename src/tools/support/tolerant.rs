@@ -9,21 +9,30 @@ use serde::Deserialize;
 use serde::de::{self, Deserializer};
 
 #[derive(Deserialize)]
-#[serde(untagged)]
+#[serde(
+    untagged,
+    expecting = "an array of strings, e.g. [\"700.HK\", \"AAPL.US\"], or that array as a JSON string"
+)]
 enum VecOrString {
     Vec(Vec<String>),
     Str(String),
 }
 
 #[derive(Deserialize)]
-#[serde(untagged)]
+#[serde(
+    untagged,
+    expecting = "an array of integers, e.g. [1, 2], or that array as a JSON string"
+)]
 enum VecI32OrString {
     Vec(Vec<i32>),
     Str(String),
 }
 
 #[derive(Deserialize)]
-#[serde(untagged)]
+#[serde(
+    untagged,
+    expecting = "an integer or a numeric string, e.g. 42 or \"42\""
+)]
 enum IntOrString {
     Int(i64),
     Uint(u64),
@@ -31,7 +40,7 @@ enum IntOrString {
 }
 
 #[derive(Deserialize)]
-#[serde(untagged)]
+#[serde(untagged, expecting = "a boolean or \"true\"/\"false\"")]
 enum BoolOrString {
     Bool(bool),
     Str(String),
@@ -115,6 +124,56 @@ where
     }
 }
 
+#[derive(Deserialize)]
+#[serde(
+    untagged,
+    expecting = "an array of integers or numeric strings, e.g. [4, \"7\"], or that array as a JSON string"
+)]
+enum VecIntOrString {
+    Vec(Vec<IntOrString>),
+    Str(String),
+}
+
+/// Parse a numeric string, naming the offending value on failure (the bare
+/// `ParseIntError` text, "invalid digit found in string", says neither which
+/// value nor what was expected).
+fn parse_int<T, E>(s: &str) -> Result<T, E>
+where
+    T: std::str::FromStr,
+    E: de::Error,
+{
+    s.trim()
+        .parse::<T>()
+        .map_err(|_| E::custom(format!("expected an integer, got {s:?}")))
+}
+
+fn int_of<E: de::Error>(v: IntOrString) -> Result<i64, E> {
+    match v {
+        IntOrString::Int(i) => Ok(i),
+        IntOrString::Uint(u) => i64::try_from(u).map_err(E::custom),
+        IntOrString::Str(s) => parse_int::<i64, E>(&s),
+    }
+}
+
+/// `Option<Vec<i64>>` whose items may be numbers or numeric strings (ids that
+/// another tool returns as strings), or the whole array a JSON string.
+pub fn tolerant_option_vec_i64<'de, D>(d: D) -> Result<Option<Vec<i64>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let items = match Option::<VecIntOrString>::deserialize(d)? {
+        None => return Ok(None),
+        Some(VecIntOrString::Str(s)) if s.trim().is_empty() => return Ok(None),
+        Some(VecIntOrString::Str(s)) => parse_json_vec::<IntOrString, _>(&s)?,
+        Some(VecIntOrString::Vec(v)) => v,
+    };
+    items
+        .into_iter()
+        .map(int_of)
+        .collect::<Result<_, _>>()
+        .map(Some)
+}
+
 macro_rules! int_helper {
     ($name:ident, $option_name:ident, $t:ty) => {
         #[doc = concat!("`", stringify!($t), "` that may arrive as a number or as a string.")]
@@ -126,7 +185,7 @@ macro_rules! int_helper {
             match IntOrString::deserialize(d)? {
                 IntOrString::Int(i) => <$t>::try_from(i).map_err(de::Error::custom),
                 IntOrString::Uint(u) => <$t>::try_from(u).map_err(de::Error::custom),
-                IntOrString::Str(s) => s.trim().parse::<$t>().map_err(de::Error::custom),
+                IntOrString::Str(s) => parse_int::<$t, _>(&s),
             }
         }
 
@@ -143,9 +202,7 @@ macro_rules! int_helper {
                     <$t>::try_from(u).map(Some).map_err(de::Error::custom)
                 }
                 Some(IntOrString::Str(s)) if s.is_empty() => Ok(None),
-                Some(IntOrString::Str(s)) => {
-                    s.trim().parse::<$t>().map(Some).map_err(de::Error::custom)
-                }
+                Some(IntOrString::Str(s)) => parse_int::<$t, _>(&s).map(Some),
             }
         }
     };
@@ -160,6 +217,41 @@ int_helper!(tolerant_u32, tolerant_option_u32, u32);
 mod tests {
     use super::*;
     use serde::Deserialize;
+
+    #[derive(Deserialize)]
+    struct Ids {
+        #[serde(default, deserialize_with = "tolerant_option_vec_i64")]
+        ids: Option<Vec<i64>>,
+    }
+
+    #[test]
+    fn a_wrong_shape_names_the_expected_one() {
+        let err = serde_json::from_str::<Syms>(r#"{"symbols":[1]}"#)
+            .err()
+            .expect("numbers are not symbols");
+        assert!(
+            err.to_string().contains("an array of strings"),
+            "the error must say what was expected: {err}"
+        );
+    }
+
+    #[test]
+    fn vec_i64_accepts_numbers_strings_and_encoded_arrays() {
+        for raw in [
+            r#"{"ids":[4,7]}"#,
+            r#"{"ids":["4","7"]}"#,
+            r#"{"ids":"[4,\"7\"]"}"#,
+        ] {
+            let v: Ids = serde_json::from_str(raw).expect("must deserialize");
+            assert_eq!(v.ids, Some(vec![4, 7]), "{raw} must yield [4, 7]");
+        }
+        let v: Ids = serde_json::from_str(r#"{"ids":""}"#).expect("empty string must deserialize");
+        assert_eq!(v.ids, None, "an empty string is no filter");
+        assert!(
+            serde_json::from_str::<Ids>(r#"{"ids":["x"]}"#).is_err(),
+            "a non-numeric id must be rejected"
+        );
+    }
 
     #[derive(Deserialize)]
     struct Syms {

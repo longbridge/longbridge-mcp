@@ -1062,8 +1062,8 @@
       "description": "按条件筛选标的的窝轮/牛熊证列表，返回顶层数组 {symbol, name, warrant_type, status, last_done, change_rate, volume, expiry_date（yyyymmdd）, strike_price, implied_volatility, delta, premium, leverage_ratio, effective_leverage, outstanding_ratio, conversion_ratio, …}",
       "properties": {
         "symbol": "标的代码，例如 `\"700.HK\"`",
-        "sort_by": "排序字段：`LastDone`、`ChangeRate`、`ChangeValue`、`Volume`、`Turnover`、`ExpiryDate`、`StrikePrice`、`UpperStrikePrice`、`LowerStrikePrice`、`OutstandingQuantity`、`OutstandingRatio`、`Premium`、`ItmOtm`、`ImpliedVolatility`、`Delta`",
-        "sort_order": "排序方向：`Ascending`（升序）或 `Descending`（降序）",
+        "sort_by": "排序字段（默认 `Volume`）：`LastDone`、`ChangeRate`、`ChangeValue`、`Volume`、`Turnover`、`ExpiryDate`、`StrikePrice`、`UpperStrikePrice`、`LowerStrikePrice`、`OutstandingQuantity`、`OutstandingRatio`、`Premium`、`ItmOtm`、`ImpliedVolatility`、`Delta`",
+        "sort_order": "排序方向：`Ascending`（升序）或 `Descending`（降序），默认 `Descending`",
         "warrant_type": "按品种筛选（可选）：`Call`（认购证）、`Put`（认沽证）、`Bull`（牛证）、`Bear`（熊证）、`Inline`（界内证）",
         "issuer": "按发行商 ID 筛选（可选），`issuer_id` 来自 `warrant_issuers`",
         "expiry_date": "按到期时段筛选（可选）：`LT_3`（<3 个月）、`Between_3_6`（3-6 个月）、`Between_6_12`（6-12 个月）、`GT_12`（>12 个月）",
@@ -1301,7 +1301,7 @@
       "title": "策略详情",
       "description": "运行前查看策略的过滤条件详情。返回 market, filter{filters[]{key, min, max, tech_values}}。如需直接执行策略，使用 screener_search 的 strategy_id 参数。",
       "properties": {
-        "id": "策略 ID，来自 screener_recommend_strategies 或 screener_user_strategies 的 screeners[].id"
+        "id": "策略 ID，来自 screener_recommend_strategies 或 screener_user_strategies 的 strategys[].id"
       }
     },
     "screener_search": {
