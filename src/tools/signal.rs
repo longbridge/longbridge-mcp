@@ -33,7 +33,7 @@ pub struct SignalsParam {
     /// Maximum number of results to return. Defaults to 5 (each signal is ~5KB);
     /// page with offset for more.
     #[serde(default, deserialize_with = "tolerant_option_i32")]
-    #[schemars(extend("default" = 20))]
+    #[schemars(extend("default" = 5))]
     pub limit: Option<i32>,
     /// Number of results to skip for pagination. Defaults to 0.
     #[serde(default, deserialize_with = "tolerant_option_i32")]
@@ -57,7 +57,7 @@ pub struct SecurityFactsParam {
     pub end_time: Option<String>,
     /// The maximum number of facts to return. If the number of facts in the time range exceeds this limit, only the latest 'limit' facts will be returned. Defaults to 3 (each fact is several KB); page back with end_time for older ones.
     #[serde(default, deserialize_with = "tolerant_option_i32")]
-    #[schemars(extend("default" = 100))]
+    #[schemars(extend("default" = 3))]
     pub limit: Option<i32>,
 }
 

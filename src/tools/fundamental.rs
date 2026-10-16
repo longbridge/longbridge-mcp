@@ -9,6 +9,7 @@ use crate::tools::support::http_client::{
     http_get_tool, http_get_tool_dropping, http_get_tool_rounding, http_get_tool_unix,
     http_get_tool_unix_dropping, http_get_tool_unix_rounding,
 };
+use crate::tools::support::tolerant::{tolerant_i64, tolerant_option_usize};
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct SymbolParam {
@@ -1171,6 +1172,25 @@ pub async fn financial_report_snapshot(
 pub struct ShareholderTopParam {
     /// Security symbol, e.g. "AAPL.US"
     pub symbol: String,
+    /// Number of reporting periods to return, newest first: the "最新"
+    /// (latest) snapshot, then quarters. Defaults to 4 (~4KB each); up to 15.
+    #[serde(default, deserialize_with = "tolerant_option_usize")]
+    #[schemars(extend("default" = 4))]
+    pub periods: Option<usize>,
+}
+
+/// Periods `shareholder_top` returns when `periods` is omitted: all 15 run
+/// ~63KB, past what a client accepts in one tool result.
+const DEFAULT_SHAREHOLDER_PERIODS: usize = 4;
+
+/// Keep the newest `periods` segments of a `shareholder_top` response, in both
+/// `info[]` and the parallel `periods[]` label list.
+fn limit_shareholder_periods(value: &mut serde_json::Value, periods: usize) {
+    for key in ["info", "periods"] {
+        if let Some(arr) = value.get_mut(key).and_then(serde_json::Value::as_array_mut) {
+            arr.truncate(periods.max(1));
+        }
+    }
 }
 
 /// Drop the per-holder `period` (== the enclosing `info[].period` on every row)
@@ -1215,6 +1235,7 @@ pub async fn shareholder_top(
     let mut value: serde_json::Value =
         serde_json::from_str(&json).map_err(crate::error::Error::Serialize)?;
     trim_shareholder_top(&mut value);
+    limit_shareholder_periods(&mut value, p.periods.unwrap_or(DEFAULT_SHAREHOLDER_PERIODS));
     crate::tools::tool_json(&value)
 }
 
@@ -1222,7 +1243,9 @@ pub async fn shareholder_top(
 pub struct ShareholderDetailParam {
     /// Security symbol, e.g. "AAPL.US"
     pub symbol: String,
-    /// Shareholder object_id from shareholder_top tool
+    /// Shareholder object_id from shareholder_top tool. `shareholder_top`
+    /// returns it as a string; either a number or a numeric string is accepted.
+    #[serde(deserialize_with = "tolerant_i64")]
     pub object_id: i64,
 }
 
@@ -1299,9 +1322,46 @@ pub async fn valuation_comparison(
 
 #[cfg(test)]
 mod tests {
-    use super::rating_part;
+    use super::{ShareholderDetailParam, limit_shareholder_periods, rating_part};
+
+    #[test]
+    fn limit_shareholder_periods_keeps_the_newest_segments() {
+        let mut v = serde_json::json!({
+            "periods": ["最新", "Q2 2026", "Q1 2026"],
+            "info": [{"period": "最新"}, {"period": "Q2 2026"}, {"period": "Q1 2026"}]
+        });
+        limit_shareholder_periods(&mut v, 2);
+        assert_eq!(
+            v["periods"],
+            serde_json::json!(["最新", "Q2 2026"]),
+            "the period labels must be cut in step with info"
+        );
+        assert_eq!(
+            v["info"].as_array().map(Vec::len),
+            Some(2),
+            "info must keep two segments"
+        );
+        limit_shareholder_periods(&mut v, 0);
+        assert_eq!(
+            v["info"].as_array().map(Vec::len),
+            Some(1),
+            "zero must still keep the latest segment"
+        );
+    }
     use rmcp::ErrorData as McpError;
     use rmcp::model::Content;
+
+    #[test]
+    fn shareholder_detail_accepts_the_string_object_id_from_shareholder_top() {
+        let p: ShareholderDetailParam =
+            serde_json::from_value(serde_json::json!({"symbol": "700.HK", "object_id": "452583"}))
+                .expect("a numeric string object_id must deserialize");
+        assert_eq!(p.object_id, 452583, "the string must parse to the same id");
+        let p: ShareholderDetailParam =
+            serde_json::from_value(serde_json::json!({"symbol": "700.HK", "object_id": 452583}))
+                .expect("a numeric object_id must still deserialize");
+        assert_eq!(p.object_id, 452583, "a number must pass through unchanged");
+    }
 
     #[test]
     fn trim_institution_rating_detail_keeps_target_date_and_rounds() {

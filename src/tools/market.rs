@@ -649,9 +649,10 @@ pub struct RankListParam {
     /// Tab key from rank_categories second_tags[].key, e.g. "hot_all-us" (US total heat),
     /// "hot_up-hk" (HK rising heat), "trade_heat-us" (US hot trades).
     /// The "ib_" prefix is stripped from rank_categories keys and added back automatically.
+    /// A key without a market suffix (e.g. "hot_all") gets one from `market`.
     pub key: String,
     /// Market override: "US" | "HK" | "CN" | "SG".
-    /// Defaults to the market suffix in the key (e.g. "ib_hot_all-hk" → HK), then "US".
+    /// The key's market suffix wins (e.g. "hot_all-hk" → HK); otherwise defaults to "US".
     pub market: Option<String>,
     /// Number of results to return (default: 20; capped by the board's own length, typically 50)
     pub size: Option<u32>,
@@ -665,19 +666,7 @@ pub async fn rank_list(
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
     let need_article = p.need_article.unwrap_or(false).to_string();
-    // Auto-prepend "ib_" if the key doesn't already start with it.
-    let key = if p.key.starts_with("ib_") {
-        p.key.clone()
-    } else {
-        format!("ib_{}", p.key)
-    };
-    // Infer market from key suffix (e.g. "ib_hot_all-hk" → "HK"), fall back to param or "US".
-    let key_market = key
-        .rsplit_once('-')
-        .map(|(_, m)| m.to_uppercase())
-        .filter(|m| matches!(m.as_str(), "US" | "HK" | "CN" | "SG"))
-        .or_else(|| p.market.as_deref().map(|m| m.to_uppercase()))
-        .unwrap_or_else(|| "US".to_string());
+    let (key, key_market) = rank_key_and_market(&p.key, p.market.as_deref());
     // The endpoint takes no page-size parameter and always returns its full
     // board (e.g. 50 rows), so `size` is applied here after the fetch.
     let size = p.size.unwrap_or(20) as usize;
@@ -698,6 +687,32 @@ pub async fn rank_list(
     truncate_rank_list_rows(&mut value, size);
     trim_rank_list_rows(&mut value);
     tool_json(&value)
+}
+
+/// Resolve the upstream board key and market for `rank_list`.
+///
+/// The key gets its "ib_" prefix back. The market comes from the key's suffix
+/// (e.g. "hot_all-hk" → HK), then the `market` argument, then US. A key
+/// without a market suffix (e.g. the `hot_all` group name from
+/// rank_categories) names no board upstream, so the resolved market is
+/// appended to it.
+fn rank_key_and_market(key: &str, market: Option<&str>) -> (String, String) {
+    let key = key.trim();
+    let key = key.strip_prefix("ib_").unwrap_or(key);
+    let suffix = key
+        .rsplit_once('-')
+        .map(|(_, m)| m.to_uppercase())
+        .filter(|m| matches!(m.as_str(), "US" | "HK" | "CN" | "SG"));
+    match suffix {
+        Some(m) => (format!("ib_{key}"), m),
+        None => {
+            let m = market
+                .map(|m| m.trim().to_uppercase())
+                .filter(|m| !m.is_empty())
+                .unwrap_or_else(|| "US".to_string());
+            (format!("ib_{key}-{}", m.to_lowercase()), m)
+        }
+    }
 }
 
 /// Keep only the first `size` rows of a `rank_list` response.
@@ -760,7 +775,35 @@ fn trim_rank_list_rows(value: &mut serde_json::Value) {
 
 #[cfg(test)]
 mod tests {
-    use super::{hoist_intraday_prev_closes, trade_status_label};
+    use super::{hoist_intraday_prev_closes, rank_key_and_market, trade_status_label};
+
+    #[test]
+    fn rank_key_keeps_its_own_market_suffix() {
+        assert_eq!(
+            rank_key_and_market("hot_all-hk", Some("US")),
+            ("ib_hot_all-hk".to_string(), "HK".to_string()),
+            "the key's suffix must win over the market argument"
+        );
+        assert_eq!(
+            rank_key_and_market("ib_trade_heat-us", None),
+            ("ib_trade_heat-us".to_string(), "US".to_string()),
+            "an already prefixed key must not be prefixed twice"
+        );
+    }
+
+    #[test]
+    fn rank_key_without_suffix_gets_the_market_appended() {
+        assert_eq!(
+            rank_key_and_market("hot_all", Some("hk")),
+            ("ib_hot_all-hk".to_string(), "HK".to_string()),
+            "a group key must be completed from the market argument"
+        );
+        assert_eq!(
+            rank_key_and_market("hot_all", None),
+            ("ib_hot_all-us".to_string(), "US".to_string()),
+            "a group key with no market must default to US"
+        );
+    }
 
     #[test]
     fn truncate_rank_list_keeps_first_rows() {

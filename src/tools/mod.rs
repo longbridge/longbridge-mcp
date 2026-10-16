@@ -6091,7 +6091,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::fundamental::ShareholderTopResponse>(),
-        description = "Get Top 20 major shareholders (institutions, individuals, insiders) across reporting periods. Returns info[]{period, share_holders[]{object_id, name, title, shares_held, percent_shares_held, shares_changed, filing_date}}. Use object_id with shareholder_detail to drill into a holder's full trade history."
+        description = "Get Top 20 major shareholders (institutions, individuals, insiders) across reporting periods, newest first (4 periods by default; set periods for more). Returns info[]{period, share_holders[]{object_id, name, title, shares_held, percent_shares_held, shares_changed, filing_date}}. Use object_id with shareholder_detail to drill into a holder's full trade history."
     )]
     async fn shareholder_top(
         &self,
