@@ -54,5 +54,5 @@ jaq-json = { version = "2.0", features = ["serde"] }
 
 # TEMP: unpublished US asset APIs (feat/us-asset-apis). Drop before merge.
 [patch.crates-io]
-longbridge = { path = "/private/tmp/claude-501/-Users-hogan-work-longbridge-longbridge-mcp/26ecef02-dd5f-4310-a8cb-70625219e796/scratchpad/sdk-us-asset/rust" }
-longbridge-proto = { path = "/private/tmp/claude-501/-Users-hogan-work-longbridge-longbridge-mcp/26ecef02-dd5f-4310-a8cb-70625219e796/scratchpad/sdk-us-asset/rust/crates/proto" }
+longbridge = { git = "https://github.com/longbridge/openapi.git", branch = "feat/us-asset-apis" }
+longbridge-proto = { git = "https://github.com/longbridge/openapi.git", branch = "feat/us-asset-apis" }
