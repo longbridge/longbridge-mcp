@@ -2872,7 +2872,7 @@ impl Longbridge {
         title = "Stock Positions",
         annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = true),
         output_schema = schema_for::<output::StockPositionsResponse>(),
-        description = "Get current stock positions across all channels. Returns list[].stock_info[]{symbol, symbol_name, quantity, available_quantity, currency, cost_price, market}. US accounts get a US-specific variant instead (no list): the US asset overview object {account_type, currency, cash_buy_power, overnight_buy_power, cash_list[]{currency, total_cash, total_amount, settled_cash, frozen_buy_cash, outstanding}, stock_list[]{symbol (e.g. AAPL.US), name, quantity, currency, average_cost, market, market_price, last_done, prev_close, position_side, today_pl, industry_name}, option_list[], crypto_list[], multi_leg}."
+        description = "Get current stock positions across all channels. Returns list[].stock_info[]{symbol, symbol_name, quantity, available_quantity, currency, cost_price, market}. US accounts get a US-specific variant instead (no list): the US asset overview object {account_type, currency, cash_buy_power, overnight_buy_power, cash_list[]{currency, total_cash, total_amount, settled_cash, frozen_buy_cash, outstanding}, stock_list[]{symbol (e.g. AAPL.US), name, quantity, currency, average_cost, market, market_price, last_done, prev_close, position_side, today_pl, industry_name}, option_list[], crypto_list[]{symbol (e.g. BTCUSD.BKKT), name, quantity, currency, average_cost, market, market_price, last_done, prev_close, position_side, today_pl}, multi_leg}."
     )]
     async fn stock_positions(
         &self,
@@ -4441,7 +4441,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get exchange rates for all supported currencies. Returns {exchanges[]{base_currency, other_currency, average_rate}}: average_rate is the value of 1 other_currency in base_currency (e.g. base USD, other HKD, 0.12743 = 1 HKD is 0.12743 USD). US accounts get a US-specific variant: the US account's rates, each entry also carrying universal_key/spec_key (the upstream rate-table keys), plus bid_rate/offer_rate only when they differ from average_rate."
+        description = "Get exchange rates for all supported currencies. Returns {exchanges[]{base_currency, other_currency, average_rate}}: average_rate is the value of 1 other_currency in base_currency (e.g. base USD, other HKD, 0.12743 = 1 HKD is 0.12743 USD). US accounts get a US-specific variant: the US account's rates, each entry also carrying universal_key (the account channel, e.g. us_lb_apex) and spec_key (the rate type, e.g. am or reference; the same pair can appear once per rate type), plus bid_rate/offer_rate only when they differ from average_rate."
     )]
     async fn exchange_rate(
         &self,

@@ -111,7 +111,7 @@
     },
     "stock_positions": {
       "title": "股票持仓",
-      "description": "查询所有渠道下的当前股票持仓，返回 list[].stock_info[]{symbol, symbol_name, quantity, available_quantity, currency, cost_price, market}。美股账户返回美股专用结构（无 list）：美股资产概览对象 {account_type, currency, cash_buy_power, overnight_buy_power, cash_list[]{currency, total_cash, total_amount, settled_cash, frozen_buy_cash, outstanding}, stock_list[]{symbol（如 AAPL.US）, name, quantity, currency, average_cost, market, market_price, last_done, prev_close, position_side, today_pl, industry_name}, option_list[], crypto_list[], multi_leg}"
+      "description": "查询所有渠道下的当前股票持仓，返回 list[].stock_info[]{symbol, symbol_name, quantity, available_quantity, currency, cost_price, market}。美股账户返回美股专用结构（无 list）：美股资产概览对象 {account_type, currency, cash_buy_power, overnight_buy_power, cash_list[]{currency, total_cash, total_amount, settled_cash, frozen_buy_cash, outstanding}, stock_list[]{symbol（如 AAPL.US）, name, quantity, currency, average_cost, market, market_price, last_done, prev_close, position_side, today_pl, industry_name}, option_list[], crypto_list[]{symbol（如 BTCUSD.BKKT）, name, quantity, currency, average_cost, market, market_price, last_done, prev_close, position_side, today_pl}, multi_leg}"
     },
     "dca_history": {
       "title": "定投执行历史",
@@ -516,7 +516,7 @@
     },
     "exchange_rate": {
       "title": "汇率",
-      "description": "获取全部支持币种的汇率，返回 {exchanges[]{base_currency, other_currency, average_rate}}：average_rate 为 1 单位 other_currency 折合的 base_currency（如 base USD、other HKD、0.12743 即 1 HKD = 0.12743 USD）。美股账户返回美股账户自身的汇率，每条额外带 universal_key/spec_key（上游汇率表键），bid_rate/offer_rate 仅在与 average_rate 不同时返回"
+      "description": "获取全部支持币种的汇率，返回 {exchanges[]{base_currency, other_currency, average_rate}}：average_rate 为 1 单位 other_currency 折合的 base_currency（如 base USD、other HKD、0.12743 即 1 HKD = 0.12743 USD）。美股账户返回美股账户自身的汇率，每条额外带 universal_key（账户渠道，如 us_lb_apex）和 spec_key（汇率类型，如 am、reference；同一币种对可按汇率类型各出现一次），bid_rate/offer_rate 仅在与 average_rate 不同时返回"
     },
     "executive": {
       "title": "高管与董事",

@@ -500,12 +500,34 @@ pub struct UsOptionPosition {
 
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct UsCryptoPosition {
+    /// Symbol, e.g. "BTCUSD.BKKT". Qualified from the bare pair code and
+    /// `market` (see `normalize_us_crypto_list`) so it matches every other
+    /// tool's fully-qualified `symbol` convention.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub symbol: Option<String>,
+    /// Asset name, e.g. "Bitcoin".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quantity: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub currency: Option<String>,
+    /// Empty when the server has no cost basis.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub average_cost: Option<String>,
+    /// Market code, e.g. "BKKT".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub market: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub market_price: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_done: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prev_close: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub position_side: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub today_pl: Option<String>,
 }
 
 /// `order_detail`'s US-region shape: the order is nested under `order`

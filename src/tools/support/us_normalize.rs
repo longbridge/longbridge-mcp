@@ -46,6 +46,34 @@ pub fn normalize_us_stock_list(v: &mut Value) {
     }
 }
 
+/// `USAssetOverview.crypto_list[]` carries the bare trading-pair code as
+/// `symbol` (e.g. `"BTCUSD"`) and the market separately (e.g. `"BKKT"`).
+/// Rewrites `symbol` to the fully-qualified form (`"BTCUSD.BKKT"`), the
+/// convention every other tool in this server follows. Entries whose `symbol`
+/// is empty or already qualified, or that have no `market`, are left as they
+/// are. No-ops if `crypto_list` is absent or not an array.
+pub fn normalize_us_crypto_list(v: &mut Value) {
+    let Value::Object(map) = v else { return };
+    let Some(Value::Array(cryptos)) = map.get_mut("crypto_list") else {
+        return;
+    };
+    for entry in cryptos.iter_mut() {
+        let Value::Object(crypto) = entry else {
+            continue;
+        };
+        let (Some(Value::String(symbol)), Some(Value::String(market))) =
+            (crypto.get("symbol"), crypto.get("market"))
+        else {
+            continue;
+        };
+        if symbol.is_empty() || market.is_empty() || symbol.contains('.') {
+            continue;
+        }
+        let qualified = format!("{symbol}.{market}");
+        crypto.insert("symbol".to_string(), Value::String(qualified));
+    }
+}
+
 /// `USCryptoOverview.profile` is a JSON-encoded string (not a nested object)
 /// holding one HTML-formatted description per language, e.g.
 /// `"{\"en\": \"<p>...</p>\", \"zh-CN\": \"...\"}"`. Parses it into a proper
@@ -447,6 +475,51 @@ mod tests {
         let mut v = json!({"cash_list": []});
         normalize_us_stock_list(&mut v);
         assert_eq!(v, json!({"cash_list": []}));
+    }
+
+    #[test]
+    fn normalize_us_crypto_list_qualifies_the_pair_code_with_its_market() {
+        let mut v = json!({
+            "crypto_list": [
+                {"symbol": "BTCUSD", "market": "BKKT", "quantity": "0.5"},
+                {"symbol": "ETHUSD.BKKT", "market": "BKKT"},
+                {"symbol": "SOLUSD", "market": ""},
+                {"symbol": "", "market": "BKKT"}
+            ]
+        });
+        normalize_us_crypto_list(&mut v);
+        assert_eq!(
+            v["crypto_list"][0]["symbol"],
+            json!("BTCUSD.BKKT"),
+            "a bare pair code gets its market suffix"
+        );
+        assert_eq!(
+            v["crypto_list"][0]["quantity"],
+            json!("0.5"),
+            "other fields are kept"
+        );
+        assert_eq!(
+            v["crypto_list"][1]["symbol"],
+            json!("ETHUSD.BKKT"),
+            "an already-qualified symbol is not suffixed twice"
+        );
+        assert_eq!(
+            v["crypto_list"][2]["symbol"],
+            json!("SOLUSD"),
+            "no market, nothing to qualify with"
+        );
+        assert_eq!(
+            v["crypto_list"][3]["symbol"],
+            json!(""),
+            "an empty symbol stays empty"
+        );
+    }
+
+    #[test]
+    fn normalize_us_crypto_list_noop_on_missing_crypto_list() {
+        let mut v = json!({"cash_list": []});
+        normalize_us_crypto_list(&mut v);
+        assert_eq!(v, json!({"cash_list": []}), "nothing to normalize");
     }
 
     #[test]

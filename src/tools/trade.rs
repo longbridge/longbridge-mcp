@@ -18,7 +18,7 @@ use crate::tools::support::parse;
 use crate::tools::support::tolerant::{
     tolerant_id_string, tolerant_option_id_string, tolerant_option_string, tolerant_string,
 };
-use crate::tools::support::us_normalize::normalize_us_stock_list;
+use crate::tools::support::us_normalize::{normalize_us_crypto_list, normalize_us_stock_list};
 use crate::tools::{tool_json, tool_result};
 
 pub use crate::tools::quote::SymbolParam;
@@ -472,6 +472,7 @@ pub async fn stock_positions(mctx: &crate::tools::McpContext) -> Result<CallTool
         let result = ctx.us_asset_overview().await.map_err(Error::longbridge)?;
         let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;
         normalize_us_stock_list(&mut value);
+        normalize_us_crypto_list(&mut value);
         value
     } else {
         let result = ctx.stock_positions(None).await.map_err(Error::longbridge)?;

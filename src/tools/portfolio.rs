@@ -281,8 +281,8 @@ mod tests {
 
     fn rate(bid: &str, offer: &str, average: &str) -> USExchangeRate {
         USExchangeRate {
-            universal_key: "1".to_string(),
-            spec_key: "USD".to_string(),
+            universal_key: "us_lb_apex".to_string(),
+            spec_key: "am".to_string(),
             base_currency: "USD".to_string(),
             other_currency: "HKD".to_string(),
             bid_rate: bid.to_string(),
@@ -305,8 +305,8 @@ mod tests {
         );
         assert_eq!(v["base_currency"], "USD", "base currency is kept");
         assert_eq!(v["other_currency"], "HKD", "other currency is kept");
-        assert_eq!(v["universal_key"], "1", "upstream key is kept");
-        assert_eq!(v["spec_key"], "USD", "upstream key is kept");
+        assert_eq!(v["universal_key"], "us_lb_apex", "account channel is kept");
+        assert_eq!(v["spec_key"], "am", "rate type is kept");
     }
 
     #[test]
