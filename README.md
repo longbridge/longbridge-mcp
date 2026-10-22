@@ -8,7 +8,7 @@
   <a href="https://chatgpt.com"><img alt="ChatGPT App" src="https://img.shields.io/badge/ChatGPT-App-10a37f?logo=openai&logoColor=white"></a>
   <a href="https://claude.ai/settings/connectors"><img alt="Claude Connector" src="https://img.shields.io/badge/Claude-Connector-d97757?logo=claude&logoColor=white"></a>
   <a href="https://registry.modelcontextprotocol.io/v0/servers/com.longbridge%2Fmcp/versions"><img alt="Official MCP Registry" src="https://img.shields.io/badge/MCP%20Registry-com.longbridge%2Fmcp-0a66c2"></a>
-  <a href="https://smithery.ai/servers/longbridge-official/longbridge-mcp"><img alt="Smithery" src="https://smithery.ai/badge/longbridge-official/longbridge-mcp"></a>
+  <a href="https://lightnow.ai/servers/com.longbridge/mcp"><img alt="LightNow capabilities" src="https://lightnow.ai/badge/com.longbridge/mcp"></a>
   <a href="https://lobehub.com/mcp/longbridge-longbridge-mcp"><img alt="LobeHub" src="https://lobehub.com/badge/mcp/longbridge-longbridge-mcp"></a>
   <a href="https://glama.ai/mcp/servers/longbridge/longbridge-mcp"><img alt="longbridge-mcp MCP server" src="https://glama.ai/mcp/servers/longbridge/longbridge-mcp/badges/score.svg"></a>
   <a href="https://github.com/longbridge/longbridge-mcp/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/badge/license-MIT-blue"></a>
