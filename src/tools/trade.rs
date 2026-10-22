@@ -1,6 +1,9 @@
+use std::future::Future;
+
+use longbridge::DcRegion;
 use longbridge::trade::{
     CancelOrderOptions, GetOrderDetailOptions, GetTodayExecutionsOptions, GetTodayOrdersOptions,
-    TradeContext,
+    GetUSTransactionHistoryOptions, TradeContext, USTransaction,
 };
 use rmcp::ErrorData as McpError;
 use rmcp::model::CallToolResult;
@@ -8,12 +11,14 @@ use rmcp::schemars::JsonSchema;
 use rmcp::serde::Deserialize;
 
 use crate::error::Error;
+use crate::serialize::{strip_nulls, strip_trailing_zeros};
 use crate::tools::support::dry_run;
 use crate::tools::support::http_client::http_get_tool;
 use crate::tools::support::parse;
 use crate::tools::support::tolerant::{
     tolerant_id_string, tolerant_option_id_string, tolerant_option_string, tolerant_string,
 };
+use crate::tools::support::us_normalize::normalize_us_stock_list;
 use crate::tools::{tool_json, tool_result};
 
 pub use crate::tools::quote::SymbolParam;
@@ -436,48 +441,45 @@ pub async fn account_balance(
     p: AccountBalanceParam,
 ) -> Result<CallToolResult, McpError> {
     let (ctx, _) = TradeContext::new(mctx.create_config());
-    let result = ctx
-        .account_balance(p.currency.as_deref())
-        .await
-        .map_err(Error::longbridge)?;
+    // The AP balance endpoint is not deployed in the US data center (it fails
+    // with `code 12`); US accounts are served by the US cash/buying-power
+    // endpoint instead, which has its own shape.
+    let mut value = if mctx.dc_region().await == DcRegion::Us {
+        let result = ctx
+            .us_cash_and_buy_power(p.currency.as_deref())
+            .await
+            .map_err(Error::longbridge)?;
+        serde_json::to_value(&result).map_err(Error::Serialize)?
+    } else {
+        let result = ctx
+            .account_balance(p.currency.as_deref())
+            .await
+            .map_err(Error::longbridge)?;
+        serde_json::to_value(&result).map_err(Error::Serialize)?
+    };
     // Cash/margin amounts are padded to two decimals ("123000.00", "0.00");
     // strip the trailing zeros (lossless).
-    let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;
-    crate::serialize::strip_trailing_zeros(&mut value);
+    strip_trailing_zeros(&mut value);
     tool_json(&value)
 }
 
 pub async fn stock_positions(mctx: &crate::tools::McpContext) -> Result<CallToolResult, McpError> {
     let (ctx, _) = TradeContext::new(mctx.create_config());
-    let result = ctx.stock_positions(None).await.map_err(Error::longbridge)?;
-    let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;
-    if mctx.dc_region().await == longbridge::DcRegion::Us {
-        // The US overview is supplementary: its failure should annotate the
-        // positions rather than discard them, but staying silent would let the
-        // caller read a US account as having no overview at all.
-        match ctx.us_asset_overview().await {
-            Ok(us_overview) => {
-                if let (Some(obj), Ok(mut us_value)) = (
-                    value.as_object_mut(),
-                    serde_json::to_value(&us_overview).map_err(Error::Serialize),
-                ) {
-                    crate::tools::support::us_normalize::normalize_us_stock_list(&mut us_value);
-                    obj.insert("us_asset_overview".to_string(), us_value);
-                }
-            }
-            Err(e) => {
-                if let Some(obj) = value.as_object_mut() {
-                    obj.insert(
-                        "warnings".to_string(),
-                        serde_json::json!([format!("us_asset_overview is unavailable: {e}")]),
-                    );
-                }
-            }
-        }
-    }
+    // The AP positions endpoint is not deployed in the US data center (it
+    // fails with `code 12`), so US accounts get the US asset overview alone:
+    // it already carries the stock, option, crypto and cash holdings.
+    let mut value = if mctx.dc_region().await == DcRegion::Us {
+        let result = ctx.us_asset_overview().await.map_err(Error::longbridge)?;
+        let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;
+        normalize_us_stock_list(&mut value);
+        value
+    } else {
+        let result = ctx.stock_positions(None).await.map_err(Error::longbridge)?;
+        serde_json::to_value(&result).map_err(Error::Serialize)?
+    };
     // `cost_price` is padded to a fixed decimal width ("41.430"); strip the
     // trailing zeros (lossless).
-    crate::serialize::strip_trailing_zeros(&mut value);
+    strip_trailing_zeros(&mut value);
     tool_json(&value)
 }
 
@@ -486,7 +488,7 @@ pub async fn fund_positions(mctx: &crate::tools::McpContext) -> Result<CallToolR
     let result = ctx.fund_positions(None).await.map_err(Error::longbridge)?;
     // Cost/NAV amounts are padded to a fixed decimal width; strip trailing zeros.
     let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;
-    crate::serialize::strip_trailing_zeros(&mut value);
+    strip_trailing_zeros(&mut value);
     tool_json(&value)
 }
 
@@ -786,10 +788,99 @@ pub async fn cash_flow(
 ) -> Result<CallToolResult, McpError> {
     let start = parse::parse_rfc3339(&p.start_at)?;
     let end = parse::parse_rfc3339_end(&p.end_at)?;
-    let opts = longbridge::trade::GetCashFlowOptions::new(start, end);
     let (ctx, _) = TradeContext::new(mctx.create_config());
+    if mctx.dc_region().await == DcRegion::Us {
+        // The AP cash-flow endpoint is not deployed in the US data center (it
+        // fails with `code 12`); US accounts are served by the paged US
+        // transaction history instead.
+        let pages = collect_us_pages(US_TRANSACTION_PAGE_SIZE, US_TRANSACTION_MAX_PAGES, |page| {
+            let mut opts = GetUSTransactionHistoryOptions::new(start, end);
+            opts.page = page;
+            opts.size = US_TRANSACTION_PAGE_SIZE;
+            let ctx = &ctx;
+            async move { ctx.us_transaction_history(opts).await.map(|r| r.items) }
+        })
+        .await
+        .map_err(Error::longbridge)?;
+        let mut value = us_transactions_json(pages).map_err(Error::Serialize)?;
+        strip_nulls(&mut value);
+        strip_trailing_zeros(&mut value);
+        return tool_json(&value);
+    }
+    let opts = longbridge::trade::GetCashFlowOptions::new(start, end);
     let result = ctx.cash_flow(opts).await.map_err(Error::longbridge)?;
     tool_json(&result)
+}
+
+/// Page size requested from the US transaction history.
+const US_TRANSACTION_PAGE_SIZE: i32 = 100;
+
+/// Most US transaction-history pages `cash_flow` walks before it stops and
+/// reports the result as truncated.
+const US_TRANSACTION_MAX_PAGES: i32 = 20;
+
+/// Records collected from a paged US endpoint that returns no total count.
+#[derive(Debug)]
+struct UsPages<T> {
+    /// Every record fetched, in page order.
+    items: Vec<T>,
+    /// True when the page cap was reached while the last page was still full,
+    /// so more records may exist.
+    truncated: bool,
+}
+
+/// Walk a paged US endpoint from page 1 until a page comes back shorter than
+/// `size` (the API's only end-of-data signal), or `max_pages` pages have been
+/// fetched.
+async fn collect_us_pages<T, E, F, Fut>(
+    size: i32,
+    max_pages: i32,
+    mut fetch: F,
+) -> Result<UsPages<T>, E>
+where
+    F: FnMut(i32) -> Fut,
+    Fut: Future<Output = Result<Vec<T>, E>>,
+{
+    let full_page = usize::try_from(size).unwrap_or(0);
+    let mut items = Vec::new();
+    for page in 1..=max_pages {
+        let batch = fetch(page).await?;
+        let last = batch.len() < full_page || batch.is_empty();
+        items.extend(batch);
+        if last {
+            return Ok(UsPages {
+                items,
+                truncated: false,
+            });
+        }
+    }
+    Ok(UsPages {
+        items,
+        truncated: true,
+    })
+}
+
+/// The US `cash_flow` response: `{items[], truncated}`, plus a `note` saying
+/// how to get the rest when the page cap cut the history short.
+fn us_transactions_json(
+    pages: UsPages<USTransaction>,
+) -> Result<serde_json::Value, serde_json::Error> {
+    let mut value = serde_json::json!({
+        "items": serde_json::to_value(&pages.items)?,
+        "truncated": pages.truncated,
+    });
+    if pages.truncated
+        && let Some(obj) = value.as_object_mut()
+    {
+        obj.insert(
+            "note".to_string(),
+            serde_json::Value::String(format!(
+                "Only the first {} records are returned; narrow start_at/end_at to see the rest.",
+                pages.items.len()
+            )),
+        );
+    }
+    Ok(value)
 }
 
 /// Parse a decimal-valued attached-order field, naming the field in the error
@@ -1772,9 +1863,106 @@ mod attached_order_tests {
 #[cfg(test)]
 mod tests {
     use super::{
-        ORDER_TYPES, ReplaceOrderParam, SubmitOrderParam, canonical_choice, missing_order_fields,
-        replace_scope, submit_scope,
+        ORDER_TYPES, ReplaceOrderParam, SubmitOrderParam, USTransaction, UsPages, canonical_choice,
+        collect_us_pages, missing_order_fields, replace_scope, submit_scope, us_transactions_json,
     };
+
+    /// Drive `collect_us_pages` over a fake endpoint holding `total` records,
+    /// returning what it collected and the pages it asked for.
+    async fn walk(total: usize, size: i32, max_pages: i32) -> (UsPages<usize>, Vec<i32>) {
+        let mut requested = Vec::new();
+        let pages = collect_us_pages(size, max_pages, |page| {
+            requested.push(page);
+            let size = size as usize;
+            let start = (page as usize - 1) * size;
+            let batch: Vec<usize> = (start..total.min(start + size)).collect();
+            async move { Ok::<_, std::convert::Infallible>(batch) }
+        })
+        .await
+        .unwrap_or_else(|e| match e {});
+        (pages, requested)
+    }
+
+    #[tokio::test]
+    async fn collect_us_pages_stops_at_the_first_short_page() {
+        let (pages, requested) = walk(250, 100, 20).await;
+        assert_eq!(pages.items.len(), 250, "every record must be collected");
+        assert_eq!(requested, [1, 2, 3], "a short third page ends the walk");
+        assert!(!pages.truncated, "a short last page is not a truncation");
+    }
+
+    #[tokio::test]
+    async fn collect_us_pages_fetches_one_more_page_after_an_exact_fit() {
+        // No total count upstream: a full page could be followed by more, so
+        // the walk only ends on the (empty) page after it.
+        let (pages, requested) = walk(200, 100, 20).await;
+        assert_eq!(pages.items.len(), 200, "every record must be collected");
+        assert_eq!(requested, [1, 2, 3], "an empty page ends the walk");
+        assert!(!pages.truncated, "an empty last page is not a truncation");
+    }
+
+    #[tokio::test]
+    async fn collect_us_pages_reports_truncation_at_the_page_cap() {
+        let (pages, requested) = walk(1000, 100, 3).await;
+        assert_eq!(
+            pages.items.len(),
+            300,
+            "only the capped pages are collected"
+        );
+        assert_eq!(requested, [1, 2, 3], "no page past the cap is requested");
+        assert!(
+            pages.truncated,
+            "a full page at the cap may hide more records"
+        );
+    }
+
+    #[tokio::test]
+    async fn collect_us_pages_propagates_errors() {
+        let result: Result<UsPages<usize>, &str> =
+            collect_us_pages(100, 20, |_| async { Err("upstream down") }).await;
+        assert_eq!(
+            result.map(|p| p.items.len()),
+            Err("upstream down"),
+            "a failed page must fail the call"
+        );
+    }
+
+    #[test]
+    fn us_transactions_json_notes_truncation_only_when_truncated() {
+        let item = USTransaction {
+            title: "Deposit".to_string(),
+            amount: "500".to_string(),
+            currency: "USD".to_string(),
+            ..Default::default()
+        };
+        let complete = us_transactions_json(UsPages {
+            items: vec![item.clone()],
+            truncated: false,
+        })
+        .expect("transactions serialize");
+        assert_eq!(
+            complete["truncated"], false,
+            "complete history is not truncated"
+        );
+        assert!(complete.get("note").is_none(), "no note without truncation");
+        assert_eq!(
+            complete["items"][0]["title"], "Deposit",
+            "items carry the records"
+        );
+
+        let truncated = us_transactions_json(UsPages {
+            items: vec![item],
+            truncated: true,
+        })
+        .expect("transactions serialize");
+        assert_eq!(truncated["truncated"], true, "truncation must be flagged");
+        assert!(
+            truncated["note"]
+                .as_str()
+                .is_some_and(|n| n.contains("start_at")),
+            "a truncated history must say how to get the rest"
+        );
+    }
 
     #[test]
     fn a_replace_code_does_not_carry_over_to_another_leg_change() {

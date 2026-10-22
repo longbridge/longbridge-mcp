@@ -1,3 +1,7 @@
+use std::str::FromStr;
+
+use longbridge::trade::{TradeContext, USExchangeRate};
+use longbridge::{DcRegion, Decimal};
 use rmcp::ErrorData as McpError;
 use rmcp::model::{CallToolResult, Content};
 use rmcp::schemars::JsonSchema;
@@ -42,6 +46,15 @@ fn date_to_unix(s: &str, end_of_day: bool) -> Result<i64, McpError> {
 }
 
 pub async fn exchange_rate(mctx: &crate::tools::McpContext) -> Result<CallToolResult, McpError> {
+    if mctx.dc_region().await == DcRegion::Us {
+        // `/v1/asset/exchange_rates` is not deployed in the US data center (it
+        // fails with `code 12`); US accounts read the US account's own rates.
+        let (ctx, _) = TradeContext::new(mctx.create_config());
+        let result = ctx.us_exchange_rates().await.map_err(Error::longbridge)?;
+        let exchanges: Vec<serde_json::Value> =
+            result.exchanges.iter().map(us_exchange_rate_json).collect();
+        return tool_json(&serde_json::json!({ "exchanges": exchanges }));
+    }
     let client = mctx.create_http_client();
     // Longbridge's asset FX feed is a single mid-reference rate: `bid_rate` and
     // `offer_rate` always equal `average_rate` (verified across all supported
@@ -53,6 +66,45 @@ pub async fn exchange_rate(mctx: &crate::tools::McpContext) -> Result<CallToolRe
         &["bid_rate", "offer_rate"],
     )
     .await
+}
+
+/// One US exchange rate as `exchange_rate` returns it: `bid_rate` /
+/// `offer_rate` are dropped when they equal `average_rate`, matching the AP
+/// path (where the feed is a single mid rate), and kept when they carry a
+/// real spread.
+fn us_exchange_rate_json(rate: &USExchangeRate) -> serde_json::Value {
+    let mut obj = serde_json::Map::new();
+    obj.insert(
+        "base_currency".to_string(),
+        rate.base_currency.clone().into(),
+    );
+    obj.insert(
+        "other_currency".to_string(),
+        rate.other_currency.clone().into(),
+    );
+    obj.insert("average_rate".to_string(), rate.average_rate.clone().into());
+    for (key, side) in [
+        ("bid_rate", &rate.bid_rate),
+        ("offer_rate", &rate.offer_rate),
+    ] {
+        if !side.is_empty() && !same_rate(side, &rate.average_rate) {
+            obj.insert(key.to_string(), side.clone().into());
+        }
+    }
+    obj.insert(
+        "universal_key".to_string(),
+        rate.universal_key.clone().into(),
+    );
+    obj.insert("spec_key".to_string(), rate.spec_key.clone().into());
+    serde_json::Value::Object(obj)
+}
+
+/// Whether two rate strings name the same number ("7.80" and "7.8" do).
+fn same_rate(a: &str, b: &str) -> bool {
+    match (Decimal::from_str(a), Decimal::from_str(b)) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => a == b,
+    }
 }
 
 pub async fn profit_analysis(
@@ -226,6 +278,53 @@ pub async fn profit_analysis_realized(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn rate(bid: &str, offer: &str, average: &str) -> USExchangeRate {
+        USExchangeRate {
+            universal_key: "1".to_string(),
+            spec_key: "USD".to_string(),
+            base_currency: "USD".to_string(),
+            other_currency: "HKD".to_string(),
+            bid_rate: bid.to_string(),
+            offer_rate: offer.to_string(),
+            average_rate: average.to_string(),
+        }
+    }
+
+    #[test]
+    fn us_exchange_rate_drops_sides_equal_to_the_average() {
+        let v = us_exchange_rate_json(&rate("7.80", "7.8", "7.8"));
+        assert_eq!(v["average_rate"], "7.8", "average_rate is always kept");
+        assert!(
+            v.get("bid_rate").is_none(),
+            "bid equal to average is dropped"
+        );
+        assert!(
+            v.get("offer_rate").is_none(),
+            "offer equal to average is dropped"
+        );
+        assert_eq!(v["base_currency"], "USD", "base currency is kept");
+        assert_eq!(v["other_currency"], "HKD", "other currency is kept");
+        assert_eq!(v["universal_key"], "1", "upstream key is kept");
+        assert_eq!(v["spec_key"], "USD", "upstream key is kept");
+    }
+
+    #[test]
+    fn us_exchange_rate_keeps_a_real_spread() {
+        let v = us_exchange_rate_json(&rate("7.79", "7.81", "7.8"));
+        assert_eq!(v["bid_rate"], "7.79", "a bid off the average is kept");
+        assert_eq!(v["offer_rate"], "7.81", "an offer off the average is kept");
+    }
+
+    #[test]
+    fn us_exchange_rate_drops_missing_sides() {
+        let v = us_exchange_rate_json(&rate("", "", "7.8"));
+        assert!(v.get("bid_rate").is_none(), "an absent bid is not emitted");
+        assert!(
+            v.get("offer_rate").is_none(),
+            "an absent offer is not emitted"
+        );
+    }
 
     #[test]
     fn map_realized_pl_category_translates_friendly_names_to_backend_codes() {

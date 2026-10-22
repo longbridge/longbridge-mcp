@@ -44,14 +44,14 @@
     },
     "account_balance": {
       "title": "帳戶餘額",
-      "description": "查詢帳戶現金餘額與資產概覽，返回頂層數組 {currency, total_cash, net_assets, buy_power, max_finance_amount, remaining_finance_amount, risk_level, margin_call, init_margin, maintenance_margin, cash_infos[]{currency, available_cash, withdraw_cash, frozen_cash, settling_cash}}",
+      "description": "查詢帳戶現金餘額與資產概覽，返回頂層數組 {currency, total_cash, net_assets, buy_power, max_finance_amount, remaining_finance_amount, risk_level, margin_call, init_margin, maintenance_margin, cash_infos[]{currency, available_cash, withdraw_cash, frozen_cash, settling_cash}}。美股賬戶返回美股專用結構：對象 {buy_limit_info{currency, cash_buy_power, overnight_buy_power, day_trade_buy_power, instant_buy_power, intraday_margin_buy_power, option_buy_power, crypto_buy_power, mme}, cash_list[]{currency, total_amount, available_cash, withdraw_cash, frozen_cash, settled_cash, outstanding, external_amount}, margin_status{currency, nlv, margin_equity, margin_maintenance_excess, mmr, reg_t_excess, sma}}",
       "properties": {
         "currency": "按幣種代碼篩選（如 `\"USD\"`、`\"HKD\"`），省略則返回所有幣種"
       }
     },
     "cash_flow": {
       "title": "資金流水",
-      "description": "查詢資金流水記錄（出入金、派息等），返回 頂層數組 {transaction_flow_name, direction（In/Out）, business_type, balance（發生金額）, currency, business_time, symbol, description}",
+      "description": "查詢資金流水記錄（出入金、派息等），返回 頂層數組 {transaction_flow_name, direction（In/Out）, business_type, balance（發生金額）, currency, business_time, symbol, description}。美股賬戶返回美股專用結構：賬戶交易流水（出入金、交易、公司行動、轉倉等）{items[]{title, biz_code, biz_code_name, amount, currency, symbol, market, equity_type, position_side, quantity, quantity_description, ref_no, remark, create_at, done_at}, truncated}，amount 為負表示流出；最多返回 2000 條，truncated=true（附 note）表示區間內還有更多記錄，請縮小時間範圍",
       "properties": {
         "start_at": "起始時間：RFC3339（如 2026-09-01T00:00:00Z），或日期（yyyy-mm-dd，表示當天 UTC 0 點）",
         "end_at": "結束時間：RFC3339（如 2026-09-30T23:59:59Z），或日期（yyyy-mm-dd，表示當天 UTC 結束）"
@@ -111,7 +111,7 @@
     },
     "stock_positions": {
       "title": "股票持倉",
-      "description": "查詢所有渠道下的當前股票持倉，返回 list[].stock_info[]{symbol, symbol_name, quantity, available_quantity, currency, cost_price, market}。僅限美股賬戶：額外附帶 us_asset_overview 字段 {cash_list, stock_list, option_list, crypto_list, cash_buy_power, overnight_buy_power}"
+      "description": "查詢所有渠道下的當前股票持倉，返回 list[].stock_info[]{symbol, symbol_name, quantity, available_quantity, currency, cost_price, market}。美股賬戶返回美股專用結構（無 list）：美股資產概覽對象 {account_type, currency, cash_buy_power, overnight_buy_power, cash_list[]{currency, total_cash, total_amount, settled_cash, frozen_buy_cash, outstanding}, stock_list[]{symbol（如 AAPL.US）, name, quantity, currency, average_cost, market, market_price, last_done, prev_close, position_side, today_pl, industry_name}, option_list[], crypto_list[], multi_leg}"
     },
     "dca_history": {
       "title": "定投執行歷史",
@@ -516,7 +516,7 @@
     },
     "exchange_rate": {
       "title": "匯率",
-      "description": "獲取全部支援幣種的匯率，返回 {exchanges[]{base_currency, other_currency, average_rate}}：average_rate 為 1 單位 other_currency 折合的 base_currency（如 base USD、other HKD、0.12743 即 1 HKD = 0.12743 USD）"
+      "description": "獲取全部支援幣種的匯率，返回 {exchanges[]{base_currency, other_currency, average_rate}}：average_rate 為 1 單位 other_currency 折合的 base_currency（如 base USD、other HKD、0.12743 即 1 HKD = 0.12743 USD）。美股賬戶返回美股賬戶自身的匯率，每條額外帶 universal_key/spec_key（上游匯率表鍵），bid_rate/offer_rate 僅在與 average_rate 不同時返回"
     },
     "executive": {
       "title": "高管與董事",

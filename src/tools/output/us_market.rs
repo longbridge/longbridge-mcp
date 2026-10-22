@@ -1,7 +1,7 @@
 //! Typed output schemas for tools with a US-region-specific response shape,
 //! covering `financial_statement`, `financial_report`,
 //! `financial_report_key_metrics`, `profit_analysis_realized`, `etf_docs`,
-//! `stock_positions`'s `us_asset_overview` field, and `order_detail`'s
+//! `stock_positions`'s US-account shape, and `order_detail`'s
 //! US-wrapped shape.
 //!
 //! Shapes are reconstructed from real staging responses (captured via a raw
@@ -396,7 +396,7 @@ pub struct EtfDocsResponse {
     pub files: Option<Vec<EtfDocFile>>,
 }
 
-/// `stock_positions`'s `us_asset_overview` field (US accounts only).
+/// `stock_positions`'s response for US accounts (flattened to the top level).
 /// Reconstructed from a real staging `/v1/us/assets/overview` response.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct UsAssetOverview {

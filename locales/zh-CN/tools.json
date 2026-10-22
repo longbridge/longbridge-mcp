@@ -44,14 +44,14 @@
     },
     "account_balance": {
       "title": "账户余额",
-      "description": "查询账户现金余额与资产概览，返回顶层数组 {currency, total_cash, net_assets, buy_power, max_finance_amount, remaining_finance_amount, risk_level, margin_call, init_margin, maintenance_margin, cash_infos[]{currency, available_cash, withdraw_cash, frozen_cash, settling_cash}}",
+      "description": "查询账户现金余额与资产概览，返回顶层数组 {currency, total_cash, net_assets, buy_power, max_finance_amount, remaining_finance_amount, risk_level, margin_call, init_margin, maintenance_margin, cash_infos[]{currency, available_cash, withdraw_cash, frozen_cash, settling_cash}}。美股账户返回美股专用结构：对象 {buy_limit_info{currency, cash_buy_power, overnight_buy_power, day_trade_buy_power, instant_buy_power, intraday_margin_buy_power, option_buy_power, crypto_buy_power, mme}, cash_list[]{currency, total_amount, available_cash, withdraw_cash, frozen_cash, settled_cash, outstanding, external_amount}, margin_status{currency, nlv, margin_equity, margin_maintenance_excess, mmr, reg_t_excess, sma}}",
       "properties": {
         "currency": "按币种代码筛选（如 `\"USD\"`、`\"HKD\"`），省略则返回所有币种"
       }
     },
     "cash_flow": {
       "title": "资金流水",
-      "description": "查询资金流水记录（出入金、派息等），返回 顶层数组 {transaction_flow_name, direction（In/Out）, business_type, balance（发生金额）, currency, business_time, symbol, description}",
+      "description": "查询资金流水记录（出入金、派息等），返回 顶层数组 {transaction_flow_name, direction（In/Out）, business_type, balance（发生金额）, currency, business_time, symbol, description}。美股账户返回美股专用结构：账户交易流水（出入金、交易、公司行动、转仓等）{items[]{title, biz_code, biz_code_name, amount, currency, symbol, market, equity_type, position_side, quantity, quantity_description, ref_no, remark, create_at, done_at}, truncated}，amount 为负表示流出；最多返回 2000 条，truncated=true（附 note）表示区间内还有更多记录，请缩小时间范围",
       "properties": {
         "start_at": "起始时间：RFC3339（如 2026-09-01T00:00:00Z），或日期（yyyy-mm-dd，表示当天 UTC 0 点）",
         "end_at": "结束时间：RFC3339（如 2026-09-30T23:59:59Z），或日期（yyyy-mm-dd，表示当天 UTC 结束）"
@@ -111,7 +111,7 @@
     },
     "stock_positions": {
       "title": "股票持仓",
-      "description": "查询所有渠道下的当前股票持仓，返回 list[].stock_info[]{symbol, symbol_name, quantity, available_quantity, currency, cost_price, market}。仅限美股账户：额外附带 us_asset_overview 字段 {cash_list, stock_list, option_list, crypto_list, cash_buy_power, overnight_buy_power}"
+      "description": "查询所有渠道下的当前股票持仓，返回 list[].stock_info[]{symbol, symbol_name, quantity, available_quantity, currency, cost_price, market}。美股账户返回美股专用结构（无 list）：美股资产概览对象 {account_type, currency, cash_buy_power, overnight_buy_power, cash_list[]{currency, total_cash, total_amount, settled_cash, frozen_buy_cash, outstanding}, stock_list[]{symbol（如 AAPL.US）, name, quantity, currency, average_cost, market, market_price, last_done, prev_close, position_side, today_pl, industry_name}, option_list[], crypto_list[], multi_leg}"
     },
     "dca_history": {
       "title": "定投执行历史",
@@ -516,7 +516,7 @@
     },
     "exchange_rate": {
       "title": "汇率",
-      "description": "获取全部支持币种的汇率，返回 {exchanges[]{base_currency, other_currency, average_rate}}：average_rate 为 1 单位 other_currency 折合的 base_currency（如 base USD、other HKD、0.12743 即 1 HKD = 0.12743 USD）"
+      "description": "获取全部支持币种的汇率，返回 {exchanges[]{base_currency, other_currency, average_rate}}：average_rate 为 1 单位 other_currency 折合的 base_currency（如 base USD、other HKD、0.12743 即 1 HKD = 0.12743 USD）。美股账户返回美股账户自身的汇率，每条额外带 universal_key/spec_key（上游汇率表键），bid_rate/offer_rate 仅在与 average_rate 不同时返回"
     },
     "executive": {
       "title": "高管与董事",

@@ -1265,9 +1265,13 @@ const US_ONLY_TOOLS: &[&str] = &[
 
 /// Tools whose underlying SDK method is AP-DC-only (calls
 /// `.dc_restrict(DcRegion::Ap)` / checks `DcRegion::Ap` internally, confirmed
-/// against the SDK source: broker queue/holding data and the entire
-/// recurring-investment (DCA) API) — hidden from accounts in the US region.
+/// against the SDK source: broker queue/holding data, the entire
+/// recurring-investment (DCA) API, fund positions and margin ratios, whose
+/// endpoints are not deployed in the US data center) — hidden from accounts
+/// in the US region.
 const AP_ONLY_TOOLS: &[&str] = &[
+    "fund_positions",
+    "margin_ratio",
     "brokers",
     "broker_holding",
     "broker_holding_detail",
@@ -2849,7 +2853,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get account cash balance and asset summary. Returns a top-level array of {currency, total_cash, net_assets, buy_power, max_finance_amount, remaining_finance_amount, risk_level, margin_call, init_margin, maintenance_margin, cash_infos[]{currency, available_cash, withdraw_cash, frozen_cash, settling_cash}}. Filter by currency (e.g. \"USD\", \"HKD\")."
+        description = "Get account cash balance and asset summary. Returns a top-level array of {currency, total_cash, net_assets, buy_power, max_finance_amount, remaining_finance_amount, risk_level, margin_call, init_margin, maintenance_margin, cash_infos[]{currency, available_cash, withdraw_cash, frozen_cash, settling_cash}}. Filter by currency (e.g. \"USD\", \"HKD\"). US accounts get a US-specific variant instead: an object {buy_limit_info{currency, cash_buy_power, overnight_buy_power, day_trade_buy_power, instant_buy_power, intraday_margin_buy_power, option_buy_power, crypto_buy_power, mme}, cash_list[]{currency, total_amount, available_cash, withdraw_cash, frozen_cash, settled_cash, outstanding, external_amount}, margin_status{currency, nlv, margin_equity, margin_maintenance_excess, mmr, reg_t_excess, sma}}."
     )]
     async fn account_balance(
         &self,
@@ -2868,7 +2872,7 @@ impl Longbridge {
         title = "Stock Positions",
         annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = true),
         output_schema = schema_for::<output::StockPositionsResponse>(),
-        description = "Get current stock positions across all channels. Returns list[].stock_info[]{symbol, symbol_name, quantity, available_quantity, currency, cost_price, market}. US accounts only: an additional us_asset_overview field {cash_list, stock_list, option_list, crypto_list, cash_buy_power, overnight_buy_power} is included alongside the existing data."
+        description = "Get current stock positions across all channels. Returns list[].stock_info[]{symbol, symbol_name, quantity, available_quantity, currency, cost_price, market}. US accounts get a US-specific variant instead (no list): the US asset overview object {account_type, currency, cash_buy_power, overnight_buy_power, cash_list[]{currency, total_cash, total_amount, settled_cash, frozen_buy_cash, outstanding}, stock_list[]{symbol (e.g. AAPL.US), name, quantity, currency, average_cost, market, market_price, last_done, prev_close, position_side, today_pl, industry_name}, option_list[], crypto_list[], multi_leg}."
     )]
     async fn stock_positions(
         &self,
@@ -3061,7 +3065,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get cash flow records (deposits, withdrawals, dividends). Returns a top-level array of {transaction_flow_name, direction (In/Out), business_type, balance (the amount moved), currency, business_time, symbol, description}. start_at/end_at: RFC3339 or yyyy-mm-dd."
+        description = "Get cash flow records (deposits, withdrawals, dividends). Returns a top-level array of {transaction_flow_name, direction (In/Out), business_type, balance (the amount moved), currency, business_time, symbol, description}. start_at/end_at: RFC3339 or yyyy-mm-dd. US accounts get a US-specific variant instead: the account transaction history (deposits, withdrawals, trades, corporate actions, transfers) as {items[]{title, biz_code, biz_code_name, amount (negative = outflow), currency, symbol, market, equity_type, position_side, quantity, quantity_description, ref_no, remark, create_at, done_at}, truncated}; at most 2000 records are returned, and truncated=true (with a note) means the range held more, so narrow it."
     )]
     async fn cash_flow(
         &self,
@@ -4437,7 +4441,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get exchange rates for all supported currencies. Returns {exchanges[]{base_currency, other_currency, average_rate}}: average_rate is the value of 1 other_currency in base_currency (e.g. base USD, other HKD, 0.12743 = 1 HKD is 0.12743 USD)."
+        description = "Get exchange rates for all supported currencies. Returns {exchanges[]{base_currency, other_currency, average_rate}}: average_rate is the value of 1 other_currency in base_currency (e.g. base USD, other HKD, 0.12743 = 1 HKD is 0.12743 USD). US accounts get a US-specific variant: the US account's rates, each entry also carrying universal_key/spec_key (the upstream rate-table keys), plus bid_rate/offer_rate only when they differ from average_rate."
     )]
     async fn exchange_rate(
         &self,
@@ -7176,6 +7180,64 @@ mod tests {
                 .iter()
                 .all(|n| !super::AP_ONLY_TOOLS.contains(n)),
             "US_ONLY_TOOLS and AP_ONLY_TOOLS must be disjoint"
+        );
+    }
+
+    #[test]
+    fn ap_only_asset_tools_are_hidden_for_us_accounts() {
+        use longbridge::DcRegion;
+
+        // Their endpoints are not deployed in the US data center, so a US
+        // account could only ever get `code 12 internal server error`.
+        for name in ["fund_positions", "margin_ratio"] {
+            assert!(
+                super::is_hidden_for_dc_region(name, DcRegion::Us),
+                "`{name}` must be hidden for US accounts"
+            );
+            assert!(
+                !super::is_hidden_for_dc_region(name, DcRegion::Ap),
+                "`{name}` must stay visible for AP accounts"
+            );
+        }
+        // These are routed to US endpoints instead, so both regions keep them.
+        for name in [
+            "account_balance",
+            "stock_positions",
+            "cash_flow",
+            "exchange_rate",
+        ] {
+            for region in [DcRegion::Us, DcRegion::Ap] {
+                assert!(
+                    !super::is_hidden_for_dc_region(name, region),
+                    "`{name}` must stay visible for {region:?} accounts"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn stock_positions_schema_covers_both_region_shapes() {
+        let schema = super::output_schema_map()
+            .get("stock_positions")
+            .expect("stock_positions schema");
+        let properties = schema
+            .get("properties")
+            .and_then(|p| p.as_object())
+            .expect("stock_positions schema must list properties");
+        for key in ["list", "stock_list", "cash_list", "cash_buy_power"] {
+            assert!(
+                properties.contains_key(key),
+                "stock_positions schema must describe `{key}`"
+            );
+        }
+        let required = schema
+            .get("required")
+            .and_then(|r| r.as_array())
+            .cloned()
+            .unwrap_or_default();
+        assert!(
+            required.is_empty(),
+            "neither region's shape carries the other's fields, so none can be required"
         );
     }
 

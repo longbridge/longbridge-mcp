@@ -80,20 +80,21 @@ pub struct MarginRatioResponse {
     pub fm_factor: String,
 }
 
-/// Returned by `stock_positions`. Top-level wraps a `list` array
-/// (one entry per linked broker channel), each carrying its own positions.
+/// Returned by `stock_positions`.
+///
+/// AP accounts get a `list` array (one entry per linked broker channel), each
+/// carrying its own positions. US accounts get the US asset overview fields at
+/// the top level instead, and no `list`: the AP positions endpoint is not
+/// deployed in the US data center.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct StockPositionsResponse {
-    /// Position channels — one entry per broker channel.
-    pub list: Vec<StockPositionChannel>,
-    /// US accounts only: cash/stock/option/crypto overview from a separate
-    /// US-specific endpoint.
+    /// AP accounts: position channels, one entry per broker channel.
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub list: Option<Vec<StockPositionChannel>>,
+    /// US accounts: cash/stock/option/crypto overview from the US asset
+    /// overview endpoint.
+    #[serde(flatten)]
     pub us_asset_overview: Option<us_market::UsAssetOverview>,
-    /// Present when the US overview call failed: positions are still returned,
-    /// and this names what is missing and why.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub warnings: Option<Vec<String>>,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
