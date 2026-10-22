@@ -51,3 +51,8 @@ sha2 = "0.10"
 jaq-core = "3.1"
 jaq-std = "3.0"
 jaq-json = { version = "2.0", features = ["serde"] }
+
+# TEMP: unpublished US asset APIs (feat/us-asset-apis). Drop before merge.
+[patch.crates-io]
+longbridge = { path = "/private/tmp/claude-501/-Users-hogan-work-longbridge-longbridge-mcp/26ecef02-dd5f-4310-a8cb-70625219e796/scratchpad/sdk-us-asset/rust" }
+longbridge-proto = { path = "/private/tmp/claude-501/-Users-hogan-work-longbridge-longbridge-mcp/26ecef02-dd5f-4310-a8cb-70625219e796/scratchpad/sdk-us-asset/rust/crates/proto" }
