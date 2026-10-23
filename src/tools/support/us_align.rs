@@ -306,14 +306,24 @@ pub fn order_sides(raw: &[Value]) -> HashMap<String, OrderSide> {
     raw.iter()
         .filter_map(|order| {
             let id = order.get("id")?.as_str()?;
-            let side = match order.get("action")?.as_i64()? {
-                1 => OrderSide::Buy,
-                2 => OrderSide::Sell,
-                _ => return None,
-            };
-            Some((id.to_string(), side))
+            Some((id.to_string(), action_side(order)?))
         })
         .collect()
+}
+
+/// Order side from the raw `/v1/us/orders/{id}` data (`{order: {action, …}}`),
+/// or `None` when its `action` is neither Buy nor Sell.
+pub fn order_detail_side(data: &Value) -> Option<OrderSide> {
+    action_side(data.get("order")?)
+}
+
+/// Side of one raw US order from its `action` (1 Buy, 2 Sell).
+fn action_side(order: &Value) -> Option<OrderSide> {
+    match order.get("action")?.as_i64()? {
+        1 => Some(OrderSide::Buy),
+        2 => Some(OrderSide::Sell),
+        _ => None,
+    }
 }
 
 /// One AP `history[]` entry from a US `order_histories[]` entry.

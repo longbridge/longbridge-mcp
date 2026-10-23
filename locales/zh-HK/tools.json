@@ -151,7 +151,7 @@
     },
     "history_executions": {
       "title": "歷史成交",
-      "description": "查詢指定日期區間內的全部成交記錄，自動翻頁返回完整結果（不會在每頁 1000 條上限處截斷）。返回頂層數組 {order_id, trade_id, symbol, side, quantity, price, trade_done_at}；trade_id 為穩定的去重鍵；side 未知時為 null。start_at/end_at 為 RFC3339 格式，或只傳日期（yyyy-mm-dd）按 UTC 當天解讀（美股賬戶按紐約時間 EST/EDT，與 history_orders 一致）。亞太賬戶按成交時間（trade_done_at）篩選。美股賬戶讀取 v1 歷史成交，不按成交時間篩選，區間邊緣可能跨日滯後：請將區間前後各放寬一天，再按 trade_done_at 自行篩選；side 由賬戶在該區間內的委託補全",
+      "description": "查詢指定日期區間內的全部成交記錄，自動翻頁返回完整結果（不會在每頁 1000 條上限處截斷）。返回頂層數組 {order_id, trade_id, symbol, side, quantity, price, trade_done_at}；trade_id 為穩定的去重鍵；side 無法確定時為 \"Unknown\"（美股賬戶：未查到所屬委託，可調用 order_detail(order_id) 獲取）。start_at/end_at 為 RFC3339 格式，或只傳日期（yyyy-mm-dd）按 UTC 當天解讀（美股賬戶按紐約時間 EST/EDT，與 history_orders 一致）。亞太賬戶按成交時間（trade_done_at）篩選。美股賬戶讀取 v1 歷史成交，不按成交時間篩選，區間邊緣可能跨日滯後：請將區間前後各放寬一天，再按 trade_done_at 自行篩選；side 由賬戶在該區間內的委託及委託詳情補全",
       "properties": {
         "symbol": "按證券篩選（可選）",
         "start_at": "起始時間：RFC3339（如 2026-09-01T00:00:00Z），或日期（yyyy-mm-dd，表示當天 UTC 0 點；美股賬戶按紐約時間）",
@@ -179,7 +179,7 @@
     },
     "today_executions": {
       "title": "當日成交",
-      "description": "查詢當日成交，返回頂層數組 {order_id, trade_id, symbol, side, quantity, price, trade_done_at}；side 取自成交所屬委託，未知時為 null。可傳入 symbol 或 order_id 篩選",
+      "description": "查詢當日成交，返回頂層數組 {order_id, trade_id, symbol, side, quantity, price, trade_done_at}；side 取自成交所屬委託，無法確定時為 \"\"（美股賬戶：未查到所屬委託，可調用 order_detail(order_id) 獲取）。可傳入 symbol 或 order_id 篩選",
       "properties": {
         "symbol": "按證券篩選，例如 `\"700.HK\"`",
         "order_id": "按指定委託單號篩選"

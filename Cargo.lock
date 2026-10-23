@@ -1689,6 +1689,7 @@ dependencies = [
  "base64 0.22.1",
  "bs58",
  "clap",
+ "futures-util",
  "jaq-core",
  "jaq-json",
  "jaq-std",

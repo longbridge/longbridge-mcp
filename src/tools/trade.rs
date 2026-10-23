@@ -1,8 +1,10 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 
+use futures_util::stream::{self, StreamExt};
+
 use longbridge::DcRegion;
-use longbridge::httpclient::Json;
+use longbridge::httpclient::{HttpClientError, Json};
 use longbridge::trade::{
     AccountBalance, CancelOrderOptions, Execution, GetHistoryExecutionsOptions,
     GetOrderDetailOptions, GetTodayExecutionsOptions, GetTodayOrdersOptions, GetUSHistoryOrders,
@@ -757,9 +759,11 @@ pub async fn today_executions(
             .today_executions(exec_opts)
             .await
             .map_err(Error::longbridge)?;
-        let (start, end) = us_market::us_today_orders_window(time::OffsetDateTime::now_utc());
-        let sides = us_fill_sides(&ctx, &executions, p.symbol, start, end).await?;
-        return tool_json(&executions_value(&executions, &sides));
+        let query = us_today_fill_side_query(time::OffsetDateTime::now_utc(), p.symbol);
+        let sides = us_fill_sides(mctx, &ctx, &executions, query).await;
+        // An unresolved side is "", as AP today_executions renders a fill
+        // whose order is not in today's orders.
+        return tool_json(&us_executions_json(&executions, &sides, ""));
     }
 
     let mut order_opts = GetTodayOrdersOptions::new();
@@ -771,9 +775,15 @@ pub async fn today_executions(
         ctx.today_orders(order_opts),
     )
     .map_err(Error::longbridge)?;
-    let sides: HashMap<String, OrderSide> =
-        orders.into_iter().map(|o| (o.order_id, o.side)).collect();
-    tool_json(&executions_value(&executions, &sides))
+    // AP takes the side from today's orders only; a fill whose order is not
+    // among them gets "".
+    let side_map: HashMap<String, String> = orders
+        .into_iter()
+        .map(|o| (o.order_id, format!("{:?}", o.side)))
+        .collect();
+    tool_json(&executions_json(&executions, |e| {
+        side_map.get(&e.order_id).cloned().unwrap_or_default()
+    }))
 }
 
 pub async fn history_orders(
@@ -878,29 +888,32 @@ pub async fn history_executions(
                 .await
                 .map_err(Error::longbridge)?;
             // v1 history omits `side` for US accounts; fill it from the
-            // account's orders over the same range.
-            let sides = us_fill_sides(&ctx, &executions, p.symbol, start, end).await?;
-            return tool_json(&executions_value(&executions, &sides));
+            // account's orders over the same range. An unresolved side is
+            // "Unknown", as AP history_executions renders one.
+            let query = us_fill_side_query(p.symbol, start, end);
+            let sides = us_fill_sides(mctx, &ctx, &executions, query).await;
+            return tool_json(&us_executions_json(&executions, &sides, "Unknown"));
         }
         ExecutionsSource::V3All => v3_all_executions(&ctx, start, end, p.symbol).await?,
     };
-    tool_json(&executions_value(&executions, &HashMap::new()))
+    tool_json(&executions_json(&executions, |e| format!("{:?}", e.side)))
 }
 
-/// Side by order ID for the US fills in `executions` that lack one, read from
-/// the US orders placed between `start` and `end` (paged up to
-/// `US_ORDER_MAX_PAGES`). Skips the order query when every fill has a side.
-async fn us_fill_sides(
-    ctx: &TradeContext,
-    executions: &[Execution],
+/// Most order IDs `us_fill_sides` looks up one by one in the US order detail
+/// endpoint after the range order query left them unmatched.
+const US_SIDE_DETAIL_MAX_LOOKUPS: usize = 20;
+
+/// Order-detail lookups `us_fill_sides` runs at once.
+const US_SIDE_DETAIL_CONCURRENCY: usize = 5;
+
+/// The US order query `us_fill_sides` runs for fills between `start` and
+/// `end` (every page up to `US_ORDER_MAX_PAGES` is walked).
+fn us_fill_side_query(
     symbol: Option<String>,
     start: time::OffsetDateTime,
     end: time::OffsetDateTime,
-) -> Result<HashMap<String, OrderSide>, McpError> {
-    if executions.iter().all(|e| e.side != OrderSide::Unknown) {
-        return Ok(HashMap::new());
-    }
-    let opts = GetUSHistoryOrders {
+) -> GetUSHistoryOrders {
+    GetUSHistoryOrders {
         symbol,
         side: OrderSide::Unknown,
         start_at: start.unix_timestamp(),
@@ -910,9 +923,154 @@ async fn us_fill_sides(
         query_type: 0,
         page: 1,
         limit: US_ORDER_PAGE_SIZE,
+    }
+}
+
+/// The order query for today's US fills: today_orders' window, which opens at
+/// 20:00 ET the previous day so overnight-session fills find their order.
+fn us_today_fill_side_query(
+    now: time::OffsetDateTime,
+    symbol: Option<String>,
+) -> GetUSHistoryOrders {
+    let (start, end) = us_market::us_today_orders_window(now);
+    us_fill_side_query(symbol, start, end)
+}
+
+/// Side by order ID for the US fills in `executions` that lack one: from the
+/// US orders matched by `query`, then from the order detail endpoint for the
+/// order IDs still unmatched. Never fails: an order-query error leaves every
+/// side unresolved.
+async fn us_fill_sides(
+    mctx: &crate::tools::McpContext,
+    ctx: &TradeContext,
+    executions: &[Execution],
+    query: GetUSHistoryOrders,
+) -> HashMap<String, OrderSide> {
+    resolve_fill_sides(
+        executions,
+        query,
+        |opts| {
+            collect_us_pages(US_ORDER_PAGE_SIZE, US_ORDER_MAX_PAGES, move |page| {
+                let opts = GetUSHistoryOrders {
+                    page,
+                    ..opts.clone()
+                };
+                async move { ctx.us_query_orders(opts).await.map(|r| r.orders) }
+            })
+        },
+        |order_id| us_order_side(mctx, order_id),
+    )
+    .await
+}
+
+/// One US order's side from `/v1/us/orders/{order_id}`, or `None` when its
+/// `action` is neither Buy nor Sell.
+async fn us_order_side(
+    mctx: &crate::tools::McpContext,
+    order_id: String,
+) -> Result<Option<OrderSide>, HttpClientError> {
+    if order_id.is_empty() || !order_id.bytes().all(|b| b.is_ascii_alphanumeric()) {
+        return Ok(None);
+    }
+    let path = format!("/v1/us/orders/{order_id}");
+    let Json(data) = mctx
+        .create_http_client()
+        .request(Method::GET, path.as_str())
+        .dc_restrict(DcRegion::Us)
+        .response::<Json<serde_json::Value>>()
+        .send()
+        .await?;
+    Ok(us_align::order_detail_side(&data))
+}
+
+/// Resolve the sides of fills that lack one. `query_orders` runs `query` (the
+/// account's orders over the fills' range); order IDs it leaves unmatched are
+/// looked up with `order_side`, at most `US_SIDE_DETAIL_MAX_LOOKUPS` of them
+/// and `US_SIDE_DETAIL_CONCURRENCY` at a time. Nothing is queried when every
+/// fill has a side; a failed order query falls back to an empty map and a
+/// failed lookup leaves that order unresolved, so the fills are still
+/// returned.
+async fn resolve_fill_sides<Q, QFut, QErr, D, DFut, DErr>(
+    executions: &[Execution],
+    query: GetUSHistoryOrders,
+    query_orders: Q,
+    order_side: D,
+) -> HashMap<String, OrderSide>
+where
+    Q: FnOnce(GetUSHistoryOrders) -> QFut,
+    QFut: Future<Output = Result<UsPages<serde_json::Value>, QErr>>,
+    QErr: std::fmt::Display,
+    D: Fn(String) -> DFut,
+    DFut: Future<Output = Result<Option<OrderSide>, DErr>>,
+    DErr: std::fmt::Display,
+{
+    let mut seen = HashSet::new();
+    let unmatched: Vec<&str> = executions
+        .iter()
+        .filter(|e| e.side == OrderSide::Unknown)
+        .map(|e| e.order_id.as_str())
+        .filter(|id| seen.insert(*id))
+        .collect();
+    if unmatched.is_empty() {
+        return HashMap::new();
+    }
+
+    let mut sides = match query_orders(query).await {
+        Ok(pages) => {
+            if pages.truncated {
+                tracing::warn!(
+                    orders = pages.items.len(),
+                    "US order query for fill sides stopped at the page cap; \
+                     falling back to order detail lookups"
+                );
+            }
+            us_align::order_sides(&pages.items)
+        }
+        Err(err) => {
+            tracing::warn!(
+                error = %err,
+                "US order query for fill sides failed; leaving sides unresolved"
+            );
+            return HashMap::new();
+        }
     };
-    let orders = us_orders(ctx, opts, None, None).await?;
-    Ok(us_align::order_sides(&orders))
+
+    let missing: Vec<String> = unmatched
+        .into_iter()
+        .filter(|id| !sides.contains_key(*id))
+        .map(str::to_string)
+        .collect();
+    if missing.len() > US_SIDE_DETAIL_MAX_LOOKUPS {
+        tracing::warn!(
+            unmatched = missing.len(),
+            looked_up = US_SIDE_DETAIL_MAX_LOOKUPS,
+            "too many fills without a matching US order; the rest stay unresolved"
+        );
+    }
+    let order_side = &order_side;
+    let lookups: Vec<(String, Result<Option<OrderSide>, DErr>)> =
+        stream::iter(missing.into_iter().take(US_SIDE_DETAIL_MAX_LOOKUPS))
+            .map(|id| async move {
+                let side = order_side(id.clone()).await;
+                (id, side)
+            })
+            .buffer_unordered(US_SIDE_DETAIL_CONCURRENCY)
+            .collect()
+            .await;
+    for (id, side) in lookups {
+        match side {
+            Ok(Some(side)) => {
+                sides.insert(id, side);
+            }
+            Ok(None) => {}
+            Err(err) => tracing::warn!(
+                order_id = %id,
+                error = %err,
+                "US order detail lookup for a fill side failed"
+            ),
+        }
+    }
+    sides
 }
 
 /// Every fill from v3 `/trade/execution/all`, which filters by execution time
@@ -947,29 +1105,18 @@ async fn v3_all_executions(
     Ok(executions)
 }
 
-/// Render fills as the tool's top-level array, with `side` spelled out: the
-/// fill's own side, else its order's side from `order_sides`, else null.
-fn executions_value(
-    executions: &[Execution],
-    order_sides: &HashMap<String, OrderSide>,
-) -> serde_json::Value {
+/// Render fills as the tool's top-level array, with `side` set to
+/// `side(fill)`.
+fn executions_json<F>(executions: &[Execution], side: F) -> serde_json::Value
+where
+    F: Fn(&Execution) -> String,
+{
     let result: Vec<serde_json::Value> = executions
         .iter()
         .map(|e| {
             let mut v = serde_json::to_value(e).unwrap_or_default();
             if let serde_json::Value::Object(ref mut map) = v {
-                let side = match e.side {
-                    OrderSide::Unknown => order_sides
-                        .get(&e.order_id)
-                        .copied()
-                        .unwrap_or(OrderSide::Unknown),
-                    side => side,
-                };
-                let side = match side {
-                    OrderSide::Unknown => serde_json::Value::Null,
-                    side => serde_json::Value::String(format!("{side:?}")),
-                };
-                map.insert("side".to_string(), side);
+                map.insert("side".to_string(), serde_json::Value::String(side(e)));
             }
             v
         })
@@ -979,6 +1126,23 @@ fn executions_value(
     let mut value = serde_json::Value::Array(result);
     strip_trailing_zeros(&mut value);
     value
+}
+
+/// US fills as the tool's top-level array: each fill's own side, else its
+/// order's side from `order_sides`, else `unresolved` (the value the AP tool
+/// renders for an unknown side).
+fn us_executions_json(
+    executions: &[Execution],
+    order_sides: &HashMap<String, OrderSide>,
+    unresolved: &str,
+) -> serde_json::Value {
+    executions_json(executions, |e| {
+        let side = match e.side {
+            OrderSide::Unknown => order_sides.get(&e.order_id).copied(),
+            side => Some(side),
+        };
+        side.map_or_else(|| unresolved.to_string(), |side| format!("{side:?}"))
+    })
 }
 
 pub async fn cash_flow(
@@ -2055,11 +2219,17 @@ mod tests {
     };
 
     use std::collections::HashMap;
+    use std::future::Ready;
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use longbridge::trade::{Execution, OrderSide};
-    use serde_json::json;
+    use longbridge::trade::{Execution, GetUSHistoryOrders, OrderSide};
+    use serde_json::{Value, json};
 
-    use super::executions_value;
+    use super::{
+        US_SIDE_DETAIL_CONCURRENCY, US_SIDE_DETAIL_MAX_LOOKUPS, executions_json,
+        resolve_fill_sides, us_executions_json, us_fill_side_query, us_today_fill_side_query,
+    };
     use crate::tools::support::us_align;
 
     /// Two fills as US prod `/v1/trade/execution/history` returns them: no
@@ -2086,6 +2256,39 @@ mod tests {
         .expect("v1 US fills without side must deserialize")
     }
 
+    /// Side-less fills, one per order ID.
+    fn fills_for(order_ids: &[String]) -> Vec<Execution> {
+        let raw: Vec<Value> = order_ids
+            .iter()
+            .map(|id| {
+                json!({
+                    "order_id": id,
+                    "price": "1",
+                    "quantity": "1",
+                    "symbol": "AAPL.US",
+                    "trade_done_at": "1792000000",
+                    "trade_id": format!("{id}-1")
+                })
+            })
+            .collect();
+        serde_json::from_value(Value::Array(raw)).expect("side-less fills must deserialize")
+    }
+
+    fn any_query() -> GetUSHistoryOrders {
+        us_fill_side_query(
+            None,
+            datetime!(2026-10-22 04:00 UTC),
+            datetime!(2026-10-23 03:59:59 UTC),
+        )
+    }
+
+    fn orders_page(orders: Vec<Value>) -> Result<UsPages<Value>, String> {
+        Ok(UsPages {
+            items: orders,
+            truncated: false,
+        })
+    }
+
     #[test]
     fn v1_us_fill_without_side_deserializes_as_unknown() {
         let fills = v1_us_fills();
@@ -2097,7 +2300,43 @@ mod tests {
     }
 
     #[test]
-    fn executions_fill_side_from_us_orders_and_null_when_unmatched() {
+    fn ap_today_executions_side_matches_the_prior_output() {
+        // Prior AP behavior: the side comes from today's orders only (the
+        // fill's own side is ignored) and an unmatched fill gets "".
+        let mut fills = v1_us_fills();
+        fills[1].side = OrderSide::Buy;
+        let side_map = HashMap::from([("701".to_string(), "Sell".to_string())]);
+        let value = executions_json(&fills, |e| {
+            side_map.get(&e.order_id).cloned().unwrap_or_default()
+        });
+        assert_eq!(value[0]["side"], json!("Sell"), "side comes from order 701");
+        assert_eq!(
+            value[1]["side"],
+            json!(""),
+            "an unmatched AP fill gets \"\""
+        );
+        assert_eq!(
+            value[0]["price"],
+            json!("187.25"),
+            "trailing zeros are stripped"
+        );
+    }
+
+    #[test]
+    fn ap_history_executions_side_matches_the_prior_output() {
+        let mut fills = v1_us_fills();
+        fills[0].side = OrderSide::Buy;
+        let value = executions_json(&fills, |e| format!("{:?}", e.side));
+        assert_eq!(value[0]["side"], json!("Buy"), "the fill's own side");
+        assert_eq!(
+            value[1]["side"],
+            json!("Unknown"),
+            "an unknown AP history side stays \"Unknown\""
+        );
+    }
+
+    #[test]
+    fn us_executions_fill_side_from_orders_and_use_the_ap_unresolved_value() {
         let orders = [
             json!({"id": "701", "action": 2}),
             json!({"id": "702", "action": 1}),
@@ -2109,27 +2348,220 @@ mod tests {
             2,
             "an action that is neither Buy nor Sell is skipped"
         );
-        let value = executions_value(&v1_us_fills(), &sides);
-        assert_eq!(value[0]["side"], json!("Sell"), "side comes from order 701");
+        let today = us_executions_json(&v1_us_fills(), &sides, "");
+        assert_eq!(today[0]["side"], json!("Sell"), "side comes from order 701");
         assert_eq!(
-            value[0]["price"],
-            json!("187.25"),
-            "trailing zeros are stripped"
+            today[1]["side"],
+            json!(""),
+            "an unresolved today fill matches AP today_executions"
         );
+        let history = us_executions_json(&v1_us_fills(), &sides, "Unknown");
         assert_eq!(
-            value[1]["side"],
-            serde_json::Value::Null,
-            "a fill with no matching order gets a null side, not Unknown"
+            history[1]["side"],
+            json!("Unknown"),
+            "an unresolved history fill matches AP history_executions"
+        );
+        assert!(
+            history
+                .as_array()
+                .expect("fills render as an array")
+                .iter()
+                .all(|f| !f["side"].is_null()),
+            "no fill gets a null side"
         );
     }
 
     #[test]
-    fn executions_keep_their_own_side_over_the_order_map() {
+    fn us_executions_keep_their_own_side_over_the_order_map() {
         let mut fills = v1_us_fills();
         fills[0].side = OrderSide::Buy;
         let sides = HashMap::from([("701".to_string(), OrderSide::Sell)]);
-        let value = executions_value(&fills, &sides);
+        let value = us_executions_json(&fills, &sides, "");
         assert_eq!(value[0]["side"], json!("Buy"), "the fill's own side wins");
+    }
+
+    #[test]
+    fn order_detail_side_reads_the_order_action() {
+        assert_eq!(
+            us_align::order_detail_side(&json!({"order": {"id": "1", "action": 1}})),
+            Some(OrderSide::Buy),
+            "action 1 is Buy"
+        );
+        assert_eq!(
+            us_align::order_detail_side(&json!({"order": {"id": "1", "action": 2}})),
+            Some(OrderSide::Sell),
+            "action 2 is Sell"
+        );
+        assert_eq!(
+            us_align::order_detail_side(&json!({"order": {"action": 0}})),
+            None,
+            "another action is unresolved"
+        );
+    }
+
+    #[tokio::test]
+    async fn fill_sides_skip_every_query_when_all_fills_have_a_side() {
+        let mut fills = v1_us_fills();
+        for fill in &mut fills {
+            fill.side = OrderSide::Sell;
+        }
+        let sides = resolve_fill_sides(
+            &fills,
+            any_query(),
+            |_| -> Ready<Result<UsPages<Value>, String>> {
+                panic!("the order query must not run when every fill has a side")
+            },
+            |_| -> Ready<Result<Option<OrderSide>, String>> {
+                panic!("no order detail lookup may run when every fill has a side")
+            },
+        )
+        .await;
+        assert!(sides.is_empty(), "nothing to resolve");
+    }
+
+    #[tokio::test]
+    async fn fill_sides_fall_back_to_empty_when_the_order_query_fails() {
+        let fills = v1_us_fills();
+        let sides = resolve_fill_sides(
+            &fills,
+            any_query(),
+            |_| async { Err::<UsPages<Value>, _>("upstream 500".to_string()) },
+            |_| -> Ready<Result<Option<OrderSide>, String>> {
+                panic!("no detail lookup runs after a failed order query")
+            },
+        )
+        .await;
+        assert!(sides.is_empty(), "a failed order query resolves nothing");
+        let value = us_executions_json(&fills, &sides, "Unknown");
+        assert_eq!(
+            value.as_array().map(Vec::len),
+            Some(2),
+            "the fills are still returned"
+        );
+        assert_eq!(
+            value[0]["side"],
+            json!("Unknown"),
+            "an unresolved side uses the AP value"
+        );
+    }
+
+    #[tokio::test]
+    async fn fill_sides_look_up_unmatched_orders_by_detail() {
+        let fills = fills_for(&["701".into(), "998".into(), "999".into(), "999".into()]);
+        let looked_up = Mutex::new(Vec::new());
+        let sides = resolve_fill_sides(
+            &fills,
+            any_query(),
+            |_| async { orders_page(vec![json!({"id": "701", "action": 2})]) },
+            |id| {
+                looked_up.lock().expect("lookup log lock").push(id.clone());
+                async move {
+                    match id.as_str() {
+                        "999" => Ok(Some(OrderSide::Buy)),
+                        _ => Err("detail lookup failed".to_string()),
+                    }
+                }
+            },
+        )
+        .await;
+        let mut looked_up = looked_up.into_inner().expect("lookup log lock");
+        looked_up.sort();
+        assert_eq!(
+            looked_up,
+            ["998", "999"],
+            "only order IDs the range query left unmatched are looked up, once each"
+        );
+        assert_eq!(
+            sides.get("701"),
+            Some(&OrderSide::Sell),
+            "from the range query"
+        );
+        assert_eq!(sides.get("999"), Some(&OrderSide::Buy), "from order detail");
+        assert_eq!(sides.get("998"), None, "a failed lookup stays unresolved");
+    }
+
+    #[tokio::test]
+    async fn fill_sides_cap_and_bound_detail_lookups() {
+        let ids: Vec<String> = (0..US_SIDE_DETAIL_MAX_LOOKUPS + 5)
+            .map(|i| format!("{}", 100 + i))
+            .collect();
+        let fills = fills_for(&ids);
+        let calls = AtomicUsize::new(0);
+        let in_flight = AtomicUsize::new(0);
+        let peak = AtomicUsize::new(0);
+        let sides = resolve_fill_sides(
+            &fills,
+            any_query(),
+            |_| async { orders_page(Vec::new()) },
+            |_| {
+                calls.fetch_add(1, Ordering::SeqCst);
+                let (in_flight, peak) = (&in_flight, &peak);
+                async move {
+                    let now = in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+                    peak.fetch_max(now, Ordering::SeqCst);
+                    tokio::task::yield_now().await;
+                    in_flight.fetch_sub(1, Ordering::SeqCst);
+                    Ok::<_, String>(Some(OrderSide::Sell))
+                }
+            },
+        )
+        .await;
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            US_SIDE_DETAIL_MAX_LOOKUPS,
+            "lookups stop at the cap"
+        );
+        assert_eq!(
+            sides.len(),
+            US_SIDE_DETAIL_MAX_LOOKUPS,
+            "each lookup resolves"
+        );
+        assert!(
+            peak.load(Ordering::SeqCst) <= US_SIDE_DETAIL_CONCURRENCY,
+            "lookups run at most US_SIDE_DETAIL_CONCURRENCY at a time"
+        );
+    }
+
+    #[tokio::test]
+    async fn today_fill_sides_query_today_orders_window() {
+        // 2026-10-23 01:30 ET: an overnight fill from 21:00 ET on 10-22 must
+        // find its order, so the query opens at 20:00 ET the day before.
+        let now = datetime!(2026-10-23 05:30 UTC);
+        let query = us_today_fill_side_query(now, Some("AAPL.US".to_string()));
+        assert_eq!(
+            query.start_at,
+            datetime!(2026-10-23 00:00 UTC).unix_timestamp(),
+            "starts at 20:00 ET the previous day"
+        );
+        assert_eq!(
+            query.end_at,
+            datetime!(2026-10-24 03:59:59 UTC).unix_timestamp(),
+            "ends at the end of today in New York"
+        );
+        let seen = Mutex::new(None);
+        let sides = resolve_fill_sides(
+            &v1_us_fills(),
+            query,
+            |opts| {
+                *seen.lock().expect("query log lock") = Some((opts.start_at, opts.end_at));
+                async { orders_page(vec![json!({"id": "701", "action": 1})]) }
+            },
+            |_| async { Ok::<_, String>(None) },
+        )
+        .await;
+        assert_eq!(
+            seen.into_inner().expect("query log lock"),
+            Some((
+                datetime!(2026-10-23 00:00 UTC).unix_timestamp(),
+                datetime!(2026-10-24 03:59:59 UTC).unix_timestamp()
+            )),
+            "the range query receives today_orders' window"
+        );
+        assert_eq!(
+            sides.get("701"),
+            Some(&OrderSide::Buy),
+            "resolved in the window"
+        );
     }
 
     #[test]
