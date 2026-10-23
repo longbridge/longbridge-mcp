@@ -173,7 +173,7 @@
     },
     "order_detail": {
       "title": "委托详情",
-      "description": "查询单个委托详情，返回 {order_id, symbol, status, side, order_type, quantity, price, executed_quantity, executed_price, submitted_at, time_in_force, msg, attached_orders[]}，其中 attached_orders[] 为该委托的止盈/止损附加单及其各自单号。要按附加单自身的单号查询，设置 is_attached=true，此时返回该附加单本身，charge_detail 为 null。美股账户返回同样的顶层字段及 history[]，但无 time_in_force、tag、expire_date、outside_rth 及费用/抵扣字段（美股原始代码见 us_time_in_force、us_tag，另含 done_at、gtd、security_type、us_attached_orders、us_charge_detail）；is_attached 无效",
+      "description": "查询单个委托详情，返回 {order_id, symbol, status, side, order_type, quantity, price, executed_quantity, executed_price, submitted_at, time_in_force, msg, attached_orders[]}，其中 attached_orders[] 为该委托的止盈/止损附加单及其各自单号。要按附加单自身的单号查询，设置 is_attached=true，此时返回该附加单本身，charge_detail 为 null。美股账户返回同样的顶层字段及 history[]（网关未转换时以 counter_id 代替 symbol），但无 time_in_force、tag、expire_date、outside_rth 及费用/抵扣字段（美股原始代码见 us_time_in_force、us_tag，另含 done_at、gtd、security_type、us_attached_orders、us_charge_detail）；is_attached 无效",
       "properties": {
         "order_id": "委托单号：母单单号，或（配合 is_attached=true）止盈/止损附加单单号",
         "is_attached": "设为 true 表示 order_id 是止盈/止损附加单单号，返回该附加单本身（charge_detail 为 null）；查询母单时省略或传 false。美股账户下无效"
@@ -189,7 +189,7 @@
     },
     "today_orders": {
       "title": "当日委托",
-      "description": "获取当日委托，返回委托的顶层数组 {order_id, symbol, stock_name, side, order_type, status, quantity, executed_quantity, price, currency, time_in_force, submitted_at, updated_at, msg, …, attached_orders[]}，其中 attached_orders[] 为该委托的止盈/止损附加单。可用 symbol 按证券筛选，或用 order_id 查询单笔委托。要按附加单自身的单号查询，把该单号作为 order_id 并同时设置 is_attached=true，返回的委托即为该附加单本身。is_attached 不配合 order_id 时无效。美股账户返回同样的数组和字段名，但无 time_in_force、tag、expire_date、outside_rth（美股原始代码见 us_time_in_force、us_tag，另含 gtd、security_type、operate_direction）；is_attached 无效，us_action（Buy/Sell）可筛选，默认返回当日全部委托（最多 500 条），传 us_page/us_limit 则只返回该页",
+      "description": "获取当日委托，返回委托的顶层数组 {order_id, symbol, stock_name, side, order_type, status, quantity, executed_quantity, price, currency, time_in_force, submitted_at, updated_at, msg, …, attached_orders[]}，其中 attached_orders[] 为该委托的止盈/止损附加单。可用 symbol 按证券筛选，或用 order_id 查询单笔委托。要按附加单自身的单号查询，把该单号作为 order_id 并同时设置 is_attached=true，返回的委托即为该附加单本身。is_attached 不配合 order_id 时无效。美股账户返回同样的数组和字段名（网关未转换时以 counter_id 代替 symbol），但无 time_in_force、tag、expire_date、outside_rth（美股原始代码见 us_time_in_force、us_tag，另含 gtd、security_type、operate_direction）；is_attached 无效，us_action（Buy/Sell）可筛选，默认返回当日全部委托（最多 500 条），传 us_page/us_limit 则只返回该页",
       "properties": {
         "symbol": "按证券筛选，例如 `\"700.HK\"`，省略则返回当日全部委托",
         "order_id": "按委托单号筛选：母单单号，或（配合 is_attached=true）止盈/止损附加单单号。美股账户仅匹配母单单号",

@@ -27,18 +27,6 @@ const PREFERRED_RATE_SPEC: &str = "reference";
 /// Fallback rate type when the preferred one is missing for a pair.
 const FALLBACK_RATE_SPEC: &str = "am";
 
-/// `TYPE/MARKET/CODE` (e.g. `ST/US/INTC`, `VA/BKKT/BTCUSD`) to the
-/// user-facing `CODE.MARKET` (`INTC.US`, `BTCUSD.BKKT`). `None` unless all
-/// three parts are present.
-pub fn symbol_from_counter_id(counter_id: &str) -> Option<String> {
-    let mut parts = counter_id.splitn(3, '/');
-    let (_, market, code) = (parts.next()?, parts.next()?, parts.next()?);
-    if market.is_empty() || code.is_empty() {
-        return None;
-    }
-    Some(format!("{code}.{market}"))
-}
-
 /// A unix-seconds string (`"1790935832"`) as the RFC3339 UTC string AP
 /// outputs use (`"2026-10-02T10:10:32Z"`). `None` for empty, zero or
 /// unparsable input.
@@ -328,8 +316,9 @@ fn order_history_entry(src: &Value) -> Value {
 /// Mapped to AP names: `order_id`, `status` (already AP's form, e.g.
 /// `FilledStatus`), `stock_name`, `quantity`, `executed_quantity`, `price`,
 /// `executed_price`, `submitted_at`/`updated_at` (RFC3339), `side`, `symbol`
-/// (as given, or derived from `counter_id` where the gateway has not
-/// converted it yet; `underlying_symbol` likewise for options),
+/// and `underlying_symbol` (as the gateway converted them; where it has not,
+/// `counter_id`/`underlying_counter_id` pass through unchanged instead —
+/// symbol conversion is the gateway's job),
 /// `order_type`, `last_done`, `trigger_price`, `msg`, `currency`, `remark`,
 /// the trailing/limit-offset fields and, for a detail, `history[]`.
 /// `time_in_force` and `tag` use codes whose meaning differs from AP's, so
@@ -369,9 +358,16 @@ pub fn order(src: &Value) -> Value {
         ("symbol", "counter_id"),
         ("underlying_symbol", "underlying_counter_id"),
     ] {
-        if let Some(symbol) = order_symbol(src, symbol_key, counter_id_key) {
-            map.insert(symbol_key.to_string(), Value::String(symbol));
-        }
+        let has_symbol = src
+            .get(symbol_key)
+            .and_then(Value::as_str)
+            .is_some_and(|s| !s.is_empty());
+        let key = if has_symbol {
+            symbol_key
+        } else {
+            counter_id_key
+        };
+        copy_str(&mut map, src, key, key);
     }
     copy_str(&mut map, src, "order_type", "order_type");
     copy_str(&mut map, src, "last_done", "last_done");
@@ -429,20 +425,6 @@ pub fn order(src: &Value) -> Value {
         map.insert("us_charge_detail".to_string(), charge.clone());
     }
     Value::Object(map)
-}
-
-/// `src[symbol_key]` when the gateway already converted it, else derived
-/// from `src[counter_id_key]`: the gateway's counter_id-to-symbol rename for
-/// the US order endpoints is not deployed everywhere yet.
-fn order_symbol(src: &Value, symbol_key: &str, counter_id_key: &str) -> Option<String> {
-    let non_empty = |key: &str| {
-        src.get(key)
-            .and_then(Value::as_str)
-            .filter(|s| !s.is_empty())
-    };
-    non_empty(symbol_key)
-        .map(str::to_string)
-        .or_else(|| non_empty(counter_id_key).and_then(symbol_from_counter_id))
 }
 
 /// A US attached (take-profit/stop-loss) leg with its empty fields dropped.
@@ -650,25 +632,6 @@ mod tests {
     }
 
     #[test]
-    fn counter_id_converts_to_symbol() {
-        for (counter_id, symbol) in [
-            ("ST/US/INTC", "INTC.US"),
-            ("ETF/US/MULL", "MULL.US"),
-            ("VA/BKKT/BTCUSD", "BTCUSD.BKKT"),
-            ("OP/US/AAPL261120C345000", "AAPL261120C345000.US"),
-        ] {
-            assert_eq!(
-                symbol_from_counter_id(counter_id).as_deref(),
-                Some(symbol),
-                "`{counter_id}` converts"
-            );
-        }
-        for bad in ["", "INTC", "ST/US", "ST//INTC", "ST/US/"] {
-            assert_eq!(symbol_from_counter_id(bad), None, "`{bad}` is rejected");
-        }
-    }
-
-    #[test]
     fn order_prefers_a_gateway_converted_symbol() {
         let v = order(&json!({
             "id": "1",
@@ -687,53 +650,46 @@ mod tests {
             json!("AAPL.US"),
             "underlying used as given"
         );
+        assert!(
+            v.get("counter_id").is_none(),
+            "redundant counter_id dropped"
+        );
         assert_eq!(v["side"], json!("Sell"), "action 2 is Sell");
     }
 
     #[test]
-    fn order_derives_symbols_from_counter_ids_when_missing() {
+    fn order_without_a_symbol_passes_counter_ids_through() {
         let v = order(&json!({
             "id": "1",
             "symbol": "",
             "counter_id": "OP/US/AAPL261120C345000",
             "underlying_counter_id": "ST/US/AAPL"
         }));
-        assert_eq!(
-            v["symbol"],
-            json!("AAPL261120C345000.US"),
-            "empty symbol: derived"
+        assert!(v.get("symbol").is_none(), "no symbol is derived");
+        assert!(
+            v.get("underlying_symbol").is_none(),
+            "no underlying derived"
         );
         assert_eq!(
-            v["underlying_symbol"],
-            json!("AAPL.US"),
-            "underlying: derived"
+            v["counter_id"],
+            json!("OP/US/AAPL261120C345000"),
+            "counter_id is the only identifier, kept as-is"
+        );
+        assert_eq!(
+            v["underlying_counter_id"],
+            json!("ST/US/AAPL"),
+            "underlying_counter_id kept as-is"
         );
 
         let v = order(&json!({"id": "1", "underlying_counter_id": ""}));
-        assert!(v.get("symbol").is_none(), "no source, no symbol");
-        assert!(
-            v.get("underlying_symbol").is_none(),
-            "no source, no underlying"
-        );
-    }
-
-    #[test]
-    fn converted_and_raw_order_responses_map_the_same() {
-        // The same order before and after the gateway's counter_id rename.
-        let raw = fixture("orders")["orders"][0].clone();
-        let mut converted = raw.clone();
-        let map = converted
-            .as_object_mut()
-            .expect("fixture order is an object");
-        map.remove("counter_id");
-        map.remove("underlying_counter_id");
-        map.insert("symbol".to_string(), json!("EXMC.US"));
-        map.insert("underlying_symbol".to_string(), json!(""));
-        assert_eq!(
-            order(&raw),
-            order(&converted),
-            "both shapes map identically"
-        );
+        for absent in [
+            "symbol",
+            "counter_id",
+            "underlying_symbol",
+            "underlying_counter_id",
+        ] {
+            assert!(v.get(absent).is_none(), "no source, no `{absent}`");
+        }
     }
 
     #[test]
@@ -766,10 +722,11 @@ mod tests {
         );
         assert_eq!(v["executed_quantity"], json!("3"), "executed_qty renamed");
         assert_eq!(v["side"], json!("Buy"), "action 1 is Buy");
+        assert!(v.get("symbol").is_none(), "symbol is never derived");
         assert_eq!(
-            v["symbol"],
-            json!("EXMP.US"),
-            "symbol derives from counter_id"
+            v["counter_id"],
+            json!("ST/US/EXMP"),
+            "counter_id passes through"
         );
         assert_eq!(
             v["submitted_at"],
@@ -798,7 +755,6 @@ mod tests {
             "id",
             "name",
             "action",
-            "counter_id",
         ] {
             assert!(
                 v.get(absent).is_none(),

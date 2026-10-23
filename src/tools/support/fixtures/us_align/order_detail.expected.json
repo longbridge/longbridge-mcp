@@ -7,7 +7,7 @@
   "price": "119",
   "submitted_at": "2026-10-02T10:10:32Z",
   "side": "Buy",
-  "symbol": "EXMC.US",
+  "counter_id": "ST/US/EXMC",
   "order_type": "LO",
   "msg": "",
   "currency": "USD",

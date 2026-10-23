@@ -641,8 +641,8 @@ fn us_orders_json(orders: &[serde_json::Value]) -> serde_json::Value {
 }
 
 /// One US order's detail in the AP `order_detail` shape. Read as raw JSON:
-/// the typed SDK response drops `counter_id`, the only field the US endpoint
-/// identifies the security by.
+/// the typed SDK response drops `counter_id`, which the US endpoint may
+/// return as its only security identifier until the gateway converts it.
 async fn us_order_detail_json(
     mctx: &crate::tools::McpContext,
     order_id: &str,
