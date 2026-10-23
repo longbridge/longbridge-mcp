@@ -8917,7 +8917,7 @@ mod tool_error_tests {
             let (message, data) = super::dc_region_rejection(name, DcRegion::Us);
             let alternative = super::us_alternative_for_ap_only_tool(name);
             assert!(
-                message.ends_with(&alternative),
+                message.ends_with(alternative),
                 "`{name}`: the message must spell out the alternative: {message}"
             );
             let result = super::rejected_call(name, "unknown", message, data);
