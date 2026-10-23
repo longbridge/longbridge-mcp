@@ -1115,7 +1115,16 @@ where
             );
             if !symbols.is_empty() {
                 match query_orders(FillSideQuery { symbols, ..query }).await {
-                    Ok(pages) => sides.extend(us_align::order_sides(&pages.items)),
+                    Ok(pages) => {
+                        if pages.truncated {
+                            tracing::warn!(
+                                orders = pages.items.len(),
+                                truncated = true,
+                                "symbol-filtered US order query for fill sides stopped at the page cap"
+                            );
+                        }
+                        sides.extend(us_align::order_sides(&pages.items));
+                    }
                     Err(err) => tracing::warn!(
                         error = %err,
                         "symbol-filtered US order query for fill sides failed"
