@@ -6,6 +6,8 @@ use longbridge::quote::{
 use rmcp::model::ErrorData as McpError;
 use time::Date;
 
+use crate::tools::support::us_market::new_york_instant;
+
 const DATE_FORMAT: &[time::format_description::BorrowedFormatItem<'_>] =
     time::macros::format_description!("[year]-[month]-[day]");
 
@@ -89,25 +91,47 @@ pub fn parse_date(s: &str) -> Result<Date, McpError> {
 /// Parse the start of a time range: an RFC3339 datetime, or a bare
 /// `yyyy-mm-dd` date read as the start of that day in UTC.
 pub fn parse_rfc3339(s: &str) -> Result<time::OffsetDateTime, McpError> {
-    parse_datetime_or_date(s, time::Time::MIDNIGHT)
+    parse_datetime_or_date(s, time::Time::MIDNIGHT, utc_instant)
 }
 
 /// Parse the end of a time range: an RFC3339 datetime, or a bare
 /// `yyyy-mm-dd` date read as the end of that day in UTC, so the day is
 /// included.
 pub fn parse_rfc3339_end(s: &str) -> Result<time::OffsetDateTime, McpError> {
-    parse_datetime_or_date(s, time::macros::time!(23:59:59))
+    parse_datetime_or_date(s, time::macros::time!(23:59:59), utc_instant)
 }
 
-fn parse_datetime_or_date(
+/// Like [`parse_rfc3339`], but a bare date is the start of that day in New
+/// York (America/New_York, EST/EDT) — the US-market day.
+pub fn parse_rfc3339_new_york(s: &str) -> Result<time::OffsetDateTime, McpError> {
+    parse_datetime_or_date(s, time::Time::MIDNIGHT, new_york_instant)
+}
+
+/// Like [`parse_rfc3339_end`], but a bare date is the end of that day in New
+/// York (America/New_York, EST/EDT) — the US-market day.
+pub fn parse_rfc3339_end_new_york(s: &str) -> Result<time::OffsetDateTime, McpError> {
+    parse_datetime_or_date(s, time::macros::time!(23:59:59), new_york_instant)
+}
+
+fn utc_instant(date: Date, time_of_day: time::Time) -> time::OffsetDateTime {
+    date.with_time(time_of_day).assume_utc()
+}
+
+/// Parses `s` as RFC3339, or as a bare date placed at `time_of_day` by
+/// `instant` (which fixes the time zone the date is read in).
+fn parse_datetime_or_date<F>(
     s: &str,
     time_of_day: time::Time,
-) -> Result<time::OffsetDateTime, McpError> {
+    instant: F,
+) -> Result<time::OffsetDateTime, McpError>
+where
+    F: Fn(Date, time::Time) -> time::OffsetDateTime,
+{
     let s = s.trim();
     time::OffsetDateTime::parse(s, &time::format_description::well_known::Rfc3339)
         .or_else(|e| {
             Date::parse(s, DATE_FORMAT)
-                .map(|d| d.with_time(time_of_day).assume_utc())
+                .map(|d| instant(d, time_of_day))
                 .map_err(|_| e)
         })
         .map_err(|e| {
@@ -370,6 +394,37 @@ mod tests {
         assert!(
             parse_rfc3339("yesterday").is_err(),
             "free text must still be rejected"
+        );
+    }
+
+    #[test]
+    fn new_york_range_bounds_read_a_bare_date_as_the_new_york_day() {
+        use time::macros::datetime;
+
+        assert_eq!(
+            parse_rfc3339_new_york("2026-10-23").expect("a date must parse as a start"),
+            datetime!(2026-10-23 04:00 UTC),
+            "EDT: the New York day starts at 04:00 UTC"
+        );
+        assert_eq!(
+            parse_rfc3339_end_new_york("2026-10-23").expect("a date must parse as an end"),
+            datetime!(2026-10-24 03:59:59 UTC),
+            "EDT: the New York day ends at 03:59:59 UTC the next day"
+        );
+        assert_eq!(
+            parse_rfc3339_new_york("2026-12-01").expect("a date must parse as a start"),
+            datetime!(2026-12-01 05:00 UTC),
+            "EST: the New York day starts at 05:00 UTC"
+        );
+        assert_eq!(
+            parse_rfc3339_end_new_york("2026-03-08").expect("a date must parse as an end"),
+            datetime!(2026-03-09 03:59:59 UTC),
+            "spring-forward day ends in EDT"
+        );
+        assert_eq!(
+            parse_rfc3339_new_york("2026-10-23T00:00:00Z").expect("RFC3339 must still parse"),
+            datetime!(2026-10-23 00:00 UTC),
+            "an explicit offset is honored, not re-read in New York"
         );
     }
 

@@ -351,9 +351,9 @@ pub struct CancelOrderParam {
 pub struct HistoryOrdersParam {
     /// Filter by symbol (optional)
     pub symbol: Option<String>,
-    /// Start time: RFC3339 (e.g. 2026-09-01T00:00:00Z), or a date (yyyy-mm-dd) for the start of that day in UTC
+    /// Start time: RFC3339 (e.g. 2026-09-01T00:00:00Z), or a date (yyyy-mm-dd) for the start of that day in UTC (history_orders on a US account: in New York time)
     pub start_at: String,
-    /// End time: RFC3339 (e.g. 2026-09-30T23:59:59Z), or a date (yyyy-mm-dd) for the end of that day in UTC
+    /// End time: RFC3339 (e.g. 2026-09-30T23:59:59Z), or a date (yyyy-mm-dd) for the end of that day in UTC (history_orders on a US account: in New York time)
     pub end_at: String,
     /// US accounts only: return just this page (default: every page, up to
     /// 500 orders). Ignored for AP accounts (the region is inferred from the
@@ -525,19 +525,19 @@ pub async fn today_orders(
             Some(s) if s.eq_ignore_ascii_case("sell") => longbridge::trade::OrderSide::Sell,
             _ => longbridge::trade::OrderSide::Unknown,
         };
-        let now = time::OffsetDateTime::now_utc();
-        let start_of_day = us_market::us_market_start_of_day(now);
+        let (start_at, end_at) = us_market::us_today_orders_window(time::OffsetDateTime::now_utc());
         let opts = GetUSHistoryOrders {
             symbol: p.symbol,
             side,
             // Confirmed via live testing that start_at/end_at do filter
-            // correctly on the backend (unlike query_type, see below) — the
-            // start of the current US-market (New York) day gives "today",
-            // matching the market's trading day, instead of a multi-month
-            // window that would make this indistinguishable from
-            // history_orders.
-            start_at: start_of_day.unix_timestamp(),
-            end_at: now.unix_timestamp(),
+            // correctly on the backend (unlike query_type, see below). The
+            // window runs from 20:00 ET yesterday (the overnight session that
+            // trades into today opens then) to the end of today in New York,
+            // so an overnight order does not vanish at New York midnight —
+            // agents are told to check today_orders before resending an
+            // unconfirmed write, and a missing order would invite a duplicate.
+            start_at: start_at.unix_timestamp(),
+            end_at: end_at.unix_timestamp(),
             // query_type (0=all/1=pending/2=history) does not actually filter
             // on the backend as of this writing (confirmed via live testing —
             // "pending" returned the identical set as "all", "history"
@@ -774,10 +774,12 @@ pub async fn history_orders(
     mctx: &crate::tools::McpContext,
     p: HistoryOrdersParam,
 ) -> Result<CallToolResult, McpError> {
-    let start = parse::parse_rfc3339(&p.start_at)?;
-    let end = parse::parse_rfc3339_end(&p.end_at)?;
     let (ctx, _) = TradeContext::new(mctx.create_config());
     if mctx.dc_region().await == longbridge::DcRegion::Us {
+        // A bare date is a New York (US-market) day, so a range ending
+        // yesterday stitches with today_orders' window.
+        let start = parse::parse_rfc3339_new_york(&p.start_at)?;
+        let end = parse::parse_rfc3339_end_new_york(&p.end_at)?;
         let opts = GetUSHistoryOrders {
             symbol: p.symbol,
             side: longbridge::trade::OrderSide::Unknown,
@@ -795,6 +797,8 @@ pub async fn history_orders(
         let orders = us_orders(&ctx, opts, p.us_page, p.us_limit).await?;
         return tool_json(&us_orders_json(&orders));
     }
+    let start = parse::parse_rfc3339(&p.start_at)?;
+    let end = parse::parse_rfc3339_end(&p.end_at)?;
     let mut opts = longbridge::trade::GetHistoryOrdersOptions::new()
         .start_at(start)
         .end_at(end);

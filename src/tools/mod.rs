@@ -274,7 +274,10 @@ fn tool_error(name: &str, err: &McpError) -> CallToolResult {
         if recoverable == "backoff" && !is_rate_limit(err) && !is_read_only_tool(name) {
             ("none", Some(UNCONFIRMED_WRITE_HINT))
         } else {
-            (recoverable, error_hint(err))
+            (
+                recoverable,
+                us_ap_only_hint(name, err).or_else(|| error_hint(err)),
+            )
         };
     let envelope = serde_json::json!({
         "error_code": error_code_of(err),
@@ -1295,12 +1298,13 @@ const AP_ONLY_TOOLS: &[&str] = &[
 fn us_alternative_for_ap_only_tool(name: &str) -> &'static str {
     match name {
         "margin_ratio" => {
-            "Use account_balance instead: its us.margin_status block carries the US \
-             account's margin figures."
+            "There is no per-symbol US equivalent of the margin ratio. Account-level margin \
+             figures are in account_balance, under us.margin_status."
         }
         "operating" => {
-            "For a US symbol use financial_report_key_metrics for key financial metrics (it \
-             has no management commentary)."
+            "There is no US equivalent for operating reviews (management discussion). For a \
+             US symbol, financial_report_key_metrics covers key financial metrics only, a \
+             partial substitute."
         }
         "fund_positions" => {
             "There is no US equivalent for fund holdings; tell the user and \
@@ -1312,20 +1316,33 @@ fn us_alternative_for_ap_only_tool(name: &str) -> &'static str {
 
 /// The rejection for a tool hidden from accounts in `region`: the message
 /// names the region and, for a US account calling an AP-only tool, the US
-/// alternative (or that there is none).
+/// alternative (or that there is none). [`tool_error`] also delivers that
+/// alternative as the envelope's `hint`.
 fn dc_region_rejection(name: &str, region: longbridge::DcRegion) -> (String, serde_json::Value) {
     let mut message =
         format!("Tool `{name}` is not available for accounts in the {region} data center.");
-    let mut data = serde_json::json!({
+    let data = serde_json::json!({
         "error_code": "dc_region_restricted",
         "dc_region_restricted": { "current": region.to_string() },
     });
     if region == longbridge::DcRegion::Us && AP_ONLY_TOOLS.contains(&name) {
-        let alternative = us_alternative_for_ap_only_tool(name);
-        message = format!("{message} {alternative}");
-        data["alternative"] = serde_json::Value::String(alternative.to_string());
+        message = format!("{message} {}", us_alternative_for_ap_only_tool(name));
     }
     (message, data)
+}
+
+/// The US alternative for `name` when `err` is a DC-region restriction of an
+/// AP-only tool for a US account — the specific guidance that replaces the
+/// generic "use the equivalent tool" DC-region hint.
+fn us_ap_only_hint(name: &str, err: &McpError) -> Option<&'static str> {
+    let current = err
+        .data
+        .as_ref()?
+        .get("dc_region_restricted")?
+        .get("current")?
+        .as_str()?;
+    (current.eq_ignore_ascii_case("us") && AP_ONLY_TOOLS.contains(&name))
+        .then(|| us_alternative_for_ap_only_tool(name))
 }
 
 /// True when `name` is restricted to the DC region opposite `region` — i.e.
@@ -2994,7 +3011,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get orders placed today. Returns a top-level array of orders {order_id, symbol, stock_name, side, order_type, status, quantity, executed_quantity, price, currency, time_in_force, submitted_at, updated_at, msg, …, attached_orders[]}, where attached_orders[] holds the order's take-profit/stop-loss legs. Pass symbol to filter by security, or order_id for one order. To fetch an attached leg by its own ID, pass that ID as order_id together with is_attached=true — the leg itself comes back as the order entry. is_attached does nothing without order_id. US accounts get a US-specific variant: the same array and field names, without time_in_force, tag, expire_date and outside_rth (raw US codes in us_time_in_force, us_tag; plus gtd, security_type, operate_direction); is_attached is ignored, us_action (Buy/Sell) filters, and all of today's orders (up to 500) are returned unless us_page/us_limit pick one page; today means the US market day, starting at midnight New York time (EST/EDT)."
+        description = "Get orders placed today. Returns a top-level array of orders {order_id, symbol, stock_name, side, order_type, status, quantity, executed_quantity, price, currency, time_in_force, submitted_at, updated_at, msg, …, attached_orders[]}, where attached_orders[] holds the order's take-profit/stop-loss legs. Pass symbol to filter by security, or order_id for one order. To fetch an attached leg by its own ID, pass that ID as order_id together with is_attached=true — the leg itself comes back as the order entry. is_attached does nothing without order_id. US accounts get a US-specific variant: the same array and field names, without time_in_force, tag, expire_date and outside_rth (raw US codes in us_time_in_force, us_tag; plus gtd, security_type, operate_direction); is_attached is ignored, us_action (Buy/Sell) filters, and all of today's orders (up to 500) are returned unless us_page/us_limit pick one page; today spans 20:00 New York time (EST/EDT) on the previous calendar day, when the overnight session (20:00–04:00 ET) opens, through 23:59:59 New York time today, so an order placed in the overnight session stays listed after New York midnight."
     )]
     async fn today_orders(
         &self,
@@ -3082,7 +3099,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get historical orders between dates (AP accounts: excludes today). Returns orders[]{order_id, symbol, side, status, quantity, price, submitted_at}. start_at/end_at in RFC3339. US accounts get a US-specific variant: the same array and field names as today_orders' US variant; the range is applied as given, so it includes today's orders when it covers today, and all orders in it (up to 500) are returned unless us_page/us_limit pick one page."
+        description = "Get historical orders between dates (AP accounts: excludes today). Returns orders[]{order_id, symbol, side, status, quantity, price, submitted_at}. start_at/end_at in RFC3339. US accounts get a US-specific variant: the same array and field names as today_orders' US variant; a bare yyyy-mm-dd start_at/end_at is read as a New York (EST/EDT) day rather than UTC; the range is applied as given, so it includes today's orders when it covers today, and all orders in it (up to 500) are returned unless us_page/us_limit pick one page."
     )]
     async fn history_orders(
         &self,
@@ -7656,6 +7673,32 @@ mod tests {
     }
 
     #[test]
+    fn schema_validator_rejects_a_golden_missing_a_required_key() {
+        let schema = super::output_schema_map()
+            .get("stock_positions")
+            .expect("stock_positions must declare an output_schema");
+        let root = serde_json::Value::Object((**schema).clone());
+        let mut value: serde_json::Value =
+            serde_json::from_str(include_str!("fixtures/ap/stock_positions.expected.json"))
+                .expect("AP golden is valid JSON");
+        let mut errors = Vec::new();
+        schema_violations(&root, &root, &value, "$", &mut errors);
+        assert!(errors.is_empty(), "the intact golden must pass: {errors:?}");
+        value["list"][0]["stock_info"][0]
+            .as_object_mut()
+            .expect("the golden holds a stock_info entry")
+            .remove("symbol")
+            .expect("the golden stock_info entry carries symbol");
+        schema_violations(&root, &root, &value, "$", &mut errors);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e == "$.list[0].stock_info[0]: missing required `symbol`"),
+            "dropping the required stock_info symbol must fail validation, got: {errors:?}"
+        );
+    }
+
+    #[test]
     fn ap_golden_outputs_conform_to_their_output_schemas() {
         for (tool, text) in [
             (
@@ -8872,10 +8915,7 @@ mod tool_error_tests {
         let _lock = crate::test_support::LOG_CAPTURE_LOCK.blocking_lock();
         for name in super::AP_ONLY_TOOLS {
             let (message, data) = super::dc_region_rejection(name, DcRegion::Us);
-            let alternative = data["alternative"]
-                .as_str()
-                .unwrap_or_else(|| panic!("`{name}` rejection must carry an alternative"))
-                .to_string();
+            let alternative = super::us_alternative_for_ap_only_tool(name);
             assert!(
                 message.ends_with(&alternative),
                 "`{name}`: the message must spell out the alternative: {message}"
@@ -8889,14 +8929,32 @@ mod tool_error_tests {
                 "{name}: retrying cannot help: {v}"
             );
             assert!(
-                v["message"].as_str().unwrap().contains(&alternative),
+                v["message"].as_str().unwrap().contains(alternative),
                 "{name}: the envelope message must carry the alternative: {v}"
+            );
+            assert_eq!(
+                v["hint"], alternative,
+                "{name}: the delivered hint must be the alternative, not the generic \
+                 \"use the equivalent tool\" DC-region hint: {v}"
+            );
+            assert!(
+                v.get("alternative").is_none() && v["data"].is_null(),
+                "{name}: no field is dropped in transit: {v}"
             );
         }
         let (margin, _) = super::dc_region_rejection("margin_ratio", DcRegion::Us);
         assert!(
-            margin.contains("account_balance") && margin.contains("us.margin_status"),
-            "margin_ratio points at account_balance's us.margin_status: {margin}"
+            margin.contains("no per-symbol US equivalent")
+                && margin.contains("account_balance")
+                && margin.contains("us.margin_status"),
+            "margin_ratio has no per-symbol US equivalent; account-level figures are in \
+             account_balance's us.margin_status: {margin}"
+        );
+        let (operating, _) = super::dc_region_rejection("operating", DcRegion::Us);
+        assert!(
+            operating.contains("no US equivalent")
+                && operating.contains("financial_report_key_metrics"),
+            "operating has no US equivalent; key metrics are only partial: {operating}"
         );
         let (funds, _) = super::dc_region_rejection("fund_positions", DcRegion::Us);
         assert!(
@@ -8905,8 +8963,15 @@ mod tool_error_tests {
         );
         let (us_only, data) = super::dc_region_rejection("etf_docs", DcRegion::Ap);
         assert!(
-            data.get("alternative").is_none() && us_only.ends_with("data center."),
+            us_only.ends_with("data center."),
             "US-only tools rejected for AP accounts keep the plain message: {us_only}"
+        );
+        let result = super::rejected_call("etf_docs", "unknown", us_only, data);
+        let v: serde_json::Value =
+            serde_json::from_str(&result.content[0].as_text().unwrap().text).unwrap();
+        assert!(
+            v["hint"].as_str().unwrap().contains("equivalent tool"),
+            "US-only tools rejected for AP accounts keep the generic DC-region hint: {v}"
         );
     }
 
