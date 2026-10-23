@@ -2224,8 +2224,8 @@ use crate::tools::quote::{
     UpdateWatchlistGroupParam, WarrantListParam,
 };
 use crate::tools::trade::{
-    CashFlowParam, EstimateMaxQtyParam, HistoryOrdersParam, OrderDetailParam, ReplaceOrderParam,
-    SubmitMultiLegOrderParam, SubmitOrderParam,
+    CashFlowParam, EstimateMaxQtyParam, HistoryExecutionsParam, HistoryOrdersParam,
+    OrderDetailParam, ReplaceOrderParam, SubmitMultiLegOrderParam, SubmitOrderParam,
 };
 
 #[tool_router(vis = "pub(crate)")]
@@ -3011,7 +3011,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get orders placed today. Returns a top-level array of orders {order_id, symbol, stock_name, side, order_type, status, quantity, executed_quantity, price, currency, time_in_force, submitted_at, updated_at, msg, …, attached_orders[]}, where attached_orders[] holds the order's take-profit/stop-loss legs. Pass symbol to filter by security, or order_id for one order. To fetch an attached leg by its own ID, pass that ID as order_id together with is_attached=true — the leg itself comes back as the order entry. is_attached does nothing without order_id. US accounts get a US-specific variant: the same array and field names, without time_in_force, tag, expire_date and outside_rth (raw US codes in us_time_in_force, us_tag; plus gtd, security_type, operate_direction); is_attached is ignored, us_action (Buy/Sell) filters, and all of today's orders (up to 500) are returned unless us_page/us_limit pick one page; today spans 20:00 New York time (EST/EDT) on the previous calendar day, when the overnight session (20:00–04:00 ET) opens, through 23:59:59 New York time today, so an order placed in the overnight session stays listed after New York midnight."
+        description = "Get orders placed today. Returns a top-level array of orders {order_id, symbol, stock_name, side, order_type, status, quantity, executed_quantity, price, currency, time_in_force, submitted_at, updated_at, msg, …, attached_orders[]}, where attached_orders[] holds the order's take-profit/stop-loss legs. Pass symbol to filter by security, or order_id for one order. To fetch an attached leg by its own ID, pass that ID as order_id together with is_attached=true — the leg itself comes back as the order entry. is_attached does nothing without order_id. US accounts get a US-specific variant: the same array and field names, without time_in_force, tag, expire_date and outside_rth (raw US codes in us_time_in_force, us_tag; plus gtd, security_type, operate_direction); is_attached is ignored, us_action (Buy/Sell) filters, and all of today's orders (up to 500) are returned unless us_page/us_limit pick one page; today spans 20:00 New York time (EST/EDT) yesterday, when the overnight session opens, through 23:59:59 New York time today, so it may include last evening's overnight orders, which also appear in history_orders for yesterday; dedupe by order_id when combining."
     )]
     async fn today_orders(
         &self,
@@ -3099,7 +3099,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get historical orders between dates (AP accounts: excludes today). Returns orders[]{order_id, symbol, side, status, quantity, price, submitted_at}. start_at/end_at in RFC3339. US accounts get a US-specific variant: the same array and field names as today_orders' US variant; a bare yyyy-mm-dd start_at/end_at is read as a New York (EST/EDT) day rather than UTC; the range is applied as given, so it includes today's orders when it covers today, and all orders in it (up to 500) are returned unless us_page/us_limit pick one page."
+        description = "Get historical orders between dates (AP accounts: excludes today). Returns orders[]{order_id, symbol, side, status, quantity, price, submitted_at}. start_at/end_at in RFC3339. US accounts get a US-specific variant: the same array and field names as today_orders' US variant; a bare yyyy-mm-dd start_at/end_at is read as a New York (EST/EDT) day rather than UTC; the range is applied as given, so it includes today's orders when it covers today, and all orders in it (up to 500) are returned unless us_page/us_limit pick one page. today_orders' US window opens at 20:00 ET on the previous day, so orders placed from 20:00 ET yesterday appear in both a range ending yesterday and today_orders; dedupe by order_id when combining them."
     )]
     async fn history_orders(
         &self,
@@ -3122,12 +3122,12 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get every trade execution (fill) in a date range, filtered by execution time (trade_done_at) and auto-paginated to return the complete set (never truncated at the 1000-per-page cap). Returns a top-level array of {order_id, trade_id, symbol, side, quantity, price, trade_done_at}; trade_id is the stable dedupe key. start_at/end_at in RFC3339."
+        description = "Get every trade execution (fill) in a date range, filtered by execution time (trade_done_at) and auto-paginated to return the complete set (never truncated at the 1000-per-page cap). Returns a top-level array of {order_id, trade_id, symbol, side, quantity, price, trade_done_at}; trade_id is the stable dedupe key. start_at/end_at in RFC3339, or a bare yyyy-mm-dd read as a UTC day (US accounts: a New York EST/EDT day, matching history_orders)."
     )]
     async fn history_executions(
         &self,
         ctx: RequestContext<RoleServer>,
-        Parameters(p): Parameters<HistoryOrdersParam>,
+        Parameters(p): Parameters<HistoryExecutionsParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
         measured_tool_call("history_executions", format!("{p:?}"), || {

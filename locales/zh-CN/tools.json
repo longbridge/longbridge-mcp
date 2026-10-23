@@ -151,18 +151,16 @@
     },
     "history_executions": {
       "title": "历史成交",
-      "description": "获取指定日期区间内的全部成交记录，按成交时间（trade_done_at）筛选并自动翻页返回完整结果（不受每页 1000 条上限截断）。返回顶层数组 {order_id, trade_id, symbol, side, quantity, price, trade_done_at}；trade_id 为稳定去重键。start_at/end_at 为 RFC3339 格式",
+      "description": "获取指定日期区间内的全部成交记录，按成交时间（trade_done_at）筛选并自动翻页返回完整结果（不受每页 1000 条上限截断）。返回顶层数组 {order_id, trade_id, symbol, side, quantity, price, trade_done_at}；trade_id 为稳定去重键。start_at/end_at 为 RFC3339 格式，或只传日期（yyyy-mm-dd）按 UTC 当天解读（美股账户按纽约时间 EST/EDT，与 history_orders 一致）",
       "properties": {
         "symbol": "按证券筛选（可选）",
-        "start_at": "起始时间：RFC3339（如 2026-09-01T00:00:00Z），或日期（yyyy-mm-dd，表示当天 UTC 0 点）",
-        "end_at": "结束时间：RFC3339（如 2026-09-30T23:59:59Z），或日期（yyyy-mm-dd，表示当天 UTC 结束）",
-        "us_page": "仅限美股账户：只返回该页（默认返回全部页，最多 500 条）。亚太账户忽略（区域由账户自动识别，无需传入）",
-        "us_limit": "仅限美股账户：配合 us_page 分页时的每页数量（默认 50）。亚太账户忽略"
+        "start_at": "起始时间：RFC3339（如 2026-09-01T00:00:00Z），或日期（yyyy-mm-dd，表示当天 UTC 0 点；美股账户按纽约时间）",
+        "end_at": "结束时间：RFC3339（如 2026-09-30T23:59:59Z），或日期（yyyy-mm-dd，表示当天 UTC 结束；美股账户按纽约时间）"
       }
     },
     "history_orders": {
       "title": "历史委托",
-      "description": "查询指定日期区间内的历史委托（AP 账户不含当日），返回 orders[]{order_id, symbol, side, status, quantity, price, submitted_at}。美股账户返回与 today_orders 美股版相同的数组和字段；start_at/end_at 只传日期（yyyy-mm-dd）时按纽约时间（EST/EDT）而非 UTC 解读；区间按原样查询，覆盖当日时也包含当日委托；默认返回区间内全部委托（最多 500 条），传 us_page/us_limit 则只返回该页",
+      "description": "查询指定日期区间内的历史委托（AP 账户不含当日），返回 orders[]{order_id, symbol, side, status, quantity, price, submitted_at}。美股账户返回与 today_orders 美股版相同的数组和字段；start_at/end_at 只传日期（yyyy-mm-dd）时按纽约时间（EST/EDT）而非 UTC 解读；区间按原样查询，覆盖当日时也包含当日委托；默认返回区间内全部委托（最多 500 条），传 us_page/us_limit 则只返回该页。today_orders 美股版的窗口从前一日纽约时间 20:00 开始，因此昨日 20:00 ET 起的委托会同时出现在截至昨日的区间和 today_orders 中，合并时请按 order_id 去重",
       "properties": {
         "symbol": "按证券筛选（可选）",
         "start_at": "起始时间：RFC3339（如 2026-09-01T00:00:00Z），或日期（yyyy-mm-dd，表示当天 UTC 0 点；美股账户按纽约时间）",
@@ -189,7 +187,7 @@
     },
     "today_orders": {
       "title": "当日委托",
-      "description": "获取当日委托，返回委托的顶层数组 {order_id, symbol, stock_name, side, order_type, status, quantity, executed_quantity, price, currency, time_in_force, submitted_at, updated_at, msg, …, attached_orders[]}，其中 attached_orders[] 为该委托的止盈/止损附加单。可用 symbol 按证券筛选，或用 order_id 查询单笔委托。要按附加单自身的单号查询，把该单号作为 order_id 并同时设置 is_attached=true，返回的委托即为该附加单本身。is_attached 不配合 order_id 时无效。美股账户返回同样的数组和字段名，但无 time_in_force、tag、expire_date、outside_rth（美股原始代码见 us_time_in_force、us_tag，另含 gtd、security_type、operate_direction）；is_attached 无效，us_action（Buy/Sell）可筛选，默认返回当日全部委托（最多 500 条），传 us_page/us_limit 则只返回该页；“当日”指从前一自然日纽约时间（EST/EDT）20:00（夜盘 20:00–04:00 ET 开盘）至当日纽约时间 23:59:59，因此夜盘委托过纽约零点后仍会列出",
+      "description": "获取当日委托，返回委托的顶层数组 {order_id, symbol, stock_name, side, order_type, status, quantity, executed_quantity, price, currency, time_in_force, submitted_at, updated_at, msg, …, attached_orders[]}，其中 attached_orders[] 为该委托的止盈/止损附加单。可用 symbol 按证券筛选，或用 order_id 查询单笔委托。要按附加单自身的单号查询，把该单号作为 order_id 并同时设置 is_attached=true，返回的委托即为该附加单本身。is_attached 不配合 order_id 时无效。美股账户返回同样的数组和字段名，但无 time_in_force、tag、expire_date、outside_rth（美股原始代码见 us_time_in_force、us_tag，另含 gtd、security_type、operate_direction）；is_attached 无效，us_action（Buy/Sell）可筛选，默认返回当日全部委托（最多 500 条），传 us_page/us_limit 则只返回该页；“当日”指从前一自然日纽约时间（EST/EDT）20:00（夜盘 20:00–04:00 ET 开盘）至当日纽约时间 23:59:59，因此夜盘委托过纽约零点后仍会列出，当日列表可能包含前一晚的夜盘委托；前一日纽约时间 20:00 起的委托也会出现在该日的 history_orders 中，合并两者时请按 order_id 去重",
       "properties": {
         "symbol": "按证券筛选，例如 `\"700.HK\"`，省略则返回当日全部委托",
         "order_id": "按委托单号筛选：母单单号，或（配合 is_attached=true）止盈/止损附加单单号。美股账户仅匹配母单单号",

@@ -3,9 +3,9 @@ use std::future::Future;
 use longbridge::DcRegion;
 use longbridge::httpclient::Json;
 use longbridge::trade::{
-    AccountBalance, CancelOrderOptions, GetOrderDetailOptions, GetTodayExecutionsOptions,
-    GetTodayOrdersOptions, GetUSHistoryOrders, GetUSTransactionHistoryOptions, Order, OrderDetail,
-    StockPositionsResponse, TradeContext,
+    AccountBalance, CancelOrderOptions, Execution, GetHistoryExecutionsOptions,
+    GetOrderDetailOptions, GetTodayExecutionsOptions, GetTodayOrdersOptions, GetUSHistoryOrders,
+    GetUSTransactionHistoryOptions, Order, OrderDetail, StockPositionsResponse, TradeContext,
 };
 use reqwest::Method;
 use rmcp::ErrorData as McpError;
@@ -351,9 +351,9 @@ pub struct CancelOrderParam {
 pub struct HistoryOrdersParam {
     /// Filter by symbol (optional)
     pub symbol: Option<String>,
-    /// Start time: RFC3339 (e.g. 2026-09-01T00:00:00Z), or a date (yyyy-mm-dd) for the start of that day in UTC (history_orders on a US account: in New York time)
+    /// Start time: RFC3339 (e.g. 2026-09-01T00:00:00Z), or a date (yyyy-mm-dd) for the start of that day in UTC (US accounts: in New York time)
     pub start_at: String,
-    /// End time: RFC3339 (e.g. 2026-09-30T23:59:59Z), or a date (yyyy-mm-dd) for the end of that day in UTC (history_orders on a US account: in New York time)
+    /// End time: RFC3339 (e.g. 2026-09-30T23:59:59Z), or a date (yyyy-mm-dd) for the end of that day in UTC (US accounts: in New York time)
     pub end_at: String,
     /// US accounts only: return just this page (default: every page, up to
     /// 500 orders). Ignored for AP accounts (the region is inferred from the
@@ -362,6 +362,16 @@ pub struct HistoryOrdersParam {
     /// US accounts only: page size when paging with us_page (default 50).
     /// Ignored for AP accounts.
     pub us_limit: Option<i32>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct HistoryExecutionsParam {
+    /// Filter by symbol (optional)
+    pub symbol: Option<String>,
+    /// Start time: RFC3339 (e.g. 2026-09-01T00:00:00Z), or a date (yyyy-mm-dd) for the start of that day in UTC (US accounts: in New York time)
+    pub start_at: String,
+    /// End time: RFC3339 (e.g. 2026-09-30T23:59:59Z), or a date (yyyy-mm-dd) for the end of that day in UTC (US accounts: in New York time)
+    pub end_at: String,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -775,11 +785,13 @@ pub async fn history_orders(
     p: HistoryOrdersParam,
 ) -> Result<CallToolResult, McpError> {
     let (ctx, _) = TradeContext::new(mctx.create_config());
-    if mctx.dc_region().await == longbridge::DcRegion::Us {
-        // A bare date is a New York (US-market) day, so a range ending
-        // yesterday stitches with today_orders' window.
-        let start = parse::parse_rfc3339_new_york(&p.start_at)?;
-        let end = parse::parse_rfc3339_end_new_york(&p.end_at)?;
+    let region = mctx.dc_region().await;
+    let (start, end) = history_range(region, &p.start_at, &p.end_at)?;
+    if region == DcRegion::Us {
+        // A bare date is a New York (US-market) day. today_orders' window
+        // opens at 20:00 ET on the previous day, so a range ending yesterday
+        // overlaps it for yesterday's 20:00–24:00 ET orders; callers combining
+        // the two dedupe by order_id.
         let opts = GetUSHistoryOrders {
             symbol: p.symbol,
             side: longbridge::trade::OrderSide::Unknown,
@@ -797,8 +809,6 @@ pub async fn history_orders(
         let orders = us_orders(&ctx, opts, p.us_page, p.us_limit).await?;
         return tool_json(&us_orders_json(&orders));
     }
-    let start = parse::parse_rfc3339(&p.start_at)?;
-    let end = parse::parse_rfc3339_end(&p.end_at)?;
     let mut opts = longbridge::trade::GetHistoryOrdersOptions::new()
         .start_at(start)
         .end_at(end);
@@ -809,23 +819,88 @@ pub async fn history_orders(
     tool_json(&ap_orders_json(&result).map_err(Error::Serialize)?)
 }
 
+/// Parse a history tool's `start_at`/`end_at` for the account's region.
+///
+/// A bare `yyyy-mm-dd` is a New York (US-market) day for US accounts and a
+/// UTC day otherwise; full RFC3339 timestamps are taken as given.
+fn history_range(
+    region: DcRegion,
+    start_at: &str,
+    end_at: &str,
+) -> Result<(time::OffsetDateTime, time::OffsetDateTime), McpError> {
+    if region == DcRegion::Us {
+        Ok((
+            parse::parse_rfc3339_new_york(start_at)?,
+            parse::parse_rfc3339_end_new_york(end_at)?,
+        ))
+    } else {
+        Ok((
+            parse::parse_rfc3339(start_at)?,
+            parse::parse_rfc3339_end(end_at)?,
+        ))
+    }
+}
+
+/// Upstream endpoint `history_executions` reads fills from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExecutionsSource {
+    /// v1 `/trade/execution/history` (walked page by page by the SDK).
+    V1History,
+    /// v3 `/trade/execution/all`, filtered by execution time.
+    V3All,
+}
+
+/// Pick the executions endpoint for a region: v3 `/trade/execution/all` is not
+/// deployed in the US data center (it fails with `code 12`), so US accounts
+/// use v1 `/trade/execution/history`.
+fn executions_source(region: DcRegion) -> ExecutionsSource {
+    if region == DcRegion::Us {
+        ExecutionsSource::V1History
+    } else {
+        ExecutionsSource::V3All
+    }
+}
+
 pub async fn history_executions(
     mctx: &crate::tools::McpContext,
-    p: HistoryOrdersParam,
+    p: HistoryExecutionsParam,
 ) -> Result<CallToolResult, McpError> {
-    let start = parse::parse_rfc3339(&p.start_at)?;
-    let end = parse::parse_rfc3339_end(&p.end_at)?;
+    let region = mctx.dc_region().await;
+    let (start, end) = history_range(region, &p.start_at, &p.end_at)?;
 
     let (ctx, _) = TradeContext::new(mctx.create_config());
-    // v3 `/trade/execution/all` filters by execution time and caps each page at
-    // 1000 records; walk `page` until `has_more` is false.
-    let mut executions: Vec<longbridge::trade::Execution> = Vec::new();
+    let executions = match executions_source(region) {
+        ExecutionsSource::V1History => {
+            let mut opts = GetHistoryExecutionsOptions::new()
+                .start_at(start)
+                .end_at(end);
+            if let Some(symbol) = p.symbol {
+                opts = opts.symbol(symbol);
+            }
+            ctx.history_executions(opts)
+                .await
+                .map_err(Error::longbridge)?
+        }
+        ExecutionsSource::V3All => v3_all_executions(&ctx, start, end, p.symbol).await?,
+    };
+    executions_json(&executions)
+}
+
+/// Every fill from v3 `/trade/execution/all`, which filters by execution time
+/// and caps each page at 1000 records; walk `page` until `has_more` is false.
+async fn v3_all_executions(
+    ctx: &TradeContext,
+    start: time::OffsetDateTime,
+    end: time::OffsetDateTime,
+    symbol: Option<String>,
+) -> Result<Vec<Execution>, McpError> {
+    let mut executions: Vec<Execution> = Vec::new();
     for page in 1..=1000u64 {
         let mut exec_opts = longbridge::trade::GetAllExecutionsOptions::new()
             .start_at(start)
             .end_at(end)
             .page(page);
-        if let Some(ref symbol) = p.symbol {
+        if let Some(ref symbol) = symbol {
             exec_opts = exec_opts.symbol(symbol.clone());
         }
         let resp = ctx
@@ -840,7 +915,11 @@ pub async fn history_executions(
             break;
         }
     }
+    Ok(executions)
+}
 
+/// Render fills as the tool's top-level array, with `side` spelled out.
+fn executions_json(executions: &[Execution]) -> Result<CallToolResult, McpError> {
     let result: Vec<serde_json::Value> = executions
         .iter()
         .map(|e| {
@@ -1924,10 +2003,60 @@ mod attached_order_tests {
 
 #[cfg(test)]
 mod tests {
+    use longbridge::DcRegion;
+    use rmcp::schemars::schema_for;
+    use time::macros::datetime;
+
     use super::{
-        ORDER_TYPES, ReplaceOrderParam, SubmitOrderParam, UsPages, canonical_choice,
-        collect_us_pages, missing_order_fields, replace_scope, submit_scope,
+        ExecutionsSource, HistoryExecutionsParam, ORDER_TYPES, ReplaceOrderParam, SubmitOrderParam,
+        UsPages, canonical_choice, collect_us_pages, executions_source, history_range,
+        missing_order_fields, replace_scope, submit_scope,
     };
+
+    #[test]
+    fn history_range_reads_bare_dates_in_new_york_for_us_accounts() {
+        let (start, end) = history_range(DcRegion::Us, "2026-10-22", "2026-10-22")
+            .expect("bare dates must parse for a US account");
+        assert_eq!(start, datetime!(2026-10-22 04:00 UTC));
+        assert_eq!(end, datetime!(2026-10-23 03:59:59 UTC));
+    }
+
+    #[test]
+    fn history_range_reads_bare_dates_in_utc_for_ap_accounts() {
+        let (start, end) = history_range(DcRegion::Ap, "2026-10-22", "2026-10-22")
+            .expect("bare dates must parse for an AP account");
+        assert_eq!(start, datetime!(2026-10-22 00:00 UTC));
+        assert_eq!(end, datetime!(2026-10-22 23:59:59 UTC));
+    }
+
+    #[test]
+    fn history_range_takes_rfc3339_bounds_as_given_in_every_region() {
+        for region in [DcRegion::Us, DcRegion::Ap] {
+            let (start, end) =
+                history_range(region, "2026-10-22T13:30:00Z", "2026-10-22T20:00:00Z")
+                    .expect("RFC3339 bounds must parse");
+            assert_eq!(start, datetime!(2026-10-22 13:30 UTC), "{region:?} start");
+            assert_eq!(end, datetime!(2026-10-22 20:00 UTC), "{region:?} end");
+        }
+    }
+
+    #[test]
+    fn history_executions_uses_v1_history_for_us_and_v3_all_elsewhere() {
+        assert_eq!(executions_source(DcRegion::Us), ExecutionsSource::V1History);
+        assert_eq!(executions_source(DcRegion::Ap), ExecutionsSource::V3All);
+    }
+
+    #[test]
+    fn history_executions_schema_has_no_us_paging_fields() {
+        let schema = serde_json::to_value(schema_for!(HistoryExecutionsParam))
+            .expect("schema must serialize");
+        let props = schema["properties"]
+            .as_object()
+            .expect("schema must have properties");
+        let mut keys: Vec<&str> = props.keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        assert_eq!(keys, ["end_at", "start_at", "symbol"]);
+    }
 
     /// Drive `collect_us_pages` over a fake endpoint holding `total` records,
     /// returning what it collected and the pages it asked for.
