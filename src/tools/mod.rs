@@ -3088,7 +3088,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get cash flow records (deposits, withdrawals, dividends). Returns a top-level array of {transaction_flow_name, direction (In/Out), business_type, balance (the amount moved), currency, business_time, symbol, description}. start_at/end_at: RFC3339 or yyyy-mm-dd. US accounts get a US-specific variant: the same array without business_type (see biz_code, biz_code_name); balance is unsigned and direction comes from the amount's sign, or the quantity's when no cash moved (crypto transfers); plus quantity, quantity_description, ref_no, equity_type. Newest first, at most 2000 records: getting 2000 means narrow the range."
+        description = "Get cash flow records (deposits, withdrawals, dividends). Returns a top-level array of {transaction_flow_name, direction (In/Out), business_type, balance (the amount moved), currency, business_time, symbol, description}. start_at/end_at: RFC3339 or yyyy-mm-dd. direction and business_type are unreliable upstream (always Out / 0); use the sign of balance. US accounts get a US-specific variant: the same array without business_type (see biz_code, biz_code_name); balance is signed (0 when no cash moved, e.g. crypto transfers) and direction comes from its sign, or the quantity's when it is 0; plus quantity, quantity_description, ref_no, equity_type. Newest first, at most 2000 records: getting 2000 means narrow the range."
     )]
     async fn cash_flow(
         &self,

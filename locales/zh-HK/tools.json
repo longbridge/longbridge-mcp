@@ -51,7 +51,7 @@
     },
     "cash_flow": {
       "title": "資金流水",
-      "description": "查詢資金流水記錄（出入金、派息等），返回 頂層數組 {transaction_flow_name, direction（In/Out）, business_type, balance（發生金額）, currency, business_time, symbol, description}。美股賬戶返回同樣的數組，但無 business_type（見 biz_code、biz_code_name）；balance 為不帶符號的金額，direction 取金額符號，無資金變動時（如加密貨幣轉入轉出）取數量符號；另含 quantity、quantity_description、ref_no、equity_type。按時間倒序，最多 2000 條：恰好 2000 條表示還有更多，請縮小時間範圍",
+      "description": "查詢資金流水記錄（出入金、派息等），返回 頂層數組 {transaction_flow_name, direction（In/Out）, business_type, balance（發生金額）, currency, business_time, symbol, description}。上游的 direction 與 business_type 不可靠（恆為 Out / 0），請以 balance 的正負判斷方向。美股賬戶返回同樣的數組，但無 business_type（見 biz_code、biz_code_name）；balance 為帶符號金額（無資金變動時如加密貨幣轉入轉出為 0），direction 取其符號，為 0 時取數量符號；另含 quantity、quantity_description、ref_no、equity_type。按時間倒序，最多 2000 條：恰好 2000 條表示還有更多，請縮小時間範圍",
       "properties": {
         "start_at": "起始時間：RFC3339（如 2026-09-01T00:00:00Z），或日期（yyyy-mm-dd，表示當天 UTC 0 點）",
         "end_at": "結束時間：RFC3339（如 2026-09-30T23:59:59Z），或日期（yyyy-mm-dd，表示當天 UTC 結束）"

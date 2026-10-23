@@ -200,8 +200,9 @@ pub fn stock_positions(src: &USAssetOverview) -> Result<Value, serde_json::Error
     Ok(serde_json::json!({ "list": list, "us": us }))
 }
 
-/// One US transaction as an AP `cash_flow` entry. `balance` is the
-/// unsigned amount with the sign moved into `direction`; `business_type`
+/// One US transaction as an AP `cash_flow` entry. `balance` is the signed
+/// amount, as AP returns it (0 for crypto movements, where `direction`
+/// follows the quantity's sign instead); `business_type`
 /// (AP's cash/stock/fund code) has no US equivalent and is omitted in favour
 /// of `biz_code`/`biz_code_name`.
 pub fn cash_flow_item(t: &USTransaction) -> Value {
@@ -211,10 +212,7 @@ pub fn cash_flow_item(t: &USTransaction) -> Value {
         "direction".to_string(),
         Value::String(cash_flow_direction(&t.amount, &t.quantity).to_string()),
     );
-    match Decimal::from_str(t.amount.trim()) {
-        Ok(amount) => put(&mut map, "balance", &amount.abs().to_string()),
-        Err(_) => put(&mut map, "balance", &t.amount),
-    }
+    put(&mut map, "balance", &t.amount);
     put(&mut map, "currency", &t.currency);
     if let Some(time) = t.done_at.or(t.create_at).and_then(rfc3339) {
         map.insert("business_time".to_string(), Value::String(time));
@@ -620,7 +618,7 @@ mod tests {
     }
 
     #[test]
-    fn cash_flow_balance_is_unsigned() {
+    fn cash_flow_balance_keeps_the_sign() {
         let item = cash_flow_item(&USTransaction {
             amount: "-4300.00".to_string(),
             quantity: "0".to_string(),
@@ -628,8 +626,8 @@ mod tests {
         });
         assert_eq!(
             item["balance"],
-            json!("4300.00"),
-            "the sign lives in direction"
+            json!("-4300.00"),
+            "balance is signed, as AP returns it"
         );
         assert_eq!(
             item["direction"],
@@ -637,6 +635,13 @@ mod tests {
             "a negative amount is outflow"
         );
         assert!(item.get("quantity").is_none(), "a zero quantity is dropped");
+        let crypto = cash_flow_item(&USTransaction {
+            amount: "0.00".to_string(),
+            quantity: "-0.01".to_string(),
+            ..Default::default()
+        });
+        assert_eq!(crypto["balance"], json!("0.00"), "no cash moved: balance 0");
+        assert_eq!(crypto["direction"], json!("Out"), "quantity sign decides");
         assert!(item.get("symbol").is_none(), "an empty symbol is dropped");
         assert!(
             item.get("business_type").is_none(),
