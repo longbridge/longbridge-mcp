@@ -520,7 +520,7 @@
     },
     "fx_rate": {
       "title": "外汇参考汇率",
-      "description": "获取欧洲央行（ECB）公布的公开外汇参考汇率（经 Frankfurter），每个工作日约 16:00 CET 发布一次；非实时 / 可成交报价，周末不更新，无买卖价。默认返回最新汇率；传 date 查询某一历史日期（自 1999-01-04 起），传 start/end 查询逐日序列（最多 5 个币种、366 天）。覆盖 30 种货币（USD、EUR、HKD、CNY、JPY、SGD、GBP、AUD 等），不含 CNH、TWD 及加密货币。返回 {base, date, rates{币种代码: 汇率}, source}（序列返回 {base, start_date, end_date, rates{yyyy-mm-dd: {币种代码: 汇率}}, source}）；汇率为 1 单位 base 折合的该币种数量（如 base USD、HKD 7.8472 即 1 USD = 7.8472 HKD），与 exchange_rate 方向相反。date 为发布日，可能早于今天，引用汇率时请一并注明",
+      "description": "获取欧洲央行（ECB）公布的公开外汇参考汇率（经 Frankfurter），每个工作日约 16:00 CET 发布一次；非实时 / 可成交报价，周末不更新，无买卖价。默认返回最新汇率；传 date 查询某一历史日期（自 1999-01-04 起），传 start/end 查询逐日序列（最多 5 个币种、366 天）。覆盖 30 种货币（USD、EUR、HKD、CNY、JPY、SGD、GBP、AUD 等），不含 CNH、TWD 及加密货币。返回 {base, date, rates{币种代码: 汇率}, source}（序列返回 {base, start_date, end_date, rates{yyyy-mm-dd: {币种代码: 汇率}}, source}）；汇率为 1 单位 base 折合的该币种数量（如 base USD、HKD 7.8472 即 1 USD = 7.8472 HKD），与 exchange_rate 方向相反。查询交叉汇率（如港币兑人民币）请直接把 base 设为 HKD，不要用两个 USD 汇率相除。date 为发布日，可能早于今天，引用汇率时请一并注明",
       "properties": {
         "base": "基准货币，ISO 4217 代码（默认 `\"USD\"`）。汇率为 1 单位基准货币折合的各报价货币数量",
         "currencies": "报价货币，ISO 4217 代码，例如 `[\"HKD\", \"CNY\"]`（不是 \"700.HK\" 这类证券代码）。不传则返回全部 30 种支持币种。传 `start` 时必填，最多 5 个。不含 CNH、TWD 及加密货币",

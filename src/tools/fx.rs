@@ -11,7 +11,7 @@
 //! to the most recent prior business day, reported in the response's `date`.
 
 use std::collections::HashMap;
-use std::sync::{LazyLock, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
 use rmcp::ErrorData as McpError;
@@ -90,6 +90,13 @@ static HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
 static CACHE: LazyLock<Mutex<HashMap<String, CacheEntry>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
+/// One gate per URL with a request in flight, so concurrent identical misses
+/// make a single upstream call: the first holder fetches, the rest wait and
+/// then read its result from [`CACHE`]. Entries are removed once no caller
+/// holds them, so the map only ever holds in-flight URLs.
+static IN_FLIGHT: LazyLock<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
 struct CacheEntry {
     stored: Instant,
     ttl: Duration,
@@ -137,6 +144,25 @@ fn insert_bounded(
             json,
         },
     );
+}
+
+/// Take (creating if needed) the in-flight gate for `key`.
+fn gate_acquire(key: &str) -> Option<Arc<tokio::sync::Mutex<()>>> {
+    let mut gates = IN_FLIGHT.lock().ok()?;
+    Some(gates.entry(key.to_string()).or_default().clone())
+}
+
+/// Hand back a gate from [`gate_acquire`], dropping the map entry when no
+/// other caller still holds it. Both sides run under the `IN_FLIGHT` lock, so
+/// the reference count seen here is exact.
+fn gate_release(key: &str, gate: Arc<tokio::sync::Mutex<()>>) {
+    let Ok(mut gates) = IN_FLIGHT.lock() else {
+        return;
+    };
+    // One reference is the map's, one is ours.
+    if Arc::strong_count(&gate) <= 2 {
+        gates.remove(key);
+    }
 }
 
 #[derive(Debug, Default, Deserialize, JsonSchema)]
@@ -195,8 +221,10 @@ fn today() -> Date {
     time::OffsetDateTime::now_utc().date()
 }
 
-/// Parse a `yyyy-mm-dd` date within the published range
-/// (`MIN_DATE` ..= today).
+/// Parse a `yyyy-mm-dd` date within the published range. The upper bound is
+/// one day past today in UTC, so a caller east of UTC (e.g. Hong Kong between
+/// 00:00 and 08:00) can still ask for its own "today"; the rate source answers
+/// such a date with its latest publication.
 fn parse_date(field: &str, raw: &str) -> Result<Date, McpError> {
     let d = Date::parse(raw.trim(), format_description!("[year]-[month]-[day]")).map_err(|e| {
         invalid(format!(
@@ -208,7 +236,7 @@ fn parse_date(field: &str, raw: &str) -> Result<Date, McpError> {
             "{field} {d} is before {MIN_DATE}, the first ECB reference-rate publication"
         )));
     }
-    if d > today() {
+    if d > today() + time::Duration::days(1) {
         return Err(invalid(format!("{field} {d} is in the future")));
     }
     Ok(d)
@@ -336,11 +364,33 @@ async fn fetch(base_url: &str, query: FxQuery) -> Result<CallToolResult, McpErro
     let qs = serde_urlencoded::to_string(&params).map_err(|e| unavailable(&e.to_string()))?;
     let url = format!("{base_url}/{}?{qs}", query.path);
     if let Some(json) = cache_get(&url) {
+        crate::metrics::record_fx_rate_cache(true);
         return Ok(tool_result(json));
     }
 
+    // A poisoned map only loses the dedupe; the request still goes through.
+    let Some(gate) = gate_acquire(&url) else {
+        return request(&url, query.settled).await.map(tool_result);
+    };
+    let result = {
+        let _held = gate.lock().await;
+        match cache_get(&url) {
+            Some(json) => {
+                crate::metrics::record_fx_rate_cache(true);
+                Ok(json)
+            }
+            None => request(&url, query.settled).await,
+        }
+    };
+    gate_release(&url, gate);
+    result.map(tool_result)
+}
+
+/// Fetch `url` from the rate source, cache a success, and return its JSON.
+async fn request(url: &str, settled: bool) -> Result<String, McpError> {
+    crate::metrics::record_fx_rate_cache(false);
     let resp = HTTP_CLIENT
-        .get(&url)
+        .get(url)
         .send()
         .await
         .map_err(|e| unavailable(&e.to_string()))?;
@@ -370,13 +420,9 @@ async fn fetch(base_url: &str, query: FxQuery) -> Result<CallToolResult, McpErro
     let body: serde_json::Value =
         serde_json::from_str(&text).map_err(|e| unavailable(&e.to_string()))?;
     let json = serde_json::to_string(&shape(body)).unwrap_or_default();
-    let ttl = if query.settled {
-        SETTLED_TTL
-    } else {
-        FRESH_TTL
-    };
-    cache_put(url, ttl, json.clone());
-    Ok(tool_result(json))
+    let ttl = if settled { SETTLED_TTL } else { FRESH_TTL };
+    cache_put(url.to_string(), ttl, json.clone());
+    Ok(json)
 }
 
 /// Get ECB reference exchange rates (latest, a historical date, or a series).
@@ -551,9 +597,18 @@ mod tests {
         .unwrap_err();
         assert!(before.message.contains("1999-01-04"), "{}", before.message);
 
-        let tomorrow = today() + time::Duration::days(1);
+        // Tomorrow in UTC is still "today" east of UTC, so it is accepted.
+        assert!(
+            build_query(FxRateParam {
+                date: Some((today() + time::Duration::days(1)).to_string()),
+                ..param()
+            })
+            .is_ok(),
+            "tomorrow (UTC) must be accepted for callers east of UTC"
+        );
+
         let future = build_query(FxRateParam {
-            date: Some(tomorrow.to_string()),
+            date: Some((today() + time::Duration::days(2)).to_string()),
             ..param()
         })
         .unwrap_err();
@@ -682,13 +737,15 @@ mod tests {
 
     /// Serve one canned HTTP response on a local port and return its base URL.
     async fn mock_server(status: u16, body: &'static str) -> String {
-        counting_mock_server(status, body).await.0
+        counting_mock_server(status, body, Duration::ZERO).await.0
     }
 
-    /// Like [`mock_server`], also returning a count of requests served.
+    /// Like [`mock_server`], answering after `delay` and also returning a
+    /// count of requests served.
     async fn counting_mock_server(
         status: u16,
         body: &'static str,
+        delay: Duration,
     ) -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
         use std::sync::Arc;
         use std::sync::atomic::{AtomicUsize, Ordering};
@@ -701,7 +758,10 @@ mod tests {
         let code = StatusCode::from_u16(status).expect("valid status");
         let app = axum::Router::new().fallback(get(move || {
             counter.fetch_add(1, Ordering::SeqCst);
-            async move { (code, body) }
+            async move {
+                tokio::time::sleep(delay).await;
+                (code, body)
+            }
         }));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
@@ -716,6 +776,7 @@ mod tests {
         let (base, hits) = counting_mock_server(
             200,
             r#"{"amount":1.0,"base":"USD","date":"2026-10-21","rates":{"HKD":7.8472}}"#,
+            Duration::ZERO,
         )
         .await;
         for _ in 0..3 {
@@ -729,11 +790,40 @@ mod tests {
         );
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_identical_requests_share_one_upstream_call() {
+        use std::sync::atomic::Ordering;
+
+        let (base, hits) = counting_mock_server(
+            200,
+            r#"{"amount":1.0,"base":"USD","date":"2026-10-21","rates":{"HKD":7.8472}}"#,
+            // Slow enough that all eight calls are in flight together.
+            Duration::from_millis(300),
+        )
+        .await;
+        let calls: Vec<_> = (0..8)
+            .map(|_| {
+                let base = base.clone();
+                tokio::spawn(async move { fetch(&base, build_query(param()).unwrap()).await })
+            })
+            .collect();
+        for call in calls {
+            let result = call.await.expect("task").expect("fetch");
+            assert_eq!(result.is_error, Some(false));
+        }
+        assert_eq!(hits.load(Ordering::SeqCst), 1, "misses must be coalesced");
+        let in_flight = IN_FLIGHT.lock().expect("in-flight lock");
+        assert!(
+            !in_flight.keys().any(|k| k.starts_with(&base)),
+            "gates must be released once the requests finish"
+        );
+    }
+
     #[tokio::test]
     async fn failures_are_not_cached() {
         use std::sync::atomic::Ordering;
 
-        let (base, hits) = counting_mock_server(502, "bad gateway").await;
+        let (base, hits) = counting_mock_server(502, "bad gateway", Duration::ZERO).await;
         for _ in 0..2 {
             assert!(fetch(&base, build_query(param()).unwrap()).await.is_err());
         }
