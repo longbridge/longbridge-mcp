@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap};
 use std::future::Future;
 
 use futures_util::stream::{self, StreamExt};
@@ -8,8 +8,8 @@ use longbridge::httpclient::{HttpClientError, Json};
 use longbridge::trade::{
     AccountBalance, CancelOrderOptions, Execution, GetHistoryExecutionsOptions,
     GetOrderDetailOptions, GetTodayExecutionsOptions, GetTodayOrdersOptions, GetUSHistoryOrders,
-    GetUSTransactionHistoryOptions, Order, OrderDetail, OrderSide, StockPositionsResponse,
-    TradeContext,
+    GetUSTransactionHistoryOptions, Order, OrderDetail, OrderSide, QueryUSOrdersResponse,
+    StockPositionsResponse, TradeContext,
 };
 use reqwest::Method;
 use rmcp::ErrorData as McpError;
@@ -663,24 +663,41 @@ async fn us_order_detail_json(
     mctx: &crate::tools::McpContext,
     order_id: &str,
 ) -> Result<serde_json::Value, McpError> {
-    if order_id.is_empty() || !order_id.bytes().all(|b| b.is_ascii_alphanumeric()) {
+    if !is_us_order_id(order_id) {
         return Err(McpError::invalid_params(
             "order_id must be the order's numeric ID",
             None,
         ));
     }
-    let client = mctx.create_http_client();
-    let path = format!("/v1/us/orders/{order_id}");
-    let Json(data) = client
-        .request(Method::GET, path.as_str())
-        .dc_restrict(DcRegion::Us)
-        .response::<Json<serde_json::Value>>()
-        .send()
+    let data = us_order_detail_data(mctx, order_id)
         .await
         .map_err(|e| Error::longbridge(e.into()))?;
     let mut value = us_align::order_detail(&data);
     strip_trailing_zeros(&mut value);
     Ok(value)
+}
+
+/// Whether `order_id` can name an order in the `/v1/us/orders/{order_id}`
+/// path (non-empty and ASCII alphanumeric, so it cannot alter the path).
+fn is_us_order_id(order_id: &str) -> bool {
+    !order_id.is_empty() && order_id.bytes().all(|b| b.is_ascii_alphanumeric())
+}
+
+/// Raw data of `/v1/us/orders/{order_id}`. `order_id` must pass
+/// `is_us_order_id`.
+async fn us_order_detail_data(
+    mctx: &crate::tools::McpContext,
+    order_id: &str,
+) -> Result<serde_json::Value, HttpClientError> {
+    let path = format!("/v1/us/orders/{order_id}");
+    let Json(data) = mctx
+        .create_http_client()
+        .request(Method::GET, path.as_str())
+        .dc_restrict(DcRegion::Us)
+        .response::<Json<serde_json::Value>>()
+        .send()
+        .await?;
+    Ok(data)
 }
 
 pub async fn order_detail(
@@ -742,6 +759,7 @@ pub async fn today_executions(
     mctx: &crate::tools::McpContext,
     p: TodayExecutionsParam,
 ) -> Result<CallToolResult, McpError> {
+    let by_order = p.order_id.is_some();
     let mut exec_opts = GetTodayExecutionsOptions::new();
     if let Some(ref symbol) = p.symbol {
         exec_opts = exec_opts.symbol(symbol.clone());
@@ -754,13 +772,15 @@ pub async fn today_executions(
     if mctx.dc_region().await == DcRegion::Us {
         // v1 fills carry no side for US accounts, and the AP today-orders
         // endpoint is not the US order source: take the side from the US
-        // orders in today_orders' window.
+        // orders in today_orders' window, or, when the fills are filtered to
+        // one order, from that order's detail.
         let executions = ctx
             .today_executions(exec_opts)
             .await
             .map_err(Error::longbridge)?;
-        let query = us_today_fill_side_query(time::OffsetDateTime::now_utc(), p.symbol);
-        let sides = us_fill_sides(mctx, &ctx, &executions, query).await;
+        let query =
+            us_today_executions_side_query(time::OffsetDateTime::now_utc(), p.symbol, by_order);
+        let sides = us_fill_sides(mctx, &executions, query).await;
         // An unresolved side is "", as AP today_executions renders a fill
         // whose order is not in today's orders.
         return tool_json(&us_executions_json(&executions, &sides, ""));
@@ -890,8 +910,8 @@ pub async fn history_executions(
             // v1 history omits `side` for US accounts; fill it from the
             // account's orders over the same range. An unresolved side is
             // "Unknown", as AP history_executions renders one.
-            let query = us_fill_side_query(p.symbol, start, end);
-            let sides = us_fill_sides(mctx, &ctx, &executions, query).await;
+            let query = Some(us_fill_side_query(p.symbol, start, end));
+            let sides = us_fill_sides(mctx, &executions, query).await;
             return tool_json(&us_executions_json(&executions, &sides, "Unknown"));
         }
         ExecutionsSource::V3All => v3_all_executions(&ctx, start, end, p.symbol).await?,
@@ -906,61 +926,106 @@ const US_SIDE_DETAIL_MAX_LOOKUPS: usize = 20;
 /// Order-detail lookups `us_fill_sides` runs at once.
 const US_SIDE_DETAIL_CONCURRENCY: usize = 5;
 
+/// Most symbols the follow-up order query of `resolve_fill_sides` filters by
+/// after the unfiltered range query stopped at the page cap.
+const US_SIDE_QUERY_MAX_SYMBOLS: usize = 50;
+
+/// A US order range query for fill sides: the account's orders between
+/// `start_at` and `end_at` (unix seconds), limited to `symbols` unless it is
+/// empty.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FillSideQuery {
+    symbols: Vec<String>,
+    start_at: i64,
+    end_at: i64,
+}
+
 /// The US order query `us_fill_sides` runs for fills between `start` and
 /// `end` (every page up to `US_ORDER_MAX_PAGES` is walked).
 fn us_fill_side_query(
     symbol: Option<String>,
     start: time::OffsetDateTime,
     end: time::OffsetDateTime,
-) -> GetUSHistoryOrders {
-    GetUSHistoryOrders {
-        symbol,
-        side: OrderSide::Unknown,
+) -> FillSideQuery {
+    FillSideQuery {
+        symbols: symbol.into_iter().collect(),
         start_at: start.unix_timestamp(),
         end_at: end.unix_timestamp(),
-        // 0 (all) is the only query_type confirmed to return data; see
-        // today_orders.
-        query_type: 0,
-        page: 1,
-        limit: US_ORDER_PAGE_SIZE,
     }
 }
 
 /// The order query for today's US fills: today_orders' window, which opens at
 /// 20:00 ET the previous day so overnight-session fills find their order.
-fn us_today_fill_side_query(
-    now: time::OffsetDateTime,
-    symbol: Option<String>,
-) -> GetUSHistoryOrders {
+fn us_today_fill_side_query(now: time::OffsetDateTime, symbol: Option<String>) -> FillSideQuery {
     let (start, end) = us_market::us_today_orders_window(now);
     us_fill_side_query(symbol, start, end)
 }
 
+/// The range query `today_executions` resolves US fill sides with: none when
+/// the fills are filtered to one order (`by_order`), whose side its order
+/// detail gives directly, and today_orders' window otherwise.
+fn us_today_executions_side_query(
+    now: time::OffsetDateTime,
+    symbol: Option<String>,
+    by_order: bool,
+) -> Option<FillSideQuery> {
+    (!by_order).then(|| us_today_fill_side_query(now, symbol))
+}
+
 /// Side by order ID for the US fills in `executions` that lack one: from the
-/// US orders matched by `query`, then from the order detail endpoint for the
-/// order IDs still unmatched. Never fails: an order-query error leaves every
-/// side unresolved.
+/// US orders matched by `query` (skipped when it is `None`), then from the
+/// order detail endpoint for the order IDs still unmatched. Never fails: an
+/// order-query error leaves every side unresolved.
 async fn us_fill_sides(
     mctx: &crate::tools::McpContext,
-    ctx: &TradeContext,
     executions: &[Execution],
-    query: GetUSHistoryOrders,
+    query: Option<FillSideQuery>,
 ) -> HashMap<String, OrderSide> {
     resolve_fill_sides(
         executions,
         query,
-        |opts| {
+        |query| {
             collect_us_pages(US_ORDER_PAGE_SIZE, US_ORDER_MAX_PAGES, move |page| {
-                let opts = GetUSHistoryOrders {
-                    page,
-                    ..opts.clone()
-                };
-                async move { ctx.us_query_orders(opts).await.map(|r| r.orders) }
+                let query = query.clone();
+                async move { us_order_page(mctx, &query, page).await }
             })
         },
         |order_id| us_order_side(mctx, order_id),
     )
     .await
+}
+
+/// One page of `POST /v1/us/orders/query` for `query`. Sent directly rather
+/// than through `TradeContext::us_query_orders`, which takes a single symbol.
+async fn us_order_page(
+    mctx: &crate::tools::McpContext,
+    query: &FillSideQuery,
+    page: i32,
+) -> Result<Vec<serde_json::Value>, HttpClientError> {
+    let body = serde_json::json!({
+        "account_channel": "",
+        "action": 0,
+        // Seconds as floats, as the SDK sends them.
+        "start_at": query.start_at as f64,
+        "end_at": query.end_at as f64,
+        "symbols": query.symbols,
+        "security_types": [],
+        // 0 (all) is the only query_type confirmed to return data; see
+        // today_orders.
+        "query_type": 0,
+        "page": page,
+        "limit": US_ORDER_PAGE_SIZE,
+        "query_version": time::OffsetDateTime::now_utc().unix_timestamp() as f64,
+    });
+    let Json(resp) = mctx
+        .create_http_client()
+        .request(Method::POST, "/v1/us/orders/query")
+        .dc_restrict(DcRegion::Us)
+        .body(Json(body))
+        .response::<Json<QueryUSOrdersResponse>>()
+        .send()
+        .await?;
+    Ok(resp.orders)
 }
 
 /// One US order's side from `/v1/us/orders/{order_id}`, or `None` when its
@@ -969,71 +1034,96 @@ async fn us_order_side(
     mctx: &crate::tools::McpContext,
     order_id: String,
 ) -> Result<Option<OrderSide>, HttpClientError> {
-    if order_id.is_empty() || !order_id.bytes().all(|b| b.is_ascii_alphanumeric()) {
+    if !is_us_order_id(&order_id) {
         return Ok(None);
     }
-    let path = format!("/v1/us/orders/{order_id}");
-    let Json(data) = mctx
-        .create_http_client()
-        .request(Method::GET, path.as_str())
-        .dc_restrict(DcRegion::Us)
-        .response::<Json<serde_json::Value>>()
-        .send()
-        .await?;
+    let data = us_order_detail_data(mctx, &order_id).await?;
     Ok(us_align::order_detail_side(&data))
 }
 
 /// Resolve the sides of fills that lack one. `query_orders` runs `query` (the
-/// account's orders over the fills' range); order IDs it leaves unmatched are
-/// looked up with `order_side`, at most `US_SIDE_DETAIL_MAX_LOOKUPS` of them
-/// and `US_SIDE_DETAIL_CONCURRENCY` at a time. Nothing is queried when every
-/// fill has a side; a failed order query falls back to an empty map and a
-/// failed lookup leaves that order unresolved, so the fills are still
-/// returned.
+/// account's orders over the fills' range); when that unfiltered query stops
+/// at the page cap it runs once more filtered by the symbols of the fills
+/// still unmatched (at most `US_SIDE_QUERY_MAX_SYMBOLS`). Order IDs left
+/// unmatched, or every order ID when `query` is `None`, are looked up with
+/// `order_side`, at most `US_SIDE_DETAIL_MAX_LOOKUPS` of them and
+/// `US_SIDE_DETAIL_CONCURRENCY` at a time. Nothing is queried when every fill
+/// has a side; a failed first order query falls back to an empty map, while a
+/// failed follow-up query or lookup only leaves those orders unresolved, so
+/// the fills are still returned.
 async fn resolve_fill_sides<Q, QFut, QErr, D, DFut, DErr>(
     executions: &[Execution],
-    query: GetUSHistoryOrders,
+    query: Option<FillSideQuery>,
     query_orders: Q,
     order_side: D,
 ) -> HashMap<String, OrderSide>
 where
-    Q: FnOnce(GetUSHistoryOrders) -> QFut,
+    Q: Fn(FillSideQuery) -> QFut,
     QFut: Future<Output = Result<UsPages<serde_json::Value>, QErr>>,
     QErr: std::fmt::Display,
     D: Fn(String) -> DFut,
     DFut: Future<Output = Result<Option<OrderSide>, DErr>>,
     DErr: std::fmt::Display,
 {
-    let mut seen = HashSet::new();
+    let mut symbol_of: HashMap<&str, &str> = HashMap::new();
     let unmatched: Vec<&str> = executions
         .iter()
         .filter(|e| e.side == OrderSide::Unknown)
+        .filter(|e| {
+            symbol_of
+                .insert(e.order_id.as_str(), e.symbol.as_str())
+                .is_none()
+        })
         .map(|e| e.order_id.as_str())
-        .filter(|id| seen.insert(*id))
         .collect();
     if unmatched.is_empty() {
         return HashMap::new();
     }
 
-    let mut sides = match query_orders(query).await {
-        Ok(pages) => {
-            if pages.truncated {
+    let mut sides = HashMap::new();
+    if let Some(query) = query {
+        let pages = match query_orders(query.clone()).await {
+            Ok(pages) => pages,
+            Err(err) => {
                 tracing::warn!(
-                    orders = pages.items.len(),
-                    "US order query for fill sides stopped at the page cap; \
-                     falling back to order detail lookups"
+                    error = %err,
+                    "US order query for fill sides failed; leaving sides unresolved"
                 );
+                return HashMap::new();
             }
-            us_align::order_sides(&pages.items)
-        }
-        Err(err) => {
+        };
+        sides = us_align::order_sides(&pages.items);
+        if pages.truncated {
+            let symbols: Vec<String> = if query.symbols.is_empty() {
+                unmatched
+                    .iter()
+                    .filter(|id| !sides.contains_key(**id))
+                    .filter_map(|id| symbol_of.get(id).copied())
+                    .filter(|symbol| !symbol.is_empty())
+                    .collect::<BTreeSet<&str>>()
+                    .into_iter()
+                    .take(US_SIDE_QUERY_MAX_SYMBOLS)
+                    .map(str::to_string)
+                    .collect()
+            } else {
+                Vec::new()
+            };
             tracing::warn!(
-                error = %err,
-                "US order query for fill sides failed; leaving sides unresolved"
+                orders = pages.items.len(),
+                retry_symbols = symbols.len(),
+                "US order query for fill sides stopped at the page cap"
             );
-            return HashMap::new();
+            if !symbols.is_empty() {
+                match query_orders(FillSideQuery { symbols, ..query }).await {
+                    Ok(pages) => sides.extend(us_align::order_sides(&pages.items)),
+                    Err(err) => tracing::warn!(
+                        error = %err,
+                        "symbol-filtered US order query for fill sides failed"
+                    ),
+                }
+            }
         }
-    };
+    }
 
     let missing: Vec<String> = unmatched
         .into_iter()
@@ -2223,12 +2313,13 @@ mod tests {
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use longbridge::trade::{Execution, GetUSHistoryOrders, OrderSide};
+    use longbridge::trade::{Execution, OrderSide};
     use serde_json::{Value, json};
 
     use super::{
-        US_SIDE_DETAIL_CONCURRENCY, US_SIDE_DETAIL_MAX_LOOKUPS, executions_json,
-        resolve_fill_sides, us_executions_json, us_fill_side_query, us_today_fill_side_query,
+        FillSideQuery, US_SIDE_DETAIL_CONCURRENCY, US_SIDE_DETAIL_MAX_LOOKUPS,
+        US_SIDE_QUERY_MAX_SYMBOLS, executions_json, resolve_fill_sides, us_executions_json,
+        us_fill_side_query, us_today_executions_side_query, us_today_fill_side_query,
     };
     use crate::tools::support::us_align;
 
@@ -2258,14 +2349,23 @@ mod tests {
 
     /// Side-less fills, one per order ID.
     fn fills_for(order_ids: &[String]) -> Vec<Execution> {
-        let raw: Vec<Value> = order_ids
+        let pairs: Vec<(&str, &str)> = order_ids
             .iter()
-            .map(|id| {
+            .map(|id| (id.as_str(), "AAPL.US"))
+            .collect();
+        fills_with(&pairs)
+    }
+
+    /// Side-less fills, one per `(order ID, symbol)`.
+    fn fills_with(fills: &[(&str, &str)]) -> Vec<Execution> {
+        let raw: Vec<Value> = fills
+            .iter()
+            .map(|(id, symbol)| {
                 json!({
                     "order_id": id,
                     "price": "1",
                     "quantity": "1",
-                    "symbol": "AAPL.US",
+                    "symbol": symbol,
                     "trade_done_at": "1792000000",
                     "trade_id": format!("{id}-1")
                 })
@@ -2274,7 +2374,7 @@ mod tests {
         serde_json::from_value(Value::Array(raw)).expect("side-less fills must deserialize")
     }
 
-    fn any_query() -> GetUSHistoryOrders {
+    fn any_query() -> FillSideQuery {
         us_fill_side_query(
             None,
             datetime!(2026-10-22 04:00 UTC),
@@ -2286,6 +2386,14 @@ mod tests {
         Ok(UsPages {
             items: orders,
             truncated: false,
+        })
+    }
+
+    /// A page set that stopped at the page cap.
+    fn capped_orders(orders: Vec<Value>) -> Result<UsPages<Value>, String> {
+        Ok(UsPages {
+            items: orders,
+            truncated: true,
         })
     }
 
@@ -2407,7 +2515,7 @@ mod tests {
         }
         let sides = resolve_fill_sides(
             &fills,
-            any_query(),
+            Some(any_query()),
             |_| -> Ready<Result<UsPages<Value>, String>> {
                 panic!("the order query must not run when every fill has a side")
             },
@@ -2424,7 +2532,7 @@ mod tests {
         let fills = v1_us_fills();
         let sides = resolve_fill_sides(
             &fills,
-            any_query(),
+            Some(any_query()),
             |_| async { Err::<UsPages<Value>, _>("upstream 500".to_string()) },
             |_| -> Ready<Result<Option<OrderSide>, String>> {
                 panic!("no detail lookup runs after a failed order query")
@@ -2451,7 +2559,7 @@ mod tests {
         let looked_up = Mutex::new(Vec::new());
         let sides = resolve_fill_sides(
             &fills,
-            any_query(),
+            Some(any_query()),
             |_| async { orders_page(vec![json!({"id": "701", "action": 2})]) },
             |id| {
                 looked_up.lock().expect("lookup log lock").push(id.clone());
@@ -2491,7 +2599,7 @@ mod tests {
         let peak = AtomicUsize::new(0);
         let sides = resolve_fill_sides(
             &fills,
-            any_query(),
+            Some(any_query()),
             |_| async { orders_page(Vec::new()) },
             |_| {
                 calls.fetch_add(1, Ordering::SeqCst);
@@ -2541,7 +2649,7 @@ mod tests {
         let seen = Mutex::new(None);
         let sides = resolve_fill_sides(
             &v1_us_fills(),
-            query,
+            Some(query),
             |opts| {
                 *seen.lock().expect("query log lock") = Some((opts.start_at, opts.end_at));
                 async { orders_page(vec![json!({"id": "701", "action": 1})]) }
@@ -2561,6 +2669,224 @@ mod tests {
             sides.get("701"),
             Some(&OrderSide::Buy),
             "resolved in the window"
+        );
+    }
+
+    #[tokio::test]
+    async fn capped_fill_side_query_retries_filtered_by_unmatched_symbols() {
+        let fills = fills_with(&[
+            ("701", "AAPL.US"),
+            ("702", "TSLA.US"),
+            ("703", "TSLA.US"),
+            ("704", "NVDA.US"),
+            ("705", "MSFT.US"),
+        ]);
+        let queries = Mutex::new(Vec::new());
+        let looked_up = Mutex::new(Vec::new());
+        let sides = resolve_fill_sides(
+            &fills,
+            Some(any_query()),
+            |query: FillSideQuery| {
+                let first = query.symbols.is_empty();
+                queries.lock().expect("query log lock").push(query);
+                async move {
+                    if first {
+                        capped_orders(vec![json!({"id": "701", "action": 1})])
+                    } else {
+                        orders_page(vec![
+                            json!({"id": "702", "action": 2}),
+                            json!({"id": "703", "action": 1}),
+                        ])
+                    }
+                }
+            },
+            |id| {
+                looked_up.lock().expect("lookup log lock").push(id.clone());
+                async move { Ok::<_, String>(Some(OrderSide::Sell)) }
+            },
+        )
+        .await;
+        let queries = queries.into_inner().expect("query log lock");
+        assert_eq!(queries.len(), 2, "one follow-up query after the page cap");
+        assert_eq!(
+            queries[1],
+            FillSideQuery {
+                symbols: vec!["MSFT.US".into(), "NVDA.US".into(), "TSLA.US".into()],
+                ..any_query()
+            },
+            "the follow-up keeps the range and filters by the deduped symbols still unmatched"
+        );
+        let mut looked_up = looked_up.into_inner().expect("lookup log lock");
+        looked_up.sort();
+        assert_eq!(
+            looked_up,
+            ["704", "705"],
+            "orders the follow-up still misses fall back to detail lookups"
+        );
+        assert_eq!(sides.get("701"), Some(&OrderSide::Buy), "first query");
+        assert_eq!(sides.get("702"), Some(&OrderSide::Sell), "follow-up query");
+        assert_eq!(sides.get("703"), Some(&OrderSide::Buy), "follow-up query");
+        assert_eq!(sides.get("704"), Some(&OrderSide::Sell), "detail lookup");
+    }
+
+    #[tokio::test]
+    async fn capped_fill_side_query_bounds_the_follow_up_symbol_list() {
+        let ids: Vec<String> = (0..US_SIDE_QUERY_MAX_SYMBOLS + 5)
+            .map(|i| format!("{}", 100 + i))
+            .collect();
+        let symbols: Vec<String> = (0..ids.len()).map(|i| format!("S{i:03}.US")).collect();
+        let pairs: Vec<(&str, &str)> = ids
+            .iter()
+            .zip(&symbols)
+            .map(|(id, symbol)| (id.as_str(), symbol.as_str()))
+            .collect();
+        let fills = fills_with(&pairs);
+        let follow_up = Mutex::new(None);
+        resolve_fill_sides(
+            &fills,
+            Some(any_query()),
+            |query: FillSideQuery| {
+                let first = query.symbols.is_empty();
+                if !first {
+                    *follow_up.lock().expect("query log lock") = Some(query.symbols);
+                }
+                async move {
+                    if first {
+                        capped_orders(Vec::new())
+                    } else {
+                        orders_page(Vec::new())
+                    }
+                }
+            },
+            |_| async { Ok::<_, String>(None) },
+        )
+        .await;
+        let symbols = follow_up
+            .into_inner()
+            .expect("query log lock")
+            .expect("a follow-up query must run");
+        assert_eq!(
+            symbols.len(),
+            US_SIDE_QUERY_MAX_SYMBOLS,
+            "the follow-up filters by at most US_SIDE_QUERY_MAX_SYMBOLS symbols"
+        );
+    }
+
+    #[tokio::test]
+    async fn capped_symbol_filtered_query_falls_back_to_detail_lookups() {
+        let fills = v1_us_fills();
+        let calls = AtomicUsize::new(0);
+        let looked_up = Mutex::new(Vec::new());
+        let sides = resolve_fill_sides(
+            &fills,
+            Some(us_fill_side_query(
+                Some("AAPL.US".to_string()),
+                datetime!(2026-10-22 04:00 UTC),
+                datetime!(2026-10-23 03:59:59 UTC),
+            )),
+            |_| {
+                calls.fetch_add(1, Ordering::SeqCst);
+                async { capped_orders(vec![json!({"id": "701", "action": 2})]) }
+            },
+            |id| {
+                looked_up.lock().expect("lookup log lock").push(id.clone());
+                async move { Ok::<_, String>(Some(OrderSide::Buy)) }
+            },
+        )
+        .await;
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "an already symbol-filtered query is not retried"
+        );
+        assert_eq!(
+            looked_up.into_inner().expect("lookup log lock"),
+            ["999"],
+            "the truncated query's unmatched order is looked up by detail"
+        );
+        assert_eq!(
+            sides.get("701"),
+            Some(&OrderSide::Sell),
+            "orders on the capped pages still resolve"
+        );
+        assert_eq!(sides.get("999"), Some(&OrderSide::Buy), "from order detail");
+    }
+
+    #[tokio::test]
+    async fn failed_follow_up_query_still_runs_detail_lookups() {
+        let fills = v1_us_fills();
+        let calls = AtomicUsize::new(0);
+        let sides = resolve_fill_sides(
+            &fills,
+            Some(any_query()),
+            |query: FillSideQuery| {
+                calls.fetch_add(1, Ordering::SeqCst);
+                async move {
+                    if query.symbols.is_empty() {
+                        capped_orders(Vec::new())
+                    } else {
+                        Err("upstream 500".to_string())
+                    }
+                }
+            },
+            |id| async move {
+                Ok::<_, String>(Some(if id == "701" {
+                    OrderSide::Buy
+                } else {
+                    OrderSide::Sell
+                }))
+            },
+        )
+        .await;
+        assert_eq!(calls.load(Ordering::SeqCst), 2, "the follow-up ran");
+        assert_eq!(sides.get("701"), Some(&OrderSide::Buy), "from order detail");
+        assert_eq!(
+            sides.get("999"),
+            Some(&OrderSide::Sell),
+            "from order detail"
+        );
+    }
+
+    #[test]
+    fn today_executions_by_order_skip_the_range_query() {
+        let now = datetime!(2026-10-23 05:30 UTC);
+        assert_eq!(
+            us_today_executions_side_query(now, None, true),
+            None,
+            "fills filtered to one order resolve from its detail"
+        );
+        assert_eq!(
+            us_today_executions_side_query(now, Some("AAPL.US".into()), false),
+            Some(us_today_fill_side_query(now, Some("AAPL.US".into()))),
+            "otherwise today_orders' window is queried"
+        );
+    }
+
+    #[tokio::test]
+    async fn fill_sides_without_a_range_query_look_up_the_order_directly() {
+        let fills = fills_for(&["701".into(), "701".into()]);
+        let looked_up = Mutex::new(Vec::new());
+        let sides = resolve_fill_sides(
+            &fills,
+            None,
+            |_| -> Ready<Result<UsPages<Value>, String>> {
+                panic!("no range query runs for fills filtered to one order")
+            },
+            |id| {
+                looked_up.lock().expect("lookup log lock").push(id.clone());
+                async move { Ok::<_, String>(Some(OrderSide::Sell)) }
+            },
+        )
+        .await;
+        assert_eq!(
+            looked_up.into_inner().expect("lookup log lock"),
+            ["701"],
+            "the order is looked up once"
+        );
+        assert_eq!(
+            sides.get("701"),
+            Some(&OrderSide::Sell),
+            "from order detail"
         );
     }
 

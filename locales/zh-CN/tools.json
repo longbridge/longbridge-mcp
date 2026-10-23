@@ -151,7 +151,7 @@
     },
     "history_executions": {
       "title": "历史成交",
-      "description": "获取指定日期区间内的全部成交记录，自动翻页返回完整结果（不受每页 1000 条上限截断）。返回顶层数组 {order_id, trade_id, symbol, side, quantity, price, trade_done_at}；trade_id 为稳定去重键；side 无法确定时为 \"Unknown\"（美股账户：未查到所属委托，可调用 order_detail(order_id) 获取）。start_at/end_at 为 RFC3339 格式，或只传日期（yyyy-mm-dd）按 UTC 当天解读（美股账户按纽约时间 EST/EDT，与 history_orders 一致）。亚太账户按成交时间（trade_done_at）筛选。美股账户读取 v1 历史成交，不按成交时间筛选，区间边缘可能跨日滞后：请将区间前后各放宽一天，再按 trade_done_at 自行筛选；side 由账户在该区间内的委托及委托详情补全",
+      "description": "获取指定日期区间内的全部成交记录，自动翻页返回完整结果（不受每页 1000 条上限截断）。返回顶层数组 {order_id, trade_id, symbol, side, quantity, price, trade_done_at}；trade_id 为稳定去重键；side 无法确定时为 \"Unknown\"（美股账户：未能解析所属委托的方向，可调用 order_detail(order_id) 获取）。start_at/end_at 为 RFC3339 格式，或只传日期（yyyy-mm-dd）按 UTC 当天解读（美股账户按纽约时间 EST/EDT，与 history_orders 一致）。亚太账户按成交时间（trade_done_at）筛选。美股账户读取 v1 历史成交，不按成交时间筛选，区间边缘可能跨日滞后：请将区间前后各放宽一天，再按 trade_done_at 自行筛选；side 由账户在该区间内的委托及委托详情补全",
       "properties": {
         "symbol": "按证券筛选（可选）",
         "start_at": "起始时间：RFC3339（如 2026-09-01T00:00:00Z），或日期（yyyy-mm-dd，表示当天 UTC 0 点；美股账户按纽约时间）",
@@ -179,7 +179,7 @@
     },
     "today_executions": {
       "title": "当日成交",
-      "description": "获取当日成交记录，返回顶层数组 {order_id, trade_id, symbol, side, quantity, price, trade_done_at}；side 取自成交所属委托，无法确定时为 \"\"（美股账户：未查到所属委托，可调用 order_detail(order_id) 获取）。可传 symbol 或 order_id 筛选",
+      "description": "获取当日成交记录，返回顶层数组 {order_id, trade_id, symbol, side, quantity, price, trade_done_at}；side 取自成交所属委托，无法确定时为 \"\"（美股账户：未能解析所属委托的方向，可调用 order_detail(order_id) 获取）。可传 symbol 或 order_id 筛选",
       "properties": {
         "symbol": "按证券筛选，例如 `\"700.HK\"`",
         "order_id": "按指定委托单号筛选"
