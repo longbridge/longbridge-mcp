@@ -2954,7 +2954,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get orders placed today. Returns a top-level array of orders {order_id, symbol, stock_name, side, order_type, status, quantity, executed_quantity, price, currency, time_in_force, submitted_at, updated_at, msg, …, attached_orders[]}, where attached_orders[] holds the order's take-profit/stop-loss legs. Pass symbol to filter by security, or order_id for one order. To fetch an attached leg by its own ID, pass that ID as order_id together with is_attached=true — the leg itself comes back as the order entry. is_attached does nothing without order_id, and neither has any effect for US accounts, which are served by the US order endpoint. US accounts only: us_action (Buy/Sell), us_page, us_limit filter/paginate via a separate US order endpoint, which returns an object with the orders under orders[]."
+        description = "Get orders placed today. Returns a top-level array of orders {order_id, symbol, stock_name, side, order_type, status, quantity, executed_quantity, price, currency, time_in_force, submitted_at, updated_at, msg, …, attached_orders[]}, where attached_orders[] holds the order's take-profit/stop-loss legs. Pass symbol to filter by security, or order_id for one order. To fetch an attached leg by its own ID, pass that ID as order_id together with is_attached=true — the leg itself comes back as the order entry. is_attached does nothing without order_id. US accounts get a US-specific variant instead, served by the US order endpoint (order_id/is_attached are ignored; us_action (Buy/Sell), us_page, us_limit filter/paginate): an object {orders[]{id (not order_id), symbol, name, action (Buy/Sell), order_type, status, quantity, executed_qty, price, executed_price, currency, time_in_force, submitted_at, …}, total_count}."
     )]
     async fn today_orders(
         &self,
@@ -3042,7 +3042,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get historical orders between dates (excludes today). Returns orders[]{order_id, symbol, side, status, quantity, price, submitted_at}. start_at/end_at in RFC3339. US accounts only: us_page, us_limit paginate via a separate US order endpoint (default page size 20 — pass us_page to see more than the first page)."
+        description = "Get historical orders between dates (excludes today). Returns orders[]{order_id, symbol, side, status, quantity, price, submitted_at}. start_at/end_at in RFC3339. US accounts get a US-specific variant instead, served by the US order endpoint: {orders[]{id (not order_id), symbol, name, action (Buy/Sell), order_type, status, quantity, executed_qty, price, executed_price, currency, time_in_force, submitted_at, …}, total_count}; us_page, us_limit paginate it (default page size 20 — pass us_page to see more than the first page)."
     )]
     async fn history_orders(
         &self,
@@ -8472,6 +8472,8 @@ mod tool_error_tests {
             "cash_flow",
             "exchange_rate",
             "order_detail",
+            "today_orders",
+            "history_orders",
         ] {
             assert!(names.contains(&tool), "`{tool}` must carry the marker");
             assert!(us.contains(tool), "US note must name `{tool}`: {us}");
