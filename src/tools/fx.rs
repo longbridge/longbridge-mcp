@@ -146,22 +146,39 @@ fn insert_bounded(
     );
 }
 
-/// Take (creating if needed) the in-flight gate for `key`.
-fn gate_acquire(key: &str) -> Option<Arc<tokio::sync::Mutex<()>>> {
-    let mut gates = IN_FLIGHT.lock().ok()?;
-    Some(gates.entry(key.to_string()).or_default().clone())
+/// A caller's hold on the in-flight gate for one URL. Released on drop, so
+/// the map entry is cleaned up even when the tool call is cancelled mid-request
+/// (a client `notifications/cancelled` or a dropped connection drops the
+/// future without running the code after its pending `.await`).
+struct Gate {
+    key: String,
+    lock: Arc<tokio::sync::Mutex<()>>,
 }
 
-/// Hand back a gate from [`gate_acquire`], dropping the map entry when no
-/// other caller still holds it. Both sides run under the `IN_FLIGHT` lock, so
-/// the reference count seen here is exact.
-fn gate_release(key: &str, gate: Arc<tokio::sync::Mutex<()>>) {
-    let Ok(mut gates) = IN_FLIGHT.lock() else {
-        return;
-    };
-    // One reference is the map's, one is ours.
-    if Arc::strong_count(&gate) <= 2 {
-        gates.remove(key);
+impl Gate {
+    /// Take (creating if needed) the in-flight gate for `key`.
+    fn acquire(key: &str) -> Option<Self> {
+        let mut gates = IN_FLIGHT.lock().ok()?;
+        let lock = gates.entry(key.to_string()).or_default().clone();
+        Some(Self {
+            key: key.to_string(),
+            lock,
+        })
+    }
+}
+
+impl Drop for Gate {
+    /// Drop the map entry when no other caller still holds the gate. Both
+    /// acquire and release run under the `IN_FLIGHT` lock, so the reference
+    /// count seen here is exact.
+    fn drop(&mut self) {
+        let Ok(mut gates) = IN_FLIGHT.lock() else {
+            return;
+        };
+        // One reference is the map's, one is ours.
+        if Arc::strong_count(&self.lock) <= 2 {
+            gates.remove(&self.key);
+        }
     }
 }
 
@@ -369,21 +386,18 @@ async fn fetch(base_url: &str, query: FxQuery) -> Result<CallToolResult, McpErro
     }
 
     // A poisoned map only loses the dedupe; the request still goes through.
-    let Some(gate) = gate_acquire(&url) else {
+    let Some(gate) = Gate::acquire(&url) else {
         return request(&url, query.settled).await.map(tool_result);
     };
-    let result = {
-        let _held = gate.lock().await;
-        match cache_get(&url) {
-            Some(json) => {
-                crate::metrics::record_fx_rate_cache(true);
-                Ok(json)
-            }
-            None => request(&url, query.settled).await,
+    let _held = gate.lock.lock().await;
+    let json = match cache_get(&url) {
+        Some(json) => {
+            crate::metrics::record_fx_rate_cache(true);
+            json
         }
+        None => request(&url, query.settled).await?,
     };
-    gate_release(&url, gate);
-    result.map(tool_result)
+    Ok(tool_result(json))
 }
 
 /// Fetch `url` from the rate source, cache a success, and return its JSON.
@@ -816,6 +830,29 @@ mod tests {
         assert!(
             !in_flight.keys().any(|k| k.starts_with(&base)),
             "gates must be released once the requests finish"
+        );
+    }
+
+    #[tokio::test]
+    async fn cancelled_requests_release_their_gate() {
+        let (base, _hits) = counting_mock_server(
+            200,
+            r#"{"amount":1.0,"base":"USD","date":"2026-10-21","rates":{"HKD":7.8472}}"#,
+            Duration::from_secs(5),
+        )
+        .await;
+        // Give up long before the slow upstream answers, dropping the call
+        // mid-request the way a client cancellation does.
+        let cancelled = tokio::time::timeout(
+            Duration::from_millis(100),
+            fetch(&base, build_query(param()).unwrap()),
+        )
+        .await;
+        assert!(cancelled.is_err(), "the call should still be pending");
+        let in_flight = IN_FLIGHT.lock().expect("in-flight lock");
+        assert!(
+            !in_flight.keys().any(|k| k.starts_with(&base)),
+            "a cancelled call must not leave its gate behind"
         );
     }
 
