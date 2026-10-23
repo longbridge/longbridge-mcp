@@ -492,7 +492,7 @@ fn error_hint(err: &McpError) -> Option<&'static str> {
 
     if msg.contains(TRANSPORT_ERROR) {
         return Some(
-            "Hint: a transient network error reaching Longbridge (the request got no \
+            "Hint: a transient network error reaching the upstream service (the request got no \
              response). Wait a moment and retry the same call.",
         );
     }
