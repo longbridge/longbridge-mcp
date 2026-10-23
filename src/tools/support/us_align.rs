@@ -8,11 +8,12 @@
 //! AP counterpart are kept under distinct names (or a `us` sub-object); AP
 //! fields with no US source are left out rather than invented.
 
+use std::collections::HashMap;
 use std::str::FromStr;
 
 use longbridge::Decimal;
 use longbridge::trade::{
-    USAssetOverview, USCashAndBuyPower, USExchangeRate, USStockEntry, USTransaction,
+    OrderSide, USAssetOverview, USCashAndBuyPower, USExchangeRate, USStockEntry, USTransaction,
 };
 use serde_json::{Map, Number, Value};
 use time::OffsetDateTime;
@@ -296,6 +297,23 @@ fn order_side(action: Option<i64>) -> &'static str {
         Some(2) => "Sell",
         _ => "Unknown",
     }
+}
+
+/// Order side by order ID (`id`) for raw US orders, used to fill in fills
+/// that come back without a side. Orders whose `action` is neither Buy nor
+/// Sell are left out.
+pub fn order_sides(raw: &[Value]) -> HashMap<String, OrderSide> {
+    raw.iter()
+        .filter_map(|order| {
+            let id = order.get("id")?.as_str()?;
+            let side = match order.get("action")?.as_i64()? {
+                1 => OrderSide::Buy,
+                2 => OrderSide::Sell,
+                _ => return None,
+            };
+            Some((id.to_string(), side))
+        })
+        .collect()
 }
 
 /// One AP `history[]` entry from a US `order_histories[]` entry.

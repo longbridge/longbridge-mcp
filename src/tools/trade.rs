@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::future::Future;
 
 use longbridge::DcRegion;
@@ -5,7 +6,8 @@ use longbridge::httpclient::Json;
 use longbridge::trade::{
     AccountBalance, CancelOrderOptions, Execution, GetHistoryExecutionsOptions,
     GetOrderDetailOptions, GetTodayExecutionsOptions, GetTodayOrdersOptions, GetUSHistoryOrders,
-    GetUSTransactionHistoryOptions, Order, OrderDetail, StockPositionsResponse, TradeContext,
+    GetUSTransactionHistoryOptions, Order, OrderDetail, OrderSide, StockPositionsResponse,
+    TradeContext,
 };
 use reqwest::Method;
 use rmcp::ErrorData as McpError;
@@ -738,46 +740,40 @@ pub async fn today_executions(
     mctx: &crate::tools::McpContext,
     p: TodayExecutionsParam,
 ) -> Result<CallToolResult, McpError> {
-    use std::collections::HashMap;
-
     let mut exec_opts = GetTodayExecutionsOptions::new();
-    let mut order_opts = GetTodayOrdersOptions::new();
     if let Some(ref symbol) = p.symbol {
         exec_opts = exec_opts.symbol(symbol.clone());
-        order_opts = order_opts.symbol(symbol.clone());
     }
     if let Some(order_id) = p.order_id {
         exec_opts = exec_opts.order_id(order_id);
     }
 
     let (ctx, _) = TradeContext::new(mctx.create_config());
+    if mctx.dc_region().await == DcRegion::Us {
+        // v1 fills carry no side for US accounts, and the AP today-orders
+        // endpoint is not the US order source: take the side from the US
+        // orders in today_orders' window.
+        let executions = ctx
+            .today_executions(exec_opts)
+            .await
+            .map_err(Error::longbridge)?;
+        let (start, end) = us_market::us_today_orders_window(time::OffsetDateTime::now_utc());
+        let sides = us_fill_sides(&ctx, &executions, p.symbol, start, end).await?;
+        return tool_json(&executions_value(&executions, &sides));
+    }
+
+    let mut order_opts = GetTodayOrdersOptions::new();
+    if let Some(symbol) = p.symbol {
+        order_opts = order_opts.symbol(symbol);
+    }
     let (executions, orders) = tokio::try_join!(
         ctx.today_executions(exec_opts),
         ctx.today_orders(order_opts),
     )
     .map_err(Error::longbridge)?;
-
-    let side_map: HashMap<String, String> = orders
-        .into_iter()
-        .map(|o| (o.order_id, format!("{:?}", o.side)))
-        .collect();
-
-    let result: Vec<serde_json::Value> = executions
-        .iter()
-        .map(|e| {
-            let mut v = serde_json::to_value(e).unwrap_or_default();
-            if let serde_json::Value::Object(ref mut map) = v {
-                let side = side_map.get(&e.order_id).cloned().unwrap_or_default();
-                map.insert("side".to_string(), serde_json::Value::String(side));
-            }
-            v
-        })
-        .collect();
-    // Execution prices/amounts come padded to a fixed decimal width; strip
-    // trailing zeros (lossless).
-    let mut value = serde_json::Value::Array(result);
-    crate::serialize::strip_trailing_zeros(&mut value);
-    tool_json(&value)
+    let sides: HashMap<String, OrderSide> =
+        orders.into_iter().map(|o| (o.order_id, o.side)).collect();
+    tool_json(&executions_value(&executions, &sides))
 }
 
 pub async fn history_orders(
@@ -874,16 +870,49 @@ pub async fn history_executions(
             let mut opts = GetHistoryExecutionsOptions::new()
                 .start_at(start)
                 .end_at(end);
-            if let Some(symbol) = p.symbol {
-                opts = opts.symbol(symbol);
+            if let Some(ref symbol) = p.symbol {
+                opts = opts.symbol(symbol.clone());
             }
-            ctx.history_executions(opts)
+            let executions = ctx
+                .history_executions(opts)
                 .await
-                .map_err(Error::longbridge)?
+                .map_err(Error::longbridge)?;
+            // v1 history omits `side` for US accounts; fill it from the
+            // account's orders over the same range.
+            let sides = us_fill_sides(&ctx, &executions, p.symbol, start, end).await?;
+            return tool_json(&executions_value(&executions, &sides));
         }
         ExecutionsSource::V3All => v3_all_executions(&ctx, start, end, p.symbol).await?,
     };
-    executions_json(&executions)
+    tool_json(&executions_value(&executions, &HashMap::new()))
+}
+
+/// Side by order ID for the US fills in `executions` that lack one, read from
+/// the US orders placed between `start` and `end` (paged up to
+/// `US_ORDER_MAX_PAGES`). Skips the order query when every fill has a side.
+async fn us_fill_sides(
+    ctx: &TradeContext,
+    executions: &[Execution],
+    symbol: Option<String>,
+    start: time::OffsetDateTime,
+    end: time::OffsetDateTime,
+) -> Result<HashMap<String, OrderSide>, McpError> {
+    if executions.iter().all(|e| e.side != OrderSide::Unknown) {
+        return Ok(HashMap::new());
+    }
+    let opts = GetUSHistoryOrders {
+        symbol,
+        side: OrderSide::Unknown,
+        start_at: start.unix_timestamp(),
+        end_at: end.unix_timestamp(),
+        // 0 (all) is the only query_type confirmed to return data; see
+        // today_orders.
+        query_type: 0,
+        page: 1,
+        limit: US_ORDER_PAGE_SIZE,
+    };
+    let orders = us_orders(ctx, opts, None, None).await?;
+    Ok(us_align::order_sides(&orders))
 }
 
 /// Every fill from v3 `/trade/execution/all`, which filters by execution time
@@ -918,17 +947,29 @@ async fn v3_all_executions(
     Ok(executions)
 }
 
-/// Render fills as the tool's top-level array, with `side` spelled out.
-fn executions_json(executions: &[Execution]) -> Result<CallToolResult, McpError> {
+/// Render fills as the tool's top-level array, with `side` spelled out: the
+/// fill's own side, else its order's side from `order_sides`, else null.
+fn executions_value(
+    executions: &[Execution],
+    order_sides: &HashMap<String, OrderSide>,
+) -> serde_json::Value {
     let result: Vec<serde_json::Value> = executions
         .iter()
         .map(|e| {
             let mut v = serde_json::to_value(e).unwrap_or_default();
             if let serde_json::Value::Object(ref mut map) = v {
-                map.insert(
-                    "side".to_string(),
-                    serde_json::Value::String(format!("{:?}", e.side)),
-                );
+                let side = match e.side {
+                    OrderSide::Unknown => order_sides
+                        .get(&e.order_id)
+                        .copied()
+                        .unwrap_or(OrderSide::Unknown),
+                    side => side,
+                };
+                let side = match side {
+                    OrderSide::Unknown => serde_json::Value::Null,
+                    side => serde_json::Value::String(format!("{side:?}")),
+                };
+                map.insert("side".to_string(), side);
             }
             v
         })
@@ -936,8 +977,8 @@ fn executions_json(executions: &[Execution]) -> Result<CallToolResult, McpError>
     // Execution prices/amounts come padded to a fixed decimal width; strip
     // trailing zeros (lossless).
     let mut value = serde_json::Value::Array(result);
-    crate::serialize::strip_trailing_zeros(&mut value);
-    tool_json(&value)
+    strip_trailing_zeros(&mut value);
+    value
 }
 
 pub async fn cash_flow(
@@ -2012,6 +2053,84 @@ mod tests {
         UsPages, canonical_choice, collect_us_pages, executions_source, history_range,
         missing_order_fields, replace_scope, submit_scope,
     };
+
+    use std::collections::HashMap;
+
+    use longbridge::trade::{Execution, OrderSide};
+    use serde_json::json;
+
+    use super::executions_value;
+    use crate::tools::support::us_align;
+
+    /// Two fills as US prod `/v1/trade/execution/history` returns them: no
+    /// `side` key.
+    fn v1_us_fills() -> Vec<Execution> {
+        serde_json::from_value(json!([
+            {
+                "order_id": "701",
+                "price": "187.2500",
+                "quantity": "3",
+                "symbol": "AAPL.US",
+                "trade_done_at": "1792000000",
+                "trade_id": "701-1"
+            },
+            {
+                "order_id": "999",
+                "price": "10.00",
+                "quantity": "1",
+                "symbol": "TSLA.US",
+                "trade_done_at": "1792000100",
+                "trade_id": "999-1"
+            }
+        ]))
+        .expect("v1 US fills without side must deserialize")
+    }
+
+    #[test]
+    fn v1_us_fill_without_side_deserializes_as_unknown() {
+        let fills = v1_us_fills();
+        assert_eq!(fills.len(), 2, "both fills must parse");
+        assert!(
+            fills.iter().all(|f| f.side == OrderSide::Unknown),
+            "a missing side must default to Unknown"
+        );
+    }
+
+    #[test]
+    fn executions_fill_side_from_us_orders_and_null_when_unmatched() {
+        let orders = [
+            json!({"id": "701", "action": 2}),
+            json!({"id": "702", "action": 1}),
+            json!({"id": "703", "action": 0}),
+        ];
+        let sides = us_align::order_sides(&orders);
+        assert_eq!(
+            sides.len(),
+            2,
+            "an action that is neither Buy nor Sell is skipped"
+        );
+        let value = executions_value(&v1_us_fills(), &sides);
+        assert_eq!(value[0]["side"], json!("Sell"), "side comes from order 701");
+        assert_eq!(
+            value[0]["price"],
+            json!("187.25"),
+            "trailing zeros are stripped"
+        );
+        assert_eq!(
+            value[1]["side"],
+            serde_json::Value::Null,
+            "a fill with no matching order gets a null side, not Unknown"
+        );
+    }
+
+    #[test]
+    fn executions_keep_their_own_side_over_the_order_map() {
+        let mut fills = v1_us_fills();
+        fills[0].side = OrderSide::Buy;
+        let sides = HashMap::from([("701".to_string(), OrderSide::Sell)]);
+        let value = executions_value(&fills, &sides);
+        assert_eq!(value[0]["side"], json!("Buy"), "the fill's own side wins");
+    }
 
     #[test]
     fn history_range_reads_bare_dates_in_new_york_for_us_accounts() {

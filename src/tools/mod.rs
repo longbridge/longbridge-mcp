@@ -3076,7 +3076,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get today's trade executions (fills). Returns a top-level array of {order_id, trade_id, symbol, side, quantity, price, trade_done_at}. Pass symbol or order_id to filter."
+        description = "Get today's trade executions (fills). Returns a top-level array of {order_id, trade_id, symbol, side, quantity, price, trade_done_at}; side comes from the fill's order and is null when unknown. Pass symbol or order_id to filter."
     )]
     async fn today_executions(
         &self,
@@ -3122,7 +3122,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get every trade execution (fill) in a date range, filtered by execution time (trade_done_at) and auto-paginated to return the complete set (never truncated at the 1000-per-page cap). Returns a top-level array of {order_id, trade_id, symbol, side, quantity, price, trade_done_at}; trade_id is the stable dedupe key. start_at/end_at in RFC3339, or a bare yyyy-mm-dd read as a UTC day (US accounts: a New York EST/EDT day, matching history_orders)."
+        description = "Get every trade execution (fill) in a date range, auto-paginated to return the complete set (never truncated at the 1000-per-page cap). Returns a top-level array of {order_id, trade_id, symbol, side, quantity, price, trade_done_at}; trade_id is the stable dedupe key; side is null when unknown. start_at/end_at in RFC3339, or a bare yyyy-mm-dd read as a UTC day (US accounts: a New York EST/EDT day, matching history_orders). AP accounts are filtered by execution time (trade_done_at). US accounts read v1 history, which is not filtered by execution time and can lag across days near the range edges: widen the range by a day each side and filter on trade_done_at; side is filled from the account's orders in the range."
     )]
     async fn history_executions(
         &self,
