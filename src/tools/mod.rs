@@ -811,6 +811,7 @@ mod content;
 mod dca;
 mod fund;
 mod fundamental;
+mod fx;
 mod grid;
 mod ipo;
 mod jq;
@@ -1754,6 +1755,7 @@ const TOOL_ENDPOINTS: &[(&str, u8)] = &[
     ("estimate_max_purchase_quantity", V2),
     ("etf_docs", V2),
     ("exchange_rate", V2),
+    ("fx_rate", V2),
     ("executive", V2),
     ("financial_report", V2),
     ("financial_report_key_metrics", V2),
@@ -4437,7 +4439,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get exchange rates for all supported currencies. Returns {exchanges[]{base_currency, other_currency, average_rate}}: average_rate is the value of 1 other_currency in base_currency (e.g. base USD, other HKD, 0.12743 = 1 HKD is 0.12743 USD)."
+        description = "Get Longbridge's account-conversion exchange rates for all supported currencies (the rates used to value assets in an account's currency). Returns {exchanges[]{base_currency, other_currency, average_rate}}: average_rate is the value of 1 other_currency in base_currency (e.g. base USD, other HKD, 0.12743 = 1 HKD is 0.12743 USD). For public market reference rates or history, use fx_rate."
     )]
     async fn exchange_rate(
         &self,
@@ -4448,6 +4450,24 @@ impl Longbridge {
             portfolio::exchange_rate(&mctx)
         })
         .await
+    }
+
+    /// Get public ECB reference exchange rates.
+    #[tool(
+        title = "FX Reference Rate",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = true
+        ),
+        description = "Get public foreign-exchange reference rates from the European Central Bank (via Frankfurter), published once per business day around 16:00 CET; not live or tradable quotes, no weekends, no bid/ask. Latest by default; pass date for a historical day (from 1999-01-04) or start/end for a daily series. Returns {base, date, rates{CODE: rate}, source} (a series returns {base, start_date, end_date, rates{yyyy-mm-dd: {CODE: rate}}, source}); rate is the amount of CODE worth 1 base (e.g. base USD, HKD 7.8472 = 1 USD is 7.8472 HKD)."
+    )]
+    async fn fx_rate(
+        &self,
+        Parameters(p): Parameters<fx::FxRateParam>,
+    ) -> Result<CallToolResult, McpError> {
+        measured_tool_call("fx_rate", format!("{p:?}"), || fx::fx_rate(p)).await
     }
 
     /// Get profit analysis summary.
