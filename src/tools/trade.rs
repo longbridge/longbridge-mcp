@@ -22,6 +22,7 @@ use crate::tools::support::tolerant::{
     tolerant_id_string, tolerant_option_id_string, tolerant_option_string, tolerant_string,
 };
 use crate::tools::support::us_align;
+use crate::tools::support::us_market;
 use crate::tools::{tool_json, tool_result};
 
 pub use crate::tools::quote::SymbolParam;
@@ -525,13 +526,14 @@ pub async fn today_orders(
             _ => longbridge::trade::OrderSide::Unknown,
         };
         let now = time::OffsetDateTime::now_utc();
-        let start_of_day = now.replace_time(time::Time::MIDNIGHT);
+        let start_of_day = us_market::us_market_start_of_day(now);
         let opts = GetUSHistoryOrders {
             symbol: p.symbol,
             side,
             // Confirmed via live testing that start_at/end_at do filter
-            // correctly on the backend (unlike query_type, see below) — start
-            // of the current UTC day gives "today" instead of a multi-month
+            // correctly on the backend (unlike query_type, see below) — the
+            // start of the current US-market (New York) day gives "today",
+            // matching the market's trading day, instead of a multi-month
             // window that would make this indistinguishable from
             // history_orders.
             start_at: start_of_day.unix_timestamp(),

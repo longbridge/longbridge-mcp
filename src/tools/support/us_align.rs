@@ -142,21 +142,28 @@ pub fn account_balance(src: &USCashAndBuyPower) -> Result<Value, serde_json::Err
     Ok(Value::Array(vec![Value::Object(entry)]))
 }
 
-/// One US stock holding as an AP `stock_info[]` entry. `available_quantity`
-/// has no source in the US overview and is omitted; US quote/P&L fields are
-/// kept as extras.
+/// One US stock holding as an AP `stock_info[]` entry. The keys the AP
+/// output schema requires (`symbol`, `symbol_name`, `quantity`, `currency`,
+/// `cost_price`, `market`) are always present — as `""` when the US overview
+/// leaves them blank, as AP serializes its own blank strings — so the
+/// structured output always validates. `available_quantity` has no source in
+/// the US overview and is omitted; US quote/P&L fields are kept as extras.
 fn stock_position(stock: &USStockEntry) -> Value {
     let symbol = [stock.full_symbol.clone(), stock.symbol.clone()]
         .into_iter()
         .find(|s| s.contains('.'))
         .unwrap_or_else(|| stock.symbol.clone());
     let mut map = Map::new();
-    put(&mut map, "symbol", &symbol);
-    put(&mut map, "symbol_name", &stock.name);
-    put(&mut map, "quantity", &stock.quantity);
-    put(&mut map, "currency", &stock.currency);
-    put(&mut map, "cost_price", &stock.average_cost);
-    put(&mut map, "market", &stock.market);
+    for (key, value) in [
+        ("symbol", symbol.as_str()),
+        ("symbol_name", stock.name.as_str()),
+        ("quantity", stock.quantity.as_str()),
+        ("currency", stock.currency.as_str()),
+        ("cost_price", stock.average_cost.as_str()),
+        ("market", stock.market.as_str()),
+    ] {
+        map.insert(key.to_string(), Value::String(value.to_string()));
+    }
     put(&mut map, "asset_type", &stock.asset_type);
     put(&mut map, "position_side", &stock.position_side);
     put(&mut map, "last_done", &stock.last_done);
@@ -542,6 +549,34 @@ mod tests {
             .expect("fixture deserializes as the SDK type");
         let value = stock_positions(&src).expect("positions map");
         assert_golden("stock_positions", rendered(value));
+    }
+
+    #[test]
+    fn stock_position_keeps_required_keys_when_blank() {
+        let src = USAssetOverview {
+            stock_list: vec![USStockEntry::default()],
+            ..Default::default()
+        };
+        let value = stock_positions(&src).expect("positions map");
+        let entry = &value["list"][0]["stock_info"][0];
+        for key in [
+            "symbol",
+            "symbol_name",
+            "quantity",
+            "currency",
+            "cost_price",
+            "market",
+        ] {
+            assert_eq!(
+                entry[key],
+                json!(""),
+                "required AP key `{key}` must be emitted even when blank"
+            );
+        }
+        assert!(
+            entry.get("last_done").is_none(),
+            "optional US extras are still dropped when blank"
+        );
     }
 
     #[test]

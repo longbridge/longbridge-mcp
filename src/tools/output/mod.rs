@@ -432,9 +432,9 @@ pub struct OrderDetailResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub outside_rth: Option<String>,
     /// Attached take-profit / stop-loss legs of this order. Absent when it has
-    /// none; US accounts list theirs, in the US shape, under
-    /// `us_attached_orders`.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    /// none (so not required, for AP and US alike); US accounts list theirs,
+    /// in the US shape, under `us_attached_orders`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub attached_orders: Vec<AttachedOrderDetailResponse>,
     /// US accounts only: the raw time-in-force code (its meaning differs
     /// from `time_in_force`).

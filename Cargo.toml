@@ -34,6 +34,8 @@ time = { version = "0.3", features = [
     "parsing",
     "serde-human-readable",
 ] }
+# Already in the tree via the longbridge SDK; used for US-market-local dates.
+time-tz = "2.0.0"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "http2", "charset"] }
 tower = "0.5"
 tower-http = { version = "0.6", features = ["cors"] }
