@@ -4461,7 +4461,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get public foreign-exchange reference rates from the European Central Bank (via Frankfurter), published once per business day around 16:00 CET; not live or tradable quotes, no weekends, no bid/ask. Latest by default; pass date for a historical day (from 1999-01-04) or start/end for a daily series. Returns {base, date, rates{CODE: rate}, source} (a series returns {base, start_date, end_date, rates{yyyy-mm-dd: {CODE: rate}}, source}); rate is the amount of CODE worth 1 base (e.g. base USD, HKD 7.8472 = 1 USD is 7.8472 HKD)."
+        description = "Get public foreign-exchange reference rates from the European Central Bank (via Frankfurter), published once per business day around 16:00 CET; not live or tradable quotes, no weekends, no bid/ask. Latest by default; pass date for a historical day (from 1999-01-04) or start/end for a daily series (at most 5 currencies and 366 days). Covers 30 currencies (USD, EUR, HKD, CNY, JPY, SGD, GBP, AUD, ...); not CNH, TWD or crypto. Returns {base, date, rates{CODE: rate}, source} (a series returns {base, start_date, end_date, rates{yyyy-mm-dd: {CODE: rate}}, source}); rate is the amount of CODE worth 1 base (e.g. base USD, HKD 7.8472 = 1 USD is 7.8472 HKD), the opposite direction to exchange_rate. date is the publication day and may be before today: cite it with the rate."
     )]
     async fn fx_rate(
         &self,

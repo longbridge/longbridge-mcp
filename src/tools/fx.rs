@@ -18,7 +18,7 @@ use rmcp::model::CallToolResult;
 use rmcp::schemars::JsonSchema;
 use rmcp::serde::Deserialize;
 use time::Date;
-use time::macros::format_description;
+use time::macros::{date, format_description};
 
 use crate::tools::tool_result;
 
@@ -32,6 +32,23 @@ const BASE_URL_ENV: &str = "LONGBRIDGE_MCP_FX_URL";
 /// Longest `start`..`end` span accepted, in days. Keeps a time series within a
 /// size an LLM can usefully read.
 const MAX_RANGE_DAYS: i64 = 366;
+
+/// Most quote currencies a time series may request. With the day cap this
+/// bounds a series to roughly 1,300 data points.
+const MAX_SERIES_CURRENCIES: usize = 5;
+
+/// First day of ECB reference-rate publication.
+const MIN_DATE: Date = date!(1999 - 01 - 04);
+
+/// Currencies the ECB currently publishes reference rates for (Frankfurter's
+/// `/currencies`). Checked locally because the upstream answers an unknown code
+/// with a bare `not found`, which gives a caller nothing to correct. Retired
+/// codes (e.g. RUB, HRK) are left out even though old dates carry them.
+const SUPPORTED_CURRENCIES: &[&str] = &[
+    "AUD", "BRL", "CAD", "CHF", "CNY", "CZK", "DKK", "EUR", "GBP", "HKD", "HUF", "IDR", "ILS",
+    "INR", "ISK", "JPY", "KRW", "MXN", "MYR", "NOK", "NZD", "PHP", "PLN", "RON", "SEK", "SGD",
+    "THB", "TRY", "USD", "ZAR",
+];
 
 /// Attribution attached to every response.
 const SOURCE: &str = "European Central Bank reference rates via Frankfurter (frankfurter.dev)";
@@ -56,8 +73,8 @@ static HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
 pub struct FxRateParam {
     /// Base currency, ISO 4217 code (default "USD"). Rates are the amount of each quote currency worth 1 base unit.
     pub base: Option<String>,
-    /// Quote currencies, ISO 4217 codes, e.g. ["HKD", "CNY"]. Omit for every supported currency (about 30, including USD, EUR, HKD, CNY, JPY, SGD, GBP, AUD). Required with `start`.
-    pub symbols: Option<Vec<String>>,
+    /// Quote currencies as ISO 4217 codes, e.g. ["HKD", "CNY"] (not security symbols like "700.HK"). Omit for all 30 supported currencies. Required with `start`, at most 5. CNH, TWD and crypto are not covered.
+    pub currencies: Option<Vec<String>>,
     /// Historical date (yyyy-mm-dd, from 1999-01-04). Returns the rate published on that day, or the closest prior business day. Mutually exclusive with `start`/`end`.
     pub date: Option<String>,
     /// Time-series start date (yyyy-mm-dd). Returns one entry per business day from `start` to `end`.
@@ -72,6 +89,7 @@ struct FxQuery {
     /// Path below the base URL: `latest`, `2024-01-02`, or `2024-01-02..2024-02-01`.
     path: String,
     base: String,
+    /// Comma-joined quote currencies (Frankfurter's `symbols` query parameter).
     symbols: Option<String>,
 }
 
@@ -81,27 +99,52 @@ fn invalid(msg: impl Into<String>) -> McpError {
 
 fn currency_code(raw: &str) -> Result<String, McpError> {
     let code = raw.trim().to_ascii_uppercase();
-    if code.len() == 3 && code.bytes().all(|b| b.is_ascii_uppercase()) {
-        Ok(code)
-    } else {
-        Err(invalid(format!(
+    if code.len() != 3 || !code.bytes().all(|b| b.is_ascii_uppercase()) {
+        return Err(invalid(format!(
             "invalid currency code '{raw}': expected a 3-letter ISO 4217 code such as USD"
-        )))
+        )));
     }
+    if SUPPORTED_CURRENCIES.contains(&code.as_str()) {
+        return Ok(code);
+    }
+    let hint = if code == "CNH" {
+        " CNY (the onshore rate) is the closest available; say so if you use it."
+    } else {
+        ""
+    };
+    Err(invalid(format!(
+        "{code} is not covered by ECB reference rates.{hint} Supported: {}",
+        SUPPORTED_CURRENCIES.join(", ")
+    )))
 }
 
+fn today() -> Date {
+    time::OffsetDateTime::now_utc().date()
+}
+
+/// Parse a `yyyy-mm-dd` date within the published range
+/// (`MIN_DATE` ..= today).
 fn parse_date(field: &str, raw: &str) -> Result<Date, McpError> {
-    Date::parse(raw.trim(), format_description!("[year]-[month]-[day]")).map_err(|e| {
+    let d = Date::parse(raw.trim(), format_description!("[year]-[month]-[day]")).map_err(|e| {
         invalid(format!(
             "invalid {field} '{raw}': expected yyyy-mm-dd ({e})"
         ))
-    })
+    })?;
+    if d < MIN_DATE {
+        return Err(invalid(format!(
+            "{field} {d} is before {MIN_DATE}, the first ECB reference-rate publication"
+        )));
+    }
+    if d > today() {
+        return Err(invalid(format!("{field} {d} is in the future")));
+    }
+    Ok(d)
 }
 
 fn build_query(p: FxRateParam) -> Result<FxQuery, McpError> {
     let base = currency_code(p.base.as_deref().unwrap_or("USD"))?;
 
-    let symbols = match p.symbols {
+    let symbols = match p.currencies {
         Some(list) if !list.is_empty() => {
             let mut codes = Vec::with_capacity(list.len());
             for s in &list {
@@ -112,10 +155,10 @@ fn build_query(p: FxRateParam) -> Result<FxQuery, McpError> {
             }
             if codes.is_empty() {
                 return Err(invalid(
-                    "symbols must name at least one currency other than base",
+                    "currencies must name at least one currency other than base",
                 ));
             }
-            Some(codes.join(","))
+            Some(codes)
         }
         _ => None,
     };
@@ -127,14 +170,23 @@ fn build_query(p: FxRateParam) -> Result<FxQuery, McpError> {
         (None, None, Some(_)) => return Err(invalid("end requires start")),
         (Some(date), None, None) => parse_date("date", &date)?.to_string(),
         (None, Some(start), end) => {
-            if symbols.is_none() {
-                return Err(invalid(
-                    "symbols is required for a time series (start/end), e.g. [\"HKD\"]",
-                ));
+            match &symbols {
+                None => {
+                    return Err(invalid(
+                        "currencies is required for a time series (start/end), e.g. [\"HKD\"]",
+                    ));
+                }
+                Some(codes) if codes.len() > MAX_SERIES_CURRENCIES => {
+                    return Err(invalid(format!(
+                        "a time series may request at most {MAX_SERIES_CURRENCIES} currencies; \
+                         split the request"
+                    )));
+                }
+                Some(_) => {}
             }
             let start = parse_date("start", &start)?;
             let end = end.map(|e| parse_date("end", &e)).transpose()?;
-            let span_end = end.unwrap_or_else(|| time::OffsetDateTime::now_utc().date());
+            let span_end = end.unwrap_or_else(today);
             if span_end < start {
                 return Err(invalid("end must not be earlier than start"));
             }
@@ -154,7 +206,7 @@ fn build_query(p: FxRateParam) -> Result<FxQuery, McpError> {
     Ok(FxQuery {
         path,
         base,
-        symbols,
+        symbols: symbols.map(|codes| codes.join(",")),
     })
 }
 
@@ -171,6 +223,18 @@ fn shape(mut body: serde_json::Value) -> serde_json::Value {
     body
 }
 
+/// The rate source failed. Says outright not to substitute a remembered rate:
+/// a model left with no data otherwise tends to answer from training data.
+fn unavailable(detail: &str) -> McpError {
+    McpError::internal_error(
+        format!(
+            "FX reference rates are temporarily unavailable ({detail}). Do not estimate or \
+             recall a rate; tell the user it could not be retrieved, or retry later."
+        ),
+        None,
+    )
+}
+
 async fn fetch(base_url: &str, query: FxQuery) -> Result<CallToolResult, McpError> {
     let url = format!("{base_url}/{}", query.path);
     let mut params = vec![("base", query.base.as_str())];
@@ -183,11 +247,9 @@ async fn fetch(base_url: &str, query: FxQuery) -> Result<CallToolResult, McpErro
         .query(&params)
         .send()
         .await
-        .map_err(|e| McpError::internal_error(format!("fx rate source unreachable: {e}"), None))?;
+        .map_err(|e| unavailable(&e.to_string()))?;
     let status = resp.status();
-    let text = resp.text().await.map_err(|e| {
-        McpError::internal_error(format!("failed to read fx rate response: {e}"), None)
-    })?;
+    let text = resp.text().await.map_err(|e| unavailable(&e.to_string()))?;
 
     if !status.is_success() {
         let detail = serde_json::from_str::<serde_json::Value>(&text)
@@ -198,18 +260,19 @@ async fn fetch(base_url: &str, query: FxQuery) -> Result<CallToolResult, McpErro
                     .map(str::to_string)
             })
             .unwrap_or_else(|| format!("HTTP {status}"));
-        // 404 = unknown currency, 422 = unsupported date: both fixable by the caller.
+        // Codes and dates are validated locally, so a 4xx here is a gap in
+        // that validation rather than a typo; still a caller-fixable request.
         return Err(if status.is_client_error() {
             invalid(format!(
                 "fx rate source rejected the request ({detail}); check currency codes and dates"
             ))
         } else {
-            McpError::internal_error(format!("fx rate source error: {detail}"), None)
+            unavailable(&detail)
         });
     }
 
-    let body: serde_json::Value = serde_json::from_str(&text)
-        .map_err(|e| McpError::internal_error(format!("invalid fx rate response: {e}"), None))?;
+    let body: serde_json::Value =
+        serde_json::from_str(&text).map_err(|e| unavailable(&e.to_string()))?;
     let json = serde_json::to_string(&shape(body)).unwrap_or_default();
     Ok(tool_result(json))
 }
@@ -249,7 +312,7 @@ mod tests {
     fn normalizes_and_dedupes_codes() {
         let q = build_query(FxRateParam {
             base: Some(" hkd ".into()),
-            symbols: strs(&["usd", "CNY", "Usd", "HKD"]),
+            currencies: strs(&["usd", "CNY", "Usd", "HKD"]),
             ..param()
         })
         .unwrap();
@@ -272,9 +335,9 @@ mod tests {
     }
 
     #[test]
-    fn rejects_symbols_equal_to_base_only() {
+    fn rejects_currencies_equal_to_base_only() {
         let err = build_query(FxRateParam {
-            symbols: strs(&["USD"]),
+            currencies: strs(&["USD"]),
             ..param()
         })
         .unwrap_err();
@@ -294,7 +357,7 @@ mod tests {
     #[test]
     fn series_paths() {
         let closed = build_query(FxRateParam {
-            symbols: strs(&["HKD"]),
+            currencies: strs(&["HKD"]),
             start: Some("2024-01-02".into()),
             end: Some("2024-03-01".into()),
             ..param()
@@ -304,7 +367,7 @@ mod tests {
 
         let today = time::OffsetDateTime::now_utc().date();
         let open = build_query(FxRateParam {
-            symbols: strs(&["HKD"]),
+            currencies: strs(&["HKD"]),
             start: Some((today - time::Duration::days(10)).to_string()),
             ..param()
         })
@@ -329,13 +392,13 @@ mod tests {
                 ..param()
             },
             FxRateParam {
-                symbols: strs(&["HKD"]),
+                currencies: strs(&["HKD"]),
                 start: Some("2024-03-01".into()),
                 end: Some("2024-01-02".into()),
                 ..param()
             },
             FxRateParam {
-                symbols: strs(&["HKD"]),
+                currencies: strs(&["HKD"]),
                 start: Some("2022-01-01".into()),
                 end: Some("2024-01-01".into()),
                 ..param()
@@ -348,6 +411,80 @@ mod tests {
         for (i, p) in cases.into_iter().enumerate() {
             assert!(build_query(p).is_err(), "case {i} should be rejected");
         }
+    }
+
+    #[test]
+    fn rejects_unsupported_currencies_with_the_supported_list() {
+        let err = build_query(FxRateParam {
+            currencies: strs(&["TWD"]),
+            ..param()
+        })
+        .unwrap_err();
+        assert!(
+            err.message.contains("TWD is not covered"),
+            "{}",
+            err.message
+        );
+        assert!(err.message.contains("HKD, HUF"), "{}", err.message);
+
+        let err = build_query(FxRateParam {
+            base: Some("cnh".into()),
+            ..param()
+        })
+        .unwrap_err();
+        assert!(
+            err.message.contains("CNY (the onshore rate)"),
+            "{}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn rejects_dates_outside_the_published_range() {
+        let before = build_query(FxRateParam {
+            date: Some("1998-12-31".into()),
+            ..param()
+        })
+        .unwrap_err();
+        assert!(before.message.contains("1999-01-04"), "{}", before.message);
+
+        let tomorrow = today() + time::Duration::days(1);
+        let future = build_query(FxRateParam {
+            date: Some(tomorrow.to_string()),
+            ..param()
+        })
+        .unwrap_err();
+        assert!(future.message.contains("future"), "{}", future.message);
+    }
+
+    #[test]
+    fn caps_currencies_in_a_series() {
+        let err = build_query(FxRateParam {
+            currencies: strs(&["HKD", "CNY", "JPY", "SGD", "GBP", "AUD"]),
+            start: Some("2024-01-02".into()),
+            end: Some("2024-02-01".into()),
+            ..param()
+        })
+        .unwrap_err();
+        assert!(err.message.contains("at most 5"), "{}", err.message);
+
+        // The cap applies to series only; a single day may ask for more.
+        assert!(
+            build_query(FxRateParam {
+                currencies: strs(&["HKD", "CNY", "JPY", "SGD", "GBP", "AUD"]),
+                ..param()
+            })
+            .is_ok(),
+            "latest with six currencies should be accepted"
+        );
+    }
+
+    #[test]
+    fn supported_list_is_sorted_and_unique() {
+        assert!(
+            SUPPORTED_CURRENCIES.windows(2).all(|w| w[0] < w[1]),
+            "SUPPORTED_CURRENCIES must stay sorted and free of duplicates"
+        );
     }
 
     #[test]
@@ -407,5 +544,6 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(err.code, rmcp::model::ErrorCode::INTERNAL_ERROR);
+        assert!(err.message.contains("Do not estimate"), "{}", err.message);
     }
 }
