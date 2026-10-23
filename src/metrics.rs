@@ -162,6 +162,21 @@ static TOOL_BACKOFF_RETRIES_TOTAL: LazyLock<IntCounterVec> = LazyLock::new(|| {
     counter
 });
 
+static FX_RATE_CACHE_TOTAL: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    let counter = IntCounterVec::new(
+        Opts::new(
+            "mcp_fx_rate_cache_total",
+            "fx_rate lookups by cache outcome: `hit` served from memory (including \
+             callers that waited on an identical in-flight request), `miss` sent \
+             upstream to the rate source",
+        ),
+        &["result"],
+    )
+    .unwrap();
+    REGISTRY.register(Box::new(counter.clone())).unwrap();
+    counter
+});
+
 static AUTH_EXPIRED_TOTAL: LazyLock<IntCounterVec> = LazyLock::new(|| {
     let counter = IntCounterVec::new(
         Opts::new(
@@ -247,6 +262,13 @@ pub fn record_backoff_retry(tool_name: &str) {
     let client = CURRENT_CLIENT.try_with(|c| *c).unwrap_or("unknown");
     TOOL_BACKOFF_RETRIES_TOTAL
         .with_label_values(&[tool_name, client])
+        .inc();
+}
+
+/// Record whether an `fx_rate` lookup was served from its cache.
+pub fn record_fx_rate_cache(hit: bool) {
+    FX_RATE_CACHE_TOTAL
+        .with_label_values(&[if hit { "hit" } else { "miss" }])
         .inc();
 }
 
