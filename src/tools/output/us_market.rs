@@ -1,8 +1,7 @@
 //! Typed output schemas for tools with a US-region-specific response shape,
 //! covering `financial_statement`, `financial_report`,
 //! `financial_report_key_metrics`, `profit_analysis_realized`, `etf_docs`,
-//! `stock_positions`'s US-account shape, and `order_detail`'s
-//! US-wrapped shape.
+//! and `stock_positions`'s `us` object.
 //!
 //! Shapes are reconstructed from real staging responses (captured via a raw
 //! HTTP verification pass, bypassing the SDK) plus live MCP tool calls in
@@ -396,7 +395,8 @@ pub struct EtfDocsResponse {
     pub files: Option<Vec<EtfDocFile>>,
 }
 
-/// `stock_positions`'s response for US accounts (flattened to the top level).
+/// `stock_positions`'s `us` object for US accounts: the US asset overview
+/// minus `stock_list`, whose holdings move into the AP `list` shape.
 /// Reconstructed from a real staging `/v1/us/assets/overview` response.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct UsAssetOverview {
@@ -410,8 +410,6 @@ pub struct UsAssetOverview {
     pub currency: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cash_list: Option<Vec<UsCashPosition>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub stock_list: Option<Vec<UsStockPosition>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub option_list: Option<Vec<UsOptionPosition>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -436,37 +434,6 @@ pub struct UsCashPosition {
     pub frozen_buy_cash: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub outstanding: Option<String>,
-}
-
-#[derive(Debug, Serialize, JsonSchema)]
-pub struct UsStockPosition {
-    /// Symbol, e.g. "AAPL.US". Promoted from `full_symbol` (see
-    /// `normalize_us_stock_list`) so it matches every other tool's
-    /// fully-qualified `symbol` convention.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub symbol: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub quantity: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub currency: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub average_cost: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub market: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub market_price: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub last_done: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub prev_close: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub position_side: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub today_pl: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub industry_name: Option<String>,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -528,64 +495,4 @@ pub struct UsCryptoPosition {
     pub position_side: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub today_pl: Option<String>,
-}
-
-/// `order_detail`'s US-region shape: the order is nested under `order`
-/// instead of at the response root (unlike the generic `OrderDetailResponse`
-/// shape). Confirmed via a live US staging `order_detail` call.
-#[derive(Debug, Serialize, JsonSchema)]
-pub struct UsOrderDetail {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub id: Option<String>,
-    /// "Buy" or "Sell".
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub action: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub symbol: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub security_type: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub currency: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub order_type: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub status: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub price: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub quantity: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub executed_qty: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub executed_price: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub executed_amount: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub operate_direction: Option<String>,
-    /// "Day" / "GTC" / "GTD" / "Unknown".
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub time_in_force: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub submitted_at: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub done_at: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub order_histories: Option<Vec<UsOrderHistoryEntry>>,
-}
-
-/// One state-transition entry in `UsOrderDetail.order_histories`.
-#[derive(Debug, Serialize, JsonSchema)]
-pub struct UsOrderHistoryEntry {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub status: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub price: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub qty: Option<String>,
-    /// Renamed from the raw `time` field so the generic `_at`-suffix
-    /// timestamp convention applies.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub occurred_at: Option<String>,
 }

@@ -1,0 +1,37 @@
+{
+  "order_id": "1000000000000000010",
+  "status": "CanceledStatus",
+  "stock_name": "Example Corp",
+  "quantity": "1",
+  "executed_quantity": "0",
+  "price": "119",
+  "submitted_at": "2026-10-02T10:10:32Z",
+  "side": "Buy",
+  "symbol": "EXMC.US",
+  "order_type": "LO",
+  "msg": "",
+  "currency": "USD",
+  "history": [
+    {
+      "price": "119",
+      "quantity": "1",
+      "status": "CanceledStatus",
+      "msg": "",
+      "time": "2026-10-02T10:10:40Z"
+    },
+    {
+      "price": "119",
+      "quantity": "1",
+      "status": "NewStatus",
+      "msg": "",
+      "time": "2026-10-02T10:10:32Z"
+    }
+  ],
+  "us_time_in_force": 0,
+  "us_tag": 1,
+  "gtd": "2026-10-02",
+  "security_type": "CS",
+  "operate_direction": "OPEN",
+  "executed_amount": "0",
+  "done_at": "2026-10-02T10:10:40Z"
+}

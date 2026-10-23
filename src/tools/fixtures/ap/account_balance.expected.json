@@ -1,0 +1,36 @@
+[
+  {
+    "total_cash": "100000",
+    "max_finance_amount": "50000",
+    "remaining_finance_amount": "50000",
+    "risk_level": "1",
+    "margin_call": "0",
+    "currency": "HKD",
+    "cash_infos": [
+      {
+        "withdraw_cash": "90000",
+        "available_cash": "95000",
+        "frozen_cash": "5000",
+        "settling_cash": "0",
+        "currency": "HKD"
+      },
+      {
+        "withdraw_cash": "100.5",
+        "available_cash": "100.5",
+        "frozen_cash": "0",
+        "settling_cash": "0",
+        "currency": "USD"
+      }
+    ],
+    "net_assets": "130000",
+    "init_margin": "1000",
+    "maintenance_margin": "800",
+    "buy_power": "145000",
+    "frozen_transaction_fees": [
+      {
+        "currency": "HKD",
+        "frozen_transaction_fee": "12.5"
+      }
+    ]
+  }
+]

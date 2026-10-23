@@ -44,14 +44,14 @@
     },
     "account_balance": {
       "title": "账户余额",
-      "description": "查询账户现金余额与资产概览，返回顶层数组 {currency, total_cash, net_assets, buy_power, max_finance_amount, remaining_finance_amount, risk_level, margin_call, init_margin, maintenance_margin, cash_infos[]{currency, available_cash, withdraw_cash, frozen_cash, settling_cash}}。美股账户返回美股专用结构：对象 {buy_limit_info{currency, cash_buy_power, overnight_buy_power, day_trade_buy_power, instant_buy_power, intraday_margin_buy_power, option_buy_power, crypto_buy_power, mme}, cash_list[]{currency, total_amount, available_cash, withdraw_cash, frozen_cash, settled_cash, outstanding, external_amount}, margin_status{currency, nlv, margin_equity, margin_maintenance_excess, mmr, reg_t_excess, sma}}",
+      "description": "查询账户现金余额与资产概览，返回顶层数组 {currency, total_cash, net_assets, buy_power, max_finance_amount, remaining_finance_amount, risk_level, margin_call, init_margin, maintenance_margin, cash_infos[]{currency, available_cash, withdraw_cash, frozen_cash, settling_cash}}。美股账户返回同样的数组，只有账户币种一条：含 currency、total_cash、net_assets、buy_power、maintenance_margin 与 cash_infos[]（以 settled_cash 代替 settling_cash）；无 max_finance_amount、remaining_finance_amount、risk_level、margin_call、init_margin；美股购买力与保证金明细在 us{buy_limit_info, margin_status, cash_list[]} 下",
       "properties": {
         "currency": "按币种代码筛选（如 `\"USD\"`、`\"HKD\"`），省略则返回所有币种"
       }
     },
     "cash_flow": {
       "title": "资金流水",
-      "description": "查询资金流水记录（出入金、派息等），返回 顶层数组 {transaction_flow_name, direction（In/Out）, business_type, balance（发生金额）, currency, business_time, symbol, description}。美股账户返回美股专用结构：账户交易流水（出入金、交易、公司行动、转仓等）{items[]{title, biz_code, biz_code_name, amount, currency, symbol, market, equity_type, position_side, quantity, quantity_description, ref_no, remark, create_at, done_at}, truncated}，amount 为负表示流出；最多返回 2000 条，truncated=true（附 note）表示区间内还有更多记录，请缩小时间范围",
+      "description": "查询资金流水记录（出入金、派息等），返回 顶层数组 {transaction_flow_name, direction（In/Out）, business_type, balance（发生金额）, currency, business_time, symbol, description}。美股账户返回同样的数组，但无 business_type（见 biz_code、biz_code_name）；balance 为不带符号的金额，direction 取金额符号，无资金变动时（如加密货币转入转出）取数量符号；另含 quantity、quantity_description、ref_no、equity_type。按时间倒序，最多 2000 条：恰好 2000 条说明还有更多，请缩小时间范围",
       "properties": {
         "start_at": "起始时间：RFC3339（如 2026-09-01T00:00:00Z），或日期（yyyy-mm-dd，表示当天 UTC 0 点）",
         "end_at": "结束时间：RFC3339（如 2026-09-30T23:59:59Z），或日期（yyyy-mm-dd，表示当天 UTC 结束）"
@@ -111,7 +111,7 @@
     },
     "stock_positions": {
       "title": "股票持仓",
-      "description": "查询所有渠道下的当前股票持仓，返回 list[].stock_info[]{symbol, symbol_name, quantity, available_quantity, currency, cost_price, market}。美股账户返回美股专用结构（无 list）：美股资产概览对象 {account_type, currency, cash_buy_power, overnight_buy_power, cash_list[]{currency, total_cash, total_amount, settled_cash, frozen_buy_cash, outstanding}, stock_list[]{symbol（如 AAPL.US）, name, quantity, currency, average_cost, market, market_price, last_done, prev_close, position_side, today_pl, industry_name}, option_list[], crypto_list[]{symbol（如 BTCUSD.BKKT）, name, quantity, currency, average_cost, market, market_price, last_done, prev_close, position_side, today_pl}, multi_leg}"
+      "description": "查询所有渠道下的当前股票持仓，返回 list[].stock_info[]{symbol, symbol_name, quantity, available_quantity, currency, cost_price, market}。美股账户返回同样的 list[].stock_info[]（无 available_quantity，另含 last_done、market_price、prev_close、today_pl、position_side）；现金、期权、加密货币（symbol 如 BTCUSD.BKKT）及购买力在 us{cash_list, option_list, crypto_list, cash_buy_power, …} 下"
     },
     "dca_history": {
       "title": "定投执行历史",
@@ -156,24 +156,24 @@
         "symbol": "按证券筛选（可选）",
         "start_at": "起始时间：RFC3339（如 2026-09-01T00:00:00Z），或日期（yyyy-mm-dd，表示当天 UTC 0 点）",
         "end_at": "结束时间：RFC3339（如 2026-09-30T23:59:59Z），或日期（yyyy-mm-dd，表示当天 UTC 结束）",
-        "us_page": "仅限美股账户：页码（默认 1）。亚太账户忽略（区域由账户自动识别，无需传入）",
-        "us_limit": "仅限美股账户：每页数量（默认 20）。亚太账户忽略"
+        "us_page": "仅限美股账户：只返回该页（默认返回全部页，最多 500 条）。亚太账户忽略（区域由账户自动识别，无需传入）",
+        "us_limit": "仅限美股账户：配合 us_page 分页时的每页数量（默认 50）。亚太账户忽略"
       }
     },
     "history_orders": {
       "title": "历史委托",
-      "description": "查询指定日期区间内的历史委托（不含当日），返回 orders[]{order_id, symbol, side, status, quantity, price, submitted_at}。仅限美股账户：us_page、us_limit 通过独立的美股委托接口分页（默认每页 20 条，传 us_page 可翻页）",
+      "description": "查询指定日期区间内的历史委托（不含当日），返回 orders[]{order_id, symbol, side, status, quantity, price, submitted_at}。美股账户返回与 today_orders 美股版相同的数组和字段；默认返回区间内全部委托（最多 500 条），传 us_page/us_limit 则只返回该页",
       "properties": {
         "symbol": "按证券筛选（可选）",
         "start_at": "起始时间：RFC3339（如 2026-09-01T00:00:00Z），或日期（yyyy-mm-dd，表示当天 UTC 0 点）",
         "end_at": "结束时间：RFC3339（如 2026-09-30T23:59:59Z），或日期（yyyy-mm-dd，表示当天 UTC 结束）",
-        "us_page": "仅限美股账户：页码（默认 1）。亚太账户忽略（区域由账户自动识别，无需传入）",
-        "us_limit": "仅限美股账户：每页数量（默认 20）。亚太账户忽略（区域由账户自动识别，无需传入）"
+        "us_page": "仅限美股账户：只返回该页（默认返回全部页，最多 500 条）。亚太账户忽略（区域由账户自动识别，无需传入）",
+        "us_limit": "仅限美股账户：配合 us_page 分页时的每页数量（默认 50）。亚太账户忽略"
       }
     },
     "order_detail": {
       "title": "委托详情",
-      "description": "查询单个委托详情，返回 {order_id, symbol, status, side, order_type, quantity, price, executed_quantity, executed_price, submitted_at, time_in_force, msg, attached_orders[]}，其中 attached_orders[] 为该委托的止盈/止损附加单及其各自单号。要按附加单自身的单号查询，设置 is_attached=true，此时返回该附加单本身，charge_detail 为 null。美股账户由独立的美股委托详情接口提供，其委托及附加单直接嵌套在 `order` 中返回。区域由账户自动识别",
+      "description": "查询单个委托详情，返回 {order_id, symbol, status, side, order_type, quantity, price, executed_quantity, executed_price, submitted_at, time_in_force, msg, attached_orders[]}，其中 attached_orders[] 为该委托的止盈/止损附加单及其各自单号。要按附加单自身的单号查询，设置 is_attached=true，此时返回该附加单本身，charge_detail 为 null。美股账户返回同样的顶层字段及 history[]，但无 time_in_force、tag、expire_date、outside_rth 及费用/抵扣字段（美股原始代码见 us_time_in_force、us_tag，另含 done_at、gtd、security_type、us_attached_orders、us_charge_detail）；is_attached 无效",
       "properties": {
         "order_id": "委托单号：母单单号，或（配合 is_attached=true）止盈/止损附加单单号",
         "is_attached": "设为 true 表示 order_id 是止盈/止损附加单单号，返回该附加单本身（charge_detail 为 null）；查询母单时省略或传 false。美股账户下无效"
@@ -189,14 +189,14 @@
     },
     "today_orders": {
       "title": "当日委托",
-      "description": "获取当日委托，返回委托的顶层数组 {order_id, symbol, stock_name, side, order_type, status, quantity, executed_quantity, price, currency, time_in_force, submitted_at, updated_at, msg, …, attached_orders[]}，其中 attached_orders[] 为该委托的止盈/止损附加单。可用 symbol 按证券筛选，或用 order_id 查询单笔委托。要按附加单自身的单号查询，把该单号作为 order_id 并同时设置 is_attached=true，返回的委托即为该附加单本身。is_attached 不配合 order_id 时无效，且两者对美股账户均无效（美股账户由美股委托接口提供）。仅限美股账户：us_action（Buy/Sell）、us_page、us_limit 通过独立的美股委托接口筛选/分页，该接口返回对象，委托位于 orders[] 下",
+      "description": "获取当日委托，返回委托的顶层数组 {order_id, symbol, stock_name, side, order_type, status, quantity, executed_quantity, price, currency, time_in_force, submitted_at, updated_at, msg, …, attached_orders[]}，其中 attached_orders[] 为该委托的止盈/止损附加单。可用 symbol 按证券筛选，或用 order_id 查询单笔委托。要按附加单自身的单号查询，把该单号作为 order_id 并同时设置 is_attached=true，返回的委托即为该附加单本身。is_attached 不配合 order_id 时无效。美股账户返回同样的数组和字段名，但无 time_in_force、tag、expire_date、outside_rth（美股原始代码见 us_time_in_force、us_tag，另含 gtd、security_type、operate_direction）；is_attached 无效，us_action（Buy/Sell）可筛选，默认返回当日全部委托（最多 500 条），传 us_page/us_limit 则只返回该页",
       "properties": {
         "symbol": "按证券筛选，例如 `\"700.HK\"`，省略则返回当日全部委托",
-        "order_id": "按委托单号筛选：母单单号，或（配合 is_attached=true）止盈/止损附加单单号。美股账户下无效",
+        "order_id": "按委托单号筛选：母单单号，或（配合 is_attached=true）止盈/止损附加单单号。美股账户仅匹配母单单号",
         "is_attached": "仅在同时传入 order_id 时有效：表示该 order_id 是止盈/止损附加单单号，返回结果即为该附加单本身。单独使用无效，美股账户下同样无效",
         "us_action": "仅限美股账户：按方向筛选，`\"Buy\"` 或 `\"Sell\"`，留空表示全部。亚太账户忽略（区域由账户自动识别，无需传入）",
-        "us_page": "仅限美股账户：页码（默认 1）。亚太账户忽略",
-        "us_limit": "仅限美股账户：每页数量（默认 20）。亚太账户忽略"
+        "us_page": "仅限美股账户：只返回该页（默认返回全部页，最多 500 条）。亚太账户忽略（区域由账户自动识别，无需传入）",
+        "us_limit": "仅限美股账户：配合 us_page 分页时的每页数量（默认 50）。亚太账户忽略"
       }
     },
     "cancel_order": {
@@ -516,7 +516,7 @@
     },
     "exchange_rate": {
       "title": "汇率",
-      "description": "获取全部支持币种的汇率，返回 {exchanges[]{base_currency, other_currency, average_rate}}：average_rate 为 1 单位 other_currency 折合的 base_currency（如 base USD、other HKD、0.12743 即 1 HKD = 0.12743 USD）。美股账户返回美股账户自身的汇率，每条额外带 universal_key（账户渠道，如 us_lb_apex）和 spec_key（汇率类型，如 am、reference；同一币种对可按汇率类型各出现一次），bid_rate/offer_rate 仅在与 average_rate 不同时返回"
+      "description": "获取全部支持币种的汇率，返回 {exchanges[]{base_currency, other_currency, average_rate}}：average_rate 为 1 单位 other_currency 折合的 base_currency（如 base USD、other HKD、0.12743 即 1 HKD = 0.12743 USD）。美股账户返回美股账户自身的汇率，结构相同，每个币种对一条（优先 reference 汇率，否则 am），spec_key 标明汇率类型"
     },
     "executive": {
       "title": "高管与董事",

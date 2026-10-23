@@ -2876,7 +2876,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get account cash balance and asset summary. Returns a top-level array of {currency, total_cash, net_assets, buy_power, max_finance_amount, remaining_finance_amount, risk_level, margin_call, init_margin, maintenance_margin, cash_infos[]{currency, available_cash, withdraw_cash, frozen_cash, settling_cash}}. Filter by currency (e.g. \"USD\", \"HKD\"). US accounts get a US-specific variant instead: an object {buy_limit_info{currency, cash_buy_power, overnight_buy_power, day_trade_buy_power, instant_buy_power, intraday_margin_buy_power, option_buy_power, crypto_buy_power, mme}, cash_list[]{currency, total_amount, available_cash, withdraw_cash, frozen_cash, settled_cash, outstanding, external_amount}, margin_status{currency, nlv, margin_equity, margin_maintenance_excess, mmr, reg_t_excess, sma}}."
+        description = "Get account cash balance and asset summary. Returns a top-level array of {currency, total_cash, net_assets, buy_power, max_finance_amount, remaining_finance_amount, risk_level, margin_call, init_margin, maintenance_margin, cash_infos[]{currency, available_cash, withdraw_cash, frozen_cash, settling_cash}}. Filter by currency (e.g. \"USD\", \"HKD\"). US accounts get a US-specific variant: the same array, one entry for the account currency with currency, total_cash, net_assets, buy_power, maintenance_margin and cash_infos[] (settled_cash in place of settling_cash); max_finance_amount, remaining_finance_amount, risk_level, margin_call and init_margin are absent; US buying-power and margin detail is under us{buy_limit_info, margin_status, cash_list[]}."
     )]
     async fn account_balance(
         &self,
@@ -2895,7 +2895,7 @@ impl Longbridge {
         title = "Stock Positions",
         annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = true),
         output_schema = schema_for::<output::StockPositionsResponse>(),
-        description = "Get current stock positions across all channels. Returns list[].stock_info[]{symbol, symbol_name, quantity, available_quantity, currency, cost_price, market}. US accounts get a US-specific variant instead (no list): the US asset overview object {account_type, currency, cash_buy_power, overnight_buy_power, cash_list[]{currency, total_cash, total_amount, settled_cash, frozen_buy_cash, outstanding}, stock_list[]{symbol (e.g. AAPL.US), name, quantity, currency, average_cost, market, market_price, last_done, prev_close, position_side, today_pl, industry_name}, option_list[], crypto_list[]{symbol (e.g. BTCUSD.BKKT), name, quantity, currency, average_cost, market, market_price, last_done, prev_close, position_side, today_pl}, multi_leg}."
+        description = "Get current stock positions across all channels. Returns list[].stock_info[]{symbol, symbol_name, quantity, available_quantity, currency, cost_price, market}. US accounts get a US-specific variant: the same list[].stock_info[] without available_quantity, plus last_done, market_price, prev_close, today_pl, position_side; cash, options, crypto (symbol e.g. BTCUSD.BKKT) and buying power are under us{cash_list, option_list, crypto_list, cash_buy_power, …}."
     )]
     async fn stock_positions(
         &self,
@@ -2954,7 +2954,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get orders placed today. Returns a top-level array of orders {order_id, symbol, stock_name, side, order_type, status, quantity, executed_quantity, price, currency, time_in_force, submitted_at, updated_at, msg, …, attached_orders[]}, where attached_orders[] holds the order's take-profit/stop-loss legs. Pass symbol to filter by security, or order_id for one order. To fetch an attached leg by its own ID, pass that ID as order_id together with is_attached=true — the leg itself comes back as the order entry. is_attached does nothing without order_id. US accounts get a US-specific variant instead, served by the US order endpoint (order_id/is_attached are ignored; us_action (Buy/Sell), us_page, us_limit filter/paginate): an object {orders[]{id (not order_id), symbol, name, action (Buy/Sell), order_type, status, quantity, executed_qty, price, executed_price, currency, time_in_force, submitted_at, …}, total_count}."
+        description = "Get orders placed today. Returns a top-level array of orders {order_id, symbol, stock_name, side, order_type, status, quantity, executed_quantity, price, currency, time_in_force, submitted_at, updated_at, msg, …, attached_orders[]}, where attached_orders[] holds the order's take-profit/stop-loss legs. Pass symbol to filter by security, or order_id for one order. To fetch an attached leg by its own ID, pass that ID as order_id together with is_attached=true — the leg itself comes back as the order entry. is_attached does nothing without order_id. US accounts get a US-specific variant: the same array and field names, without time_in_force, tag, expire_date and outside_rth (raw US codes in us_time_in_force, us_tag; plus gtd, security_type, operate_direction); is_attached is ignored, us_action (Buy/Sell) filters, and all of today's orders (up to 500) are returned unless us_page/us_limit pick one page."
     )]
     async fn today_orders(
         &self,
@@ -2973,7 +2973,7 @@ impl Longbridge {
         title = "Order Detail",
         annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = true),
         output_schema = schema_for::<output::OrderDetailResponse>(),
-        description = "Get detailed information about a specific order. Returns {order_id, symbol, status, side, order_type, quantity, price, executed_quantity, executed_price, submitted_at, time_in_force, msg, attached_orders[]}, where attached_orders[] holds the order's take-profit/stop-loss legs with their own order IDs. To look up such a leg by its own ID instead, pass it as order_id with is_attached=true: the response is then that leg, with charge_detail null. US accounts get a US-specific variant served by the US order endpoint, with the order (and its attached legs) nested under `order`. The region is detected from the account automatically."
+        description = "Get detailed information about a specific order. Returns {order_id, symbol, status, side, order_type, quantity, price, executed_quantity, executed_price, submitted_at, time_in_force, msg, attached_orders[]}, where attached_orders[] holds the order's take-profit/stop-loss legs with their own order IDs. To look up such a leg by its own ID instead, pass it as order_id with is_attached=true: the response is then that leg, with charge_detail null. US accounts get a US-specific variant: the same top-level fields and history[], without time_in_force, tag, expire_date, outside_rth or the fee/deduction fields (raw US codes in us_time_in_force, us_tag; plus done_at, gtd, security_type, us_attached_orders, us_charge_detail); is_attached is ignored."
     )]
     async fn order_detail(
         &self,
@@ -3042,7 +3042,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get historical orders between dates (excludes today). Returns orders[]{order_id, symbol, side, status, quantity, price, submitted_at}. start_at/end_at in RFC3339. US accounts get a US-specific variant instead, served by the US order endpoint: {orders[]{id (not order_id), symbol, name, action (Buy/Sell), order_type, status, quantity, executed_qty, price, executed_price, currency, time_in_force, submitted_at, …}, total_count}; us_page, us_limit paginate it (default page size 20 — pass us_page to see more than the first page)."
+        description = "Get historical orders between dates (excludes today). Returns orders[]{order_id, symbol, side, status, quantity, price, submitted_at}. start_at/end_at in RFC3339. US accounts get a US-specific variant: the same array and field names as today_orders' US variant; all orders in the range (up to 500) are returned unless us_page/us_limit pick one page."
     )]
     async fn history_orders(
         &self,
@@ -3088,7 +3088,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get cash flow records (deposits, withdrawals, dividends). Returns a top-level array of {transaction_flow_name, direction (In/Out), business_type, balance (the amount moved), currency, business_time, symbol, description}. start_at/end_at: RFC3339 or yyyy-mm-dd. US accounts get a US-specific variant instead: the account transaction history (deposits, withdrawals, trades, corporate actions, transfers) as {items[]{title, biz_code, biz_code_name, amount (negative = outflow), currency, symbol, market, equity_type, position_side, quantity, quantity_description, ref_no, remark, create_at, done_at}, truncated}; at most 2000 records are returned, and truncated=true (with a note) means the range held more, so narrow it."
+        description = "Get cash flow records (deposits, withdrawals, dividends). Returns a top-level array of {transaction_flow_name, direction (In/Out), business_type, balance (the amount moved), currency, business_time, symbol, description}. start_at/end_at: RFC3339 or yyyy-mm-dd. US accounts get a US-specific variant: the same array without business_type (see biz_code, biz_code_name); balance is unsigned and direction comes from the amount's sign, or the quantity's when no cash moved (crypto transfers); plus quantity, quantity_description, ref_no, equity_type. Newest first, at most 2000 records: getting 2000 means narrow the range."
     )]
     async fn cash_flow(
         &self,
@@ -4464,7 +4464,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get exchange rates for all supported currencies. Returns {exchanges[]{base_currency, other_currency, average_rate}}: average_rate is the value of 1 other_currency in base_currency (e.g. base USD, other HKD, 0.12743 = 1 HKD is 0.12743 USD). US accounts get a US-specific variant: the US account's rates, each entry also carrying universal_key (the account channel, e.g. us_lb_apex) and spec_key (the rate type, e.g. am or reference; the same pair can appear once per rate type), plus bid_rate/offer_rate only when they differ from average_rate."
+        description = "Get exchange rates for all supported currencies. Returns {exchanges[]{base_currency, other_currency, average_rate}}: average_rate is the value of 1 other_currency in base_currency (e.g. base USD, other HKD, 0.12743 = 1 HKD is 0.12743 USD). US accounts get a US-specific variant: the US account's rates in the same shape, one row per pair (the reference rate, else am) with spec_key naming the rate type."
     )]
     async fn exchange_rate(
         &self,
@@ -7239,7 +7239,7 @@ mod tests {
     }
 
     #[test]
-    fn stock_positions_schema_covers_both_region_shapes() {
+    fn stock_positions_schema_shares_the_list_shape_across_regions() {
         let schema = super::output_schema_map()
             .get("stock_positions")
             .expect("stock_positions schema");
@@ -7247,20 +7247,21 @@ mod tests {
             .get("properties")
             .and_then(|p| p.as_object())
             .expect("stock_positions schema must list properties");
-        for key in ["list", "stock_list", "cash_list", "cash_buy_power"] {
+        for key in ["list", "us"] {
             assert!(
                 properties.contains_key(key),
                 "stock_positions schema must describe `{key}`"
             );
         }
-        let required = schema
+        let required: Vec<_> = schema
             .get("required")
             .and_then(|r| r.as_array())
             .cloned()
             .unwrap_or_default();
-        assert!(
-            required.is_empty(),
-            "neither region's shape carries the other's fields, so none can be required"
+        assert_eq!(
+            required,
+            [serde_json::json!("list")],
+            "both regions return `list`; only US adds `us`"
         );
     }
 

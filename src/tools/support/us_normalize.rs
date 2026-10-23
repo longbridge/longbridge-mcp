@@ -25,27 +25,6 @@ fn strip_html(s: &str) -> String {
     out
 }
 
-/// `USAssetOverview.stock_list[]` carries both `symbol` (the bare ticker,
-/// e.g. `"AAPL"`) and `full_symbol` (converted from `counter_id`, e.g.
-/// `"AAPL.US"`) — unlike every other tool in this server, where `symbol`
-/// always means the fully-qualified form. Overwrites `symbol` with
-/// `full_symbol` and drops `full_symbol` so callers can rely on the same
-/// convention everywhere. No-ops if `stock_list` is absent or not an array.
-pub fn normalize_us_stock_list(v: &mut Value) {
-    let Value::Object(map) = v else { return };
-    let Some(Value::Array(stocks)) = map.get_mut("stock_list") else {
-        return;
-    };
-    for entry in stocks.iter_mut() {
-        let Value::Object(stock) = entry else {
-            continue;
-        };
-        if let Some(full_symbol) = stock.remove("full_symbol") {
-            stock.insert("symbol".to_string(), full_symbol);
-        }
-    }
-}
-
 /// `USAssetOverview.crypto_list[]` carries the bare trading-pair code as
 /// `symbol` (e.g. `"BTCUSD"`) and the market separately (e.g. `"BKKT"`).
 /// Rewrites `symbol` to the fully-qualified form (`"BTCUSD.BKKT"`), the
@@ -176,28 +155,6 @@ pub fn fix_valuation_value(v: &mut Value) {
     }
 }
 
-/// order side int (1/2) -> readable label. Unknown codes pass through as
-/// "Unknown" rather than panicking, since the upstream may add codes.
-fn order_side_label(code: i64) -> &'static str {
-    match code {
-        1 => "Buy",
-        2 => "Sell",
-        _ => "Unknown",
-    }
-}
-
-/// order time_in_force int -> readable label.
-fn time_in_force_label(code: i64) -> &'static str {
-    match code {
-        1 => "Day",
-        3 => "GTC",
-        4 => "GTD",
-        5 => "IOC",
-        6 => "FOK",
-        _ => "Unknown",
-    }
-}
-
 /// realized-P&L category int -> readable label (server-defined: 0=all,
 /// 1=stock, 2=option, 3=crypto). Unknown codes pass through as "Unknown"
 /// rather than panicking, since the upstream may add codes.
@@ -238,138 +195,6 @@ pub fn normalize_us_realized_pl(v: &mut Value) {
             }
         }
     }
-}
-
-/// Internal/backend-routing fields with no meaning to a tool caller, plus the
-/// account holder's real name — `order`/`order_histories` on the US order
-/// endpoints are untyped `serde_json::Value` passthrough (unlike the
-/// strongly-typed HK/AP order struct), so whatever fields the backend
-/// includes reach this function unfiltered; PII must be stripped explicitly
-/// rather than relying on a fixed struct shape to exclude it.
-const ORDER_INTERNAL_FIELDS: &[&str] = &[
-    "button_control",
-    "current_millisecond",
-    "deductions_status",
-    "free_status",
-    "platform_deductions_status",
-    "force_only_rth",
-    "limit_depth_level",
-    "tag",
-    "trend",
-    "trigger_count",
-    "trigger_status",
-    "trigger_at",
-    "account_channel",
-    // Internal bookkeeping IDs with no meaning to a caller.
-    "aaid",
-    "org_id",
-    "ploy_type",
-    "ploy_id",
-    // Exchange tick-size metadata, not order-specific data — observed as a
-    // large nested table on every order (e.g. bid_size_list), unrelated to
-    // this order's own price/quantity.
-    "bid_size_list",
-    "ticker_size",
-    // Duplicates `symbol` (the underlying counter code without the market
-    // suffix).
-    "code",
-    // Backend settlement/routing metadata, not user-facing order data.
-    "settlement_account",
-    "display_account",
-    "op_entrust_way",
-    "op_entrust_way_name",
-    "settlement_channel",
-    "short_sell_type",
-    "activate_rth",
-    // PII: the account holder's (and, for joint accounts, co-holder's) real
-    // name, plus the bank customer account number. Never surface these in
-    // tool output.
-    "real_name",
-    "en_name",
-    "customer_name",
-    "joint_real_name",
-    "joint_en_name",
-    "bcan",
-];
-
-/// Internal fields on a single `order_histories[]` entry — a state-transition
-/// log line, not an order — with no meaning to a caller.
-const ORDER_HISTORY_ENTRY_INTERNAL_FIELDS: &[&str] = &[
-    "is_manually",
-    "exec_type",
-    "opp_party_id",
-    "trd_match_id",
-    "operator",
-    "op_entrust_way",
-    "cxl_rej_response_to",
-    "withdrawal_reason",
-    "opp_name",
-    "exec_id",
-];
-
-/// Removes entries whose value is `null`, an empty string, or an empty array.
-pub fn drop_empty(map: &mut serde_json::Map<String, Value>) {
-    map.retain(|_, val| {
-        !matches!(val, Value::Null)
-            && !matches!(val, Value::String(s) if s.is_empty())
-            && !matches!(val, Value::Array(a) if a.is_empty())
-    });
-}
-
-/// Normalizes one `order_histories[]` entry in place: strips a trailing
-/// "Status" suffix from `status`, renames `time` to `occurred_at` (so the
-/// generic `_at`-suffix unix-timestamp conversion in `to_tool_json` picks it
-/// up), and removes internal fields.
-fn normalize_order_history_entry(entry: &mut Value) {
-    let Value::Object(map) = entry else { return };
-    for key in ORDER_HISTORY_ENTRY_INTERNAL_FIELDS {
-        map.remove(*key);
-    }
-    if let Some(status) = map.get("status").and_then(Value::as_str)
-        && let Some(stripped) = status.strip_suffix("Status")
-    {
-        map.insert("status".to_string(), Value::String(stripped.to_string()));
-    }
-    if let Some(t) = map.remove("time") {
-        map.insert("occurred_at".to_string(), t);
-    }
-    drop_empty(map);
-}
-
-/// Normalizes a single US order JSON object in place: numeric `action`/
-/// `time_in_force` codes become readable strings, a trailing "Status" suffix
-/// is stripped from `status` (e.g. "RejectedStatus" -> "Rejected"), nested
-/// `order_histories[]` entries are normalized the same way, and internal/PII
-/// fields are removed. Safe to call on any object; no-ops on fields that are
-/// absent.
-pub fn normalize_us_order(v: &mut Value) {
-    let Value::Object(map) = v else { return };
-    for key in ORDER_INTERNAL_FIELDS {
-        map.remove(*key);
-    }
-    if let Some(code) = map.get("action").and_then(Value::as_i64) {
-        map.insert(
-            "action".to_string(),
-            Value::String(order_side_label(code).to_string()),
-        );
-    }
-    if let Some(code) = map.get("time_in_force").and_then(Value::as_i64) {
-        map.insert(
-            "time_in_force".to_string(),
-            Value::String(time_in_force_label(code).to_string()),
-        );
-    }
-    if let Some(status) = map.get("status").and_then(Value::as_str)
-        && let Some(stripped) = status.strip_suffix("Status")
-    {
-        map.insert("status".to_string(), Value::String(stripped.to_string()));
-    }
-    if let Some(Value::Array(histories)) = map.get_mut("order_histories") {
-        for entry in histories.iter_mut() {
-            normalize_order_history_entry(entry);
-        }
-    }
-    drop_empty(map);
 }
 
 /// Strips a trailing `%` from the named string fields (recursively) and
@@ -456,28 +281,6 @@ mod tests {
     }
 
     #[test]
-    fn normalize_us_stock_list_promotes_full_symbol_over_bare_ticker() {
-        let mut v = json!({
-            "stock_list": [
-                {"symbol": "AAPL", "full_symbol": "AAPL.US", "quantity": "56"},
-                {"symbol": "B", "full_symbol": "B.US", "quantity": "4"}
-            ],
-            "cash_list": []
-        });
-        normalize_us_stock_list(&mut v);
-        assert_eq!(v["stock_list"][0]["symbol"], json!("AAPL.US"));
-        assert!(v["stock_list"][0].get("full_symbol").is_none());
-        assert_eq!(v["stock_list"][1]["symbol"], json!("B.US"));
-    }
-
-    #[test]
-    fn normalize_us_stock_list_noop_on_missing_stock_list() {
-        let mut v = json!({"cash_list": []});
-        normalize_us_stock_list(&mut v);
-        assert_eq!(v, json!({"cash_list": []}));
-    }
-
-    #[test]
     fn normalize_us_crypto_list_qualifies_the_pair_code_with_its_market() {
         let mut v = json!({
             "crypto_list": [
@@ -536,121 +339,6 @@ mod tests {
         );
         assert_eq!(v["desc"], json!("plain text unchanged"));
         assert_eq!(v["nested"]["tooltip"], json!("note"));
-    }
-
-    #[test]
-    fn normalize_us_order_maps_codes_and_strips_internal_fields() {
-        let mut v = json!({
-            "action": 1,
-            "time_in_force": 3,
-            "status": "RejectedStatus",
-            "tag": "internal",
-            "trigger_at": "",
-            "trend": [],
-            "symbol": "AAPL.US"
-        });
-        normalize_us_order(&mut v);
-        assert_eq!(v["action"], json!("Buy"));
-        assert_eq!(v["time_in_force"], json!("GTC"));
-        assert_eq!(v["status"], json!("Rejected"));
-        assert!(v.get("tag").is_none());
-        assert!(v.get("trigger_at").is_none());
-        assert!(v.get("trend").is_none());
-        assert_eq!(v["symbol"], json!("AAPL.US"));
-    }
-
-    #[test]
-    fn normalize_us_order_leaves_unknown_codes_as_unknown() {
-        let mut v = json!({"action": 99, "time_in_force": 0});
-        normalize_us_order(&mut v);
-        assert_eq!(v["action"], json!("Unknown"));
-        assert_eq!(v["time_in_force"], json!("Unknown"));
-    }
-
-    #[test]
-    fn normalize_us_order_strips_exchange_metadata_and_bookkeeping_ids() {
-        // Shape observed from a real staging today_orders response.
-        let mut v = json!({
-            "symbol": "AAPL.US",
-            "code": "AAPL",
-            "aaid": null,
-            "org_id": "1",
-            "ploy_type": "0",
-            "ploy_id": "",
-            "ticker_size": "0.01",
-            "bid_size_list": [{"str_proceed": "0", "end_proceed": "1", "bid_size": "0.0001"}]
-        });
-        normalize_us_order(&mut v);
-        assert_eq!(v["symbol"], json!("AAPL.US"));
-        assert!(v.get("code").is_none());
-        assert!(v.get("aaid").is_none());
-        assert!(v.get("org_id").is_none());
-        assert!(v.get("ploy_type").is_none());
-        assert!(v.get("ploy_id").is_none());
-        assert!(v.get("ticker_size").is_none());
-        assert!(v.get("bid_size_list").is_none());
-    }
-
-    #[test]
-    fn normalize_us_order_strips_pii_and_settlement_metadata() {
-        // Shape observed from a real staging order_detail response.
-        let mut v = json!({
-            "symbol": "AAPL.US",
-            "real_name": "John Doe",
-            "en_name": "Doe John",
-            "customer_name": "John Doe",
-            "joint_real_name": "Jane Doe",
-            "joint_en_name": "Doe Jane",
-            "bcan": "1234567890",
-            "settlement_account": "4DH07862",
-            "display_account": "4DH07862",
-            "op_entrust_way": 0,
-            "op_entrust_way_name": "APP",
-            "settlement_channel": "settlement_apex_us",
-            "short_sell_type": 7,
-            "activate_rth": 0
-        });
-        normalize_us_order(&mut v);
-        assert_eq!(v["symbol"], json!("AAPL.US"));
-        assert!(v.get("real_name").is_none());
-        assert!(v.get("en_name").is_none());
-        assert!(v.get("customer_name").is_none());
-        assert!(v.get("joint_real_name").is_none());
-        assert!(v.get("joint_en_name").is_none());
-        assert!(v.get("bcan").is_none());
-        assert!(v.get("settlement_account").is_none());
-        assert!(v.get("display_account").is_none());
-        assert!(v.get("op_entrust_way").is_none());
-        assert!(v.get("op_entrust_way_name").is_none());
-        assert!(v.get("settlement_channel").is_none());
-        assert!(v.get("short_sell_type").is_none());
-        assert!(v.get("activate_rth").is_none());
-    }
-
-    #[test]
-    fn normalize_us_order_normalizes_nested_order_histories() {
-        let mut v = json!({
-            "symbol": "NVDA260608C210000.US",
-            "order_histories": [{
-                "status": "RejectedStatus",
-                "time": "1780925402",
-                "price": "0.9000",
-                "is_manually": false,
-                "exec_type": 7,
-                "opp_party_id": "",
-                "exec_id": "536ALONGU1"
-            }]
-        });
-        normalize_us_order(&mut v);
-        let entry = &v["order_histories"][0];
-        assert_eq!(entry["status"], json!("Rejected"));
-        assert_eq!(entry["occurred_at"], json!("1780925402"));
-        assert!(entry.get("time").is_none());
-        assert!(entry.get("is_manually").is_none());
-        assert!(entry.get("exec_type").is_none());
-        assert!(entry.get("opp_party_id").is_none());
-        assert!(entry.get("exec_id").is_none());
-        assert_eq!(entry["price"], json!("0.9000"));
     }
 
     #[test]

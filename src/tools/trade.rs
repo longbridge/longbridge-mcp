@@ -1,10 +1,13 @@
 use std::future::Future;
 
 use longbridge::DcRegion;
+use longbridge::httpclient::Json;
 use longbridge::trade::{
-    CancelOrderOptions, GetOrderDetailOptions, GetTodayExecutionsOptions, GetTodayOrdersOptions,
-    GetUSTransactionHistoryOptions, TradeContext, USTransaction,
+    AccountBalance, CancelOrderOptions, GetOrderDetailOptions, GetTodayExecutionsOptions,
+    GetTodayOrdersOptions, GetUSHistoryOrders, GetUSTransactionHistoryOptions, Order, OrderDetail,
+    StockPositionsResponse, TradeContext,
 };
+use reqwest::Method;
 use rmcp::ErrorData as McpError;
 use rmcp::model::CallToolResult;
 use rmcp::schemars::JsonSchema;
@@ -18,7 +21,7 @@ use crate::tools::support::parse;
 use crate::tools::support::tolerant::{
     tolerant_id_string, tolerant_option_id_string, tolerant_option_string, tolerant_string,
 };
-use crate::tools::support::us_normalize::{normalize_us_crypto_list, normalize_us_stock_list};
+use crate::tools::support::us_align;
 use crate::tools::{tool_json, tool_result};
 
 pub use crate::tools::quote::SymbolParam;
@@ -47,8 +50,8 @@ pub struct TodayOrdersParam {
     /// Filter by symbol, e.g. "700.HK". Omit to return all today's orders.
     pub symbol: Option<String>,
     /// Filter by order ID: a parent order ID, or (with is_attached=true) the ID
-    /// of an attached take-profit / stop-loss leg. Has no effect for
-    /// US accounts, which are served by the US order endpoint.
+    /// of an attached take-profit / stop-loss leg. US accounts: matches the
+    /// parent order ID only.
     pub order_id: Option<String>,
     /// Only meaningful together with order_id: it says that order_id is the ID
     /// of an attached take-profit / stop-loss leg, and the response then
@@ -59,11 +62,11 @@ pub struct TodayOrdersParam {
     /// all. Ignored for AP accounts (the region is inferred from the
     /// account — do not pass it).
     pub us_action: Option<String>,
-    /// US accounts only: page number (default 1). Ignored for
-    /// AP accounts.
+    /// US accounts only: return just this page (default: every page, up to
+    /// 500 orders). Ignored for AP accounts.
     pub us_page: Option<i32>,
-    /// US accounts only: page size (default 20). Ignored for
-    /// AP accounts.
+    /// US accounts only: page size when paging with us_page (default 50).
+    /// Ignored for AP accounts.
     pub us_limit: Option<i32>,
 }
 
@@ -351,11 +354,12 @@ pub struct HistoryOrdersParam {
     pub start_at: String,
     /// End time: RFC3339 (e.g. 2026-09-30T23:59:59Z), or a date (yyyy-mm-dd) for the end of that day in UTC
     pub end_at: String,
-    /// US accounts only: page number (default 1). Ignored for
-    /// AP accounts (the region is inferred from the account — do not pass it).
+    /// US accounts only: return just this page (default: every page, up to
+    /// 500 orders). Ignored for AP accounts (the region is inferred from the
+    /// account — do not pass it).
     pub us_page: Option<i32>,
-    /// US accounts only: page size (default 20). Ignored for
-    /// AP accounts.
+    /// US accounts only: page size when paging with us_page (default 50).
+    /// Ignored for AP accounts.
     pub us_limit: Option<i32>,
 }
 
@@ -403,17 +407,10 @@ async fn preview_existing_order(
     is_attached: bool,
 ) -> serde_json::Value {
     if mctx.dc_region().await == longbridge::DcRegion::Us {
-        let result = match ctx.us_order_detail(order_id.to_string()).await {
-            Ok(result) => result,
-            Err(e) => return order_lookup_failed(&e.to_string()),
+        return match us_order_detail_json(mctx, order_id).await {
+            Ok(value) => value,
+            Err(e) => order_lookup_failed(&e.to_string()),
         };
-        let Ok(mut value) = serde_json::to_value(&result) else {
-            return serde_json::Value::Null;
-        };
-        if let Some(order) = value.get_mut("order") {
-            crate::tools::support::us_normalize::normalize_us_order(order);
-        }
-        return value;
     }
     let mut opts = GetOrderDetailOptions::new(order_id);
     if is_attached {
@@ -444,23 +441,30 @@ pub async fn account_balance(
     // The AP balance endpoint is not deployed in the US data center (it fails
     // with `code 12`); US accounts are served by the US cash/buying-power
     // endpoint instead, which has its own shape.
-    let mut value = if mctx.dc_region().await == DcRegion::Us {
+    if mctx.dc_region().await == DcRegion::Us {
         let result = ctx
             .us_cash_and_buy_power(p.currency.as_deref())
             .await
             .map_err(Error::longbridge)?;
-        serde_json::to_value(&result).map_err(Error::Serialize)?
-    } else {
-        let result = ctx
-            .account_balance(p.currency.as_deref())
-            .await
-            .map_err(Error::longbridge)?;
-        serde_json::to_value(&result).map_err(Error::Serialize)?
-    };
-    // Cash/margin amounts are padded to two decimals ("123000.00", "0.00");
-    // strip the trailing zeros (lossless).
+        let mut value = us_align::account_balance(&result).map_err(Error::Serialize)?;
+        strip_trailing_zeros(&mut value);
+        return tool_json(&value);
+    }
+    let result = ctx
+        .account_balance(p.currency.as_deref())
+        .await
+        .map_err(Error::longbridge)?;
+    tool_json(&ap_account_balance_json(&result).map_err(Error::Serialize)?)
+}
+
+/// The AP `account_balance` output. Cash/margin amounts are padded to two
+/// decimals ("123000.00", "0.00"); strip the trailing zeros (lossless).
+fn ap_account_balance_json(
+    result: &[AccountBalance],
+) -> Result<serde_json::Value, serde_json::Error> {
+    let mut value = serde_json::to_value(result)?;
     strip_trailing_zeros(&mut value);
-    tool_json(&value)
+    Ok(value)
 }
 
 pub async fn stock_positions(mctx: &crate::tools::McpContext) -> Result<CallToolResult, McpError> {
@@ -468,20 +472,24 @@ pub async fn stock_positions(mctx: &crate::tools::McpContext) -> Result<CallTool
     // The AP positions endpoint is not deployed in the US data center (it
     // fails with `code 12`), so US accounts get the US asset overview alone:
     // it already carries the stock, option, crypto and cash holdings.
-    let mut value = if mctx.dc_region().await == DcRegion::Us {
+    if mctx.dc_region().await == DcRegion::Us {
         let result = ctx.us_asset_overview().await.map_err(Error::longbridge)?;
-        let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;
-        normalize_us_stock_list(&mut value);
-        normalize_us_crypto_list(&mut value);
-        value
-    } else {
-        let result = ctx.stock_positions(None).await.map_err(Error::longbridge)?;
-        serde_json::to_value(&result).map_err(Error::Serialize)?
-    };
-    // `cost_price` is padded to a fixed decimal width ("41.430"); strip the
-    // trailing zeros (lossless).
+        let mut value = us_align::stock_positions(&result).map_err(Error::Serialize)?;
+        strip_trailing_zeros(&mut value);
+        return tool_json(&value);
+    }
+    let result = ctx.stock_positions(None).await.map_err(Error::longbridge)?;
+    tool_json(&ap_stock_positions_json(&result).map_err(Error::Serialize)?)
+}
+
+/// The AP `stock_positions` output. `cost_price` is padded to a fixed
+/// decimal width ("41.430"); strip the trailing zeros (lossless).
+fn ap_stock_positions_json(
+    result: &StockPositionsResponse,
+) -> Result<serde_json::Value, serde_json::Error> {
+    let mut value = serde_json::to_value(result)?;
     strip_trailing_zeros(&mut value);
-    tool_json(&value)
+    Ok(value)
 }
 
 pub async fn fund_positions(mctx: &crate::tools::McpContext) -> Result<CallToolResult, McpError> {
@@ -518,7 +526,7 @@ pub async fn today_orders(
         };
         let now = time::OffsetDateTime::now_utc();
         let start_of_day = now.replace_time(time::Time::MIDNIGHT);
-        let opts = longbridge::trade::GetUSHistoryOrders {
+        let opts = GetUSHistoryOrders {
             symbol: p.symbol,
             side,
             // Confirmed via live testing that start_at/end_at do filter
@@ -535,19 +543,16 @@ pub async fn today_orders(
             // request 0 (all) rather than expose a filter that silently does
             // nothing or hides real data.
             query_type: 0,
-            page: p.us_page.unwrap_or(1),
-            limit: p.us_limit.unwrap_or(20),
+            page: 1,
+            limit: US_ORDER_PAGE_SIZE,
         };
-        let result = ctx.us_query_orders(opts).await.map_err(Error::longbridge)?;
-        let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;
-        if let Some(orders) = value.get_mut("orders").and_then(|v| v.as_array_mut()) {
-            for order in orders {
-                crate::tools::support::us_normalize::normalize_us_order(order);
-            }
+        let mut orders = us_orders(&ctx, opts, p.us_page, p.us_limit).await?;
+        // The US endpoint has no order-ID filter; apply it here so order_id
+        // narrows the result as it does for AP accounts.
+        if let Some(order_id) = p.order_id.as_deref() {
+            orders.retain(|o| o.get("id").and_then(|id| id.as_str()) == Some(order_id));
         }
-        crate::serialize::strip_nulls(&mut value);
-        crate::serialize::strip_trailing_zeros(&mut value);
-        return tool_json(&value);
+        return tool_json(&us_orders_json(&orders));
     }
     let mut opts = GetTodayOrdersOptions::new();
     if let Some(symbol) = p.symbol {
@@ -560,13 +565,106 @@ pub async fn today_orders(
         opts = opts.is_attached();
     }
     let result = ctx.today_orders(opts).await.map_err(Error::longbridge)?;
-    // Plain market/limit orders leave the ~9 conditional-order fields
-    // (trigger_*, trailing_*, monitor_price, limit_*) as null — drop them.
-    // Prices/amounts come padded to a fixed decimal width; strip trailing zeros.
-    let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;
-    crate::serialize::strip_nulls(&mut value);
-    crate::serialize::strip_trailing_zeros(&mut value);
-    tool_json(&value)
+    tool_json(&ap_orders_json(&result).map_err(Error::Serialize)?)
+}
+
+/// The AP `today_orders`/`history_orders` output. Plain market/limit orders
+/// leave the ~9 conditional-order fields (trigger_*, trailing_*,
+/// monitor_price, limit_*) as null — drop them. Prices/amounts come padded to
+/// a fixed decimal width; strip trailing zeros.
+fn ap_orders_json(result: &[Order]) -> Result<serde_json::Value, serde_json::Error> {
+    let mut value = serde_json::to_value(result)?;
+    strip_nulls(&mut value);
+    strip_trailing_zeros(&mut value);
+    Ok(value)
+}
+
+/// The AP `order_detail` output. Prices/amounts come padded to a fixed
+/// decimal width; strip trailing zeros.
+fn ap_order_detail_json(result: &OrderDetail) -> Result<serde_json::Value, serde_json::Error> {
+    let mut value = serde_json::to_value(result)?;
+    strip_trailing_zeros(&mut value);
+    Ok(value)
+}
+
+/// Page size requested from the US order endpoint when walking every page.
+const US_ORDER_PAGE_SIZE: i32 = 50;
+
+/// Most US order pages `today_orders`/`history_orders` walk (so at most
+/// `US_ORDER_PAGE_SIZE * US_ORDER_MAX_PAGES` orders) when no page is given.
+const US_ORDER_MAX_PAGES: i32 = 10;
+
+/// Raw US orders for `opts`: the one page the caller named with
+/// `page`/`limit`, or else every page up to `US_ORDER_MAX_PAGES` — AP returns
+/// the whole range in one array, so a single default page would silently
+/// hide orders.
+async fn us_orders(
+    ctx: &TradeContext,
+    opts: GetUSHistoryOrders,
+    page: Option<i32>,
+    limit: Option<i32>,
+) -> Result<Vec<serde_json::Value>, McpError> {
+    if page.is_some() || limit.is_some() {
+        let opts = GetUSHistoryOrders {
+            page: page.unwrap_or(1),
+            limit: limit.unwrap_or(US_ORDER_PAGE_SIZE),
+            ..opts
+        };
+        let result = ctx.us_query_orders(opts).await.map_err(Error::longbridge)?;
+        return Ok(result.orders);
+    }
+    let pages = collect_us_pages(US_ORDER_PAGE_SIZE, US_ORDER_MAX_PAGES, |page| {
+        let opts = GetUSHistoryOrders {
+            page,
+            limit: US_ORDER_PAGE_SIZE,
+            ..opts.clone()
+        };
+        async move { ctx.us_query_orders(opts).await.map(|r| r.orders) }
+    })
+    .await
+    .map_err(Error::longbridge)?;
+    if pages.truncated {
+        tracing::info!(
+            orders = pages.items.len(),
+            "US order query stopped at the page cap"
+        );
+    }
+    Ok(pages.items)
+}
+
+/// US orders in the AP orders output shape (a top-level array).
+fn us_orders_json(orders: &[serde_json::Value]) -> serde_json::Value {
+    let mut value = us_align::orders(orders);
+    strip_nulls(&mut value);
+    strip_trailing_zeros(&mut value);
+    value
+}
+
+/// One US order's detail in the AP `order_detail` shape. Read as raw JSON:
+/// the typed SDK response drops `counter_id`, the only field the US endpoint
+/// identifies the security by.
+async fn us_order_detail_json(
+    mctx: &crate::tools::McpContext,
+    order_id: &str,
+) -> Result<serde_json::Value, McpError> {
+    if order_id.is_empty() || !order_id.bytes().all(|b| b.is_ascii_alphanumeric()) {
+        return Err(McpError::invalid_params(
+            "order_id must be the order's numeric ID",
+            None,
+        ));
+    }
+    let client = mctx.create_http_client();
+    let path = format!("/v1/us/orders/{order_id}");
+    let Json(data) = client
+        .request(Method::GET, path.as_str())
+        .dc_restrict(DcRegion::Us)
+        .response::<Json<serde_json::Value>>()
+        .send()
+        .await
+        .map_err(|e| Error::longbridge(e.into()))?;
+    let mut value = us_align::order_detail(&data);
+    strip_trailing_zeros(&mut value);
+    Ok(value)
 }
 
 pub async fn order_detail(
@@ -575,29 +673,14 @@ pub async fn order_detail(
 ) -> Result<CallToolResult, McpError> {
     let (ctx, _) = TradeContext::new(mctx.create_config());
     if mctx.dc_region().await == longbridge::DcRegion::Us {
-        let result = ctx
-            .us_order_detail(p.order_id)
-            .await
-            .map_err(Error::longbridge)?;
-        let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;
-        if let Some(order) = value.get_mut("order") {
-            crate::tools::support::us_normalize::normalize_us_order(order);
-        }
-        if let Some(obj) = value.as_object_mut() {
-            crate::tools::support::us_normalize::drop_empty(obj);
-        }
-        crate::serialize::strip_trailing_zeros(&mut value);
-        return tool_json(&value);
+        return tool_json(&us_order_detail_json(mctx, &p.order_id).await?);
     }
     let mut opts = GetOrderDetailOptions::new(p.order_id);
     if p.is_attached == Some(true) {
         opts = opts.is_attached();
     }
     let result = ctx.order_detail(opts).await.map_err(Error::longbridge)?;
-    // Prices/amounts come padded to a fixed decimal width; strip trailing zeros.
-    let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;
-    crate::serialize::strip_trailing_zeros(&mut value);
-    tool_json(&value)
+    tool_json(&ap_order_detail_json(&result).map_err(Error::Serialize)?)
 }
 
 pub async fn cancel_order(
@@ -693,7 +776,7 @@ pub async fn history_orders(
     let end = parse::parse_rfc3339_end(&p.end_at)?;
     let (ctx, _) = TradeContext::new(mctx.create_config());
     if mctx.dc_region().await == longbridge::DcRegion::Us {
-        let opts = longbridge::trade::GetUSHistoryOrders {
+        let opts = GetUSHistoryOrders {
             symbol: p.symbol,
             side: longbridge::trade::OrderSide::Unknown,
             start_at: start.unix_timestamp(),
@@ -704,19 +787,11 @@ pub async fn history_orders(
             // orders exist in range. 0 (all) is the only value confirmed to
             // return data.
             query_type: 0,
-            page: p.us_page.unwrap_or(1),
-            limit: p.us_limit.unwrap_or(20),
+            page: 1,
+            limit: US_ORDER_PAGE_SIZE,
         };
-        let result = ctx.us_query_orders(opts).await.map_err(Error::longbridge)?;
-        let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;
-        if let Some(orders) = value.get_mut("orders").and_then(|v| v.as_array_mut()) {
-            for order in orders {
-                crate::tools::support::us_normalize::normalize_us_order(order);
-            }
-        }
-        crate::serialize::strip_nulls(&mut value);
-        crate::serialize::strip_trailing_zeros(&mut value);
-        return tool_json(&value);
+        let orders = us_orders(&ctx, opts, p.us_page, p.us_limit).await?;
+        return tool_json(&us_orders_json(&orders));
     }
     let mut opts = longbridge::trade::GetHistoryOrdersOptions::new()
         .start_at(start)
@@ -725,10 +800,7 @@ pub async fn history_orders(
         opts = opts.symbol(symbol);
     }
     let result = ctx.history_orders(opts).await.map_err(Error::longbridge)?;
-    let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;
-    crate::serialize::strip_nulls(&mut value);
-    crate::serialize::strip_trailing_zeros(&mut value);
-    tool_json(&value)
+    tool_json(&ap_orders_json(&result).map_err(Error::Serialize)?)
 }
 
 pub async fn history_executions(
@@ -803,10 +875,16 @@ pub async fn cash_flow(
         })
         .await
         .map_err(Error::longbridge)?;
-        let mut value = us_transactions_json(pages).map_err(Error::Serialize)?;
-        strip_nulls(&mut value);
-        strip_trailing_zeros(&mut value);
-        return tool_json(&value);
+        // AP returns a bare array with no room for a truncation flag; the
+        // record cap (newest first) is documented in the tool description.
+        if pages.truncated {
+            tracing::info!(
+                records = pages.items.len(),
+                "US cash_flow stopped at the page cap"
+            );
+        }
+        // Amounts keep their upstream decimals, as AP's `balance` does.
+        return tool_json(&us_align::cash_flow(&pages.items));
     }
     let opts = longbridge::trade::GetCashFlowOptions::new(start, end);
     let result = ctx.cash_flow(opts).await.map_err(Error::longbridge)?;
@@ -859,29 +937,6 @@ where
         items,
         truncated: true,
     })
-}
-
-/// The US `cash_flow` response: `{items[], truncated}`, plus a `note` saying
-/// how to get the rest when the page cap cut the history short.
-fn us_transactions_json(
-    pages: UsPages<USTransaction>,
-) -> Result<serde_json::Value, serde_json::Error> {
-    let mut value = serde_json::json!({
-        "items": serde_json::to_value(&pages.items)?,
-        "truncated": pages.truncated,
-    });
-    if pages.truncated
-        && let Some(obj) = value.as_object_mut()
-    {
-        obj.insert(
-            "note".to_string(),
-            serde_json::Value::String(format!(
-                "Only the first {} records are returned; narrow start_at/end_at to see the rest.",
-                pages.items.len()
-            )),
-        );
-    }
-    Ok(value)
 }
 
 /// Parse a decimal-valued attached-order field, naming the field in the error
@@ -1864,8 +1919,8 @@ mod attached_order_tests {
 #[cfg(test)]
 mod tests {
     use super::{
-        ORDER_TYPES, ReplaceOrderParam, SubmitOrderParam, USTransaction, UsPages, canonical_choice,
-        collect_us_pages, missing_order_fields, replace_scope, submit_scope, us_transactions_json,
+        ORDER_TYPES, ReplaceOrderParam, SubmitOrderParam, UsPages, canonical_choice,
+        collect_us_pages, missing_order_fields, replace_scope, submit_scope,
     };
 
     /// Drive `collect_us_pages` over a fake endpoint holding `total` records,
@@ -1925,43 +1980,6 @@ mod tests {
             result.map(|p| p.items.len()),
             Err("upstream down"),
             "a failed page must fail the call"
-        );
-    }
-
-    #[test]
-    fn us_transactions_json_notes_truncation_only_when_truncated() {
-        let item = USTransaction {
-            title: "Deposit".to_string(),
-            amount: "500".to_string(),
-            currency: "USD".to_string(),
-            ..Default::default()
-        };
-        let complete = us_transactions_json(UsPages {
-            items: vec![item.clone()],
-            truncated: false,
-        })
-        .expect("transactions serialize");
-        assert_eq!(
-            complete["truncated"], false,
-            "complete history is not truncated"
-        );
-        assert!(complete.get("note").is_none(), "no note without truncation");
-        assert_eq!(
-            complete["items"][0]["title"], "Deposit",
-            "items carry the records"
-        );
-
-        let truncated = us_transactions_json(UsPages {
-            items: vec![item],
-            truncated: true,
-        })
-        .expect("transactions serialize");
-        assert_eq!(truncated["truncated"], true, "truncation must be flagged");
-        assert!(
-            truncated["note"]
-                .as_str()
-                .is_some_and(|n| n.contains("start_at")),
-            "a truncated history must say how to get the rest"
         );
     }
 
@@ -2240,45 +2258,100 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&output).unwrap();
         assert_eq!(v["list"], serde_json::json!([]), "got: {output}");
     }
+}
 
-    /// `USOrderDetailResponse`'s top-level `order_histories`/
-    /// `current_attached_order` are near-always empty/null in practice (the
-    /// real state-transition log lives nested inside `order.order_histories`,
-    /// which is normalized separately). The empty top-level duplicate must be
-    /// dropped so callers don't mistake it for "no history exists".
-    #[test]
-    fn order_detail_envelope_drops_empty_top_level_fields() {
-        use crate::tools::support::us_normalize::{drop_empty, normalize_us_order};
+/// AP output goldens: these tools gained a US variant, and their AP output
+/// must stay byte-for-byte what it was. Each fixture is a raw AP response
+/// run through the same post-processing and serializer the AP path uses.
+#[cfg(test)]
+mod ap_output_tests {
+    use longbridge::trade::{AccountBalance, CashFlow, Order, OrderDetail, StockPositionsResponse};
+    use serde::de::DeserializeOwned;
+    use serde_json::Value;
 
-        let mut value = serde_json::json!({
-            "order": {
-                "symbol": "AAPL.US",
-                "status": "FilledStatus",
-                "order_histories": [{"status": "FilledStatus", "time": "1780925402"}]
-            },
-            "order_histories": [],
-            "current_attached_order": null
-        });
+    use super::{
+        ap_account_balance_json, ap_order_detail_json, ap_orders_json, ap_stock_positions_json,
+    };
+    use crate::serialize::to_tool_json;
 
-        if let Some(order) = value.get_mut("order") {
-            normalize_us_order(order);
-        }
-        if let Some(obj) = value.as_object_mut() {
-            drop_empty(obj);
-        }
+    fn fixture<T>(text: &str) -> T
+    where
+        T: DeserializeOwned,
+    {
+        serde_json::from_str(text).expect("AP fixture deserializes as the SDK type")
+    }
 
-        assert!(
-            value.get("order_histories").is_none(),
-            "empty top-level order_histories should be dropped: {value}"
-        );
-        assert!(
-            value.get("current_attached_order").is_none(),
-            "null current_attached_order should be dropped: {value}"
-        );
+    /// What the model receives: `tool_json`'s serializer over `value`.
+    fn rendered<T>(value: &T) -> Value
+    where
+        T: serde::Serialize,
+    {
+        let json = to_tool_json(value).expect("tool JSON serializes");
+        serde_json::from_str(&json).expect("tool JSON parses")
+    }
+
+    fn assert_golden(name: &str, actual: Value, golden: &str) {
+        let expected: Value = serde_json::from_str(golden).expect("golden is valid JSON");
         assert_eq!(
-            value["order"]["order_histories"][0]["occurred_at"],
-            serde_json::json!("1780925402"),
-            "nested order_histories must survive: {value}"
+            actual,
+            expected,
+            "AP `{name}` output changed:\n{}",
+            serde_json::to_string_pretty(&actual).unwrap_or_default()
+        );
+    }
+
+    #[test]
+    fn ap_account_balance_output_is_unchanged() {
+        let result: Vec<AccountBalance> = fixture(include_str!("fixtures/ap/account_balance.json"));
+        let value = ap_account_balance_json(&result).expect("AP balance serializes");
+        assert_golden(
+            "account_balance",
+            rendered(&value),
+            include_str!("fixtures/ap/account_balance.expected.json"),
+        );
+    }
+
+    #[test]
+    fn ap_stock_positions_output_is_unchanged() {
+        let result: StockPositionsResponse =
+            fixture(include_str!("fixtures/ap/stock_positions.json"));
+        let value = ap_stock_positions_json(&result).expect("AP positions serialize");
+        assert_golden(
+            "stock_positions",
+            rendered(&value),
+            include_str!("fixtures/ap/stock_positions.expected.json"),
+        );
+    }
+
+    #[test]
+    fn ap_cash_flow_output_is_unchanged() {
+        let result: Vec<CashFlow> = fixture(include_str!("fixtures/ap/cash_flow.json"));
+        assert_golden(
+            "cash_flow",
+            rendered(&result),
+            include_str!("fixtures/ap/cash_flow.expected.json"),
+        );
+    }
+
+    #[test]
+    fn ap_orders_output_is_unchanged() {
+        let result: Vec<Order> = fixture(include_str!("fixtures/ap/orders.json"));
+        let value = ap_orders_json(&result).expect("AP orders serialize");
+        assert_golden(
+            "orders",
+            rendered(&value),
+            include_str!("fixtures/ap/orders.expected.json"),
+        );
+    }
+
+    #[test]
+    fn ap_order_detail_output_is_unchanged() {
+        let result: OrderDetail = fixture(include_str!("fixtures/ap/order_detail.json"));
+        let value = ap_order_detail_json(&result).expect("AP order detail serializes");
+        assert_golden(
+            "order_detail",
+            rendered(&value),
+            include_str!("fixtures/ap/order_detail.expected.json"),
         );
     }
 }
