@@ -1298,15 +1298,38 @@ fn is_hidden_for_dc_region(name: &str, region: longbridge::DcRegion) -> bool {
     }
 }
 
+/// Description phrase marking a tool that returns its US-specific variant for
+/// every US account, whatever its arguments. Tools that switch only for `.US`
+/// symbols say "US accounts querying a .US symbol" instead.
+const US_ACCOUNT_VARIANT_MARKER: &str = "US accounts get a US-specific variant";
+
+/// Names of the tools whose description carries `US_ACCOUNT_VARIANT_MARKER`,
+/// sorted — the account-scoped tools whose shape depends on the region alone.
+fn us_account_variant_tools() -> impl Iterator<Item = &'static str> {
+    all_tools_full_cached()
+        .iter()
+        .filter(|tool| {
+            tool.description
+                .as_deref()
+                .is_some_and(|d| d.contains(US_ACCOUNT_VARIANT_MARKER))
+        })
+        .map(|tool| tool.name.as_ref())
+}
+
 /// Which response variant this connection's tools return: tools whose
-/// description mentions a "US accounts ... US-specific variant" switch on the
-/// account's data center, which the model otherwise cannot see.
+/// description mentions a US-account variant switch on the account's data
+/// center, which the model otherwise cannot see.
 fn region_note(region: longbridge::DcRegion) -> &'static str {
+    static US_NOTE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     match region {
-        longbridge::DcRegion::Us => {
-            "This account is in the US data center: tools whose description mentions a \
-             US-account variant return that US-specific shape for .US symbols."
-        }
+        longbridge::DcRegion::Us => US_NOTE.get_or_init(|| {
+            format!(
+                "This account is in the US data center: {} return the US-account shape \
+                 described in their descriptions; other tools with a US variant switch to it \
+                 for .US symbols.",
+                us_account_variant_tools().collect::<Vec<_>>().join(", ")
+            )
+        }),
         longbridge::DcRegion::Ap => {
             "This account is in the AP (Hong Kong) data center: tools whose description \
              mentions a US-account variant return their generic shape, not the US one."
@@ -8426,14 +8449,46 @@ mod tool_error_tests {
 
     #[test]
     fn region_note_names_which_variant_tools_return() {
+        let us = super::region_note(longbridge::DcRegion::Us);
         assert!(
-            super::region_note(longbridge::DcRegion::Us).contains("US-specific shape"),
-            "US accounts are told they get the US variant"
+            us.contains("return the US-account shape") && us.contains("for .US symbols"),
+            "US accounts are told which tools switch by account and which by symbol: {us}"
         );
         assert!(
             super::region_note(longbridge::DcRegion::Ap).contains("generic shape"),
             "AP accounts are told they get the generic shape"
         );
+    }
+
+    #[test]
+    fn region_note_names_every_account_scoped_us_variant_tool() {
+        // These switch on the account region alone (no symbol argument), so
+        // the US note must name them rather than imply a .US-symbol switch.
+        let us = super::region_note(longbridge::DcRegion::Us);
+        let names: Vec<_> = super::us_account_variant_tools().collect();
+        for tool in [
+            "account_balance",
+            "stock_positions",
+            "cash_flow",
+            "exchange_rate",
+            "order_detail",
+        ] {
+            assert!(names.contains(&tool), "`{tool}` must carry the marker");
+            assert!(us.contains(tool), "US note must name `{tool}`: {us}");
+        }
+        // Symbol-scoped variants stay out of the account list.
+        for tool in [
+            "dividend",
+            "consensus",
+            "valuation",
+            "company",
+            "financial_report",
+        ] {
+            assert!(
+                !names.contains(&tool),
+                "`{tool}` switches only for .US symbols and must not be listed"
+            );
+        }
     }
 
     #[test]
