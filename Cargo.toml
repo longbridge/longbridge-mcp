@@ -4,8 +4,8 @@ version = "0.14.0"
 edition = "2024"
 
 [dependencies]
-longbridge = "5.2"
-longbridge-proto = "5.2"
+longbridge = "5.3"
+longbridge-proto = "5.3"
 rust_decimal = "1"
 rmcp = { version = "1.4", features = [
     "server",
@@ -54,8 +54,3 @@ futures-util = "0.3"
 jaq-core = "3.1"
 jaq-std = "3.0"
 jaq-json = { version = "2.0", features = ["serde"] }
-
-# TEMP: unpublished US asset APIs (feat/us-asset-apis). Drop before merge.
-[patch.crates-io]
-longbridge = { git = "https://github.com/longbridge/openapi.git", branch = "feat/us-asset-apis" }
-longbridge-proto = { git = "https://github.com/longbridge/openapi.git", branch = "feat/us-asset-apis" }
