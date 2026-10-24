@@ -11,5 +11,6 @@ pub mod response_limit;
 pub mod symbol_alias;
 pub mod text;
 pub mod tolerant;
+pub mod us_align;
 pub mod us_market;
 pub mod us_normalize;

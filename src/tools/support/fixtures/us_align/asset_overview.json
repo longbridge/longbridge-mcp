@@ -1,0 +1,16 @@
+{
+  "cash_list": [{"currency": "USD", "total_amount": "1250.40", "outstanding": "0", "settled_cash": "1250.40", "total_cash": "1250.40", "frozen_buy_cash": "0"}],
+  "stock_list": [
+    {"symbol": "EXMP", "asset_type": "STOCK", "quantity": "10", "currency": "USD", "average_cost": "20.500", "market": "US", "counter_id": "ETF/US/EXMP", "full_symbol": "EXMP.US", "trade_status": "204", "prev_close": "21.000", "last_done": "22.100", "market_price": "22.000", "pretrade_close": "22.100", "stock_invest_of_today": "220.000", "today_pl": "11.000", "pretrade_stock_invest_of_today": "210.000", "pretrade_today_pl": "0.000", "night_last_done": "", "night_prev_close": "", "position_side": "LONG", "open_position_time": "1780000000", "name": "Example ETF", "industry_counter_id": "", "industry_name": ""}
+  ],
+  "option_list": [],
+  "crypto_list": [
+    {"symbol": "BTCUSD", "asset_type": "CRYPTO", "quantity": "0.0002", "currency": "USD", "average_cost": "80000.000", "market": "BKKT", "counter_id": "VA/BKKT/BTCUSD", "trade_status": "105", "prev_close": "81000.00", "last_done": "81500.00", "market_price": "81500.00", "pretrade_close": "81000.000", "stock_invest_of_today": "16.300", "today_pl": "0.000", "pretrade_stock_invest_of_today": "16.300", "pretrade_today_pl": "0.000", "night_last_done": "", "night_prev_close": "", "position_side": "LONG", "open_position_time": "1790000000", "name": "Bitcoin", "industry_counter_id": "", "industry_name": ""}
+  ],
+  "asset_timestamp": "1792000000",
+  "cash_buy_power": "1200.40",
+  "overnight_buy_power": "1200.40",
+  "currency": "USD",
+  "multi_leg": {"holdings": []},
+  "account_type": "1"
+}

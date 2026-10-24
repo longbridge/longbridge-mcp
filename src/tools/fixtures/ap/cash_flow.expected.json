@@ -1,0 +1,22 @@
+[
+  {
+    "transaction_flow_name": "Dividend",
+    "direction": "In",
+    "business_type": 1,
+    "balance": "12.50",
+    "currency": "HKD",
+    "business_time": "2023-11-14T22:13:20Z",
+    "symbol": "700.HK",
+    "description": "cash dividend"
+  },
+  {
+    "transaction_flow_name": "Fee",
+    "direction": "Out",
+    "business_type": 1,
+    "balance": "-1.54",
+    "currency": "USD",
+    "business_time": "2023-11-14T22:15:00Z",
+    "symbol": null,
+    "description": ""
+  }
+]

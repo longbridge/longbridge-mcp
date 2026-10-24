@@ -4,8 +4,8 @@ version = "0.14.0"
 edition = "2024"
 
 [dependencies]
-longbridge = "5.2"
-longbridge-proto = "5.2"
+longbridge = "5.3"
+longbridge-proto = "5.3"
 rust_decimal = "1"
 rmcp = { version = "1.4", features = [
     "server",
@@ -34,6 +34,8 @@ time = { version = "0.3", features = [
     "parsing",
     "serde-human-readable",
 ] }
+# Already in the tree via the longbridge SDK; used for US-market-local dates.
+time-tz = "2.0.0"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "http2", "charset"] }
 tower = "0.5"
 tower-http = { version = "0.6", features = ["cors"] }
@@ -46,6 +48,7 @@ serde-transcode = "1.1"
 anyhow = "1"
 rustls = { version = "0.23", features = ["ring"] }
 sha2 = "0.10"
+futures-util = "0.3"
 
 # Embedded jq-compatible response filtering (no external jq executable).
 jaq-core = "3.1"
