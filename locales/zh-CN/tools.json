@@ -514,7 +514,18 @@
     },
     "exchange_rate": {
       "title": "汇率",
-      "description": "获取全部支持币种的汇率，返回 {exchanges[]{base_currency, other_currency, average_rate}}：average_rate 为 1 单位 other_currency 折合的 base_currency（如 base USD、other HKD、0.12743 即 1 HKD = 0.12743 USD）。美股账户返回美股账户自身的汇率，结构相同，每个币种对一条（优先 reference 汇率，否则 am），spec_key 标明汇率类型"
+      "description": "获取 Longbridge 账户折算汇率（用于将资产折算为账户币种），覆盖全部支持币种，返回 {exchanges[]{base_currency, other_currency, average_rate}}：average_rate 为 1 单位 other_currency 折合的 base_currency（如 base USD、other HKD、0.12743 即 1 HKD = 0.12743 USD）。美股账户返回美股账户自身的汇率，结构相同，每个币种对一条（优先 reference 汇率，否则 am），spec_key 标明汇率类型。如需公开市场参考汇率或历史汇率，请用 fx_rate"
+    },
+    "fx_rate": {
+      "title": "外汇参考汇率",
+      "description": "欧洲央行（ECB）公开外汇参考汇率（经 Frankfurter）：每个工作日一个汇率，非实时、不可成交，无买卖价。默认返回最新汇率，也可查历史某日或逐日序列。返回 {base, date, rates{币种代码: 汇率}, source}；序列的 rates 按 yyyy-mm-dd 分组。汇率为 1 单位 base 折合的该币种数量（base USD 时 HKD 7.8472），与 exchange_rate 方向相反；查交叉汇率请直接设置 base，不要相除。引用汇率时请注明 date：它是发布日，可能早于今天",
+      "properties": {
+        "base": "基准货币，ISO 4217 代码（默认 `\"USD\"`）。汇率为 1 单位基准货币折合的各报价货币数量",
+        "currencies": "报价货币，ISO 4217 代码，例如 `[\"HKD\", \"CNY\"]`（不是 \"700.HK\" 这类证券代码）。不传则返回全部 30 种支持币种。传 `start` 时必填，最多 5 个。不含 CNH、TWD 及加密货币",
+        "date": "历史日期（`yyyy-mm-dd`，自 1999-01-04 起）。返回当天公布的汇率，非工作日取此前最近一个工作日。不可与 `start`/`end` 同时使用",
+        "start": "序列起始日期（`yyyy-mm-dd`），返回 `start` 至 `end` 之间每个工作日一条",
+        "end": "序列结束日期（`yyyy-mm-dd`，默认最新），仅在传 `start` 时有效；跨度不超过 366 天"
+      }
     },
     "executive": {
       "title": "高管与董事",
