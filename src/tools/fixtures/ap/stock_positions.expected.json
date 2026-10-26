@@ -1,0 +1,29 @@
+{
+  "list": [
+    {
+      "account_channel": null,
+      "stock_info": [
+        {
+          "symbol": "700.HK",
+          "symbol_name": "Example Holdings",
+          "quantity": "100",
+          "available_quantity": "100",
+          "currency": "HKD",
+          "cost_price": "300.5",
+          "market": "HK",
+          "init_quantity": null
+        },
+        {
+          "symbol": "EXMP.US",
+          "symbol_name": "Example Inc",
+          "quantity": "5",
+          "available_quantity": "3",
+          "currency": "USD",
+          "cost_price": "41.43",
+          "market": "US",
+          "init_quantity": "5"
+        }
+      ]
+    }
+  ]
+}

@@ -1,3 +1,5 @@
+use longbridge::DcRegion;
+use longbridge::trade::TradeContext;
 use rmcp::ErrorData as McpError;
 use rmcp::model::{CallToolResult, Content};
 use rmcp::schemars::JsonSchema;
@@ -8,6 +10,7 @@ use crate::serialize::convert_unix_paths;
 use crate::tools::support::http_client::{
     http_get_tool, http_get_tool_dropping, http_get_tool_unix,
 };
+use crate::tools::support::us_align;
 use crate::tools::tool_json;
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -42,6 +45,13 @@ fn date_to_unix(s: &str, end_of_day: bool) -> Result<i64, McpError> {
 }
 
 pub async fn exchange_rate(mctx: &crate::tools::McpContext) -> Result<CallToolResult, McpError> {
+    if mctx.dc_region().await == DcRegion::Us {
+        // `/v1/asset/exchange_rates` is not deployed in the US data center (it
+        // fails with `code 12`); US accounts read the US account's own rates.
+        let (ctx, _) = TradeContext::new(mctx.create_config());
+        let result = ctx.us_exchange_rates().await.map_err(Error::longbridge)?;
+        return tool_json(&us_align::exchange_rates(&result.exchanges));
+    }
     let client = mctx.create_http_client();
     // Longbridge's asset FX feed is a single mid-reference rate: `bid_rate` and
     // `offer_rate` always equal `average_rate` (verified across all supported

@@ -1,19 +1,32 @@
+use std::collections::{BTreeSet, HashMap};
+use std::future::Future;
+
+use futures_util::stream::{self, StreamExt};
+
+use longbridge::DcRegion;
+use longbridge::httpclient::{HttpClientError, Json};
 use longbridge::trade::{
-    CancelOrderOptions, GetOrderDetailOptions, GetTodayExecutionsOptions, GetTodayOrdersOptions,
-    TradeContext,
+    AccountBalance, CancelOrderOptions, Execution, GetHistoryExecutionsOptions,
+    GetOrderDetailOptions, GetTodayExecutionsOptions, GetTodayOrdersOptions, GetUSHistoryOrders,
+    GetUSTransactionHistoryOptions, Order, OrderDetail, OrderSide, QueryUSOrdersResponse,
+    StockPositionsResponse, TradeContext,
 };
+use reqwest::Method;
 use rmcp::ErrorData as McpError;
 use rmcp::model::CallToolResult;
 use rmcp::schemars::JsonSchema;
 use rmcp::serde::Deserialize;
 
 use crate::error::Error;
+use crate::serialize::{strip_nulls, strip_trailing_zeros};
 use crate::tools::support::dry_run;
 use crate::tools::support::http_client::http_get_tool;
 use crate::tools::support::parse;
 use crate::tools::support::tolerant::{
     tolerant_id_string, tolerant_option_id_string, tolerant_option_string, tolerant_string,
 };
+use crate::tools::support::us_align;
+use crate::tools::support::us_market;
 use crate::tools::{tool_json, tool_result};
 
 pub use crate::tools::quote::SymbolParam;
@@ -42,8 +55,8 @@ pub struct TodayOrdersParam {
     /// Filter by symbol, e.g. "700.HK". Omit to return all today's orders.
     pub symbol: Option<String>,
     /// Filter by order ID: a parent order ID, or (with is_attached=true) the ID
-    /// of an attached take-profit / stop-loss leg. Has no effect for
-    /// US accounts, which are served by the US order endpoint.
+    /// of an attached take-profit / stop-loss leg. US accounts: matches the
+    /// parent order ID only.
     pub order_id: Option<String>,
     /// Only meaningful together with order_id: it says that order_id is the ID
     /// of an attached take-profit / stop-loss leg, and the response then
@@ -54,11 +67,11 @@ pub struct TodayOrdersParam {
     /// all. Ignored for AP accounts (the region is inferred from the
     /// account — do not pass it).
     pub us_action: Option<String>,
-    /// US accounts only: page number (default 1). Ignored for
-    /// AP accounts.
+    /// US accounts only: return just this page (default: every page, up to
+    /// 500 orders). Ignored for AP accounts.
     pub us_page: Option<i32>,
-    /// US accounts only: page size (default 20). Ignored for
-    /// AP accounts.
+    /// US accounts only: page size when paging with us_page (default 50).
+    /// Ignored for AP accounts.
     pub us_limit: Option<i32>,
 }
 
@@ -342,16 +355,27 @@ pub struct CancelOrderParam {
 pub struct HistoryOrdersParam {
     /// Filter by symbol (optional)
     pub symbol: Option<String>,
-    /// Start time: RFC3339 (e.g. 2026-09-01T00:00:00Z), or a date (yyyy-mm-dd) for the start of that day in UTC
+    /// Start time: RFC3339 (e.g. 2026-09-01T00:00:00Z), or a date (yyyy-mm-dd) for the start of that day in UTC (US accounts: in New York time)
     pub start_at: String,
-    /// End time: RFC3339 (e.g. 2026-09-30T23:59:59Z), or a date (yyyy-mm-dd) for the end of that day in UTC
+    /// End time: RFC3339 (e.g. 2026-09-30T23:59:59Z), or a date (yyyy-mm-dd) for the end of that day in UTC (US accounts: in New York time)
     pub end_at: String,
-    /// US accounts only: page number (default 1). Ignored for
-    /// AP accounts (the region is inferred from the account — do not pass it).
+    /// US accounts only: return just this page (default: every page, up to
+    /// 500 orders). Ignored for AP accounts (the region is inferred from the
+    /// account — do not pass it).
     pub us_page: Option<i32>,
-    /// US accounts only: page size (default 20). Ignored for
-    /// AP accounts.
+    /// US accounts only: page size when paging with us_page (default 50).
+    /// Ignored for AP accounts.
     pub us_limit: Option<i32>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct HistoryExecutionsParam {
+    /// Filter by symbol (optional)
+    pub symbol: Option<String>,
+    /// Start time: RFC3339 (e.g. 2026-09-01T00:00:00Z), or a date (yyyy-mm-dd) for the start of that day in UTC (US accounts: in New York time)
+    pub start_at: String,
+    /// End time: RFC3339 (e.g. 2026-09-30T23:59:59Z), or a date (yyyy-mm-dd) for the end of that day in UTC (US accounts: in New York time)
+    pub end_at: String,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -398,17 +422,10 @@ async fn preview_existing_order(
     is_attached: bool,
 ) -> serde_json::Value {
     if mctx.dc_region().await == longbridge::DcRegion::Us {
-        let result = match ctx.us_order_detail(order_id.to_string()).await {
-            Ok(result) => result,
-            Err(e) => return order_lookup_failed(&e.to_string()),
+        return match us_order_detail_json(mctx, order_id).await {
+            Ok(value) => value,
+            Err(e) => order_lookup_failed(&e.to_string()),
         };
-        let Ok(mut value) = serde_json::to_value(&result) else {
-            return serde_json::Value::Null;
-        };
-        if let Some(order) = value.get_mut("order") {
-            crate::tools::support::us_normalize::normalize_us_order(order);
-        }
-        return value;
     }
     let mut opts = GetOrderDetailOptions::new(order_id);
     if is_attached {
@@ -436,49 +453,58 @@ pub async fn account_balance(
     p: AccountBalanceParam,
 ) -> Result<CallToolResult, McpError> {
     let (ctx, _) = TradeContext::new(mctx.create_config());
+    // The AP balance endpoint is not deployed in the US data center (it fails
+    // with `code 12`); US accounts are served by the US cash/buying-power
+    // endpoint instead, which has its own shape.
+    if mctx.dc_region().await == DcRegion::Us {
+        let result = ctx
+            .us_cash_and_buy_power(p.currency.as_deref())
+            .await
+            .map_err(Error::longbridge)?;
+        let mut value = us_align::account_balance(&result).map_err(Error::Serialize)?;
+        strip_trailing_zeros(&mut value);
+        return tool_json(&value);
+    }
     let result = ctx
         .account_balance(p.currency.as_deref())
         .await
         .map_err(Error::longbridge)?;
-    // Cash/margin amounts are padded to two decimals ("123000.00", "0.00");
-    // strip the trailing zeros (lossless).
-    let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;
-    crate::serialize::strip_trailing_zeros(&mut value);
-    tool_json(&value)
+    tool_json(&ap_account_balance_json(&result).map_err(Error::Serialize)?)
+}
+
+/// The AP `account_balance` output. Cash/margin amounts are padded to two
+/// decimals ("123000.00", "0.00"); strip the trailing zeros (lossless).
+fn ap_account_balance_json(
+    result: &[AccountBalance],
+) -> Result<serde_json::Value, serde_json::Error> {
+    let mut value = serde_json::to_value(result)?;
+    strip_trailing_zeros(&mut value);
+    Ok(value)
 }
 
 pub async fn stock_positions(mctx: &crate::tools::McpContext) -> Result<CallToolResult, McpError> {
     let (ctx, _) = TradeContext::new(mctx.create_config());
-    let result = ctx.stock_positions(None).await.map_err(Error::longbridge)?;
-    let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;
-    if mctx.dc_region().await == longbridge::DcRegion::Us {
-        // The US overview is supplementary: its failure should annotate the
-        // positions rather than discard them, but staying silent would let the
-        // caller read a US account as having no overview at all.
-        match ctx.us_asset_overview().await {
-            Ok(us_overview) => {
-                if let (Some(obj), Ok(mut us_value)) = (
-                    value.as_object_mut(),
-                    serde_json::to_value(&us_overview).map_err(Error::Serialize),
-                ) {
-                    crate::tools::support::us_normalize::normalize_us_stock_list(&mut us_value);
-                    obj.insert("us_asset_overview".to_string(), us_value);
-                }
-            }
-            Err(e) => {
-                if let Some(obj) = value.as_object_mut() {
-                    obj.insert(
-                        "warnings".to_string(),
-                        serde_json::json!([format!("us_asset_overview is unavailable: {e}")]),
-                    );
-                }
-            }
-        }
+    // The AP positions endpoint is not deployed in the US data center (it
+    // fails with `code 12`), so US accounts get the US asset overview alone:
+    // it already carries the stock, option, crypto and cash holdings.
+    if mctx.dc_region().await == DcRegion::Us {
+        let result = ctx.us_asset_overview().await.map_err(Error::longbridge)?;
+        let mut value = us_align::stock_positions(&result).map_err(Error::Serialize)?;
+        strip_trailing_zeros(&mut value);
+        return tool_json(&value);
     }
-    // `cost_price` is padded to a fixed decimal width ("41.430"); strip the
-    // trailing zeros (lossless).
-    crate::serialize::strip_trailing_zeros(&mut value);
-    tool_json(&value)
+    let result = ctx.stock_positions(None).await.map_err(Error::longbridge)?;
+    tool_json(&ap_stock_positions_json(&result).map_err(Error::Serialize)?)
+}
+
+/// The AP `stock_positions` output. `cost_price` is padded to a fixed
+/// decimal width ("41.430"); strip the trailing zeros (lossless).
+fn ap_stock_positions_json(
+    result: &StockPositionsResponse,
+) -> Result<serde_json::Value, serde_json::Error> {
+    let mut value = serde_json::to_value(result)?;
+    strip_trailing_zeros(&mut value);
+    Ok(value)
 }
 
 pub async fn fund_positions(mctx: &crate::tools::McpContext) -> Result<CallToolResult, McpError> {
@@ -486,7 +512,7 @@ pub async fn fund_positions(mctx: &crate::tools::McpContext) -> Result<CallToolR
     let result = ctx.fund_positions(None).await.map_err(Error::longbridge)?;
     // Cost/NAV amounts are padded to a fixed decimal width; strip trailing zeros.
     let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;
-    crate::serialize::strip_trailing_zeros(&mut value);
+    strip_trailing_zeros(&mut value);
     tool_json(&value)
 }
 
@@ -513,18 +539,19 @@ pub async fn today_orders(
             Some(s) if s.eq_ignore_ascii_case("sell") => longbridge::trade::OrderSide::Sell,
             _ => longbridge::trade::OrderSide::Unknown,
         };
-        let now = time::OffsetDateTime::now_utc();
-        let start_of_day = now.replace_time(time::Time::MIDNIGHT);
-        let opts = longbridge::trade::GetUSHistoryOrders {
+        let (start_at, end_at) = us_market::us_today_orders_window(time::OffsetDateTime::now_utc());
+        let opts = GetUSHistoryOrders {
             symbol: p.symbol,
             side,
             // Confirmed via live testing that start_at/end_at do filter
-            // correctly on the backend (unlike query_type, see below) — start
-            // of the current UTC day gives "today" instead of a multi-month
-            // window that would make this indistinguishable from
-            // history_orders.
-            start_at: start_of_day.unix_timestamp(),
-            end_at: now.unix_timestamp(),
+            // correctly on the backend (unlike query_type, see below). The
+            // window runs from 20:00 ET yesterday (the overnight session that
+            // trades into today opens then) to the end of today in New York,
+            // so an overnight order does not vanish at New York midnight —
+            // agents are told to check today_orders before resending an
+            // unconfirmed write, and a missing order would invite a duplicate.
+            start_at: start_at.unix_timestamp(),
+            end_at: end_at.unix_timestamp(),
             // query_type (0=all/1=pending/2=history) does not actually filter
             // on the backend as of this writing (confirmed via live testing —
             // "pending" returned the identical set as "all", "history"
@@ -532,19 +559,16 @@ pub async fn today_orders(
             // request 0 (all) rather than expose a filter that silently does
             // nothing or hides real data.
             query_type: 0,
-            page: p.us_page.unwrap_or(1),
-            limit: p.us_limit.unwrap_or(20),
+            page: 1,
+            limit: US_ORDER_PAGE_SIZE,
         };
-        let result = ctx.us_query_orders(opts).await.map_err(Error::longbridge)?;
-        let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;
-        if let Some(orders) = value.get_mut("orders").and_then(|v| v.as_array_mut()) {
-            for order in orders {
-                crate::tools::support::us_normalize::normalize_us_order(order);
-            }
+        let mut orders = us_orders(&ctx, opts, p.us_page, p.us_limit).await?;
+        // The US endpoint has no order-ID filter; apply it here so order_id
+        // narrows the result as it does for AP accounts.
+        if let Some(order_id) = p.order_id.as_deref() {
+            orders.retain(|o| o.get("id").and_then(|id| id.as_str()) == Some(order_id));
         }
-        crate::serialize::strip_nulls(&mut value);
-        crate::serialize::strip_trailing_zeros(&mut value);
-        return tool_json(&value);
+        return tool_json(&us_orders_json(&orders));
     }
     let mut opts = GetTodayOrdersOptions::new();
     if let Some(symbol) = p.symbol {
@@ -557,13 +581,123 @@ pub async fn today_orders(
         opts = opts.is_attached();
     }
     let result = ctx.today_orders(opts).await.map_err(Error::longbridge)?;
-    // Plain market/limit orders leave the ~9 conditional-order fields
-    // (trigger_*, trailing_*, monitor_price, limit_*) as null — drop them.
-    // Prices/amounts come padded to a fixed decimal width; strip trailing zeros.
-    let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;
-    crate::serialize::strip_nulls(&mut value);
-    crate::serialize::strip_trailing_zeros(&mut value);
-    tool_json(&value)
+    tool_json(&ap_orders_json(&result).map_err(Error::Serialize)?)
+}
+
+/// The AP `today_orders`/`history_orders` output. Plain market/limit orders
+/// leave the ~9 conditional-order fields (trigger_*, trailing_*,
+/// monitor_price, limit_*) as null — drop them. Prices/amounts come padded to
+/// a fixed decimal width; strip trailing zeros.
+fn ap_orders_json(result: &[Order]) -> Result<serde_json::Value, serde_json::Error> {
+    let mut value = serde_json::to_value(result)?;
+    strip_nulls(&mut value);
+    strip_trailing_zeros(&mut value);
+    Ok(value)
+}
+
+/// The AP `order_detail` output. Prices/amounts come padded to a fixed
+/// decimal width; strip trailing zeros.
+fn ap_order_detail_json(result: &OrderDetail) -> Result<serde_json::Value, serde_json::Error> {
+    let mut value = serde_json::to_value(result)?;
+    strip_trailing_zeros(&mut value);
+    Ok(value)
+}
+
+/// Page size requested from the US order endpoint when walking every page.
+const US_ORDER_PAGE_SIZE: i32 = 50;
+
+/// Most US order pages `today_orders`/`history_orders` walk (so at most
+/// `US_ORDER_PAGE_SIZE * US_ORDER_MAX_PAGES` orders) when no page is given.
+const US_ORDER_MAX_PAGES: i32 = 10;
+
+/// Raw US orders for `opts`: the one page the caller named with
+/// `page`/`limit`, or else every page up to `US_ORDER_MAX_PAGES` — AP returns
+/// the whole range in one array, so a single default page would silently
+/// hide orders.
+async fn us_orders(
+    ctx: &TradeContext,
+    opts: GetUSHistoryOrders,
+    page: Option<i32>,
+    limit: Option<i32>,
+) -> Result<Vec<serde_json::Value>, McpError> {
+    if page.is_some() || limit.is_some() {
+        let opts = GetUSHistoryOrders {
+            page: page.unwrap_or(1),
+            limit: limit.unwrap_or(US_ORDER_PAGE_SIZE),
+            ..opts
+        };
+        let result = ctx.us_query_orders(opts).await.map_err(Error::longbridge)?;
+        return Ok(result.orders);
+    }
+    let pages = collect_us_pages(US_ORDER_PAGE_SIZE, US_ORDER_MAX_PAGES, |page| {
+        let opts = GetUSHistoryOrders {
+            page,
+            limit: US_ORDER_PAGE_SIZE,
+            ..opts.clone()
+        };
+        async move { ctx.us_query_orders(opts).await.map(|r| r.orders) }
+    })
+    .await
+    .map_err(Error::longbridge)?;
+    if pages.truncated {
+        tracing::info!(
+            orders = pages.items.len(),
+            "US order query stopped at the page cap"
+        );
+    }
+    Ok(pages.items)
+}
+
+/// US orders in the AP orders output shape (a top-level array).
+fn us_orders_json(orders: &[serde_json::Value]) -> serde_json::Value {
+    let mut value = us_align::orders(orders);
+    strip_nulls(&mut value);
+    strip_trailing_zeros(&mut value);
+    value
+}
+
+/// One US order's detail in the AP `order_detail` shape. Read as raw JSON:
+/// the typed SDK response drops `counter_id`, which the US endpoint may
+/// return as its only security identifier until the gateway converts it.
+async fn us_order_detail_json(
+    mctx: &crate::tools::McpContext,
+    order_id: &str,
+) -> Result<serde_json::Value, McpError> {
+    if !is_us_order_id(order_id) {
+        return Err(McpError::invalid_params(
+            "order_id must be the order's numeric ID",
+            None,
+        ));
+    }
+    let data = us_order_detail_data(mctx, order_id)
+        .await
+        .map_err(|e| Error::longbridge(e.into()))?;
+    let mut value = us_align::order_detail(&data);
+    strip_trailing_zeros(&mut value);
+    Ok(value)
+}
+
+/// Whether `order_id` can name an order in the `/v1/us/orders/{order_id}`
+/// path (non-empty and ASCII alphanumeric, so it cannot alter the path).
+fn is_us_order_id(order_id: &str) -> bool {
+    !order_id.is_empty() && order_id.bytes().all(|b| b.is_ascii_alphanumeric())
+}
+
+/// Raw data of `/v1/us/orders/{order_id}`. `order_id` must pass
+/// `is_us_order_id`.
+async fn us_order_detail_data(
+    mctx: &crate::tools::McpContext,
+    order_id: &str,
+) -> Result<serde_json::Value, HttpClientError> {
+    let path = format!("/v1/us/orders/{order_id}");
+    let Json(data) = mctx
+        .create_http_client()
+        .request(Method::GET, path.as_str())
+        .dc_restrict(DcRegion::Us)
+        .response::<Json<serde_json::Value>>()
+        .send()
+        .await?;
+    Ok(data)
 }
 
 pub async fn order_detail(
@@ -572,29 +706,14 @@ pub async fn order_detail(
 ) -> Result<CallToolResult, McpError> {
     let (ctx, _) = TradeContext::new(mctx.create_config());
     if mctx.dc_region().await == longbridge::DcRegion::Us {
-        let result = ctx
-            .us_order_detail(p.order_id)
-            .await
-            .map_err(Error::longbridge)?;
-        let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;
-        if let Some(order) = value.get_mut("order") {
-            crate::tools::support::us_normalize::normalize_us_order(order);
-        }
-        if let Some(obj) = value.as_object_mut() {
-            crate::tools::support::us_normalize::drop_empty(obj);
-        }
-        crate::serialize::strip_trailing_zeros(&mut value);
-        return tool_json(&value);
+        return tool_json(&us_order_detail_json(mctx, &p.order_id).await?);
     }
     let mut opts = GetOrderDetailOptions::new(p.order_id);
     if p.is_attached == Some(true) {
         opts = opts.is_attached();
     }
     let result = ctx.order_detail(opts).await.map_err(Error::longbridge)?;
-    // Prices/amounts come padded to a fixed decimal width; strip trailing zeros.
-    let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;
-    crate::serialize::strip_trailing_zeros(&mut value);
-    tool_json(&value)
+    tool_json(&ap_order_detail_json(&result).map_err(Error::Serialize)?)
 }
 
 pub async fn cancel_order(
@@ -640,57 +759,66 @@ pub async fn today_executions(
     mctx: &crate::tools::McpContext,
     p: TodayExecutionsParam,
 ) -> Result<CallToolResult, McpError> {
-    use std::collections::HashMap;
-
+    let by_order = p.order_id.is_some();
     let mut exec_opts = GetTodayExecutionsOptions::new();
-    let mut order_opts = GetTodayOrdersOptions::new();
     if let Some(ref symbol) = p.symbol {
         exec_opts = exec_opts.symbol(symbol.clone());
-        order_opts = order_opts.symbol(symbol.clone());
     }
     if let Some(order_id) = p.order_id {
         exec_opts = exec_opts.order_id(order_id);
     }
 
     let (ctx, _) = TradeContext::new(mctx.create_config());
+    if mctx.dc_region().await == DcRegion::Us {
+        // v1 fills carry no side for US accounts, and the AP today-orders
+        // endpoint is not the US order source: take the side from the US
+        // orders in today_orders' window, or, when the fills are filtered to
+        // one order, from that order's detail.
+        let executions = ctx
+            .today_executions(exec_opts)
+            .await
+            .map_err(Error::longbridge)?;
+        let query =
+            us_today_executions_side_query(time::OffsetDateTime::now_utc(), p.symbol, by_order);
+        let sides = us_fill_sides(mctx, &executions, query).await;
+        // An unresolved side is "", as AP today_executions renders a fill
+        // whose order is not in today's orders.
+        return tool_json(&us_executions_json(&executions, &sides, ""));
+    }
+
+    let mut order_opts = GetTodayOrdersOptions::new();
+    if let Some(symbol) = p.symbol {
+        order_opts = order_opts.symbol(symbol);
+    }
     let (executions, orders) = tokio::try_join!(
         ctx.today_executions(exec_opts),
         ctx.today_orders(order_opts),
     )
     .map_err(Error::longbridge)?;
-
+    // AP takes the side from today's orders only; a fill whose order is not
+    // among them gets "".
     let side_map: HashMap<String, String> = orders
         .into_iter()
         .map(|o| (o.order_id, format!("{:?}", o.side)))
         .collect();
-
-    let result: Vec<serde_json::Value> = executions
-        .iter()
-        .map(|e| {
-            let mut v = serde_json::to_value(e).unwrap_or_default();
-            if let serde_json::Value::Object(ref mut map) = v {
-                let side = side_map.get(&e.order_id).cloned().unwrap_or_default();
-                map.insert("side".to_string(), serde_json::Value::String(side));
-            }
-            v
-        })
-        .collect();
-    // Execution prices/amounts come padded to a fixed decimal width; strip
-    // trailing zeros (lossless).
-    let mut value = serde_json::Value::Array(result);
-    crate::serialize::strip_trailing_zeros(&mut value);
-    tool_json(&value)
+    tool_json(&executions_json(&executions, |e| {
+        side_map.get(&e.order_id).cloned().unwrap_or_default()
+    }))
 }
 
 pub async fn history_orders(
     mctx: &crate::tools::McpContext,
     p: HistoryOrdersParam,
 ) -> Result<CallToolResult, McpError> {
-    let start = parse::parse_rfc3339(&p.start_at)?;
-    let end = parse::parse_rfc3339_end(&p.end_at)?;
     let (ctx, _) = TradeContext::new(mctx.create_config());
-    if mctx.dc_region().await == longbridge::DcRegion::Us {
-        let opts = longbridge::trade::GetUSHistoryOrders {
+    let region = mctx.dc_region().await;
+    let (start, end) = history_range(region, &p.start_at, &p.end_at)?;
+    if region == DcRegion::Us {
+        // A bare date is a New York (US-market) day. today_orders' window
+        // opens at 20:00 ET on the previous day, so a range ending yesterday
+        // overlaps it for yesterday's 20:00–24:00 ET orders; callers combining
+        // the two dedupe by order_id.
+        let opts = GetUSHistoryOrders {
             symbol: p.symbol,
             side: longbridge::trade::OrderSide::Unknown,
             start_at: start.unix_timestamp(),
@@ -701,19 +829,11 @@ pub async fn history_orders(
             // orders exist in range. 0 (all) is the only value confirmed to
             // return data.
             query_type: 0,
-            page: p.us_page.unwrap_or(1),
-            limit: p.us_limit.unwrap_or(20),
+            page: 1,
+            limit: US_ORDER_PAGE_SIZE,
         };
-        let result = ctx.us_query_orders(opts).await.map_err(Error::longbridge)?;
-        let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;
-        if let Some(orders) = value.get_mut("orders").and_then(|v| v.as_array_mut()) {
-            for order in orders {
-                crate::tools::support::us_normalize::normalize_us_order(order);
-            }
-        }
-        crate::serialize::strip_nulls(&mut value);
-        crate::serialize::strip_trailing_zeros(&mut value);
-        return tool_json(&value);
+        let orders = us_orders(&ctx, opts, p.us_page, p.us_limit).await?;
+        return tool_json(&us_orders_json(&orders));
     }
     let mut opts = longbridge::trade::GetHistoryOrdersOptions::new()
         .start_at(start)
@@ -722,29 +842,351 @@ pub async fn history_orders(
         opts = opts.symbol(symbol);
     }
     let result = ctx.history_orders(opts).await.map_err(Error::longbridge)?;
-    let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;
-    crate::serialize::strip_nulls(&mut value);
-    crate::serialize::strip_trailing_zeros(&mut value);
-    tool_json(&value)
+    tool_json(&ap_orders_json(&result).map_err(Error::Serialize)?)
+}
+
+/// Parse a history tool's `start_at`/`end_at` for the account's region.
+///
+/// A bare `yyyy-mm-dd` is a New York (US-market) day for US accounts and a
+/// UTC day otherwise; full RFC3339 timestamps are taken as given.
+fn history_range(
+    region: DcRegion,
+    start_at: &str,
+    end_at: &str,
+) -> Result<(time::OffsetDateTime, time::OffsetDateTime), McpError> {
+    if region == DcRegion::Us {
+        Ok((
+            parse::parse_rfc3339_new_york(start_at)?,
+            parse::parse_rfc3339_end_new_york(end_at)?,
+        ))
+    } else {
+        Ok((
+            parse::parse_rfc3339(start_at)?,
+            parse::parse_rfc3339_end(end_at)?,
+        ))
+    }
+}
+
+/// Upstream endpoint `history_executions` reads fills from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExecutionsSource {
+    /// v1 `/trade/execution/history` (walked page by page by the SDK).
+    V1History,
+    /// v3 `/trade/execution/all`, filtered by execution time.
+    V3All,
+}
+
+/// Pick the executions endpoint for a region: v3 `/trade/execution/all` is not
+/// deployed in the US data center (it fails with `code 12`), so US accounts
+/// use v1 `/trade/execution/history`.
+fn executions_source(region: DcRegion) -> ExecutionsSource {
+    if region == DcRegion::Us {
+        ExecutionsSource::V1History
+    } else {
+        ExecutionsSource::V3All
+    }
 }
 
 pub async fn history_executions(
     mctx: &crate::tools::McpContext,
-    p: HistoryOrdersParam,
+    p: HistoryExecutionsParam,
 ) -> Result<CallToolResult, McpError> {
-    let start = parse::parse_rfc3339(&p.start_at)?;
-    let end = parse::parse_rfc3339_end(&p.end_at)?;
+    let region = mctx.dc_region().await;
+    let (start, end) = history_range(region, &p.start_at, &p.end_at)?;
 
     let (ctx, _) = TradeContext::new(mctx.create_config());
-    // v3 `/trade/execution/all` filters by execution time and caps each page at
-    // 1000 records; walk `page` until `has_more` is false.
-    let mut executions: Vec<longbridge::trade::Execution> = Vec::new();
+    let executions = match executions_source(region) {
+        ExecutionsSource::V1History => {
+            let mut opts = GetHistoryExecutionsOptions::new()
+                .start_at(start)
+                .end_at(end);
+            if let Some(ref symbol) = p.symbol {
+                opts = opts.symbol(symbol.clone());
+            }
+            let executions = ctx
+                .history_executions(opts)
+                .await
+                .map_err(Error::longbridge)?;
+            // v1 history omits `side` for US accounts; fill it from the
+            // account's orders over the same range. An unresolved side is
+            // "Unknown", as AP history_executions renders one.
+            let query = Some(us_fill_side_query(p.symbol, start, end));
+            let sides = us_fill_sides(mctx, &executions, query).await;
+            return tool_json(&us_executions_json(&executions, &sides, "Unknown"));
+        }
+        ExecutionsSource::V3All => v3_all_executions(&ctx, start, end, p.symbol).await?,
+    };
+    tool_json(&executions_json(&executions, |e| format!("{:?}", e.side)))
+}
+
+/// Most order IDs `us_fill_sides` looks up one by one in the US order detail
+/// endpoint after the range order query left them unmatched.
+const US_SIDE_DETAIL_MAX_LOOKUPS: usize = 20;
+
+/// Order-detail lookups `us_fill_sides` runs at once.
+const US_SIDE_DETAIL_CONCURRENCY: usize = 5;
+
+/// Most symbols the follow-up order query of `resolve_fill_sides` filters by
+/// after the unfiltered range query stopped at the page cap.
+const US_SIDE_QUERY_MAX_SYMBOLS: usize = 50;
+
+/// A US order range query for fill sides: the account's orders between
+/// `start_at` and `end_at` (unix seconds), limited to `symbols` unless it is
+/// empty.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FillSideQuery {
+    symbols: Vec<String>,
+    start_at: i64,
+    end_at: i64,
+}
+
+/// The US order query `us_fill_sides` runs for fills between `start` and
+/// `end` (every page up to `US_ORDER_MAX_PAGES` is walked).
+fn us_fill_side_query(
+    symbol: Option<String>,
+    start: time::OffsetDateTime,
+    end: time::OffsetDateTime,
+) -> FillSideQuery {
+    FillSideQuery {
+        symbols: symbol.into_iter().collect(),
+        start_at: start.unix_timestamp(),
+        end_at: end.unix_timestamp(),
+    }
+}
+
+/// The order query for today's US fills: today_orders' window, which opens at
+/// 20:00 ET the previous day so overnight-session fills find their order.
+fn us_today_fill_side_query(now: time::OffsetDateTime, symbol: Option<String>) -> FillSideQuery {
+    let (start, end) = us_market::us_today_orders_window(now);
+    us_fill_side_query(symbol, start, end)
+}
+
+/// The range query `today_executions` resolves US fill sides with: none when
+/// the fills are filtered to one order (`by_order`), whose side its order
+/// detail gives directly, and today_orders' window otherwise.
+fn us_today_executions_side_query(
+    now: time::OffsetDateTime,
+    symbol: Option<String>,
+    by_order: bool,
+) -> Option<FillSideQuery> {
+    (!by_order).then(|| us_today_fill_side_query(now, symbol))
+}
+
+/// Side by order ID for the US fills in `executions` that lack one: from the
+/// US orders matched by `query` (skipped when it is `None`), then from the
+/// order detail endpoint for the order IDs still unmatched. Never fails: an
+/// order-query error leaves every side unresolved.
+async fn us_fill_sides(
+    mctx: &crate::tools::McpContext,
+    executions: &[Execution],
+    query: Option<FillSideQuery>,
+) -> HashMap<String, OrderSide> {
+    resolve_fill_sides(
+        executions,
+        query,
+        |query| {
+            collect_us_pages(US_ORDER_PAGE_SIZE, US_ORDER_MAX_PAGES, move |page| {
+                let query = query.clone();
+                async move { us_order_page(mctx, &query, page).await }
+            })
+        },
+        |order_id| us_order_side(mctx, order_id),
+    )
+    .await
+}
+
+/// One page of `POST /v1/us/orders/query` for `query`. Sent directly rather
+/// than through `TradeContext::us_query_orders`, which takes a single symbol.
+async fn us_order_page(
+    mctx: &crate::tools::McpContext,
+    query: &FillSideQuery,
+    page: i32,
+) -> Result<Vec<serde_json::Value>, HttpClientError> {
+    let body = serde_json::json!({
+        "account_channel": "",
+        "action": 0,
+        // Seconds as floats, as the SDK sends them.
+        "start_at": query.start_at as f64,
+        "end_at": query.end_at as f64,
+        "symbols": query.symbols,
+        "security_types": [],
+        // 0 (all) is the only query_type confirmed to return data; see
+        // today_orders.
+        "query_type": 0,
+        "page": page,
+        "limit": US_ORDER_PAGE_SIZE,
+        "query_version": time::OffsetDateTime::now_utc().unix_timestamp() as f64,
+    });
+    let Json(resp) = mctx
+        .create_http_client()
+        .request(Method::POST, "/v1/us/orders/query")
+        .dc_restrict(DcRegion::Us)
+        .body(Json(body))
+        .response::<Json<QueryUSOrdersResponse>>()
+        .send()
+        .await?;
+    Ok(resp.orders)
+}
+
+/// One US order's side from `/v1/us/orders/{order_id}`, or `None` when its
+/// `action` is neither Buy nor Sell.
+async fn us_order_side(
+    mctx: &crate::tools::McpContext,
+    order_id: String,
+) -> Result<Option<OrderSide>, HttpClientError> {
+    if !is_us_order_id(&order_id) {
+        return Ok(None);
+    }
+    let data = us_order_detail_data(mctx, &order_id).await?;
+    Ok(us_align::order_detail_side(&data))
+}
+
+/// Resolve the sides of fills that lack one. `query_orders` runs `query` (the
+/// account's orders over the fills' range); when that unfiltered query stops
+/// at the page cap it runs once more filtered by the symbols of the fills
+/// still unmatched (at most `US_SIDE_QUERY_MAX_SYMBOLS`). Order IDs left
+/// unmatched, or every order ID when `query` is `None`, are looked up with
+/// `order_side`, at most `US_SIDE_DETAIL_MAX_LOOKUPS` of them and
+/// `US_SIDE_DETAIL_CONCURRENCY` at a time. Nothing is queried when every fill
+/// has a side; a failed first order query falls back to an empty map, while a
+/// failed follow-up query or lookup only leaves those orders unresolved, so
+/// the fills are still returned.
+async fn resolve_fill_sides<Q, QFut, QErr, D, DFut, DErr>(
+    executions: &[Execution],
+    query: Option<FillSideQuery>,
+    query_orders: Q,
+    order_side: D,
+) -> HashMap<String, OrderSide>
+where
+    Q: Fn(FillSideQuery) -> QFut,
+    QFut: Future<Output = Result<UsPages<serde_json::Value>, QErr>>,
+    QErr: std::fmt::Display,
+    D: Fn(String) -> DFut,
+    DFut: Future<Output = Result<Option<OrderSide>, DErr>>,
+    DErr: std::fmt::Display,
+{
+    let mut symbol_of: HashMap<&str, &str> = HashMap::new();
+    let unmatched: Vec<&str> = executions
+        .iter()
+        .filter(|e| e.side == OrderSide::Unknown)
+        .filter(|e| {
+            symbol_of
+                .insert(e.order_id.as_str(), e.symbol.as_str())
+                .is_none()
+        })
+        .map(|e| e.order_id.as_str())
+        .collect();
+    if unmatched.is_empty() {
+        return HashMap::new();
+    }
+
+    let mut sides = HashMap::new();
+    if let Some(query) = query {
+        let pages = match query_orders(query.clone()).await {
+            Ok(pages) => pages,
+            Err(err) => {
+                tracing::warn!(
+                    error = %err,
+                    "US order query for fill sides failed; leaving sides unresolved"
+                );
+                return HashMap::new();
+            }
+        };
+        sides = us_align::order_sides(&pages.items);
+        if pages.truncated {
+            let symbols: Vec<String> = if query.symbols.is_empty() {
+                unmatched
+                    .iter()
+                    .filter(|id| !sides.contains_key(**id))
+                    .filter_map(|id| symbol_of.get(id).copied())
+                    .filter(|symbol| !symbol.is_empty())
+                    .collect::<BTreeSet<&str>>()
+                    .into_iter()
+                    .take(US_SIDE_QUERY_MAX_SYMBOLS)
+                    .map(str::to_string)
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            tracing::warn!(
+                orders = pages.items.len(),
+                retry_symbols = symbols.len(),
+                "US order query for fill sides stopped at the page cap"
+            );
+            if !symbols.is_empty() {
+                match query_orders(FillSideQuery { symbols, ..query }).await {
+                    Ok(pages) => {
+                        if pages.truncated {
+                            tracing::warn!(
+                                orders = pages.items.len(),
+                                truncated = true,
+                                "symbol-filtered US order query for fill sides stopped at the page cap"
+                            );
+                        }
+                        sides.extend(us_align::order_sides(&pages.items));
+                    }
+                    Err(err) => tracing::warn!(
+                        error = %err,
+                        "symbol-filtered US order query for fill sides failed"
+                    ),
+                }
+            }
+        }
+    }
+
+    let missing: Vec<String> = unmatched
+        .into_iter()
+        .filter(|id| !sides.contains_key(*id))
+        .map(str::to_string)
+        .collect();
+    if missing.len() > US_SIDE_DETAIL_MAX_LOOKUPS {
+        tracing::warn!(
+            unmatched = missing.len(),
+            looked_up = US_SIDE_DETAIL_MAX_LOOKUPS,
+            "too many fills without a matching US order; the rest stay unresolved"
+        );
+    }
+    let order_side = &order_side;
+    let lookups: Vec<(String, Result<Option<OrderSide>, DErr>)> =
+        stream::iter(missing.into_iter().take(US_SIDE_DETAIL_MAX_LOOKUPS))
+            .map(|id| async move {
+                let side = order_side(id.clone()).await;
+                (id, side)
+            })
+            .buffer_unordered(US_SIDE_DETAIL_CONCURRENCY)
+            .collect()
+            .await;
+    for (id, side) in lookups {
+        match side {
+            Ok(Some(side)) => {
+                sides.insert(id, side);
+            }
+            Ok(None) => {}
+            Err(err) => tracing::warn!(
+                order_id = %id,
+                error = %err,
+                "US order detail lookup for a fill side failed"
+            ),
+        }
+    }
+    sides
+}
+
+/// Every fill from v3 `/trade/execution/all`, which filters by execution time
+/// and caps each page at 1000 records; walk `page` until `has_more` is false.
+async fn v3_all_executions(
+    ctx: &TradeContext,
+    start: time::OffsetDateTime,
+    end: time::OffsetDateTime,
+    symbol: Option<String>,
+) -> Result<Vec<Execution>, McpError> {
+    let mut executions: Vec<Execution> = Vec::new();
     for page in 1..=1000u64 {
         let mut exec_opts = longbridge::trade::GetAllExecutionsOptions::new()
             .start_at(start)
             .end_at(end)
             .page(page);
-        if let Some(ref symbol) = p.symbol {
+        if let Some(ref symbol) = symbol {
             exec_opts = exec_opts.symbol(symbol.clone());
         }
         let resp = ctx
@@ -759,16 +1201,21 @@ pub async fn history_executions(
             break;
         }
     }
+    Ok(executions)
+}
 
+/// Render fills as the tool's top-level array, with `side` set to
+/// `side(fill)`.
+fn executions_json<F>(executions: &[Execution], side: F) -> serde_json::Value
+where
+    F: Fn(&Execution) -> String,
+{
     let result: Vec<serde_json::Value> = executions
         .iter()
         .map(|e| {
             let mut v = serde_json::to_value(e).unwrap_or_default();
             if let serde_json::Value::Object(ref mut map) = v {
-                map.insert(
-                    "side".to_string(),
-                    serde_json::Value::String(format!("{:?}", e.side)),
-                );
+                map.insert("side".to_string(), serde_json::Value::String(side(e)));
             }
             v
         })
@@ -776,8 +1223,25 @@ pub async fn history_executions(
     // Execution prices/amounts come padded to a fixed decimal width; strip
     // trailing zeros (lossless).
     let mut value = serde_json::Value::Array(result);
-    crate::serialize::strip_trailing_zeros(&mut value);
-    tool_json(&value)
+    strip_trailing_zeros(&mut value);
+    value
+}
+
+/// US fills as the tool's top-level array: each fill's own side, else its
+/// order's side from `order_sides`, else `unresolved` (the value the AP tool
+/// renders for an unknown side).
+fn us_executions_json(
+    executions: &[Execution],
+    order_sides: &HashMap<String, OrderSide>,
+    unresolved: &str,
+) -> serde_json::Value {
+    executions_json(executions, |e| {
+        let side = match e.side {
+            OrderSide::Unknown => order_sides.get(&e.order_id).copied(),
+            side => Some(side),
+        };
+        side.map_or_else(|| unresolved.to_string(), |side| format!("{side:?}"))
+    })
 }
 
 pub async fn cash_flow(
@@ -786,10 +1250,82 @@ pub async fn cash_flow(
 ) -> Result<CallToolResult, McpError> {
     let start = parse::parse_rfc3339(&p.start_at)?;
     let end = parse::parse_rfc3339_end(&p.end_at)?;
-    let opts = longbridge::trade::GetCashFlowOptions::new(start, end);
     let (ctx, _) = TradeContext::new(mctx.create_config());
+    if mctx.dc_region().await == DcRegion::Us {
+        // The AP cash-flow endpoint is not deployed in the US data center (it
+        // fails with `code 12`); US accounts are served by the paged US
+        // transaction history instead.
+        let pages = collect_us_pages(US_TRANSACTION_PAGE_SIZE, US_TRANSACTION_MAX_PAGES, |page| {
+            let mut opts = GetUSTransactionHistoryOptions::new(start, end);
+            opts.page = page;
+            opts.size = US_TRANSACTION_PAGE_SIZE;
+            let ctx = &ctx;
+            async move { ctx.us_transaction_history(opts).await.map(|r| r.items) }
+        })
+        .await
+        .map_err(Error::longbridge)?;
+        // AP returns a bare array with no room for a truncation flag; the
+        // record cap (newest first) is documented in the tool description.
+        if pages.truncated {
+            tracing::info!(
+                records = pages.items.len(),
+                "US cash_flow stopped at the page cap"
+            );
+        }
+        // Amounts keep their upstream decimals, as AP's `balance` does.
+        return tool_json(&us_align::cash_flow(&pages.items));
+    }
+    let opts = longbridge::trade::GetCashFlowOptions::new(start, end);
     let result = ctx.cash_flow(opts).await.map_err(Error::longbridge)?;
     tool_json(&result)
+}
+
+/// Page size requested from the US transaction history.
+const US_TRANSACTION_PAGE_SIZE: i32 = 100;
+
+/// Most US transaction-history pages `cash_flow` walks before it stops and
+/// reports the result as truncated.
+const US_TRANSACTION_MAX_PAGES: i32 = 20;
+
+/// Records collected from a paged US endpoint that returns no total count.
+#[derive(Debug)]
+struct UsPages<T> {
+    /// Every record fetched, in page order.
+    items: Vec<T>,
+    /// True when the page cap was reached while the last page was still full,
+    /// so more records may exist.
+    truncated: bool,
+}
+
+/// Walk a paged US endpoint from page 1 until a page comes back shorter than
+/// `size` (the API's only end-of-data signal), or `max_pages` pages have been
+/// fetched.
+async fn collect_us_pages<T, E, F, Fut>(
+    size: i32,
+    max_pages: i32,
+    mut fetch: F,
+) -> Result<UsPages<T>, E>
+where
+    F: FnMut(i32) -> Fut,
+    Fut: Future<Output = Result<Vec<T>, E>>,
+{
+    let full_page = usize::try_from(size).unwrap_or(0);
+    let mut items = Vec::new();
+    for page in 1..=max_pages {
+        let batch = fetch(page).await?;
+        let last = batch.len() < full_page || batch.is_empty();
+        items.extend(batch);
+        if last {
+            return Ok(UsPages {
+                items,
+                truncated: false,
+            });
+        }
+    }
+    Ok(UsPages {
+        items,
+        truncated: true,
+    })
 }
 
 /// Parse a decimal-valued attached-order field, naming the field in the error
@@ -1771,10 +2307,702 @@ mod attached_order_tests {
 
 #[cfg(test)]
 mod tests {
+    use longbridge::DcRegion;
+    use rmcp::schemars::schema_for;
+    use time::macros::datetime;
+
     use super::{
-        ORDER_TYPES, ReplaceOrderParam, SubmitOrderParam, canonical_choice, missing_order_fields,
-        replace_scope, submit_scope,
+        ExecutionsSource, HistoryExecutionsParam, ORDER_TYPES, ReplaceOrderParam, SubmitOrderParam,
+        UsPages, canonical_choice, collect_us_pages, executions_source, history_range,
+        missing_order_fields, replace_scope, submit_scope,
     };
+
+    use std::collections::HashMap;
+    use std::future::Ready;
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use longbridge::trade::{Execution, OrderSide};
+    use serde_json::{Value, json};
+
+    use super::{
+        FillSideQuery, US_SIDE_DETAIL_CONCURRENCY, US_SIDE_DETAIL_MAX_LOOKUPS,
+        US_SIDE_QUERY_MAX_SYMBOLS, executions_json, resolve_fill_sides, us_executions_json,
+        us_fill_side_query, us_today_executions_side_query, us_today_fill_side_query,
+    };
+    use crate::tools::support::us_align;
+
+    /// Two fills as US prod `/v1/trade/execution/history` returns them: no
+    /// `side` key.
+    fn v1_us_fills() -> Vec<Execution> {
+        serde_json::from_value(json!([
+            {
+                "order_id": "701",
+                "price": "187.2500",
+                "quantity": "3",
+                "symbol": "AAPL.US",
+                "trade_done_at": "1792000000",
+                "trade_id": "701-1"
+            },
+            {
+                "order_id": "999",
+                "price": "10.00",
+                "quantity": "1",
+                "symbol": "TSLA.US",
+                "trade_done_at": "1792000100",
+                "trade_id": "999-1"
+            }
+        ]))
+        .expect("v1 US fills without side must deserialize")
+    }
+
+    /// Side-less fills, one per order ID.
+    fn fills_for(order_ids: &[String]) -> Vec<Execution> {
+        let pairs: Vec<(&str, &str)> = order_ids
+            .iter()
+            .map(|id| (id.as_str(), "AAPL.US"))
+            .collect();
+        fills_with(&pairs)
+    }
+
+    /// Side-less fills, one per `(order ID, symbol)`.
+    fn fills_with(fills: &[(&str, &str)]) -> Vec<Execution> {
+        let raw: Vec<Value> = fills
+            .iter()
+            .map(|(id, symbol)| {
+                json!({
+                    "order_id": id,
+                    "price": "1",
+                    "quantity": "1",
+                    "symbol": symbol,
+                    "trade_done_at": "1792000000",
+                    "trade_id": format!("{id}-1")
+                })
+            })
+            .collect();
+        serde_json::from_value(Value::Array(raw)).expect("side-less fills must deserialize")
+    }
+
+    fn any_query() -> FillSideQuery {
+        us_fill_side_query(
+            None,
+            datetime!(2026-10-22 04:00 UTC),
+            datetime!(2026-10-23 03:59:59 UTC),
+        )
+    }
+
+    fn orders_page(orders: Vec<Value>) -> Result<UsPages<Value>, String> {
+        Ok(UsPages {
+            items: orders,
+            truncated: false,
+        })
+    }
+
+    /// A page set that stopped at the page cap.
+    fn capped_orders(orders: Vec<Value>) -> Result<UsPages<Value>, String> {
+        Ok(UsPages {
+            items: orders,
+            truncated: true,
+        })
+    }
+
+    #[test]
+    fn v1_us_fill_without_side_deserializes_as_unknown() {
+        let fills = v1_us_fills();
+        assert_eq!(fills.len(), 2, "both fills must parse");
+        assert!(
+            fills.iter().all(|f| f.side == OrderSide::Unknown),
+            "a missing side must default to Unknown"
+        );
+    }
+
+    #[test]
+    fn ap_today_executions_side_matches_the_prior_output() {
+        // Prior AP behavior: the side comes from today's orders only (the
+        // fill's own side is ignored) and an unmatched fill gets "".
+        let mut fills = v1_us_fills();
+        fills[1].side = OrderSide::Buy;
+        let side_map = HashMap::from([("701".to_string(), "Sell".to_string())]);
+        let value = executions_json(&fills, |e| {
+            side_map.get(&e.order_id).cloned().unwrap_or_default()
+        });
+        assert_eq!(value[0]["side"], json!("Sell"), "side comes from order 701");
+        assert_eq!(
+            value[1]["side"],
+            json!(""),
+            "an unmatched AP fill gets \"\""
+        );
+        assert_eq!(
+            value[0]["price"],
+            json!("187.25"),
+            "trailing zeros are stripped"
+        );
+    }
+
+    #[test]
+    fn ap_history_executions_side_matches_the_prior_output() {
+        let mut fills = v1_us_fills();
+        fills[0].side = OrderSide::Buy;
+        let value = executions_json(&fills, |e| format!("{:?}", e.side));
+        assert_eq!(value[0]["side"], json!("Buy"), "the fill's own side");
+        assert_eq!(
+            value[1]["side"],
+            json!("Unknown"),
+            "an unknown AP history side stays \"Unknown\""
+        );
+    }
+
+    #[test]
+    fn us_executions_fill_side_from_orders_and_use_the_ap_unresolved_value() {
+        let orders = [
+            json!({"id": "701", "action": 2}),
+            json!({"id": "702", "action": 1}),
+            json!({"id": "703", "action": 0}),
+        ];
+        let sides = us_align::order_sides(&orders);
+        assert_eq!(
+            sides.len(),
+            2,
+            "an action that is neither Buy nor Sell is skipped"
+        );
+        let today = us_executions_json(&v1_us_fills(), &sides, "");
+        assert_eq!(today[0]["side"], json!("Sell"), "side comes from order 701");
+        assert_eq!(
+            today[1]["side"],
+            json!(""),
+            "an unresolved today fill matches AP today_executions"
+        );
+        let history = us_executions_json(&v1_us_fills(), &sides, "Unknown");
+        assert_eq!(
+            history[1]["side"],
+            json!("Unknown"),
+            "an unresolved history fill matches AP history_executions"
+        );
+        assert!(
+            history
+                .as_array()
+                .expect("fills render as an array")
+                .iter()
+                .all(|f| !f["side"].is_null()),
+            "no fill gets a null side"
+        );
+    }
+
+    #[test]
+    fn us_executions_keep_their_own_side_over_the_order_map() {
+        let mut fills = v1_us_fills();
+        fills[0].side = OrderSide::Buy;
+        let sides = HashMap::from([("701".to_string(), OrderSide::Sell)]);
+        let value = us_executions_json(&fills, &sides, "");
+        assert_eq!(value[0]["side"], json!("Buy"), "the fill's own side wins");
+    }
+
+    #[test]
+    fn order_detail_side_reads_the_order_action() {
+        assert_eq!(
+            us_align::order_detail_side(&json!({"order": {"id": "1", "action": 1}})),
+            Some(OrderSide::Buy),
+            "action 1 is Buy"
+        );
+        assert_eq!(
+            us_align::order_detail_side(&json!({"order": {"id": "1", "action": 2}})),
+            Some(OrderSide::Sell),
+            "action 2 is Sell"
+        );
+        assert_eq!(
+            us_align::order_detail_side(&json!({"order": {"action": 0}})),
+            None,
+            "another action is unresolved"
+        );
+    }
+
+    #[tokio::test]
+    async fn fill_sides_skip_every_query_when_all_fills_have_a_side() {
+        let mut fills = v1_us_fills();
+        for fill in &mut fills {
+            fill.side = OrderSide::Sell;
+        }
+        let sides = resolve_fill_sides(
+            &fills,
+            Some(any_query()),
+            |_| -> Ready<Result<UsPages<Value>, String>> {
+                panic!("the order query must not run when every fill has a side")
+            },
+            |_| -> Ready<Result<Option<OrderSide>, String>> {
+                panic!("no order detail lookup may run when every fill has a side")
+            },
+        )
+        .await;
+        assert!(sides.is_empty(), "nothing to resolve");
+    }
+
+    #[tokio::test]
+    async fn fill_sides_fall_back_to_empty_when_the_order_query_fails() {
+        let fills = v1_us_fills();
+        let sides = resolve_fill_sides(
+            &fills,
+            Some(any_query()),
+            |_| async { Err::<UsPages<Value>, _>("upstream 500".to_string()) },
+            |_| -> Ready<Result<Option<OrderSide>, String>> {
+                panic!("no detail lookup runs after a failed order query")
+            },
+        )
+        .await;
+        assert!(sides.is_empty(), "a failed order query resolves nothing");
+        let value = us_executions_json(&fills, &sides, "Unknown");
+        assert_eq!(
+            value.as_array().map(Vec::len),
+            Some(2),
+            "the fills are still returned"
+        );
+        assert_eq!(
+            value[0]["side"],
+            json!("Unknown"),
+            "an unresolved side uses the AP value"
+        );
+    }
+
+    #[tokio::test]
+    async fn fill_sides_look_up_unmatched_orders_by_detail() {
+        let fills = fills_for(&["701".into(), "998".into(), "999".into(), "999".into()]);
+        let looked_up = Mutex::new(Vec::new());
+        let sides = resolve_fill_sides(
+            &fills,
+            Some(any_query()),
+            |_| async { orders_page(vec![json!({"id": "701", "action": 2})]) },
+            |id| {
+                looked_up.lock().expect("lookup log lock").push(id.clone());
+                async move {
+                    match id.as_str() {
+                        "999" => Ok(Some(OrderSide::Buy)),
+                        _ => Err("detail lookup failed".to_string()),
+                    }
+                }
+            },
+        )
+        .await;
+        let mut looked_up = looked_up.into_inner().expect("lookup log lock");
+        looked_up.sort();
+        assert_eq!(
+            looked_up,
+            ["998", "999"],
+            "only order IDs the range query left unmatched are looked up, once each"
+        );
+        assert_eq!(
+            sides.get("701"),
+            Some(&OrderSide::Sell),
+            "from the range query"
+        );
+        assert_eq!(sides.get("999"), Some(&OrderSide::Buy), "from order detail");
+        assert_eq!(sides.get("998"), None, "a failed lookup stays unresolved");
+    }
+
+    #[tokio::test]
+    async fn fill_sides_cap_and_bound_detail_lookups() {
+        let ids: Vec<String> = (0..US_SIDE_DETAIL_MAX_LOOKUPS + 5)
+            .map(|i| format!("{}", 100 + i))
+            .collect();
+        let fills = fills_for(&ids);
+        let calls = AtomicUsize::new(0);
+        let in_flight = AtomicUsize::new(0);
+        let peak = AtomicUsize::new(0);
+        let sides = resolve_fill_sides(
+            &fills,
+            Some(any_query()),
+            |_| async { orders_page(Vec::new()) },
+            |_| {
+                calls.fetch_add(1, Ordering::SeqCst);
+                let (in_flight, peak) = (&in_flight, &peak);
+                async move {
+                    let now = in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+                    peak.fetch_max(now, Ordering::SeqCst);
+                    tokio::task::yield_now().await;
+                    in_flight.fetch_sub(1, Ordering::SeqCst);
+                    Ok::<_, String>(Some(OrderSide::Sell))
+                }
+            },
+        )
+        .await;
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            US_SIDE_DETAIL_MAX_LOOKUPS,
+            "lookups stop at the cap"
+        );
+        assert_eq!(
+            sides.len(),
+            US_SIDE_DETAIL_MAX_LOOKUPS,
+            "each lookup resolves"
+        );
+        assert!(
+            peak.load(Ordering::SeqCst) <= US_SIDE_DETAIL_CONCURRENCY,
+            "lookups run at most US_SIDE_DETAIL_CONCURRENCY at a time"
+        );
+    }
+
+    #[tokio::test]
+    async fn today_fill_sides_query_today_orders_window() {
+        // 2026-10-23 01:30 ET: an overnight fill from 21:00 ET on 10-22 must
+        // find its order, so the query opens at 20:00 ET the day before.
+        let now = datetime!(2026-10-23 05:30 UTC);
+        let query = us_today_fill_side_query(now, Some("AAPL.US".to_string()));
+        assert_eq!(
+            query.start_at,
+            datetime!(2026-10-23 00:00 UTC).unix_timestamp(),
+            "starts at 20:00 ET the previous day"
+        );
+        assert_eq!(
+            query.end_at,
+            datetime!(2026-10-24 03:59:59 UTC).unix_timestamp(),
+            "ends at the end of today in New York"
+        );
+        let seen = Mutex::new(None);
+        let sides = resolve_fill_sides(
+            &v1_us_fills(),
+            Some(query),
+            |opts| {
+                *seen.lock().expect("query log lock") = Some((opts.start_at, opts.end_at));
+                async { orders_page(vec![json!({"id": "701", "action": 1})]) }
+            },
+            |_| async { Ok::<_, String>(None) },
+        )
+        .await;
+        assert_eq!(
+            seen.into_inner().expect("query log lock"),
+            Some((
+                datetime!(2026-10-23 00:00 UTC).unix_timestamp(),
+                datetime!(2026-10-24 03:59:59 UTC).unix_timestamp()
+            )),
+            "the range query receives today_orders' window"
+        );
+        assert_eq!(
+            sides.get("701"),
+            Some(&OrderSide::Buy),
+            "resolved in the window"
+        );
+    }
+
+    #[tokio::test]
+    async fn capped_fill_side_query_retries_filtered_by_unmatched_symbols() {
+        let fills = fills_with(&[
+            ("701", "AAPL.US"),
+            ("702", "TSLA.US"),
+            ("703", "TSLA.US"),
+            ("704", "NVDA.US"),
+            ("705", "MSFT.US"),
+        ]);
+        let queries = Mutex::new(Vec::new());
+        let looked_up = Mutex::new(Vec::new());
+        let sides = resolve_fill_sides(
+            &fills,
+            Some(any_query()),
+            |query: FillSideQuery| {
+                let first = query.symbols.is_empty();
+                queries.lock().expect("query log lock").push(query);
+                async move {
+                    if first {
+                        capped_orders(vec![json!({"id": "701", "action": 1})])
+                    } else {
+                        orders_page(vec![
+                            json!({"id": "702", "action": 2}),
+                            json!({"id": "703", "action": 1}),
+                        ])
+                    }
+                }
+            },
+            |id| {
+                looked_up.lock().expect("lookup log lock").push(id.clone());
+                async move { Ok::<_, String>(Some(OrderSide::Sell)) }
+            },
+        )
+        .await;
+        let queries = queries.into_inner().expect("query log lock");
+        assert_eq!(queries.len(), 2, "one follow-up query after the page cap");
+        assert_eq!(
+            queries[1],
+            FillSideQuery {
+                symbols: vec!["MSFT.US".into(), "NVDA.US".into(), "TSLA.US".into()],
+                ..any_query()
+            },
+            "the follow-up keeps the range and filters by the deduped symbols still unmatched"
+        );
+        let mut looked_up = looked_up.into_inner().expect("lookup log lock");
+        looked_up.sort();
+        assert_eq!(
+            looked_up,
+            ["704", "705"],
+            "orders the follow-up still misses fall back to detail lookups"
+        );
+        assert_eq!(sides.get("701"), Some(&OrderSide::Buy), "first query");
+        assert_eq!(sides.get("702"), Some(&OrderSide::Sell), "follow-up query");
+        assert_eq!(sides.get("703"), Some(&OrderSide::Buy), "follow-up query");
+        assert_eq!(sides.get("704"), Some(&OrderSide::Sell), "detail lookup");
+    }
+
+    #[tokio::test]
+    async fn capped_fill_side_query_bounds_the_follow_up_symbol_list() {
+        let ids: Vec<String> = (0..US_SIDE_QUERY_MAX_SYMBOLS + 5)
+            .map(|i| format!("{}", 100 + i))
+            .collect();
+        let symbols: Vec<String> = (0..ids.len()).map(|i| format!("S{i:03}.US")).collect();
+        let pairs: Vec<(&str, &str)> = ids
+            .iter()
+            .zip(&symbols)
+            .map(|(id, symbol)| (id.as_str(), symbol.as_str()))
+            .collect();
+        let fills = fills_with(&pairs);
+        let follow_up = Mutex::new(None);
+        resolve_fill_sides(
+            &fills,
+            Some(any_query()),
+            |query: FillSideQuery| {
+                let first = query.symbols.is_empty();
+                if !first {
+                    *follow_up.lock().expect("query log lock") = Some(query.symbols);
+                }
+                async move {
+                    if first {
+                        capped_orders(Vec::new())
+                    } else {
+                        orders_page(Vec::new())
+                    }
+                }
+            },
+            |_| async { Ok::<_, String>(None) },
+        )
+        .await;
+        let symbols = follow_up
+            .into_inner()
+            .expect("query log lock")
+            .expect("a follow-up query must run");
+        assert_eq!(
+            symbols.len(),
+            US_SIDE_QUERY_MAX_SYMBOLS,
+            "the follow-up filters by at most US_SIDE_QUERY_MAX_SYMBOLS symbols"
+        );
+    }
+
+    #[tokio::test]
+    async fn capped_symbol_filtered_query_falls_back_to_detail_lookups() {
+        let fills = v1_us_fills();
+        let calls = AtomicUsize::new(0);
+        let looked_up = Mutex::new(Vec::new());
+        let sides = resolve_fill_sides(
+            &fills,
+            Some(us_fill_side_query(
+                Some("AAPL.US".to_string()),
+                datetime!(2026-10-22 04:00 UTC),
+                datetime!(2026-10-23 03:59:59 UTC),
+            )),
+            |_| {
+                calls.fetch_add(1, Ordering::SeqCst);
+                async { capped_orders(vec![json!({"id": "701", "action": 2})]) }
+            },
+            |id| {
+                looked_up.lock().expect("lookup log lock").push(id.clone());
+                async move { Ok::<_, String>(Some(OrderSide::Buy)) }
+            },
+        )
+        .await;
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "an already symbol-filtered query is not retried"
+        );
+        assert_eq!(
+            looked_up.into_inner().expect("lookup log lock"),
+            ["999"],
+            "the truncated query's unmatched order is looked up by detail"
+        );
+        assert_eq!(
+            sides.get("701"),
+            Some(&OrderSide::Sell),
+            "orders on the capped pages still resolve"
+        );
+        assert_eq!(sides.get("999"), Some(&OrderSide::Buy), "from order detail");
+    }
+
+    #[tokio::test]
+    async fn failed_follow_up_query_still_runs_detail_lookups() {
+        let fills = v1_us_fills();
+        let calls = AtomicUsize::new(0);
+        let sides = resolve_fill_sides(
+            &fills,
+            Some(any_query()),
+            |query: FillSideQuery| {
+                calls.fetch_add(1, Ordering::SeqCst);
+                async move {
+                    if query.symbols.is_empty() {
+                        capped_orders(Vec::new())
+                    } else {
+                        Err("upstream 500".to_string())
+                    }
+                }
+            },
+            |id| async move {
+                Ok::<_, String>(Some(if id == "701" {
+                    OrderSide::Buy
+                } else {
+                    OrderSide::Sell
+                }))
+            },
+        )
+        .await;
+        assert_eq!(calls.load(Ordering::SeqCst), 2, "the follow-up ran");
+        assert_eq!(sides.get("701"), Some(&OrderSide::Buy), "from order detail");
+        assert_eq!(
+            sides.get("999"),
+            Some(&OrderSide::Sell),
+            "from order detail"
+        );
+    }
+
+    #[test]
+    fn today_executions_by_order_skip_the_range_query() {
+        let now = datetime!(2026-10-23 05:30 UTC);
+        assert_eq!(
+            us_today_executions_side_query(now, None, true),
+            None,
+            "fills filtered to one order resolve from its detail"
+        );
+        assert_eq!(
+            us_today_executions_side_query(now, Some("AAPL.US".into()), false),
+            Some(us_today_fill_side_query(now, Some("AAPL.US".into()))),
+            "otherwise today_orders' window is queried"
+        );
+    }
+
+    #[tokio::test]
+    async fn fill_sides_without_a_range_query_look_up_the_order_directly() {
+        let fills = fills_for(&["701".into(), "701".into()]);
+        let looked_up = Mutex::new(Vec::new());
+        let sides = resolve_fill_sides(
+            &fills,
+            None,
+            |_| -> Ready<Result<UsPages<Value>, String>> {
+                panic!("no range query runs for fills filtered to one order")
+            },
+            |id| {
+                looked_up.lock().expect("lookup log lock").push(id.clone());
+                async move { Ok::<_, String>(Some(OrderSide::Sell)) }
+            },
+        )
+        .await;
+        assert_eq!(
+            looked_up.into_inner().expect("lookup log lock"),
+            ["701"],
+            "the order is looked up once"
+        );
+        assert_eq!(
+            sides.get("701"),
+            Some(&OrderSide::Sell),
+            "from order detail"
+        );
+    }
+
+    #[test]
+    fn history_range_reads_bare_dates_in_new_york_for_us_accounts() {
+        let (start, end) = history_range(DcRegion::Us, "2026-10-22", "2026-10-22")
+            .expect("bare dates must parse for a US account");
+        assert_eq!(start, datetime!(2026-10-22 04:00 UTC));
+        assert_eq!(end, datetime!(2026-10-23 03:59:59 UTC));
+    }
+
+    #[test]
+    fn history_range_reads_bare_dates_in_utc_for_ap_accounts() {
+        let (start, end) = history_range(DcRegion::Ap, "2026-10-22", "2026-10-22")
+            .expect("bare dates must parse for an AP account");
+        assert_eq!(start, datetime!(2026-10-22 00:00 UTC));
+        assert_eq!(end, datetime!(2026-10-22 23:59:59 UTC));
+    }
+
+    #[test]
+    fn history_range_takes_rfc3339_bounds_as_given_in_every_region() {
+        for region in [DcRegion::Us, DcRegion::Ap] {
+            let (start, end) =
+                history_range(region, "2026-10-22T13:30:00Z", "2026-10-22T20:00:00Z")
+                    .expect("RFC3339 bounds must parse");
+            assert_eq!(start, datetime!(2026-10-22 13:30 UTC), "{region:?} start");
+            assert_eq!(end, datetime!(2026-10-22 20:00 UTC), "{region:?} end");
+        }
+    }
+
+    #[test]
+    fn history_executions_uses_v1_history_for_us_and_v3_all_elsewhere() {
+        assert_eq!(executions_source(DcRegion::Us), ExecutionsSource::V1History);
+        assert_eq!(executions_source(DcRegion::Ap), ExecutionsSource::V3All);
+    }
+
+    #[test]
+    fn history_executions_schema_has_no_us_paging_fields() {
+        let schema = serde_json::to_value(schema_for!(HistoryExecutionsParam))
+            .expect("schema must serialize");
+        let props = schema["properties"]
+            .as_object()
+            .expect("schema must have properties");
+        let mut keys: Vec<&str> = props.keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        assert_eq!(keys, ["end_at", "start_at", "symbol"]);
+    }
+
+    /// Drive `collect_us_pages` over a fake endpoint holding `total` records,
+    /// returning what it collected and the pages it asked for.
+    async fn walk(total: usize, size: i32, max_pages: i32) -> (UsPages<usize>, Vec<i32>) {
+        let mut requested = Vec::new();
+        let pages = collect_us_pages(size, max_pages, |page| {
+            requested.push(page);
+            let size = size as usize;
+            let start = (page as usize - 1) * size;
+            let batch: Vec<usize> = (start..total.min(start + size)).collect();
+            async move { Ok::<_, std::convert::Infallible>(batch) }
+        })
+        .await
+        .unwrap_or_else(|e| match e {});
+        (pages, requested)
+    }
+
+    #[tokio::test]
+    async fn collect_us_pages_stops_at_the_first_short_page() {
+        let (pages, requested) = walk(250, 100, 20).await;
+        assert_eq!(pages.items.len(), 250, "every record must be collected");
+        assert_eq!(requested, [1, 2, 3], "a short third page ends the walk");
+        assert!(!pages.truncated, "a short last page is not a truncation");
+    }
+
+    #[tokio::test]
+    async fn collect_us_pages_fetches_one_more_page_after_an_exact_fit() {
+        // No total count upstream: a full page could be followed by more, so
+        // the walk only ends on the (empty) page after it.
+        let (pages, requested) = walk(200, 100, 20).await;
+        assert_eq!(pages.items.len(), 200, "every record must be collected");
+        assert_eq!(requested, [1, 2, 3], "an empty page ends the walk");
+        assert!(!pages.truncated, "an empty last page is not a truncation");
+    }
+
+    #[tokio::test]
+    async fn collect_us_pages_reports_truncation_at_the_page_cap() {
+        let (pages, requested) = walk(1000, 100, 3).await;
+        assert_eq!(
+            pages.items.len(),
+            300,
+            "only the capped pages are collected"
+        );
+        assert_eq!(requested, [1, 2, 3], "no page past the cap is requested");
+        assert!(
+            pages.truncated,
+            "a full page at the cap may hide more records"
+        );
+    }
+
+    #[tokio::test]
+    async fn collect_us_pages_propagates_errors() {
+        let result: Result<UsPages<usize>, &str> =
+            collect_us_pages(100, 20, |_| async { Err("upstream down") }).await;
+        assert_eq!(
+            result.map(|p| p.items.len()),
+            Err("upstream down"),
+            "a failed page must fail the call"
+        );
+    }
 
     #[test]
     fn a_replace_code_does_not_carry_over_to_another_leg_change() {
@@ -2051,45 +3279,100 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&output).unwrap();
         assert_eq!(v["list"], serde_json::json!([]), "got: {output}");
     }
+}
 
-    /// `USOrderDetailResponse`'s top-level `order_histories`/
-    /// `current_attached_order` are near-always empty/null in practice (the
-    /// real state-transition log lives nested inside `order.order_histories`,
-    /// which is normalized separately). The empty top-level duplicate must be
-    /// dropped so callers don't mistake it for "no history exists".
-    #[test]
-    fn order_detail_envelope_drops_empty_top_level_fields() {
-        use crate::tools::support::us_normalize::{drop_empty, normalize_us_order};
+/// AP output goldens: these tools gained a US variant, and their AP output
+/// must stay byte-for-byte what it was. Each fixture is a raw AP response
+/// run through the same post-processing and serializer the AP path uses.
+#[cfg(test)]
+mod ap_output_tests {
+    use longbridge::trade::{AccountBalance, CashFlow, Order, OrderDetail, StockPositionsResponse};
+    use serde::de::DeserializeOwned;
+    use serde_json::Value;
 
-        let mut value = serde_json::json!({
-            "order": {
-                "symbol": "AAPL.US",
-                "status": "FilledStatus",
-                "order_histories": [{"status": "FilledStatus", "time": "1780925402"}]
-            },
-            "order_histories": [],
-            "current_attached_order": null
-        });
+    use super::{
+        ap_account_balance_json, ap_order_detail_json, ap_orders_json, ap_stock_positions_json,
+    };
+    use crate::serialize::to_tool_json;
 
-        if let Some(order) = value.get_mut("order") {
-            normalize_us_order(order);
-        }
-        if let Some(obj) = value.as_object_mut() {
-            drop_empty(obj);
-        }
+    fn fixture<T>(text: &str) -> T
+    where
+        T: DeserializeOwned,
+    {
+        serde_json::from_str(text).expect("AP fixture deserializes as the SDK type")
+    }
 
-        assert!(
-            value.get("order_histories").is_none(),
-            "empty top-level order_histories should be dropped: {value}"
-        );
-        assert!(
-            value.get("current_attached_order").is_none(),
-            "null current_attached_order should be dropped: {value}"
-        );
+    /// What the model receives: `tool_json`'s serializer over `value`.
+    fn rendered<T>(value: &T) -> Value
+    where
+        T: serde::Serialize,
+    {
+        let json = to_tool_json(value).expect("tool JSON serializes");
+        serde_json::from_str(&json).expect("tool JSON parses")
+    }
+
+    fn assert_golden(name: &str, actual: Value, golden: &str) {
+        let expected: Value = serde_json::from_str(golden).expect("golden is valid JSON");
         assert_eq!(
-            value["order"]["order_histories"][0]["occurred_at"],
-            serde_json::json!("1780925402"),
-            "nested order_histories must survive: {value}"
+            actual,
+            expected,
+            "AP `{name}` output changed:\n{}",
+            serde_json::to_string_pretty(&actual).unwrap_or_default()
+        );
+    }
+
+    #[test]
+    fn ap_account_balance_output_is_unchanged() {
+        let result: Vec<AccountBalance> = fixture(include_str!("fixtures/ap/account_balance.json"));
+        let value = ap_account_balance_json(&result).expect("AP balance serializes");
+        assert_golden(
+            "account_balance",
+            rendered(&value),
+            include_str!("fixtures/ap/account_balance.expected.json"),
+        );
+    }
+
+    #[test]
+    fn ap_stock_positions_output_is_unchanged() {
+        let result: StockPositionsResponse =
+            fixture(include_str!("fixtures/ap/stock_positions.json"));
+        let value = ap_stock_positions_json(&result).expect("AP positions serialize");
+        assert_golden(
+            "stock_positions",
+            rendered(&value),
+            include_str!("fixtures/ap/stock_positions.expected.json"),
+        );
+    }
+
+    #[test]
+    fn ap_cash_flow_output_is_unchanged() {
+        let result: Vec<CashFlow> = fixture(include_str!("fixtures/ap/cash_flow.json"));
+        assert_golden(
+            "cash_flow",
+            rendered(&result),
+            include_str!("fixtures/ap/cash_flow.expected.json"),
+        );
+    }
+
+    #[test]
+    fn ap_orders_output_is_unchanged() {
+        let result: Vec<Order> = fixture(include_str!("fixtures/ap/orders.json"));
+        let value = ap_orders_json(&result).expect("AP orders serialize");
+        assert_golden(
+            "orders",
+            rendered(&value),
+            include_str!("fixtures/ap/orders.expected.json"),
+        );
+    }
+
+    #[test]
+    fn ap_order_detail_output_is_unchanged() {
+        let result: OrderDetail = fixture(include_str!("fixtures/ap/order_detail.json"));
+        let value = ap_order_detail_json(&result).expect("AP order detail serializes");
+        assert_golden(
+            "order_detail",
+            rendered(&value),
+            include_str!("fixtures/ap/order_detail.expected.json"),
         );
     }
 }

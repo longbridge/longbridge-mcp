@@ -274,7 +274,10 @@ fn tool_error(name: &str, err: &McpError) -> CallToolResult {
         if recoverable == "backoff" && !is_rate_limit(err) && !is_read_only_tool(name) {
             ("none", Some(UNCONFIRMED_WRITE_HINT))
         } else {
-            (recoverable, error_hint(err))
+            (
+                recoverable,
+                us_ap_only_hint(name, err).or_else(|| error_hint(err)),
+            )
         };
     let envelope = serde_json::json!({
         "error_code": error_code_of(err),
@@ -1266,9 +1269,13 @@ const US_ONLY_TOOLS: &[&str] = &[
 
 /// Tools whose underlying SDK method is AP-DC-only (calls
 /// `.dc_restrict(DcRegion::Ap)` / checks `DcRegion::Ap` internally, confirmed
-/// against the SDK source: broker queue/holding data and the entire
-/// recurring-investment (DCA) API) — hidden from accounts in the US region.
+/// against the SDK source: broker queue/holding data, the entire
+/// recurring-investment (DCA) API, fund positions and margin ratios, whose
+/// endpoints are not deployed in the US data center) — hidden from accounts
+/// in the US region.
 const AP_ONLY_TOOLS: &[&str] = &[
+    "fund_positions",
+    "margin_ratio",
     "brokers",
     "broker_holding",
     "broker_holding_detail",
@@ -1285,6 +1292,60 @@ const AP_ONLY_TOOLS: &[&str] = &[
     "dca_check",
 ];
 
+/// Guidance appended to the rejection of an [`AP_ONLY_TOOLS`] tool called by a
+/// US account: the US tool that covers the same need, or an instruction to
+/// stop when there is none. Either way the call itself cannot succeed, so the
+/// envelope stays `recoverable: none`.
+fn us_alternative_for_ap_only_tool(name: &str) -> &'static str {
+    match name {
+        "margin_ratio" => {
+            "There is no per-symbol US equivalent of the margin ratio. Account-level margin \
+             figures are in account_balance, under us.margin_status."
+        }
+        "operating" => {
+            "There is no US equivalent for operating reviews (management discussion). For a \
+             US symbol, financial_report_key_metrics covers key financial metrics only, a \
+             partial substitute."
+        }
+        "fund_positions" => {
+            "There is no US equivalent for fund holdings; tell the user and \
+             do not retry."
+        }
+        _ => "There is no US equivalent; tell the user and do not retry.",
+    }
+}
+
+/// The rejection for a tool hidden from accounts in `region`: the message
+/// names the region and, for a US account calling an AP-only tool, the US
+/// alternative (or that there is none). [`tool_error`] also delivers that
+/// alternative as the envelope's `hint`.
+fn dc_region_rejection(name: &str, region: longbridge::DcRegion) -> (String, serde_json::Value) {
+    let mut message =
+        format!("Tool `{name}` is not available for accounts in the {region} data center.");
+    let data = serde_json::json!({
+        "error_code": "dc_region_restricted",
+        "dc_region_restricted": { "current": region.to_string() },
+    });
+    if region == longbridge::DcRegion::Us && AP_ONLY_TOOLS.contains(&name) {
+        message = format!("{message} {}", us_alternative_for_ap_only_tool(name));
+    }
+    (message, data)
+}
+
+/// The US alternative for `name` when `err` is a DC-region restriction of an
+/// AP-only tool for a US account — the specific guidance that replaces the
+/// generic "use the equivalent tool" DC-region hint.
+fn us_ap_only_hint(name: &str, err: &McpError) -> Option<&'static str> {
+    let current = err
+        .data
+        .as_ref()?
+        .get("dc_region_restricted")?
+        .get("current")?
+        .as_str()?;
+    (current.eq_ignore_ascii_case("us") && AP_ONLY_TOOLS.contains(&name))
+        .then(|| us_alternative_for_ap_only_tool(name))
+}
+
 /// True when `name` is restricted to the DC region opposite `region` — i.e.
 /// it should be hidden from `tools/list` and rejected by `call_tool` for an
 /// account in `region`.
@@ -1295,15 +1356,38 @@ fn is_hidden_for_dc_region(name: &str, region: longbridge::DcRegion) -> bool {
     }
 }
 
+/// Description phrase marking a tool that returns its US-specific variant for
+/// every US account, whatever its arguments. Tools that switch only for `.US`
+/// symbols say "US accounts querying a .US symbol" instead.
+const US_ACCOUNT_VARIANT_MARKER: &str = "US accounts get a US-specific variant";
+
+/// Names of the tools whose description carries `US_ACCOUNT_VARIANT_MARKER`,
+/// sorted — the account-scoped tools whose shape depends on the region alone.
+fn us_account_variant_tools() -> impl Iterator<Item = &'static str> {
+    all_tools_full_cached()
+        .iter()
+        .filter(|tool| {
+            tool.description
+                .as_deref()
+                .is_some_and(|d| d.contains(US_ACCOUNT_VARIANT_MARKER))
+        })
+        .map(|tool| tool.name.as_ref())
+}
+
 /// Which response variant this connection's tools return: tools whose
-/// description mentions a "US accounts ... US-specific variant" switch on the
-/// account's data center, which the model otherwise cannot see.
+/// description mentions a US-account variant switch on the account's data
+/// center, which the model otherwise cannot see.
 fn region_note(region: longbridge::DcRegion) -> &'static str {
+    static US_NOTE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     match region {
-        longbridge::DcRegion::Us => {
-            "This account is in the US data center: tools whose description mentions a \
-             US-account variant return that US-specific shape for .US symbols."
-        }
+        longbridge::DcRegion::Us => US_NOTE.get_or_init(|| {
+            format!(
+                "This account is in the US data center: {} return the US-account shape \
+                 described in their descriptions; other tools with a US variant switch to it \
+                 for .US symbols.",
+                us_account_variant_tools().collect::<Vec<_>>().join(", ")
+            )
+        }),
         longbridge::DcRegion::Ap => {
             "This account is in the AP (Hong Kong) data center: tools whose description \
              mentions a US-account variant return their generic shape, not the US one."
@@ -2142,8 +2226,8 @@ use crate::tools::quote::{
     UpdateWatchlistGroupParam, WarrantListParam,
 };
 use crate::tools::trade::{
-    CashFlowParam, EstimateMaxQtyParam, HistoryOrdersParam, OrderDetailParam, ReplaceOrderParam,
-    SubmitMultiLegOrderParam, SubmitOrderParam,
+    CashFlowParam, EstimateMaxQtyParam, HistoryExecutionsParam, HistoryOrdersParam,
+    OrderDetailParam, ReplaceOrderParam, SubmitMultiLegOrderParam, SubmitOrderParam,
 };
 
 #[tool_router(vis = "pub(crate)")]
@@ -2851,7 +2935,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get account cash balance and asset summary. Returns a top-level array of {currency, total_cash, net_assets, buy_power, max_finance_amount, remaining_finance_amount, risk_level, margin_call, init_margin, maintenance_margin, cash_infos[]{currency, available_cash, withdraw_cash, frozen_cash, settling_cash}}. Filter by currency (e.g. \"USD\", \"HKD\")."
+        description = "Get account cash balance and asset summary. Returns a top-level array of {currency, total_cash, net_assets, buy_power, max_finance_amount, remaining_finance_amount, risk_level, margin_call, init_margin, maintenance_margin, cash_infos[]{currency, available_cash, withdraw_cash, frozen_cash, settling_cash}}. Filter by currency (e.g. \"USD\", \"HKD\"). US accounts get a US-specific variant: the same array, one entry for the account currency with currency, total_cash, net_assets, buy_power, maintenance_margin and cash_infos[] (settled_cash in place of settling_cash); max_finance_amount, remaining_finance_amount, risk_level, margin_call and init_margin are absent; US buying-power and margin detail is under us{buy_limit_info, margin_status, cash_list[]}."
     )]
     async fn account_balance(
         &self,
@@ -2870,7 +2954,7 @@ impl Longbridge {
         title = "Stock Positions",
         annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = true),
         output_schema = schema_for::<output::StockPositionsResponse>(),
-        description = "Get current stock positions across all channels. Returns list[].stock_info[]{symbol, symbol_name, quantity, available_quantity, currency, cost_price, market}. US accounts only: an additional us_asset_overview field {cash_list, stock_list, option_list, crypto_list, cash_buy_power, overnight_buy_power} is included alongside the existing data."
+        description = "Get current stock positions across all channels. Returns list[].stock_info[]{symbol, symbol_name, quantity, available_quantity, currency, cost_price, market}. US accounts get a US-specific variant: the same list[].stock_info[] without available_quantity, plus last_done, market_price, prev_close, today_pl, position_side; cash, options, crypto (symbol e.g. BTCUSD.BKKT) and buying power are under us{cash_list, option_list, crypto_list, cash_buy_power, …}."
     )]
     async fn stock_positions(
         &self,
@@ -2929,7 +3013,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get orders placed today. Returns a top-level array of orders {order_id, symbol, stock_name, side, order_type, status, quantity, executed_quantity, price, currency, time_in_force, submitted_at, updated_at, msg, …, attached_orders[]}, where attached_orders[] holds the order's take-profit/stop-loss legs. Pass symbol to filter by security, or order_id for one order. To fetch an attached leg by its own ID, pass that ID as order_id together with is_attached=true — the leg itself comes back as the order entry. is_attached does nothing without order_id, and neither has any effect for US accounts, which are served by the US order endpoint. US accounts only: us_action (Buy/Sell), us_page, us_limit filter/paginate via a separate US order endpoint, which returns an object with the orders under orders[]."
+        description = "Get orders placed today. Returns a top-level array of orders {order_id, symbol, stock_name, side, order_type, status, quantity, executed_quantity, price, currency, time_in_force, submitted_at, updated_at, msg, …, attached_orders[]}, where attached_orders[] holds the order's take-profit/stop-loss legs. Pass symbol to filter by security, or order_id for one order. To fetch an attached leg by its own ID, pass that ID as order_id together with is_attached=true — the leg itself comes back as the order entry. is_attached does nothing without order_id. US accounts get a US-specific variant: the same array and field names, without time_in_force, tag, expire_date and outside_rth (raw US codes in us_time_in_force, us_tag; plus gtd, security_type, operate_direction); is_attached is ignored, us_action (Buy/Sell) filters, and all of today's orders (up to 500) are returned unless us_page/us_limit pick one page; today spans 20:00 New York time (EST/EDT) yesterday, when the overnight session opens, through 23:59:59 New York time today, so it may include last evening's overnight orders, which also appear in history_orders for yesterday; dedupe by order_id when combining."
     )]
     async fn today_orders(
         &self,
@@ -2948,7 +3032,7 @@ impl Longbridge {
         title = "Order Detail",
         annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = true),
         output_schema = schema_for::<output::OrderDetailResponse>(),
-        description = "Get detailed information about a specific order. Returns {order_id, symbol, status, side, order_type, quantity, price, executed_quantity, executed_price, submitted_at, time_in_force, msg, attached_orders[]}, where attached_orders[] holds the order's take-profit/stop-loss legs with their own order IDs. To look up such a leg by its own ID instead, pass it as order_id with is_attached=true: the response is then that leg, with charge_detail null. US accounts get a US-specific variant served by the US order endpoint, with the order (and its attached legs) nested under `order`. The region is detected from the account automatically."
+        description = "Get detailed information about a specific order. Returns {order_id, symbol, status, side, order_type, quantity, price, executed_quantity, executed_price, submitted_at, time_in_force, msg, attached_orders[]}, where attached_orders[] holds the order's take-profit/stop-loss legs with their own order IDs. To look up such a leg by its own ID instead, pass it as order_id with is_attached=true: the response is then that leg, with charge_detail null. US accounts get a US-specific variant: the same top-level fields and history[], without time_in_force, tag, expire_date, outside_rth or the fee/deduction fields (raw US codes in us_time_in_force, us_tag; plus done_at, gtd, security_type, us_attached_orders, us_charge_detail); is_attached is ignored."
     )]
     async fn order_detail(
         &self,
@@ -2994,7 +3078,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get today's trade executions (fills). Returns a top-level array of {order_id, trade_id, symbol, side, quantity, price, trade_done_at}. Pass symbol or order_id to filter."
+        description = "Get today's trade executions (fills). Returns a top-level array of {order_id, trade_id, symbol, side, quantity, price, trade_done_at}; side comes from the fill's order and is \"\" when unresolved (US: the order could not be resolved; call order_detail(order_id) for it). Pass symbol or order_id to filter."
     )]
     async fn today_executions(
         &self,
@@ -3017,7 +3101,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get historical orders between dates (excludes today). Returns orders[]{order_id, symbol, side, status, quantity, price, submitted_at}. start_at/end_at in RFC3339. US accounts only: us_page, us_limit paginate via a separate US order endpoint (default page size 20 — pass us_page to see more than the first page)."
+        description = "Get historical orders between dates (AP accounts: excludes today). Returns orders[]{order_id, symbol, side, status, quantity, price, submitted_at}. start_at/end_at in RFC3339. US accounts get a US-specific variant: the same array and field names as today_orders' US variant; a bare yyyy-mm-dd start_at/end_at is read as a New York (EST/EDT) day rather than UTC; the range is applied as given, so it includes today's orders when it covers today, and all orders in it (up to 500) are returned unless us_page/us_limit pick one page. today_orders' US window opens at 20:00 ET on the previous day, so orders placed from 20:00 ET yesterday appear in both a range ending yesterday and today_orders; dedupe by order_id when combining them."
     )]
     async fn history_orders(
         &self,
@@ -3040,12 +3124,12 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get every trade execution (fill) in a date range, filtered by execution time (trade_done_at) and auto-paginated to return the complete set (never truncated at the 1000-per-page cap). Returns a top-level array of {order_id, trade_id, symbol, side, quantity, price, trade_done_at}; trade_id is the stable dedupe key. start_at/end_at in RFC3339."
+        description = "Get every trade execution (fill) in a date range, auto-paginated to return the complete set (never truncated at the 1000-per-page cap). Returns a top-level array of {order_id, trade_id, symbol, side, quantity, price, trade_done_at}; trade_id is the stable dedupe key; side is \"Unknown\" when unresolved (US: the order could not be resolved; call order_detail(order_id) for it). start_at/end_at in RFC3339, or a bare yyyy-mm-dd read as a UTC day (US accounts: a New York EST/EDT day, matching history_orders). AP accounts are filtered by execution time (trade_done_at). US accounts read v1 history, which is not filtered by execution time and can lag across days near the range edges: widen the range by a day each side and filter on trade_done_at; side is filled from the account's orders in the range, then from order detail."
     )]
     async fn history_executions(
         &self,
         ctx: RequestContext<RoleServer>,
-        Parameters(p): Parameters<HistoryOrdersParam>,
+        Parameters(p): Parameters<HistoryExecutionsParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
         measured_tool_call("history_executions", format!("{p:?}"), || {
@@ -3063,7 +3147,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get cash flow records (deposits, withdrawals, dividends). Returns a top-level array of {transaction_flow_name, direction (In/Out), business_type, balance (the amount moved), currency, business_time, symbol, description}. start_at/end_at: RFC3339 or yyyy-mm-dd."
+        description = "Get cash flow records (deposits, withdrawals, dividends). Returns a top-level array of {transaction_flow_name, direction (In/Out), business_type, balance (the amount moved), currency, business_time, symbol, description}. start_at/end_at: RFC3339 or yyyy-mm-dd. direction and business_type are unreliable upstream (always Out / 0); use the sign of balance. US accounts get a US-specific variant: the same array without business_type (see biz_code, biz_code_name); balance is signed (0 when no cash moved, e.g. crypto transfers) and direction comes from its sign, or the quantity's when it is 0 (Unknown when both are 0); plus quantity, quantity_description, ref_no, equity_type; at most 2000 records, so getting 2000 means narrow the range. Newest first."
     )]
     async fn cash_flow(
         &self,
@@ -4439,7 +4523,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get Longbridge's account-conversion exchange rates for all supported currencies (the rates used to value assets in an account's currency). Returns {exchanges[]{base_currency, other_currency, average_rate}}: average_rate is the value of 1 other_currency in base_currency (e.g. base USD, other HKD, 0.12743 = 1 HKD is 0.12743 USD). For public market reference rates or history, use fx_rate."
+        description = "Get Longbridge's account-conversion exchange rates for all supported currencies (the rates used to value assets in an account's currency). Returns {exchanges[]{base_currency, other_currency, average_rate}}: average_rate is the value of 1 other_currency in base_currency (e.g. base USD, other HKD, 0.12743 = 1 HKD is 0.12743 USD). US accounts get a US-specific variant: the US account's rates in the same shape, one row per pair (the reference rate, else am) with spec_key naming the rate type. For public market reference rates or history, use fx_rate."
     )]
     async fn exchange_rate(
         &self,
@@ -6624,18 +6708,8 @@ impl ServerHandler for Longbridge {
         if let Ok(mctx) = extract_context(&context) {
             let region = mctx.dc_region().await;
             if is_hidden_for_dc_region(request.name.as_ref(), region) {
-                return Ok(rejected_call(
-                    &request.name,
-                    client,
-                    format!(
-                        "Tool `{}` is not available for accounts in the {region} data center.",
-                        request.name
-                    ),
-                    serde_json::json!({
-                        "error_code": "dc_region_restricted",
-                        "dc_region_restricted": { "current": region.to_string() },
-                    }),
-                ));
+                let (message, data) = dc_region_rejection(request.name.as_ref(), region);
+                return Ok(rejected_call(&request.name, client, message, data));
             }
         }
         // Classify the originating client here — NOT in the HTTP middleware. In
@@ -7200,6 +7274,65 @@ mod tests {
     }
 
     #[test]
+    fn ap_only_asset_tools_are_hidden_for_us_accounts() {
+        use longbridge::DcRegion;
+
+        // Their endpoints are not deployed in the US data center, so a US
+        // account could only ever get `code 12 internal server error`.
+        for name in ["fund_positions", "margin_ratio"] {
+            assert!(
+                super::is_hidden_for_dc_region(name, DcRegion::Us),
+                "`{name}` must be hidden for US accounts"
+            );
+            assert!(
+                !super::is_hidden_for_dc_region(name, DcRegion::Ap),
+                "`{name}` must stay visible for AP accounts"
+            );
+        }
+        // These are routed to US endpoints instead, so both regions keep them.
+        for name in [
+            "account_balance",
+            "stock_positions",
+            "cash_flow",
+            "exchange_rate",
+        ] {
+            for region in [DcRegion::Us, DcRegion::Ap] {
+                assert!(
+                    !super::is_hidden_for_dc_region(name, region),
+                    "`{name}` must stay visible for {region:?} accounts"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn stock_positions_schema_shares_the_list_shape_across_regions() {
+        let schema = super::output_schema_map()
+            .get("stock_positions")
+            .expect("stock_positions schema");
+        let properties = schema
+            .get("properties")
+            .and_then(|p| p.as_object())
+            .expect("stock_positions schema must list properties");
+        for key in ["list", "us"] {
+            assert!(
+                properties.contains_key(key),
+                "stock_positions schema must describe `{key}`"
+            );
+        }
+        let required: Vec<_> = schema
+            .get("required")
+            .and_then(|r| r.as_array())
+            .cloned()
+            .unwrap_or_default();
+        assert_eq!(
+            required,
+            [serde_json::json!("list")],
+            "both regions return `list`; only US adds `us`"
+        );
+    }
+
+    #[test]
     fn v2_endpoint_region_filtering_hides_us_only_tools_for_ap() {
         use longbridge::DcRegion;
 
@@ -7336,6 +7469,9 @@ mod tests {
         // schema must impose no required fields — every field optional and no
         // `deny_unknown_fields` — so BOTH the generic and the US variant conform.
         // Otherwise the US structuredContent would violate the declared schema.
+        // Region-branching account tools that keep required fields
+        // (stock_positions, order_detail) are instead validated value-by-value
+        // against their schema in `us_golden_outputs_conform_to_their_output_schemas`.
         let tools = super::all_tools_full_cached();
         for name in ["dividend", "consensus", "valuation", "company"] {
             let tool = tools
@@ -7352,6 +7488,251 @@ mod tests {
                 "tool `{name}`: output_schema must have no required fields so both the generic \
                  and US variants conform, got required={required:?}"
             );
+        }
+    }
+
+    /// Validates `value` against the subset of JSON Schema that schemars
+    /// emits for output schemas (`$ref` into `$defs`, `type`, `properties`,
+    /// `required`, `items`, `additionalProperties`, `anyOf`/`oneOf`/`allOf`,
+    /// `enum`, `const`), pushing one message per violation into `errors`.
+    fn schema_violations(
+        root: &serde_json::Value,
+        schema: &serde_json::Value,
+        value: &serde_json::Value,
+        path: &str,
+        errors: &mut Vec<String>,
+    ) {
+        use serde_json::Value;
+
+        let Value::Object(schema_map) = schema else {
+            if schema == &Value::Bool(false) {
+                errors.push(format!("{path}: schema `false` rejects every value"));
+            }
+            return;
+        };
+        if let Some(Value::String(reference)) = schema_map.get("$ref") {
+            let pointer = reference.trim_start_matches('#');
+            match root.pointer(pointer) {
+                Some(target) => schema_violations(root, target, value, path, errors),
+                None => errors.push(format!("{path}: unresolvable $ref `{reference}`")),
+            }
+        }
+        if let Some(types) = schema_map.get("type") {
+            let allowed: Vec<&str> = match types {
+                Value::String(t) => vec![t.as_str()],
+                Value::Array(ts) => ts.iter().filter_map(Value::as_str).collect(),
+                _ => Vec::new(),
+            };
+            let matches = |t: &str| match t {
+                "null" => value.is_null(),
+                "boolean" => value.is_boolean(),
+                "string" => value.is_string(),
+                "number" => value.is_number(),
+                "integer" => value.is_i64() || value.is_u64(),
+                "array" => value.is_array(),
+                "object" => value.is_object(),
+                _ => true,
+            };
+            if !allowed.iter().any(|t| matches(t)) {
+                errors.push(format!("{path}: expected type {types}, got {value}"));
+                return;
+            }
+        }
+        if let Some(Value::Array(options)) = schema_map.get("enum")
+            && !options.contains(value)
+        {
+            errors.push(format!("{path}: {value} is not one of {options:?}"));
+        }
+        if let Some(expected) = schema_map.get("const")
+            && expected != value
+        {
+            errors.push(format!("{path}: expected const {expected}, got {value}"));
+        }
+        if let Some(Value::Array(all)) = schema_map.get("allOf") {
+            for sub in all {
+                schema_violations(root, sub, value, path, errors);
+            }
+        }
+        for key in ["anyOf", "oneOf"] {
+            if let Some(Value::Array(options)) = schema_map.get(key) {
+                let any_ok = options.iter().any(|sub| {
+                    let mut sub_errors = Vec::new();
+                    schema_violations(root, sub, value, path, &mut sub_errors);
+                    sub_errors.is_empty()
+                });
+                if !any_ok {
+                    errors.push(format!("{path}: matches no `{key}` branch"));
+                }
+            }
+        }
+        if let Value::Object(object) = value {
+            if let Some(Value::Array(required)) = schema_map.get("required") {
+                for key in required.iter().filter_map(Value::as_str) {
+                    if !object.contains_key(key) {
+                        errors.push(format!("{path}: missing required `{key}`"));
+                    }
+                }
+            }
+            let properties = schema_map.get("properties").and_then(Value::as_object);
+            for (key, field) in object {
+                let field_path = format!("{path}.{key}");
+                match properties.and_then(|p| p.get(key)) {
+                    Some(field_schema) => {
+                        schema_violations(root, field_schema, field, &field_path, errors)
+                    }
+                    None => {
+                        if let Some(extra) = schema_map.get("additionalProperties") {
+                            schema_violations(root, extra, field, &field_path, errors);
+                        }
+                    }
+                }
+            }
+        }
+        if let (Value::Array(items), Some(item_schema)) = (value, schema_map.get("items")) {
+            for (i, item) in items.iter().enumerate() {
+                schema_violations(root, item_schema, item, &format!("{path}[{i}]"), errors);
+            }
+        }
+    }
+
+    /// Asserts `value` — a tool's structured output — conforms to that tool's
+    /// declared `output_schema`.
+    fn assert_conforms_to_output_schema(tool: &str, label: &str, value: &serde_json::Value) {
+        let schema = super::output_schema_map()
+            .get(tool)
+            .unwrap_or_else(|| panic!("tool `{tool}` must declare an output_schema"));
+        let root = serde_json::Value::Object((**schema).clone());
+        let mut errors = Vec::new();
+        schema_violations(&root, &root, value, "$", &mut errors);
+        assert!(
+            errors.is_empty(),
+            "{label} violates the `{tool}` output_schema:\n{}",
+            errors.join("\n")
+        );
+    }
+
+    #[test]
+    fn us_golden_outputs_conform_to_their_output_schemas() {
+        // Every US golden (the structured output a US account receives),
+        // paired with the tool that returns it. Array-rooted outputs carry no
+        // structuredContent, so only tools that declare an output_schema are
+        // checked; stock_positions and order_detail must be among them.
+        let goldens: [(&str, &[&str], &str); 6] = [
+            (
+                "account_balance",
+                &["account_balance"],
+                include_str!("support/fixtures/us_align/account_balance.expected.json"),
+            ),
+            (
+                "stock_positions",
+                &["stock_positions"],
+                include_str!("support/fixtures/us_align/stock_positions.expected.json"),
+            ),
+            (
+                "cash_flow",
+                &["cash_flow"],
+                include_str!("support/fixtures/us_align/cash_flow.expected.json"),
+            ),
+            (
+                "exchange_rate",
+                &["exchange_rate"],
+                include_str!("support/fixtures/us_align/exchange_rate.expected.json"),
+            ),
+            (
+                "orders",
+                &["today_orders", "history_orders"],
+                include_str!("support/fixtures/us_align/orders.expected.json"),
+            ),
+            (
+                "order_detail",
+                &["order_detail"],
+                include_str!("support/fixtures/us_align/order_detail.expected.json"),
+            ),
+        ];
+        let mut checked = Vec::new();
+        for (golden, tools, text) in goldens {
+            let value: serde_json::Value =
+                serde_json::from_str(text).expect("US golden is valid JSON");
+            for tool in tools {
+                if super::output_schema_map().contains_key(*tool) {
+                    assert_conforms_to_output_schema(
+                        tool,
+                        &format!("US golden `{golden}`"),
+                        &value,
+                    );
+                    checked.push(*tool);
+                }
+            }
+        }
+        for tool in ["stock_positions", "order_detail"] {
+            assert!(
+                checked.contains(&tool),
+                "`{tool}` US golden must be validated against its output_schema"
+            );
+        }
+    }
+
+    #[test]
+    fn us_stock_positions_with_blank_fields_conform_to_the_output_schema() {
+        use longbridge::trade::{USAssetOverview, USStockEntry};
+
+        let src = USAssetOverview {
+            stock_list: vec![USStockEntry::default()],
+            ..Default::default()
+        };
+        let mut value =
+            crate::tools::support::us_align::stock_positions(&src).expect("US positions map");
+        crate::serialize::strip_trailing_zeros(&mut value);
+        let json = crate::serialize::to_tool_json(&value).expect("tool JSON serializes");
+        let value: serde_json::Value = serde_json::from_str(&json).expect("tool JSON parses");
+        assert_conforms_to_output_schema(
+            "stock_positions",
+            "US positions with a blank stock entry",
+            &value,
+        );
+    }
+
+    #[test]
+    fn schema_validator_rejects_a_golden_missing_a_required_key() {
+        let schema = super::output_schema_map()
+            .get("stock_positions")
+            .expect("stock_positions must declare an output_schema");
+        let root = serde_json::Value::Object((**schema).clone());
+        let mut value: serde_json::Value =
+            serde_json::from_str(include_str!("fixtures/ap/stock_positions.expected.json"))
+                .expect("AP golden is valid JSON");
+        let mut errors = Vec::new();
+        schema_violations(&root, &root, &value, "$", &mut errors);
+        assert!(errors.is_empty(), "the intact golden must pass: {errors:?}");
+        value["list"][0]["stock_info"][0]
+            .as_object_mut()
+            .expect("the golden holds a stock_info entry")
+            .remove("symbol")
+            .expect("the golden stock_info entry carries symbol");
+        schema_violations(&root, &root, &value, "$", &mut errors);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e == "$.list[0].stock_info[0]: missing required `symbol`"),
+            "dropping the required stock_info symbol must fail validation, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn ap_golden_outputs_conform_to_their_output_schemas() {
+        for (tool, text) in [
+            (
+                "stock_positions",
+                include_str!("fixtures/ap/stock_positions.expected.json"),
+            ),
+            (
+                "order_detail",
+                include_str!("fixtures/ap/order_detail.expected.json"),
+            ),
+        ] {
+            let value: serde_json::Value =
+                serde_json::from_str(text).expect("AP golden is valid JSON");
+            assert_conforms_to_output_schema(tool, &format!("AP golden `{tool}`"), &value);
         }
     }
 
@@ -8384,14 +8765,48 @@ mod tool_error_tests {
 
     #[test]
     fn region_note_names_which_variant_tools_return() {
+        let us = super::region_note(longbridge::DcRegion::Us);
         assert!(
-            super::region_note(longbridge::DcRegion::Us).contains("US-specific shape"),
-            "US accounts are told they get the US variant"
+            us.contains("return the US-account shape") && us.contains("for .US symbols"),
+            "US accounts are told which tools switch by account and which by symbol: {us}"
         );
         assert!(
             super::region_note(longbridge::DcRegion::Ap).contains("generic shape"),
             "AP accounts are told they get the generic shape"
         );
+    }
+
+    #[test]
+    fn region_note_names_every_account_scoped_us_variant_tool() {
+        // These switch on the account region alone (no symbol argument), so
+        // the US note must name them rather than imply a .US-symbol switch.
+        let us = super::region_note(longbridge::DcRegion::Us);
+        let names: Vec<_> = super::us_account_variant_tools().collect();
+        for tool in [
+            "account_balance",
+            "stock_positions",
+            "cash_flow",
+            "exchange_rate",
+            "order_detail",
+            "today_orders",
+            "history_orders",
+        ] {
+            assert!(names.contains(&tool), "`{tool}` must carry the marker");
+            assert!(us.contains(tool), "US note must name `{tool}`: {us}");
+        }
+        // Symbol-scoped variants stay out of the account list.
+        for tool in [
+            "dividend",
+            "consensus",
+            "valuation",
+            "company",
+            "financial_report",
+        ] {
+            assert!(
+                !names.contains(&tool),
+                "`{tool}` switches only for .US symbols and must not be listed"
+            );
+        }
     }
 
     #[test]
@@ -8510,6 +8925,74 @@ mod tool_error_tests {
         assert_eq!(v["error_code"], "dc_region_restricted");
         assert_eq!(v["recoverable"], "none");
         assert!(v["hint"].as_str().unwrap().contains("data center"), "{v}");
+    }
+
+    #[test]
+    fn ap_only_rejections_name_the_us_alternative() {
+        use longbridge::DcRegion;
+
+        // Logs through `tracing`; see region_rejection_is_an_envelope_with_the_region_hint.
+        let _lock = crate::test_support::LOG_CAPTURE_LOCK.blocking_lock();
+        for name in super::AP_ONLY_TOOLS {
+            let (message, data) = super::dc_region_rejection(name, DcRegion::Us);
+            let alternative = super::us_alternative_for_ap_only_tool(name);
+            assert!(
+                message.ends_with(alternative),
+                "`{name}`: the message must spell out the alternative: {message}"
+            );
+            let result = super::rejected_call(name, "unknown", message, data);
+            let v: serde_json::Value =
+                serde_json::from_str(&result.content[0].as_text().unwrap().text).unwrap();
+            assert_eq!(v["error_code"], "dc_region_restricted", "{name}: {v}");
+            assert_eq!(
+                v["recoverable"], "none",
+                "{name}: retrying cannot help: {v}"
+            );
+            assert!(
+                v["message"].as_str().unwrap().contains(alternative),
+                "{name}: the envelope message must carry the alternative: {v}"
+            );
+            assert_eq!(
+                v["hint"], alternative,
+                "{name}: the delivered hint must be the alternative, not the generic \
+                 \"use the equivalent tool\" DC-region hint: {v}"
+            );
+            assert!(
+                v.get("alternative").is_none() && v["data"].is_null(),
+                "{name}: no field is dropped in transit: {v}"
+            );
+        }
+        let (margin, _) = super::dc_region_rejection("margin_ratio", DcRegion::Us);
+        assert!(
+            margin.contains("no per-symbol US equivalent")
+                && margin.contains("account_balance")
+                && margin.contains("us.margin_status"),
+            "margin_ratio has no per-symbol US equivalent; account-level figures are in \
+             account_balance's us.margin_status: {margin}"
+        );
+        let (operating, _) = super::dc_region_rejection("operating", DcRegion::Us);
+        assert!(
+            operating.contains("no US equivalent")
+                && operating.contains("financial_report_key_metrics"),
+            "operating has no US equivalent; key metrics are only partial: {operating}"
+        );
+        let (funds, _) = super::dc_region_rejection("fund_positions", DcRegion::Us);
+        assert!(
+            funds.contains("no US equivalent") && funds.contains("do not retry"),
+            "fund_positions has no US alternative: {funds}"
+        );
+        let (us_only, data) = super::dc_region_rejection("etf_docs", DcRegion::Ap);
+        assert!(
+            us_only.ends_with("data center."),
+            "US-only tools rejected for AP accounts keep the plain message: {us_only}"
+        );
+        let result = super::rejected_call("etf_docs", "unknown", us_only, data);
+        let v: serde_json::Value =
+            serde_json::from_str(&result.content[0].as_text().unwrap().text).unwrap();
+        assert!(
+            v["hint"].as_str().unwrap().contains("equivalent tool"),
+            "US-only tools rejected for AP accounts keep the generic DC-region hint: {v}"
+        );
     }
 
     #[test]

@@ -1,0 +1,47 @@
+[
+  {
+    "currency": "USD",
+    "total_cash": "1250.4",
+    "net_assets": "1480.9",
+    "buy_power": "1200.4",
+    "maintenance_margin": "230.5",
+    "cash_infos": [
+      {
+        "currency": "USD",
+        "available_cash": "1200.4",
+        "withdraw_cash": "1150",
+        "frozen_cash": "50",
+        "settled_cash": "1250.4"
+      }
+    ],
+    "us": {
+      "buy_limit_info": {
+        "currency": "USD",
+        "cash_buy_power": "1200.4",
+        "overnight_buy_power": "1200.4",
+        "day_trade_buy_power": "0",
+        "instant_buy_power": "0",
+        "intraday_margin_buy_power": "1200.4",
+        "option_buy_power": "1200.4",
+        "crypto_buy_power": "1200.4",
+        "mme": "1200.4"
+      },
+      "margin_status": {
+        "currency": "USD",
+        "nlv": "1480.9",
+        "margin_equity": "1480.9",
+        "margin_maintenance_excess": "1200.4",
+        "mmr": "230.5",
+        "reg_t_excess": "1200.4",
+        "sma": "1200.4"
+      },
+      "cash_list": [
+        {
+          "currency": "USD",
+          "outstanding": "0",
+          "external_amount": "0"
+        }
+      ]
+    }
+  }
+]

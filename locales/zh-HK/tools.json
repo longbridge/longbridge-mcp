@@ -44,14 +44,14 @@
     },
     "account_balance": {
       "title": "帳戶餘額",
-      "description": "查詢帳戶現金餘額與資產概覽，返回頂層數組 {currency, total_cash, net_assets, buy_power, max_finance_amount, remaining_finance_amount, risk_level, margin_call, init_margin, maintenance_margin, cash_infos[]{currency, available_cash, withdraw_cash, frozen_cash, settling_cash}}",
+      "description": "查詢帳戶現金餘額與資產概覽，返回頂層數組 {currency, total_cash, net_assets, buy_power, max_finance_amount, remaining_finance_amount, risk_level, margin_call, init_margin, maintenance_margin, cash_infos[]{currency, available_cash, withdraw_cash, frozen_cash, settling_cash}}。美股賬戶返回同樣的數組，只有賬戶幣種一條：含 currency、total_cash、net_assets、buy_power、maintenance_margin 與 cash_infos[]（以 settled_cash 代替 settling_cash）；無 max_finance_amount、remaining_finance_amount、risk_level、margin_call、init_margin；美股購買力與保證金明細在 us{buy_limit_info, margin_status, cash_list[]} 下",
       "properties": {
         "currency": "按幣種代碼篩選（如 `\"USD\"`、`\"HKD\"`），省略則返回所有幣種"
       }
     },
     "cash_flow": {
       "title": "資金流水",
-      "description": "查詢資金流水記錄（出入金、派息等），返回 頂層數組 {transaction_flow_name, direction（In/Out）, business_type, balance（發生金額）, currency, business_time, symbol, description}",
+      "description": "查詢資金流水記錄（出入金、派息等），返回 頂層數組 {transaction_flow_name, direction（In/Out）, business_type, balance（發生金額）, currency, business_time, symbol, description}。上游的 direction 與 business_type 不可靠（恆為 Out / 0），請以 balance 的正負判斷方向。美股賬戶返回同樣的數組，但無 business_type（見 biz_code、biz_code_name）；balance 為帶符號金額（無資金變動時如加密貨幣轉入轉出為 0），direction 取其符號，為 0 時取數量符號（兩者均為 0 時為 Unknown）；另含 quantity、quantity_description、ref_no、equity_type；最多 2000 條，恰好 2000 條表示還有更多，請縮小時間範圍。按時間倒序",
       "properties": {
         "start_at": "起始時間：RFC3339（如 2026-09-01T00:00:00Z），或日期（yyyy-mm-dd，表示當天 UTC 0 點）",
         "end_at": "結束時間：RFC3339（如 2026-09-30T23:59:59Z），或日期（yyyy-mm-dd，表示當天 UTC 結束）"
@@ -111,7 +111,7 @@
     },
     "stock_positions": {
       "title": "股票持倉",
-      "description": "查詢所有渠道下的當前股票持倉，返回 list[].stock_info[]{symbol, symbol_name, quantity, available_quantity, currency, cost_price, market}。僅限美股賬戶：額外附帶 us_asset_overview 字段 {cash_list, stock_list, option_list, crypto_list, cash_buy_power, overnight_buy_power}"
+      "description": "查詢所有渠道下的當前股票持倉，返回 list[].stock_info[]{symbol, symbol_name, quantity, available_quantity, currency, cost_price, market}。美股賬戶返回同樣的 list[].stock_info[]（無 available_quantity，另含 last_done、market_price、prev_close、today_pl、position_side）；現金、期權、加密貨幣（symbol 如 BTCUSD.BKKT）及購買力在 us{cash_list, option_list, crypto_list, cash_buy_power, …} 下"
     },
     "dca_history": {
       "title": "定投執行歷史",
@@ -151,29 +151,27 @@
     },
     "history_executions": {
       "title": "歷史成交",
-      "description": "查詢指定日期區間內的全部成交記錄，按成交時間（trade_done_at）篩選並自動翻頁返回完整結果（不會在每頁 1000 條上限處截斷）。返回頂層數組 {order_id, trade_id, symbol, side, quantity, price, trade_done_at}；trade_id 為穩定的去重鍵。start_at/end_at 為 RFC3339 格式",
+      "description": "查詢指定日期區間內的全部成交記錄，自動翻頁返回完整結果（不會在每頁 1000 條上限處截斷）。返回頂層數組 {order_id, trade_id, symbol, side, quantity, price, trade_done_at}；trade_id 為穩定的去重鍵；side 無法確定時為 \"Unknown\"（美股賬戶：未能解析所屬委託的方向，可調用 order_detail(order_id) 獲取）。start_at/end_at 為 RFC3339 格式，或只傳日期（yyyy-mm-dd）按 UTC 當天解讀（美股賬戶按紐約時間 EST/EDT，與 history_orders 一致）。亞太賬戶按成交時間（trade_done_at）篩選。美股賬戶讀取 v1 歷史成交，不按成交時間篩選，區間邊緣可能跨日滯後：請將區間前後各放寬一天，再按 trade_done_at 自行篩選；side 由賬戶在該區間內的委託及委託詳情補全",
       "properties": {
         "symbol": "按證券篩選（可選）",
-        "start_at": "起始時間：RFC3339（如 2026-09-01T00:00:00Z），或日期（yyyy-mm-dd，表示當天 UTC 0 點）",
-        "end_at": "結束時間：RFC3339（如 2026-09-30T23:59:59Z），或日期（yyyy-mm-dd，表示當天 UTC 結束）",
-        "us_page": "僅限美股賬戶：頁碼（預設 1）。亞太賬戶忽略（區域由賬戶自動識別，無需傳入）",
-        "us_limit": "僅限美股賬戶：每頁數量（預設 20）。亞太賬戶忽略"
+        "start_at": "起始時間：RFC3339（如 2026-09-01T00:00:00Z），或日期（yyyy-mm-dd，表示當天 UTC 0 點；美股賬戶按紐約時間）",
+        "end_at": "結束時間：RFC3339（如 2026-09-30T23:59:59Z），或日期（yyyy-mm-dd，表示當天 UTC 結束；美股賬戶按紐約時間）"
       }
     },
     "history_orders": {
       "title": "歷史委託",
-      "description": "查詢指定日期區間內的歷史委託（不含當日），返回 orders[]{order_id, symbol, side, status, quantity, price, submitted_at}。僅限美股賬戶：us_page、us_limit 通過獨立的美股委託接口分頁（預設每頁 20 條，傳 us_page 可翻頁）",
+      "description": "查詢指定日期區間內的歷史委託（AP 賬戶不含當日），返回 orders[]{order_id, symbol, side, status, quantity, price, submitted_at}。美股賬戶返回與 today_orders 美股版相同的數組和字段；start_at/end_at 只傳日期（yyyy-mm-dd）時按紐約時間（EST/EDT）而非 UTC 解讀；區間按原樣查詢，涵蓋當日時亦包含當日委託；預設返回區間內全部委託（最多 500 條），傳 us_page/us_limit 則只返回該頁。today_orders 美股版的窗口從前一日紐約時間 20:00 開始，因此昨日 20:00 ET 起的委託會同時出現在截至昨日的區間和 today_orders 中，合併時請按 order_id 去重",
       "properties": {
         "symbol": "按證券篩選（可選）",
-        "start_at": "起始時間：RFC3339（如 2026-09-01T00:00:00Z），或日期（yyyy-mm-dd，表示當天 UTC 0 點）",
-        "end_at": "結束時間：RFC3339（如 2026-09-30T23:59:59Z），或日期（yyyy-mm-dd，表示當天 UTC 結束）",
-        "us_page": "僅限美股賬戶：頁碼（預設 1）。亞太賬戶忽略（區域由賬戶自動識別，無需傳入）",
-        "us_limit": "僅限美股賬戶：每頁數量（預設 20）。亞太賬戶忽略（區域由賬戶自動識別，無需傳入）"
+        "start_at": "起始時間：RFC3339（如 2026-09-01T00:00:00Z），或日期（yyyy-mm-dd，表示當天 UTC 0 點；美股賬戶按紐約時間）",
+        "end_at": "結束時間：RFC3339（如 2026-09-30T23:59:59Z），或日期（yyyy-mm-dd，表示當天 UTC 結束；美股賬戶按紐約時間）",
+        "us_page": "僅限美股賬戶：只返回該頁（預設返回全部頁，最多 500 條）。亞太賬戶忽略（區域由賬戶自動識別，無需傳入）",
+        "us_limit": "僅限美股賬戶：配合 us_page 分頁時的每頁數量（預設 50）。亞太賬戶忽略"
       }
     },
     "order_detail": {
       "title": "委託詳情",
-      "description": "查詢單個委託詳情，返回 {order_id, symbol, status, side, order_type, quantity, price, executed_quantity, executed_price, submitted_at, time_in_force, msg, attached_orders[]}，其中 attached_orders[] 為該委託的止盈/止損附加單及其各自單號。要按附加單自身的單號查詢，設置 is_attached=true，此時返回該附加單本身，charge_detail 為 null。美股賬戶由獨立的美股委託詳情接口提供，其委託及附加單直接嵌套在 `order` 中返回。區域由賬戶自動識別",
+      "description": "查詢單個委託詳情，返回 {order_id, symbol, status, side, order_type, quantity, price, executed_quantity, executed_price, submitted_at, time_in_force, msg, attached_orders[]}，其中 attached_orders[] 為該委託的止盈/止損附加單及其各自單號。要按附加單自身的單號查詢，設置 is_attached=true，此時返回該附加單本身，charge_detail 為 null。美股賬戶返回同樣的頂層字段及 history[]，但無 time_in_force、tag、expire_date、outside_rth 及費用/抵扣字段（美股原始代碼見 us_time_in_force、us_tag，另含 done_at、gtd、security_type、us_attached_orders、us_charge_detail）；is_attached 無效",
       "properties": {
         "order_id": "委託單號：母單單號，或（配合 is_attached=true）止盈/止損附加單單號",
         "is_attached": "設為 true 表示 order_id 是止盈/止損附加單單號，返回該附加單本身（charge_detail 為 null）；查詢母單時省略或傳 false。美股賬戶下無效"
@@ -181,7 +179,7 @@
     },
     "today_executions": {
       "title": "當日成交",
-      "description": "查詢當日成交，返回頂層數組 {order_id, trade_id, symbol, side, quantity, price, trade_done_at}。可傳入 symbol 或 order_id 篩選",
+      "description": "查詢當日成交，返回頂層數組 {order_id, trade_id, symbol, side, quantity, price, trade_done_at}；side 取自成交所屬委託，無法確定時為 \"\"（美股賬戶：未能解析所屬委託的方向，可調用 order_detail(order_id) 獲取）。可傳入 symbol 或 order_id 篩選",
       "properties": {
         "symbol": "按證券篩選，例如 `\"700.HK\"`",
         "order_id": "按指定委託單號篩選"
@@ -189,14 +187,14 @@
     },
     "today_orders": {
       "title": "當日委託",
-      "description": "查詢當日委託，返回委託組成的頂層數組 {order_id, symbol, stock_name, side, order_type, status, quantity, executed_quantity, price, currency, time_in_force, submitted_at, updated_at, msg, …, attached_orders[]}，其中 attached_orders[] 為該委託的止盈 / 止損附加單。可用 symbol 按證券篩選，或用 order_id 查詢單筆委託。要按附加單自身的單號查詢，把該單號作為 order_id 並同時設置 is_attached=true，返回的委託項即為該附加單本身。is_attached 未配合 order_id 時無效；美股賬戶由美股委託接口提供，兩者均無效。僅限美股賬戶：us_action（Buy/Sell）、us_page、us_limit 通過獨立的美股委託接口篩選 / 分頁，該接口返回物件，委託位於 orders[] 下",
+      "description": "查詢當日委託，返回委託組成的頂層數組 {order_id, symbol, stock_name, side, order_type, status, quantity, executed_quantity, price, currency, time_in_force, submitted_at, updated_at, msg, …, attached_orders[]}，其中 attached_orders[] 為該委託的止盈 / 止損附加單。可用 symbol 按證券篩選，或用 order_id 查詢單筆委託。要按附加單自身的單號查詢，把該單號作為 order_id 並同時設置 is_attached=true，返回的委託項即為該附加單本身。is_attached 未配合 order_id 時無效。美股賬戶返回同樣的數組和字段名，但無 time_in_force、tag、expire_date、outside_rth（美股原始代碼見 us_time_in_force、us_tag，另含 gtd、security_type、operate_direction）；is_attached 無效，us_action（Buy/Sell）可篩選，預設返回當日全部委託（最多 500 條），傳 us_page/us_limit 則只返回該頁；「當日」指從前一自然日紐約時間（EST/EDT）20:00（夜盤 20:00–04:00 ET 開盤）至當日紐約時間 23:59:59，因此夜盤委託過紐約零點後仍會列出，當日列表可能包含前一晚的夜盤委託；前一日紐約時間 20:00 起的委託亦會出現在該日的 history_orders 中，合併兩者時請按 order_id 去重",
       "properties": {
         "symbol": "按證券篩選，例如 `\"700.HK\"`，省略則返回當日全部委託",
-        "order_id": "按委託單號篩選：母單單號，或（配合 is_attached=true）止盈/止損附加單單號。美股賬戶下無效",
+        "order_id": "按委託單號篩選：母單單號，或（配合 is_attached=true）止盈/止損附加單單號。美股賬戶僅匹配母單單號",
         "is_attached": "僅在同時傳入 order_id 時有效：表示該 order_id 是止盈/止損附加單單號，返回結果即為該附加單本身。單獨使用無效，美股賬戶下同樣無效",
         "us_action": "僅限美股賬戶：按方向篩選，`\"Buy\"` 或 `\"Sell\"`，留空表示全部。亞太賬戶忽略（區域由賬戶自動識別，無需傳入）",
-        "us_page": "僅限美股賬戶：頁碼（默認 1）。亞太賬戶忽略（區域由賬戶自動識別，無需傳入）",
-        "us_limit": "僅限美股賬戶：每頁數量（默認 20）。亞太賬戶忽略（區域由賬戶自動識別，無需傳入）"
+        "us_page": "僅限美股賬戶：只返回該頁（預設返回全部頁，最多 500 條）。亞太賬戶忽略（區域由賬戶自動識別，無需傳入）",
+        "us_limit": "僅限美股賬戶：配合 us_page 分頁時的每頁數量（預設 50）。亞太賬戶忽略"
       }
     },
     "cancel_order": {
@@ -516,7 +514,7 @@
     },
     "exchange_rate": {
       "title": "匯率",
-      "description": "獲取 Longbridge 賬戶折算匯率（用於將資產折算為賬戶幣種），覆蓋全部支援幣種，返回 {exchanges[]{base_currency, other_currency, average_rate}}：average_rate 為 1 單位 other_currency 折合的 base_currency（如 base USD、other HKD、0.12743 即 1 HKD = 0.12743 USD）。如需公開市場參考匯率或歷史匯率，請用 fx_rate"
+      "description": "獲取 Longbridge 賬戶折算匯率（用於將資產折算為賬戶幣種），覆蓋全部支援幣種，返回 {exchanges[]{base_currency, other_currency, average_rate}}：average_rate 為 1 單位 other_currency 折合的 base_currency（如 base USD、other HKD、0.12743 即 1 HKD = 0.12743 USD）。美股賬戶返回美股賬戶自身的匯率，結構相同，每個幣種對一條（優先 reference 匯率，否則 am），spec_key 標明匯率類型。如需公開市場參考匯率或歷史匯率，請用 fx_rate"
     },
     "fx_rate": {
       "title": "外匯參考匯率",
