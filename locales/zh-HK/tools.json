@@ -516,7 +516,18 @@
     },
     "exchange_rate": {
       "title": "匯率",
-      "description": "獲取全部支援幣種的匯率，返回 {exchanges[]{base_currency, other_currency, average_rate}}：average_rate 為 1 單位 other_currency 折合的 base_currency（如 base USD、other HKD、0.12743 即 1 HKD = 0.12743 USD）"
+      "description": "獲取 Longbridge 賬戶折算匯率（用於將資產折算為賬戶幣種），覆蓋全部支援幣種，返回 {exchanges[]{base_currency, other_currency, average_rate}}：average_rate 為 1 單位 other_currency 折合的 base_currency（如 base USD、other HKD、0.12743 即 1 HKD = 0.12743 USD）。如需公開市場參考匯率或歷史匯率，請用 fx_rate"
+    },
+    "fx_rate": {
+      "title": "外匯參考匯率",
+      "description": "歐洲央行（ECB）公開外匯參考匯率（經 Frankfurter）：每個工作日一個匯率，非實時、不可成交，無買賣價。預設返回最新匯率，也可查歷史某日或逐日序列。返回 {base, date, rates{幣種代碼: 匯率}, source}；序列的 rates 按 yyyy-mm-dd 分組。匯率為 1 單位 base 折合的該幣種數量（base USD 時 HKD 7.8472），與 exchange_rate 方向相反；查交叉匯率請直接設定 base，不要相除。引用匯率時請註明 date：它是發佈日，可能早於今天",
+      "properties": {
+        "base": "基準貨幣，ISO 4217 代碼（預設 `\"USD\"`）。匯率為 1 單位基準貨幣折合的各報價貨幣數量",
+        "currencies": "報價貨幣，ISO 4217 代碼，例如 `[\"HKD\", \"CNY\"]`（不是 \"700.HK\" 這類證券代碼）。不傳則返回全部 30 種支援幣種。傳 `start` 時必填，最多 5 個。不含 CNH、TWD 及加密貨幣",
+        "date": "歷史日期（`yyyy-mm-dd`，自 1999-01-04 起）。返回當天公佈的匯率，非工作日取此前最近一個工作日。不可與 `start`/`end` 同時使用",
+        "start": "序列起始日期（`yyyy-mm-dd`），返回 `start` 至 `end` 之間每個工作日一條",
+        "end": "序列結束日期（`yyyy-mm-dd`，預設最新），僅在傳 `start` 時有效；跨度不超過 366 天"
+      }
     },
     "executive": {
       "title": "高管與董事",

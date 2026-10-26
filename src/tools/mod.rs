@@ -492,7 +492,7 @@ fn error_hint(err: &McpError) -> Option<&'static str> {
 
     if msg.contains(TRANSPORT_ERROR) {
         return Some(
-            "Hint: a transient network error reaching Longbridge (the request got no \
+            "Hint: a transient network error reaching the upstream service (the request got no \
              response). Wait a moment and retry the same call.",
         );
     }
@@ -811,6 +811,7 @@ mod content;
 mod dca;
 mod fund;
 mod fundamental;
+mod fx;
 mod grid;
 mod ipo;
 mod jq;
@@ -1754,6 +1755,7 @@ const TOOL_ENDPOINTS: &[(&str, u8)] = &[
     ("estimate_max_purchase_quantity", V2),
     ("etf_docs", V2),
     ("exchange_rate", V2),
+    ("fx_rate", V2),
     ("executive", V2),
     ("financial_report", V2),
     ("financial_report_key_metrics", V2),
@@ -4437,7 +4439,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get exchange rates for all supported currencies. Returns {exchanges[]{base_currency, other_currency, average_rate}}: average_rate is the value of 1 other_currency in base_currency (e.g. base USD, other HKD, 0.12743 = 1 HKD is 0.12743 USD)."
+        description = "Get Longbridge's account-conversion exchange rates for all supported currencies (the rates used to value assets in an account's currency). Returns {exchanges[]{base_currency, other_currency, average_rate}}: average_rate is the value of 1 other_currency in base_currency (e.g. base USD, other HKD, 0.12743 = 1 HKD is 0.12743 USD). For public market reference rates or history, use fx_rate."
     )]
     async fn exchange_rate(
         &self,
@@ -4448,6 +4450,24 @@ impl Longbridge {
             portfolio::exchange_rate(&mctx)
         })
         .await
+    }
+
+    /// Get public ECB reference exchange rates.
+    #[tool(
+        title = "FX Reference Rate",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = true
+        ),
+        description = "Public ECB foreign-exchange reference rates (via Frankfurter): one rate per business day, not live or tradable, no bid/ask. Latest by default, or a historical date / daily series. Returns {base, date, rates{CODE: rate}, source}; a series keys rates by yyyy-mm-dd. rate is CODE per 1 base (base USD, HKD 7.8472), the opposite direction to exchange_rate; for a cross rate, set base instead of dividing. Cite date with the rate: it is the publication day, possibly before today."
+    )]
+    async fn fx_rate(
+        &self,
+        Parameters(p): Parameters<fx::FxRateParam>,
+    ) -> Result<CallToolResult, McpError> {
+        measured_tool_call("fx_rate", format!("{p:?}"), || fx::fx_rate(p)).await
     }
 
     /// Get profit analysis summary.
