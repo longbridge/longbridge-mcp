@@ -2281,10 +2281,10 @@ impl Longbridge {
             read_only_hint = true,
             destructive_hint = false,
             idempotent_hint = true,
-            open_world_hint = true
+            open_world_hint = false
         ),
         meta = profile::profile_tool_meta(),
-        description = "Identify the Longbridge trading account this connection is signed in to (the one account the access token is bound to, not every account the user owns). No parameters. Returns {id, nickname, email, dc_region (AP|US), account_no, account_type, member_id}: id is the account's stable identifier (its aaid), nickname a readable name such as \"Longbridge Securities Account ••••1234\", email always empty; account_type (e.g. M margin, C cash) comes from the latest daily statement and is omitted when unavailable."
+        description = "Identify the Longbridge trading account this connection is signed in to (the one account the access token is bound to, not every account the user owns). No parameters. Returns {id, nickname, email, dc_region (AP|US), account_no, member_id}: id is the account's stable identifier (its aaid), nickname a readable name such as \"Longbridge Securities Account H11701971\", email always empty; account_no is null for accounts whose token carries none."
     )]
     async fn get_me(&self, ctx: RequestContext<RoleServer>) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;

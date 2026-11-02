@@ -5,43 +5,17 @@
 //! `id` means the same account was signed in to again, a new `id` adds an
 //! account, and `nickname` is the name users and models pick it by.
 //!
-//! Everything but the account type is read from the token's `sub` claim, so
-//! the core answer needs no upstream round trip and no scope: it works for a
-//! token granted only the quote scope. The account type (e.g. `M` for margin)
-//! is not in the token; like `longbridge auth status` in the CLI it is read
-//! from the latest daily statement, best effort and under a short deadline.
+//! The answer is read from the token's `sub` claim, not fetched: it needs no
+//! upstream round trip and no scope, so it works for a token granted only the
+//! quote scope and answers well inside the gateway's sign-in timeout.
 
-use std::sync::LazyLock;
-use std::time::Duration;
-
-use longbridge::asset::{GetStatementListOptions, GetStatementOptions, StatementType};
-use longbridge::{AssetContext, DcRegion};
+use longbridge::DcRegion;
 use rmcp::ErrorData as McpError;
 use rmcp::model::{CallToolResult, Meta};
 use serde::Serialize;
 use serde_json::Value;
 
 use crate::tools::{McpContext, tool_json};
-
-/// Bullets standing in for the hidden head of an account number.
-const MASK: &str = "••••";
-
-/// How many trailing characters of the account number the nickname shows.
-const TAIL_LEN: usize = 4;
-
-/// Deadline for the best-effort account-type lookup. Gateways call `get_me`
-/// synchronously during sign-in, so a slow statement service must not hold
-/// the identity answer back.
-const ACCOUNT_TYPE_TIMEOUT: Duration = Duration::from_millis(1500);
-
-/// Client for downloading statement files from their pre-signed URLs.
-static HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
-    reqwest::Client::builder()
-        .timeout(ACCOUNT_TYPE_TIMEOUT)
-        .user_agent(concat!("longbridge-mcp/", env!("CARGO_PKG_VERSION")))
-        .build()
-        .expect("statement http client must build with static settings")
-});
 
 /// The signed-in trading account. `id`, `nickname` and `email` are the flat
 /// shape profile-tool consumers read; the rest mirrors the account section of
@@ -59,9 +33,6 @@ pub struct Profile {
     pub dc_region: Option<&'static str>,
     /// Account number, e.g. `H11701971`.
     pub account_no: Option<String>,
-    /// Account type from the latest daily statement, e.g. `M` (margin) or `C`
-    /// (cash); absent when there is no statement or it could not be read.
-    pub account_type: Option<String>,
     /// Longbridge member id that owns the account.
     pub member_id: Option<String>,
 }
@@ -84,18 +55,10 @@ pub async fn get_me(mctx: &McpContext) -> Result<CallToolResult, McpError> {
             None,
         )
     })?;
-    let region = mctx.dc_region().await;
-    profile.dc_region = Some(match region {
+    profile.dc_region = Some(match mctx.dc_region().await {
         DcRegion::Us => "US",
         _ => "AP",
     });
-    // Statements are served by the AP asset endpoints only.
-    if region != DcRegion::Us {
-        profile.account_type = tokio::time::timeout(ACCOUNT_TYPE_TIMEOUT, account_type(mctx))
-            .await
-            .ok()
-            .flatten();
-    }
     tool_json(&profile)
 }
 
@@ -112,55 +75,22 @@ fn profile_from_token(token: &str) -> Option<Profile> {
         (None, Some(member_id)) => format!("{member_id}:{account_channel}"),
         (None, None) => return None,
     };
-    let tail_source = account_no
+    // The full account number keeps names unique across one member's
+    // accounts; tokens without one fall back to the aaid, then the member id.
+    let number = account_no
         .as_deref()
         .or(aaid.as_deref())
         .or(member_id.as_deref())
         .unwrap_or_default();
-    let nickname = format!(
-        "Longbridge {} {MASK}{}",
-        account_label(&account_channel),
-        tail(tail_source)
-    );
+    let nickname = format!("Longbridge {} {number}", account_label(&account_channel));
     Some(Profile {
         id,
         nickname,
         email: String::new(),
         dc_region: None,
         account_no,
-        account_type: None,
         member_id,
     })
-}
-
-/// The account type (`MemberInfo.AccountType`) from the latest daily
-/// statement, or `None` when there is none or any step fails.
-async fn account_type(mctx: &McpContext) -> Option<String> {
-    let ctx = AssetContext::new(mctx.create_config());
-    let list = ctx
-        .statements(
-            GetStatementListOptions::new(StatementType::Daily)
-                .page(1)
-                .page_size(1),
-        )
-        .await
-        .ok()?;
-    let file_key = list.list.into_iter().next()?.file_key;
-    let url = ctx
-        .statement_download_url(GetStatementOptions::new(file_key))
-        .await
-        .ok()?
-        .url;
-    let statement: Value = HTTP_CLIENT.get(url).send().await.ok()?.json().await.ok()?;
-    statement_account_type(&statement)
-}
-
-/// `MemberInfo.AccountType` of a statement file, when non-empty.
-fn statement_account_type(statement: &Value) -> Option<String> {
-    statement["MemberInfo"]["AccountType"]
-        .as_str()
-        .filter(|s| !s.is_empty())
-        .map(str::to_owned)
 }
 
 /// A non-empty claim as a string; numeric claims (e.g. `member_id`) are
@@ -184,16 +114,6 @@ fn account_label(account_channel: &str) -> &'static str {
     }
 }
 
-/// The last [`TAIL_LEN`] characters of `s` (all of it when shorter).
-fn tail(s: &str) -> &str {
-    let start = s
-        .char_indices()
-        .rev()
-        .nth(TAIL_LEN - 1)
-        .map_or(0, |(i, _)| i);
-    &s[start..]
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -214,11 +134,10 @@ mod tests {
             profile_from_token(&token),
             Some(Profile {
                 id: "20012394".into(),
-                nickname: "Longbridge Securities Account ••••2371".into(),
+                nickname: "Longbridge Securities Account H10012371".into(),
                 email: String::new(),
                 dc_region: None,
                 account_no: Some("H10012371".into()),
-                account_type: None,
                 member_id: Some("3162".into()),
             }),
             "a securities-account token must yield its aaid, account number and member id"
@@ -245,15 +164,18 @@ mod tests {
         ))
         .expect("live account profile");
         let paper = profile_from_token(&token_with_sub(
-            r#"{"member_id":3162,"account_channel":"lb_papertrading","target_aaid":"20045638","account_no":"LB0000012323"}"#,
+            r#"{"member_id":3162,"account_channel":"lb_papertrading","target_aaid":"20045638","account_no":"LB0000012371"}"#,
         ))
         .expect("paper account profile");
         assert_ne!(live.id, paper.id, "different accounts must differ by id");
         assert_ne!(
             live.nickname, paper.nickname,
-            "different accounts must differ by nickname"
+            "accounts sharing an account-number tail must still differ by nickname"
         );
-        assert_eq!(paper.nickname, "Longbridge Paper Trading Account ••••2323");
+        assert_eq!(
+            paper.nickname,
+            "Longbridge Paper Trading Account LB0000012371"
+        );
     }
 
     #[test]
@@ -261,9 +183,10 @@ mod tests {
         let token = token_with_sub(r#"{"member_id":5012345600,"account_channel":"us_lb_uat"}"#);
         let profile = profile_from_token(&token).expect("US token profile");
         assert_eq!(profile.id, "5012345600:us_lb_uat");
+        assert_eq!(profile.account_no, None);
         assert_eq!(
             profile.nickname,
-            "Longbridge US Securities Account ••••5600"
+            "Longbridge US Securities Account 5012345600"
         );
     }
 
@@ -279,21 +202,5 @@ mod tests {
             None,
             "a sub without aaid or member_id names no account"
         );
-    }
-
-    #[test]
-    fn reads_account_type_from_statement_member_info() {
-        let statement =
-            serde_json::json!({ "MemberInfo": { "AccountNo": "H1", "AccountType": "M" } });
-        assert_eq!(statement_account_type(&statement).as_deref(), Some("M"));
-        let blank = serde_json::json!({ "MemberInfo": { "AccountType": "" } });
-        assert_eq!(statement_account_type(&blank), None);
-    }
-
-    #[test]
-    fn tail_handles_short_and_multibyte_input() {
-        assert_eq!(tail("H10012371"), "2371");
-        assert_eq!(tail("12"), "12");
-        assert_eq!(tail("账户号码一二"), "号码一二");
     }
 }
