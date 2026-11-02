@@ -714,7 +714,7 @@
     },
     "get_me": {
       "title": "當前賬戶",
-      "description": "識別本連接登入的 Longbridge 交易賬戶（訪問令牌綁定的那一個賬戶，而非用戶名下全部賬戶）。無參數。返回 {id, nickname, email, account_channel, dc_region（AP|US）, account_no, account_type, member_id}：id 為賬戶的穩定標識（即 aaid），nickname 為可讀名稱（如 \"Longbridge Securities Account ••••1234\"），email 恆為空；account_type（如 M 孖展、C 現金）取自最近一份日結單，取不到時省略"
+      "description": "識別本連接登入的 Longbridge 交易賬戶（訪問令牌綁定的那一個賬戶，而非用戶名下全部賬戶）。無參數。返回 {id, nickname, email, dc_region（AP|US）, account_no, account_type, member_id}：id 為賬戶的穩定標識（即 aaid），nickname 為可讀名稱（如 \"Longbridge Securities Account ••••1234\"），email 恆為空；account_type（如 M 孖展、C 現金）取自最近一份日結單，取不到時省略"
     },
     "history_candlesticks_by_date": {
       "title": "歷史 K 線（按日期）",

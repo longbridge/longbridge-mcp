@@ -21,8 +21,7 @@ use rmcp::model::{CallToolResult, Meta};
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::error::Error;
-use crate::tools::{McpContext, tool_result};
+use crate::tools::{McpContext, tool_json};
 
 /// Bullets standing in for the hidden head of an account number.
 const MASK: &str = "••••";
@@ -56,8 +55,6 @@ pub struct Profile {
     pub nickname: String,
     /// Always empty: Longbridge accounts have no email to show.
     pub email: String,
-    /// Account channel, e.g. `lb` or `lb_papertrading`.
-    pub account_channel: String,
     /// Data-center region the account lives in: `AP` or `US`.
     pub dc_region: Option<&'static str>,
     /// Account number, e.g. `H11701971`.
@@ -99,10 +96,7 @@ pub async fn get_me(mctx: &McpContext) -> Result<CallToolResult, McpError> {
             .ok()
             .flatten();
     }
-    // Plain serde, not `to_tool_json`: that serializer nulls `account_channel`,
-    // and `id` (the aaid) must reach the gateway intact too.
-    let json = serde_json::to_string(&profile).map_err(Error::Serialize)?;
-    Ok(tool_result(json))
+    tool_json(&profile)
 }
 
 /// Build the profile from the token's `sub` claim, or `None` when the token
@@ -132,7 +126,6 @@ fn profile_from_token(token: &str) -> Option<Profile> {
         id,
         nickname,
         email: String::new(),
-        account_channel,
         dc_region: None,
         account_no,
         account_type: None,
@@ -223,7 +216,6 @@ mod tests {
                 id: "20012394".into(),
                 nickname: "Longbridge Securities Account ••••2371".into(),
                 email: String::new(),
-                account_channel: "lb".into(),
                 dc_region: None,
                 account_no: Some("H10012371".into()),
                 account_type: None,
@@ -234,14 +226,16 @@ mod tests {
     }
 
     #[test]
-    fn serialized_profile_keeps_id_and_account_channel() {
+    fn tool_json_keeps_identity_fields() {
         let profile = profile_from_token(&token_with_sub(
             r#"{"member_id":3162,"account_channel":"lb","target_aaid":"20012394","account_no":"H10012371"}"#,
         ))
         .expect("profile");
-        let json: Value = serde_json::to_value(&profile).expect("profile must serialize to JSON");
-        assert_eq!(json["id"], "20012394");
-        assert_eq!(json["account_channel"], "lb");
+        let json = crate::serialize::to_tool_json(&profile).expect("profile must serialize");
+        let json: Value = serde_json::from_str(&json).expect("tool JSON must parse");
+        assert_eq!(json["id"], "20012394", "the tool serializer must keep id");
+        assert_eq!(json["account_no"], "H10012371");
+        assert_eq!(json["member_id"], "3162");
     }
 
     #[test]
