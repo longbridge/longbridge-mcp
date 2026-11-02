@@ -61,6 +61,7 @@
         "fund_stock_holdings",
         "fund_trend",
         "fx_rate",
+        "get_me",
         "history_candlesticks_by_date",
         "history_candlesticks_by_offset",
         "history_market_temperature",

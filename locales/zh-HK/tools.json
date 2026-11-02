@@ -712,6 +712,10 @@
         "execute": "本次試執行返回的 confirmation_code。省略（預設）表示 DRY RUN：只校驗並回顯請求，同時返回一個三位確認碼，不會發往交易所。必須先不帶該參數呼叫一次，把預覽展示給用戶，待用戶明確確認後才可再次呼叫並回填該碼。確認碼由訂單本身（代碼、方向、數量、價格）推導而來，只對這一筆完全相同的請求生效——改動任何欄位即失效。不可自行決定回填。"
       }
     },
+    "get_me": {
+      "title": "當前賬戶",
+      "description": "識別本連接登入的 Longbridge 交易賬戶（訪問令牌綁定的那一個賬戶，而非用戶名下全部賬戶）。無參數。返回 {id, nickname, email}：id 為賬戶的穩定標識，nickname 為可讀名稱（如 \"Longbridge Securities Account ••••1234\"），email 恆為空"
+    },
     "history_candlesticks_by_date": {
       "title": "歷史 K 線（按日期）",
       "description": "按日期區間獲取歷史 K 線數據。僅 symbol 必填（不傳 start/end 時返回最近 100 根 K 線，如需指定區間請傳入 start/end）；period 預設 day（1m/5m/15m/30m/60m/day/week/month/year），forward_adjust 預設 false，trade_sessions 預設 all。返回頂層數組 {timestamp, open, high, low, close, volume, turnover, trade_session}",
