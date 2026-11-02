@@ -27,12 +27,17 @@ pub fn is_expired_at(token: &str, now: i64) -> bool {
     expires_at(token).is_some_and(|exp| exp <= now)
 }
 
-/// `account_channel` from the `sub` claim, which Longbridge encodes as a
-/// nested JSON string.
-pub fn account_channel(token: &str) -> Option<String> {
+/// The `sub` claim, which Longbridge encodes as a nested JSON string naming the
+/// trading account the token is bound to (`target_aaid`, `account_no`,
+/// `account_channel`, `member_id`, ...).
+pub fn subject(token: &str) -> Option<Value> {
     let claims = claims(token)?;
-    let sub: Value = serde_json::from_str(claims["sub"].as_str()?).ok()?;
-    sub["account_channel"]
+    serde_json::from_str(claims["sub"].as_str()?).ok()
+}
+
+/// `account_channel` from the `sub` claim.
+pub fn account_channel(token: &str) -> Option<String> {
+    subject(token)?["account_channel"]
         .as_str()
         .filter(|s| !s.is_empty())
         .map(str::to_owned)

@@ -712,6 +712,10 @@
         "execute": "本次试运行返回的 confirmation_code。省略（默认）表示 DRY RUN：只校验并回显请求，同时返回一个三位确认码，不会发往交易所。必须先不带该参数调用一次，把预览展示给用户，待用户明确确认后才可再次调用并回填该码。确认码由订单本身（代码、方向、数量、价格）推导而来，只对这一笔完全相同的请求生效——改动任何字段即失效。不可自行决定回填。"
       }
     },
+    "get_me": {
+      "title": "当前账户",
+      "description": "识别本连接登录的 Longbridge 交易账户（访问令牌绑定的那一个账户，而非用户名下全部账户）。无参数。返回 {id, nickname, email, dc_region（AP|US）, account_no, member_id}：id 为账户的稳定标识（即 aaid），nickname 为可读名称（如 \"Longbridge Securities Account H11701971\"），email 恒为空；令牌未带账户号时 account_no 为 null"
+    },
     "history_candlesticks_by_date": {
       "title": "历史 K 线（按日期）",
       "description": "按日期区间获取历史 K 线数据。仅 symbol 必填（不传 start/end 时返回最近 100 根 K 线 —— 需要特定区间请传 start/end）；period 默认 day（1m/5m/15m/30m/60m/day/week/month/year），forward_adjust 默认 false，trade_sessions 默认 all。返回顶层数组 {timestamp, open, high, low, close, volume, turnover, trade_session}",
