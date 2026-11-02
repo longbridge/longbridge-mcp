@@ -56,8 +56,6 @@ pub struct Profile {
     pub nickname: String,
     /// Always empty: Longbridge accounts have no email to show.
     pub email: String,
-    /// The trading account's aaid, when the token carries one.
-    pub aaid: Option<String>,
     /// Account channel, e.g. `lb` or `lb_papertrading`.
     pub account_channel: String,
     /// Data-center region the account lives in: `AP` or `US`.
@@ -101,8 +99,8 @@ pub async fn get_me(mctx: &McpContext) -> Result<CallToolResult, McpError> {
             .ok()
             .flatten();
     }
-    // Plain serde, not `to_tool_json`: that serializer nulls `aaid` and
-    // `account_channel`, which are exactly what this tool exists to report.
+    // Plain serde, not `to_tool_json`: that serializer nulls `account_channel`,
+    // and `id` (the aaid) must reach the gateway intact too.
     let json = serde_json::to_string(&profile).map_err(Error::Serialize)?;
     Ok(tool_result(json))
 }
@@ -134,7 +132,6 @@ fn profile_from_token(token: &str) -> Option<Profile> {
         id,
         nickname,
         email: String::new(),
-        aaid,
         account_channel,
         dc_region: None,
         account_no,
@@ -226,7 +223,6 @@ mod tests {
                 id: "20012394".into(),
                 nickname: "Longbridge Securities Account ••••2371".into(),
                 email: String::new(),
-                aaid: Some("20012394".into()),
                 account_channel: "lb".into(),
                 dc_region: None,
                 account_no: Some("H10012371".into()),
@@ -238,13 +234,13 @@ mod tests {
     }
 
     #[test]
-    fn serialized_profile_keeps_aaid_and_account_channel() {
+    fn serialized_profile_keeps_id_and_account_channel() {
         let profile = profile_from_token(&token_with_sub(
             r#"{"member_id":3162,"account_channel":"lb","target_aaid":"20012394","account_no":"H10012371"}"#,
         ))
         .expect("profile");
         let json: Value = serde_json::to_value(&profile).expect("profile must serialize to JSON");
-        assert_eq!(json["aaid"], "20012394");
+        assert_eq!(json["id"], "20012394");
         assert_eq!(json["account_channel"], "lb");
     }
 
@@ -271,7 +267,6 @@ mod tests {
         let token = token_with_sub(r#"{"member_id":5012345600,"account_channel":"us_lb_uat"}"#);
         let profile = profile_from_token(&token).expect("US token profile");
         assert_eq!(profile.id, "5012345600:us_lb_uat");
-        assert_eq!(profile.aaid, None);
         assert_eq!(
             profile.nickname,
             "Longbridge US Securities Account ••••5600"
