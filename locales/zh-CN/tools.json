@@ -714,7 +714,7 @@
     },
     "get_me": {
       "title": "当前账户",
-      "description": "识别本连接登录的 Longbridge 交易账户（访问令牌绑定的那一个账户，而非用户名下全部账户）。无参数。返回 {id, nickname, email}：id 为账户的稳定标识，nickname 为可读名称（如 \"Longbridge Securities Account ••••1234\"），email 恒为空"
+      "description": "识别本连接登录的 Longbridge 交易账户（访问令牌绑定的那一个账户，而非用户名下全部账户）。无参数。返回 {id, nickname, email, aaid, account_channel, dc_region（AP|US）, account_no, account_type, member_id}：id 为账户的稳定标识（即 aaid），nickname 为可读名称（如 \"Longbridge Securities Account ••••1234\"），email 恒为空；account_type（如 M 融资、C 现金）取自最近一份日结单，取不到时省略"
     },
     "history_candlesticks_by_date": {
       "title": "历史 K 线（按日期）",
