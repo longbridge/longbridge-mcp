@@ -57,7 +57,7 @@ pub async fn get_me(mctx: &McpContext) -> Result<CallToolResult, McpError> {
     })?;
     profile.dc_region = Some(match mctx.dc_region().await {
         DcRegion::Us => "US",
-        _ => "AP",
+        DcRegion::Ap => "AP",
     });
     tool_json(&profile)
 }
