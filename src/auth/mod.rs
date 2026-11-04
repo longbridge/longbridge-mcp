@@ -287,6 +287,10 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route("/v2/tools.json", axum::routing::get(v2_tools_json));
 
     let oauth_proxy_routes: Router = Router::new()
+        .route(
+            "/oauth2/authorize",
+            axum::routing::get(oauth_proxy::authorize),
+        )
         .route("/oauth2/token", axum::routing::post(oauth_proxy::token))
         .route("/oauth2/revoke", axum::routing::post(oauth_proxy::revoke))
         .with_state(state.clone());
