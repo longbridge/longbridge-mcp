@@ -44,6 +44,53 @@ fn public_hosts() -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// Registrable domains whose subdomains may be asserted via `X-Forwarded-Host`.
+/// Longbridge's own gateways set that header when they route a public path
+/// (e.g. `openapi.longbridge.cn/mcp`) to this server; some ingresses also pass
+/// a client-supplied value through untouched, so anything outside these
+/// domains is ignored rather than echoed into OAuth metadata.
+const TRUSTED_FORWARDED_DOMAINS: &[&str] = &[
+    "longbridge.com",
+    "longbridge.cn",
+    "longbridge.xyz",
+    "longbridge-staging.com",
+    "longportapp.com",
+    "longportapp.cn",
+];
+
+/// Built-in [`TRUSTED_FORWARDED_DOMAINS`] plus any extra domains from the
+/// comma-separated env `LONGBRIDGE_TRUSTED_FORWARDED_DOMAINS`.
+fn trusted_forwarded_domains() -> Vec<String> {
+    let mut domains: Vec<String> = TRUSTED_FORWARDED_DOMAINS
+        .iter()
+        .map(|d| d.to_string())
+        .collect();
+    if let Ok(extra) = std::env::var("LONGBRIDGE_TRUSTED_FORWARDED_DOMAINS") {
+        domains.extend(
+            extra
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty()),
+        );
+    }
+    domains
+}
+
+/// Whether `host` (optionally with `:port`) is one of `domains` or a
+/// subdomain of one, compared case-insensitively.
+fn is_trusted_forwarded_host(host: &str, domains: &[String]) -> bool {
+    let name = host
+        .rsplit_once(':')
+        .filter(|(_, port)| port.chars().all(|c| c.is_ascii_digit()))
+        .map_or(host, |(name, _)| name)
+        .trim_end_matches('.')
+        .to_ascii_lowercase();
+    domains.iter().any(|domain| {
+        let domain = domain.trim_end_matches('.').to_ascii_lowercase();
+        name == domain || name.ends_with(&format!(".{domain}"))
+    })
+}
+
 /// Public URL resolved for a request, plus whether the host was asserted
 /// through the global single-domain entry (allowlisted `X-Host`).
 pub(crate) struct PublicUrl {
@@ -63,20 +110,30 @@ pub(crate) struct PublicUrl {
 ///      ingress rewrites `Host`/`X-Forwarded-Host` back to the origin hostname,
 ///      while custom headers pass through untouched.
 ///   2. `X-Forwarded-Host` — set by the reverse proxy to the external hostname
-///      (e.g. `openapi.longbridge.xyz` when the proxy rewrites the Host).
+///      (e.g. `openapi.longbridge.xyz` when the proxy rewrites the Host); only
+///      honoured inside [`TRUSTED_FORWARDED_DOMAINS`] (plus
+///      `LONGBRIDGE_TRUSTED_FORWARDED_DOMAINS`), since an ingress that passes
+///      the header through would otherwise let any caller pick the advertised
+///      issuer and token endpoint.
 ///   3. `Host` — the hostname the client actually connected to (correct for
 ///      direct connections; may be the internal backend host behind a proxy).
 ///   4. Falls back to `fallback` (`--base-url`) when all are absent.
 ///
 /// Scheme priority: `X-Forwarded-Proto` → scheme of `--base-url`.
 pub(crate) fn public_url_from_headers(headers: &HeaderMap, fallback: &str) -> PublicUrl {
-    resolve_public_url(headers, fallback, &public_hosts())
+    resolve_public_url(
+        headers,
+        fallback,
+        &public_hosts(),
+        &trusted_forwarded_domains(),
+    )
 }
 
 fn resolve_public_url(
     headers: &HeaderMap,
     fallback: &str,
     allowed_x_hosts: &[String],
+    trusted_forwarded_domains: &[String],
 ) -> PublicUrl {
     // Prefer the proxy-set header; fall back to the scheme in --base-url so
     // that local HTTP deployments without a reverse proxy still return "http".
@@ -104,11 +161,28 @@ fn resolve_public_url(
         };
     }
 
-    let Some(host) = headers
+    let forwarded_host = headers
         .get("x-forwarded-host")
-        .or_else(|| headers.get(axum::http::header::HOST))
         .and_then(|v| v.to_str().ok())
-    else {
+        .map(str::trim)
+        .filter(|h| !h.is_empty())
+        .filter(|h| {
+            let trusted = is_trusted_forwarded_host(h, trusted_forwarded_domains);
+            if !trusted {
+                // A legitimate gateway on a new domain lands here too; the
+                // fix is to add it to LONGBRIDGE_TRUSTED_FORWARDED_DOMAINS.
+                tracing::warn!(
+                    x_forwarded_host = h,
+                    "ignoring X-Forwarded-Host outside trusted domains; using Host"
+                );
+            }
+            trusted
+        });
+    let Some(host) = forwarded_host.or_else(|| {
+        headers
+            .get(axum::http::header::HOST)
+            .and_then(|v| v.to_str().ok())
+    }) else {
         return PublicUrl {
             url: fallback.to_string(),
             via_global_entry: false,
@@ -315,6 +389,10 @@ mod tests {
         hosts.iter().map(|s| s.to_string()).collect()
     }
 
+    fn trusted() -> Vec<String> {
+        allow(TRUSTED_FORWARDED_DOMAINS)
+    }
+
     #[test]
     fn x_host_in_allowlist_wins_over_rewritten_host() {
         // Mirrors the production chain: the DC ingress has rewritten Host/XFH
@@ -326,7 +404,7 @@ mod tests {
             ("host", "mcp.longbridge.xyz"),
             ("x-forwarded-proto", "https"),
         ]);
-        let got = resolve_public_url(&h, BASE, &allow(&["mcp-global.longbridge.xyz"]));
+        let got = resolve_public_url(&h, BASE, &allow(&["mcp-global.longbridge.xyz"]), &trusted());
         assert_eq!(got.url, "https://mcp-global.longbridge.xyz");
         assert!(got.via_global_entry);
     }
@@ -340,7 +418,7 @@ mod tests {
             ("host", "mcp.longbridge.xyz"),
             ("x-forwarded-proto", "https"),
         ]);
-        let got = resolve_public_url(&h, BASE, &allow(&["mcp-global.longbridge.xyz"]));
+        let got = resolve_public_url(&h, BASE, &allow(&["mcp-global.longbridge.xyz"]), &trusted());
         assert_eq!(got.url, "https://mcp.longbridge.xyz");
         assert!(!got.via_global_entry);
     }
@@ -354,7 +432,7 @@ mod tests {
             ("host", "mcp.longbridge.xyz"),
             ("x-forwarded-proto", "https"),
         ]);
-        let got = resolve_public_url(&h, BASE, &[]);
+        let got = resolve_public_url(&h, BASE, &[], &trusted());
         assert_eq!(got.url, "https://mcp.longbridge.xyz");
         assert!(!got.via_global_entry);
     }
@@ -366,7 +444,7 @@ mod tests {
             ("host", "mcp.longbridge.xyz"),
             ("x-forwarded-proto", "https"),
         ]);
-        let got = resolve_public_url(&h, BASE, &allow(&["mcp-global.longbridge.xyz"]));
+        let got = resolve_public_url(&h, BASE, &allow(&["mcp-global.longbridge.xyz"]), &trusted());
         assert_eq!(got.url, "https://MCP-Global.Longbridge.XYZ");
         assert!(got.via_global_entry);
     }
@@ -376,21 +454,95 @@ mod tests {
         let allowlist = allow(&["mcp-global.longbridge.xyz"]);
 
         let xfh = headers(&[
-            ("x-forwarded-host", "public.example.com"),
+            ("x-forwarded-host", "openapi.longbridge.xyz"),
             ("host", "backend.internal"),
         ]);
-        let got = resolve_public_url(&xfh, BASE, &allowlist);
-        assert_eq!(got.url, "https://public.example.com");
+        let got = resolve_public_url(&xfh, BASE, &allowlist, &trusted());
+        assert_eq!(got.url, "https://openapi.longbridge.xyz");
         assert!(!got.via_global_entry);
 
         let host_only = headers(&[("host", "backend.internal")]);
         assert_eq!(
-            resolve_public_url(&host_only, BASE, &allowlist).url,
+            resolve_public_url(&host_only, BASE, &allowlist, &trusted()).url,
             "https://backend.internal"
         );
 
         let empty = headers(&[]);
-        assert_eq!(resolve_public_url(&empty, BASE, &allowlist).url, BASE);
+        assert_eq!(
+            resolve_public_url(&empty, BASE, &allowlist, &trusted()).url,
+            BASE
+        );
+    }
+
+    #[test]
+    fn untrusted_x_forwarded_host_falls_back_to_host() {
+        // Mirrors the mainland ingress, which passes a client-supplied XFH
+        // through: a forged value must not become the advertised issuer.
+        for forged in [
+            "evil.example",
+            "longbridge.cn.evil.example",
+            "evillongbridge.cn",
+        ] {
+            let h = headers(&[
+                ("x-forwarded-host", forged),
+                ("host", "mcp.longbridge.cn"),
+                ("x-forwarded-proto", "https"),
+            ]);
+            let got = resolve_public_url(&h, BASE, &[], &trusted());
+            assert_eq!(got.url, "https://mcp.longbridge.cn", "forged XFH {forged}");
+        }
+    }
+
+    /// End-to-end through the metadata handler: a forged `X-Forwarded-Host`
+    /// must not reach any advertised OAuth endpoint, including the
+    /// authorization endpoint users type their credentials into.
+    #[tokio::test]
+    async fn forged_forwarded_host_never_reaches_oauth_metadata() {
+        let h = headers(&[
+            ("x-forwarded-host", "evil.example"),
+            ("host", "mcp.longbridge.cn"),
+            ("x-forwarded-proto", "https"),
+        ]);
+        let state = Arc::new(AppState {
+            base_url: BASE.to_string(),
+        });
+        let Json(metadata) = authorization_server_metadata(State(state), h).await;
+
+        assert_eq!(metadata.issuer, "https://mcp.longbridge.cn");
+        for endpoint in [
+            &metadata.issuer,
+            &metadata.authorization_endpoint,
+            &metadata.token_endpoint,
+            &metadata.revocation_endpoint,
+            &metadata.registration_endpoint,
+            &metadata.jwks_uri,
+        ] {
+            assert!(
+                !endpoint.contains("evil.example"),
+                "forged host leaked into {endpoint}"
+            );
+        }
+    }
+
+    #[test]
+    fn trusted_forwarded_host_matching() {
+        let domains = trusted();
+        for host in [
+            "openapi.longbridge.cn",
+            "OpenAPI.Longbridge.COM",
+            "longbridge.xyz",
+            "mcp.longportapp.com:443",
+            "mcp.longbridge.com.",
+        ] {
+            assert!(is_trusted_forwarded_host(host, &domains), "{host}");
+        }
+        for host in ["evil.example", "longbridge.com.evil", "xlongbridge.com", ""] {
+            assert!(!is_trusted_forwarded_host(host, &domains), "{host}");
+        }
+        assert!(is_trusted_forwarded_host(
+            "mcp.partner.example",
+            &allow(&["partner.example"])
+        ));
     }
 
     #[test]
@@ -401,13 +553,13 @@ mod tests {
             ("x-forwarded-proto", "http"),
         ]);
         assert_eq!(
-            resolve_public_url(&h, BASE, &allowlist).url,
+            resolve_public_url(&h, BASE, &allowlist, &trusted()).url,
             "http://mcp-global.longbridge.xyz"
         );
 
         let no_proto = headers(&[("x-host", "mcp-global.longbridge.xyz")]);
         assert_eq!(
-            resolve_public_url(&no_proto, "http://localhost:8000", &allowlist).url,
+            resolve_public_url(&no_proto, "http://localhost:8000", &allowlist, &trusted()).url,
             "http://mcp-global.longbridge.xyz"
         );
     }
