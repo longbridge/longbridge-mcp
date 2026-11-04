@@ -10,7 +10,7 @@ use rmcp::serde::Deserialize;
 use crate::error::Error;
 use crate::tools::output::fact::{SecurityFactItem, SecurityFactsResponse};
 use crate::tools::output::signal::{SignalItem, SignalsResponse};
-use crate::tools::support::parse::{parse_rfc3339, parse_rfc3339_end};
+use crate::tools::support::parse::{parse_rfc3339, parse_rfc3339_end, path_segment};
 use crate::tools::support::tolerant::tolerant_option_i32;
 use crate::tools::tool_json;
 
@@ -126,6 +126,8 @@ pub async fn signal_detail(
     mctx: &crate::tools::McpContext,
     p: SignalIdParam,
 ) -> Result<CallToolResult, McpError> {
+    // The SDK interpolates the id into `/v1/signals/{signal_id}`.
+    path_segment("signal_id", &p.signal_id)?;
     let ctx = SignalContext::new(mctx.create_config());
     let signal = ctx.signal(p.signal_id).await.map_err(Error::longbridge)?;
 

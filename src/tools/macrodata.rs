@@ -5,6 +5,7 @@ use rmcp::schemars::JsonSchema;
 use rmcp::serde::Deserialize;
 
 use crate::error::Error;
+use crate::tools::support::parse;
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct MacroeconomicIndicatorsParam {
@@ -94,6 +95,8 @@ pub async fn macrodata(
     mctx: &crate::tools::McpContext,
     p: MacroeconomicParam,
 ) -> Result<CallToolResult, McpError> {
+    // The SDK interpolates the code into `/v2/quote/macrodata/{indicator_code}`.
+    parse::path_segment("indicator_code", &p.indicator_code)?;
     let ctx = FundamentalContext::new(mctx.create_config());
     let result = ctx
         .macroeconomic(
