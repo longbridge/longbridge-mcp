@@ -4832,7 +4832,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get latest news articles for a symbol, newest first (20 by default; set count for more). Returns a top-level array (no wrapper object) of {id, title, description, url, published_at, comments_count, likes_count, shares_count}."
+        description = "Get latest news articles for a symbol, newest first (20 by default; set count for more). Returns a top-level array (no wrapper object) of {id, title, description, url, published_at, comments_count, likes_count, shares_count}. Citation fields content_via (0 = Longbridge original or licensed; non-zero = third-party repost), source, source_url (the original article) and source_logo are included when the upstream provides them."
     )]
     async fn news(
         &self,
@@ -4853,7 +4853,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::social::NewsDetailResponse>(),
-        description = "Get one news article's full detail by id (from news/news_search). Returns {id, title, description, body (Markdown), url, author{member_id, name}, images[], comments_count, likes_count, shares_count, published_at, tickers[]}."
+        description = "Get one news article's full detail by id (from news/news_search). Returns {id, title, description, body (Markdown), url, author{member_id, name}, images[], comments_count, likes_count, shares_count, published_at, tickers[]}. Citation fields content_via (0 = Longbridge original or licensed; non-zero = third-party repost), source, source_url (the original article) and source_logo are included when the upstream provides them."
     )]
     async fn news_detail(
         &self,
@@ -5709,7 +5709,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Search news articles by keyword. Returns an array of {id, title, excerpt, source_name, time (RFC3339), url}, most relevant first."
+        description = "Search news articles by keyword. Returns an array of {id, title, description (summary), source (outlet display name, localized by Accept-Language), published_at (RFC3339), url, content_via, source_url, source_logo}, most relevant first. content_via is 0 for Longbridge original or licensed content and non-zero for a third-party repost, whose original is at source_url."
     )]
     async fn news_search(
         &self,

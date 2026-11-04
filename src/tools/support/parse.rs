@@ -14,6 +14,26 @@ const DATE_FORMAT: &[time::format_description::BorrowedFormatItem<'_>] =
 const PRIMITIVE_DATETIME_FORMAT: &[time::format_description::BorrowedFormatItem<'_>] =
     time::macros::format_description!("[year]-[month]-[day]T[hour]:[minute]:[second]");
 
+/// Check that `value` (the `name` argument) can be interpolated into a request
+/// path as a single segment. The HTTP client normalizes `..` segments, so a
+/// value containing `/`, `..`, `?`, `#` or `%` could otherwise send the request,
+/// with the caller's token, to a different endpoint.
+pub fn path_segment<'a>(name: &str, value: &'a str) -> Result<&'a str, McpError> {
+    let safe = !value.is_empty()
+        && !value.contains("..")
+        && value
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'));
+    if safe {
+        Ok(value)
+    } else {
+        Err(McpError::invalid_params(
+            format!("invalid {name} {value:?}: only letters, digits, '.', '-' and '_' are allowed"),
+            None,
+        ))
+    }
+}
+
 pub fn parse_period(s: &str) -> Result<Period, McpError> {
     let lower = s.trim().to_lowercase();
     // Common spellings from other APIs. "1m" stays one minute, so a month is
@@ -327,6 +347,44 @@ pub fn parse_warrant_status(s: &str) -> Result<WarrantStatus, McpError> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn path_segment_accepts_symbols_and_ids() {
+        for ok in [
+            "700.HK",
+            "AAPL.US",
+            ".VIX.US",
+            "600519.SH",
+            "BTCUSD.HAS",
+            "AAPL230317P160000.US",
+            "BRK-B.US",
+            "D05.SG",
+            "1234567890123456789",
+            "strategy_42",
+        ] {
+            assert_eq!(super::path_segment("id", ok).ok(), Some(ok), "{ok}");
+        }
+    }
+
+    /// Each of these would reach another endpoint once `..` is normalized, e.g.
+    /// `/v1/sharelists/../trade/order?order_id=1` becomes `/v1/trade/order`.
+    #[test]
+    fn path_segment_rejects_traversal_and_url_syntax() {
+        for bad in [
+            "",
+            "..",
+            "...",
+            "a..b",
+            "../trade/order?order_id=1",
+            "AAPL.US/../../v1/x",
+            "AAPL.US?x=1",
+            "AAPL.US#x",
+            "AAPL%2FUS",
+            "AAPL US",
+        ] {
+            assert!(super::path_segment("id", bad).is_err(), "{bad:?}");
+        }
+    }
+
     use super::*;
 
     #[test]
