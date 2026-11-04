@@ -123,11 +123,6 @@ fn transform_news_item(item: &serde_json::Value, language: Option<&str>) -> serd
                 "id" | "content_via" | "source_url" | "source_logo" => {
                     obj.insert(k.clone(), v.clone());
                 }
-                "source_name" => {
-                    if let Some(source) = display_source(map, language) {
-                        obj.insert("source".to_string(), source);
-                    }
-                }
                 "title" => {
                     obj.insert(
                         k.clone(),
@@ -154,6 +149,10 @@ fn transform_news_item(item: &serde_json::Value, language: Option<&str>) -> serd
                 }
                 _ => {}
             }
+        }
+        // Any one of the name variants is enough for a display name.
+        if let Some(source) = display_source(map, language) {
+            obj.insert("source".to_string(), source);
         }
     }
     if let Some(id) = obj.get("id").and_then(|v| v.as_str()) {
@@ -373,6 +372,16 @@ mod tests {
         assert_eq!(source(&zhitong, Some("zh-HK")), "智通財經");
         assert_eq!(source(&zhitong, Some("zh-TW")), "智通財經");
         assert_eq!(source(&bare, Some("zh-CN")), "businessinsider");
+        // A hit with only a localized name still gets a source.
+        let localized_only = serde_json::json!({"id": "4", "source_name_zh": "财联社"});
+        assert_eq!(source(&localized_only, Some("zh-CN")), "财联社");
+        assert_eq!(source(&localized_only, None), "财联社");
+        // No name at all: no source.
+        assert!(
+            transform_news_item(&serde_json::json!({"id": "5"}), None)
+                .get("source")
+                .is_none()
+        );
         // The localized variants never leak into the output.
         let out = transform_news_item(&zhitong, None);
         for gone in ["source_name_zh", "source_name_hk", "source_name_en"] {
