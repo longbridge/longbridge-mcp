@@ -407,6 +407,12 @@ mod tests {
     /// Tool code must not interpolate a raw parameter (`p.xxx`) into a request
     /// path, nor hand one to an SDK method that does, without running it
     /// through [`super::path_segment`] first.
+    ///
+    /// This is a text check, so it has blind spots: a parameter first copied
+    /// into a local (`let id = p.id; format!("/v1/x/{id}")`) is not traced,
+    /// and an SDK method that builds its path from an argument is covered only
+    /// once it is listed in [`SDK_PATH_METHODS`]. Validate at the call site
+    /// regardless; this test only catches the common direct form.
     #[test]
     fn tool_paths_do_not_interpolate_raw_params() {
         let sources = tool_sources();
