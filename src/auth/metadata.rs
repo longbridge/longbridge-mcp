@@ -166,7 +166,18 @@ fn resolve_public_url(
         .and_then(|v| v.to_str().ok())
         .map(str::trim)
         .filter(|h| !h.is_empty())
-        .filter(|h| is_trusted_forwarded_host(h, trusted_forwarded_domains));
+        .filter(|h| {
+            let trusted = is_trusted_forwarded_host(h, trusted_forwarded_domains);
+            if !trusted {
+                // A legitimate gateway on a new domain lands here too; the
+                // fix is to add it to LONGBRIDGE_TRUSTED_FORWARDED_DOMAINS.
+                tracing::warn!(
+                    x_forwarded_host = h,
+                    "ignoring X-Forwarded-Host outside trusted domains; using Host"
+                );
+            }
+            trusted
+        });
     let Some(host) = forwarded_host.or_else(|| {
         headers
             .get(axum::http::header::HOST)
@@ -479,6 +490,37 @@ mod tests {
             ]);
             let got = resolve_public_url(&h, BASE, &[], &trusted());
             assert_eq!(got.url, "https://mcp.longbridge.cn", "forged XFH {forged}");
+        }
+    }
+
+    /// End-to-end through the metadata handler: a forged `X-Forwarded-Host`
+    /// must not reach any advertised OAuth endpoint, including the
+    /// authorization endpoint users type their credentials into.
+    #[tokio::test]
+    async fn forged_forwarded_host_never_reaches_oauth_metadata() {
+        let h = headers(&[
+            ("x-forwarded-host", "evil.example"),
+            ("host", "mcp.longbridge.cn"),
+            ("x-forwarded-proto", "https"),
+        ]);
+        let state = Arc::new(AppState {
+            base_url: BASE.to_string(),
+        });
+        let Json(metadata) = authorization_server_metadata(State(state), h).await;
+
+        assert_eq!(metadata.issuer, "https://mcp.longbridge.cn");
+        for endpoint in [
+            &metadata.issuer,
+            &metadata.authorization_endpoint,
+            &metadata.token_endpoint,
+            &metadata.revocation_endpoint,
+            &metadata.registration_endpoint,
+            &metadata.jwks_uri,
+        ] {
+            assert!(
+                !endpoint.contains("evil.example"),
+                "forged host leaked into {endpoint}"
+            );
         }
     }
 
