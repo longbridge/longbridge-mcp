@@ -365,6 +365,88 @@ mod tests {
         }
     }
 
+    /// SDK methods that interpolate their first argument into the request path.
+    const SDK_PATH_METHODS: &[&str] = &[
+        ".topics(",
+        ".topic_detail(",
+        ".list_topic_replies(",
+        ".create_topic_reply(",
+        ".signal(",
+        ".macroeconomic(",
+    ];
+
+    /// Every tool source file, read at test time so a new file is covered too.
+    fn tool_sources() -> Vec<(String, String)> {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/tools");
+        let mut files: Vec<_> = std::fs::read_dir(&dir)
+            .expect("src/tools is readable")
+            .map(|entry| entry.expect("directory entry").path())
+            .filter(|path| path.extension().is_some_and(|ext| ext == "rs"))
+            .collect();
+        files.sort();
+        files
+            .into_iter()
+            .map(|path| {
+                let source = std::fs::read_to_string(&path).expect("tool source is readable");
+                // Test fixtures after the module are not tool code.
+                let code = source
+                    .split("#[cfg(test)]")
+                    .next()
+                    .unwrap_or("")
+                    .to_string();
+                let name = path
+                    .file_name()
+                    .expect("file name")
+                    .to_string_lossy()
+                    .into_owned();
+                (name, code)
+            })
+            .collect()
+    }
+
+    /// Tool code must not interpolate a raw parameter (`p.xxx`) into a request
+    /// path, nor hand one to an SDK method that does, without running it
+    /// through [`super::path_segment`] first.
+    ///
+    /// This is a text check, so it has blind spots: a parameter first copied
+    /// into a local (`let id = p.id; format!("/v1/x/{id}")`) is not traced,
+    /// and an SDK method that builds its path from an argument is covered only
+    /// once it is listed in [`SDK_PATH_METHODS`]. Validate at the call site
+    /// regardless; this test only catches the common direct form.
+    #[test]
+    fn tool_paths_do_not_interpolate_raw_params() {
+        let sources = tool_sources();
+        assert!(
+            sources.len() > 20,
+            "expected every tool module, got {}",
+            sources.len()
+        );
+        let mut offenders = Vec::new();
+        for (file, code) in &sources {
+            for (at, _) in code.match_indices("format!(\"/v") {
+                let call: String = code[at..].chars().take_while(|c| *c != ';').collect();
+                if call.contains(", p.") || call.contains("{p.") {
+                    offenders.push(format!("{file}: {}", call.lines().next().unwrap_or("")));
+                }
+            }
+            for function in code.split("pub async fn ").skip(1) {
+                let name = function.split('(').next().unwrap_or("").trim();
+                let calls_sdk_path = SDK_PATH_METHODS.iter().any(|method| {
+                    function
+                        .match_indices(method)
+                        .any(|(at, _)| function[at + method.len()..].trim_start().starts_with("p."))
+                });
+                if calls_sdk_path && !function.contains("path_segment(") {
+                    offenders.push(format!("{file}: {name} passes a raw param to an SDK path"));
+                }
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "raw params interpolated into request paths: {offenders:#?}"
+        );
+    }
+
     /// Each of these would reach another endpoint once `..` is normalized, e.g.
     /// `/v1/sharelists/../trade/order?order_id=1` becomes `/v1/trade/order`.
     #[test]

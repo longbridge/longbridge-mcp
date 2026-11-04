@@ -200,6 +200,8 @@ pub async fn topic(
     mctx: &crate::tools::McpContext,
     p: SymbolParam,
 ) -> Result<CallToolResult, McpError> {
+    // The SDK interpolates the symbol into `/v1/content/{symbol}/topics`.
+    parse::path_segment("symbol", &p.symbol)?;
     let ctx = ContentContext::new(mctx.create_config());
     let result = ctx.topics(p.symbol).await.map_err(Error::longbridge)?;
     // Community posts wrap every ticker mention in `[st]…#Name.HK[/st]` markup;
@@ -213,6 +215,7 @@ pub async fn topic_detail(
     mctx: &crate::tools::McpContext,
     p: TopicIdParam,
 ) -> Result<CallToolResult, McpError> {
+    parse::path_segment("topic_id", &p.topic_id)?;
     let ctx = ContentContext::new(mctx.create_config());
     let result = ctx
         .topic_detail(p.topic_id)
@@ -229,6 +232,7 @@ pub async fn topic_replies(
     mctx: &crate::tools::McpContext,
     p: TopicRepliesParam,
 ) -> Result<CallToolResult, McpError> {
+    parse::path_segment("topic_id", &p.topic_id)?;
     let ctx = ContentContext::new(mctx.create_config());
     let opts = longbridge::content::ListTopicRepliesOptions {
         page: p.page,
@@ -267,6 +271,7 @@ pub async fn topic_create_reply(
     mctx: &crate::tools::McpContext,
     p: TopicCreateReplyParam,
 ) -> Result<CallToolResult, McpError> {
+    parse::path_segment("topic_id", &p.topic_id)?;
     let ctx = ContentContext::new(mctx.create_config());
     let opts = longbridge::content::CreateReplyOptions {
         body: p.body,
