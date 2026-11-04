@@ -372,6 +372,51 @@ pub fn create_router(state: Arc<AppState>) -> Router {
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
+    use std::sync::Arc;
+
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode, header};
+    use tower::ServiceExt;
+
+    use super::{AppState, create_router};
+
+    /// `/oauth2/authorize` must be routed to the redirect handler, not swallowed
+    /// by the Bearer-protected root MCP fallback, and the redirect must not be
+    /// cacheable at the edge.
+    #[tokio::test]
+    async fn authorize_route_redirects_without_bearer_and_is_not_cacheable() {
+        let router = create_router(Arc::new(AppState {
+            base_url: "http://127.0.0.1:8000".to_string(),
+        }));
+        let query = "response_type=code&client_id=abc&state=s%2B1&code_challenge=x";
+        let response = router
+            .oneshot(
+                Request::get(format!("/oauth2/authorize?{query}"))
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("router should respond");
+
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        let location = response
+            .headers()
+            .get(header::LOCATION)
+            .and_then(|value| value.to_str().ok())
+            .expect("redirect should carry a Location header");
+        assert!(
+            location.ends_with(&format!("/oauth2/authorize?{query}")),
+            "query must be forwarded verbatim, got {location}"
+        );
+        assert!(
+            !location.starts_with("http://127.0.0.1:8000"),
+            "authorize must redirect upstream, not to itself: {location}"
+        );
+        assert_eq!(
+            response.headers().get(header::CACHE_CONTROL),
+            Some(&header::HeaderValue::from_static("no-store"))
+        );
+    }
 
     /// Guard: in static tool metadata — descriptions, input schemas, and the
     /// translations — the connect page may only appear as

@@ -76,7 +76,17 @@ pub async fn authorize(
 ) -> Response {
     let public = public_url_from_headers(&headers, &state.base_url);
     let upstream = oauth_upstream_url(public.via_global_entry);
-    Redirect::to(&authorize_redirect_url(&upstream, query.as_deref())).into_response()
+    crate::metrics::record_oauth_authorize();
+    // Each redirect carries per-login `state` and PKCE values; never let an
+    // edge cache replay one user's redirect to another.
+    (
+        [
+            (header::CACHE_CONTROL, "no-store"),
+            (header::PRAGMA, "no-cache"),
+        ],
+        Redirect::to(&authorize_redirect_url(&upstream, query.as_deref())),
+    )
+        .into_response()
 }
 
 fn authorize_redirect_url(upstream: &str, query: Option<&str>) -> String {

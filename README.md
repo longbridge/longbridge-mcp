@@ -103,6 +103,13 @@ claude mcp add --transport http longbridge https://mcp.longbridge.com
 { "mcpServers": { "longbridge": { "url": "https://mcp.longbridge.com" } } }
 ```
 
+**Codex** — add the server, then complete OAuth in the browser:
+
+```bash
+codex mcp add longbridge --url https://mcp.longbridge.com
+codex mcp login longbridge
+```
+
 **Cursor · Cline · Windsurf · Zed · other clients** — point them at `https://mcp.longbridge.com` with transport `streamable-http`.
 
 <details>

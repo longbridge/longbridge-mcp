@@ -207,6 +207,11 @@ pub(crate) fn oauth_upstream_url(via_global_entry: bool) -> String {
 /// origin, which clients enforcing issuer binding (e.g. Codex) require. Token
 /// exchange and revocation return through this server so it can attach
 /// Longbridge's private DC routing header.
+///
+/// The `issuer` is derived from request headers, so it must stay stable per
+/// public entry point: Codex binds refresh tokens to the issuer and forces a
+/// fresh login when it changes (e.g. after a Host-forwarding or
+/// `LONGBRIDGE_PUBLIC_HOSTS` change).
 #[derive(Serialize)]
 pub(crate) struct AuthorizationServerMetadata {
     issuer: String,
