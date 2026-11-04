@@ -17,6 +17,7 @@ use longbridge::DcRegion;
 
 use crate::auth::AppState;
 use crate::auth::metadata::{oauth_upstream_url, public_url_from_headers};
+use crate::metrics::{record_oauth_authorize, record_oauth_revoke, record_oauth_token};
 
 static OAUTH_HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
     reqwest::Client::builder()
@@ -57,8 +58,8 @@ fn result_label(is_success: bool) -> &'static str {
 /// 按操作类型记录对应的 OAuth 指标。
 fn record(op: OAuthOp, grant_type: &str, result: &str) {
     match op {
-        OAuthOp::Token => crate::metrics::record_oauth_token(grant_type, result),
-        OAuthOp::Revoke => crate::metrics::record_oauth_revoke(result),
+        OAuthOp::Token => record_oauth_token(grant_type, result),
+        OAuthOp::Revoke => record_oauth_revoke(result),
     }
 }
 
@@ -76,7 +77,7 @@ pub async fn authorize(
 ) -> Response {
     let public = public_url_from_headers(&headers, &state.base_url);
     let upstream = oauth_upstream_url(public.via_global_entry);
-    crate::metrics::record_oauth_authorize();
+    record_oauth_authorize();
     // Each redirect carries per-login `state` and PKCE values; never let an
     // edge cache replay one user's redirect to another.
     (
@@ -89,8 +90,13 @@ pub async fn authorize(
         .into_response()
 }
 
+/// Join an upstream OAuth base URL and a leading-slash endpoint path.
+fn upstream_endpoint(upstream: &str, path: &str) -> String {
+    format!("{}{path}", upstream.trim_end_matches('/'))
+}
+
 fn authorize_redirect_url(upstream: &str, query: Option<&str>) -> String {
-    let base = format!("{}/oauth2/authorize", upstream.trim_end_matches('/'));
+    let base = upstream_endpoint(upstream, "/oauth2/authorize");
     match query.filter(|query| !query.is_empty()) {
         Some(query) => format!("{base}?{query}"),
         None => base,
@@ -156,7 +162,7 @@ async fn forward(
     let grant_type = grant_type_of(&pairs);
     let public = public_url_from_headers(headers, &state.base_url);
     let upstream = oauth_upstream_url(public.via_global_entry);
-    let url = format!("{}{upstream_path}", upstream.trim_end_matches('/'));
+    let url = upstream_endpoint(&upstream, upstream_path);
 
     match upstream_request(&url, region, body).send().await {
         Ok(response) => {
