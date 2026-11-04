@@ -5,6 +5,7 @@ use rmcp::schemars::JsonSchema;
 use rmcp::serde::Deserialize;
 
 use crate::serialize::convert_unix_paths;
+use crate::tools::support::exchange_time::{localize_result, localize_tool_output};
 use crate::tools::support::http_client::{
     http_get_tool, http_get_tool_dropping, http_get_tool_rounding, http_get_tool_unix,
     http_get_tool_unix_dropping, http_get_tool_unix_rounding,
@@ -439,11 +440,12 @@ pub async fn valuation(
     if crate::tools::support::us_market::is_us_fundamental(mctx, &p.symbol).await {
         let ctx = longbridge::fundamental::FundamentalContext::new(mctx.create_config());
         let result = ctx
-            .us_valuation_overview(p.symbol)
+            .us_valuation_overview(p.symbol.clone())
             .await
             .map_err(crate::error::Error::longbridge)?;
         let mut value = serde_json::to_value(&result).map_err(crate::error::Error::Serialize)?;
         crate::tools::support::us_normalize::fix_valuation_value(&mut value);
+        localize_tool_output("valuation", &mut value, Some(&p.symbol));
         return crate::tools::tool_json(&value);
     }
     let client = mctx.create_http_client();
@@ -468,6 +470,7 @@ pub async fn valuation(
         serde_json::from_str(&json).map_err(crate::error::Error::Serialize)?;
     // The `desc` summary wraps emphasised numbers in `<strong>` markup.
     crate::serialize::strip_html_tags_in_field(&mut value, "desc");
+    localize_tool_output("valuation", &mut value, Some(&p.symbol));
     crate::tools::tool_json(&value)
 }
 
@@ -510,6 +513,7 @@ pub async fn valuation_history(
     crate::serialize::strip_trailing_zeros(&mut value);
     crate::serialize::strip_empty_strings(&mut value);
     crate::serialize::strip_html_tags_in_field(&mut value, "desc");
+    localize_tool_output("valuation_history", &mut value, Some(&p.symbol));
     crate::tools::tool_json(&value)
 }
 
@@ -521,14 +525,15 @@ pub async fn industry_valuation(
     // Valuation ratios and per-share figures arrive with up to ~22 fractional
     // digits of bogus precision (e.g. bps "145.6260066297869181464524"), on both
     // the top-level metrics and every `history` row; cap at 6 dp.
-    http_get_tool_unix_rounding(
+    let result = http_get_tool_unix_rounding(
         &client,
         "/v1/quote/industry-valuation-comparison",
         &[("symbol", p.symbol.as_str())],
         &["list.*.history.*.date"],
         6,
     )
-    .await
+    .await?;
+    Ok(localize_result("industry_valuation", result, None))
 }
 
 pub async fn industry_valuation_dist(
@@ -945,7 +950,7 @@ pub async fn valuation_rank(
         ("end_date", end.as_str()),
     ];
     // Every pe/pb/ps/dvd row carries `total` == the top-level `max_num`.
-    http_get_tool_unix_dropping(
+    let result = http_get_tool_unix_dropping(
         &client,
         "/v1/quote/valuation/rank",
         &params,
@@ -957,7 +962,8 @@ pub async fn valuation_rank(
         ],
         &["total"],
     )
-    .await
+    .await?;
+    Ok(localize_result("valuation_rank", result, Some(&p.symbol)))
 }
 
 /// Get institution rating history (target price + evaluate history) for a security.
@@ -1146,14 +1152,19 @@ pub async fn institutional_views(
     // The `tlist` price series arrives with ~19 fractional digits of bogus
     // precision (e.g. "803.3032108278430037073"); cap it at 6 dp. Both series
     // carry unix-second dates.
-    http_get_tool_unix_rounding(
+    let result = http_get_tool_unix_rounding(
         &client,
         "/v1/quote/ratings/institutional",
         &[("symbol", p.symbol.as_str())],
         &["elist.*.date", "tlist.*.date"],
         6,
     )
-    .await
+    .await?;
+    Ok(localize_result(
+        "institutional_views",
+        result,
+        Some(&p.symbol),
+    ))
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -1414,6 +1425,7 @@ pub async fn valuation_comparison(
     // `history` row; cap at 6 dp.
     let mut value = serde_json::to_value(&result).map_err(crate::error::Error::Serialize)?;
     crate::serialize::round_decimals(&mut value, 6);
+    localize_tool_output("valuation_comparison", &mut value, None);
     crate::tools::tool_json(&value)
 }
 

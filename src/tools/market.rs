@@ -8,6 +8,7 @@ use rmcp::serde::{Deserialize, Serialize};
 
 use crate::error::Error;
 use crate::serialize::{convert_unix_paths, transform_json};
+use crate::tools::support::exchange_time::{localize_result, localize_tool_output};
 use crate::tools::support::http_client::{
     http_get_tool, http_get_tool_dropping, http_get_tool_trimming_zeros, http_get_tool_unix,
     http_get_tool_unix_dropping,
@@ -129,6 +130,7 @@ pub async fn market_status(mctx: &crate::tools::McpContext) -> Result<CallToolRe
         &mut data,
         &["market_time.*.timestamp", "market_time.*.delay_timestamp"],
     );
+    localize_tool_output("market_status", &mut data, None);
 
     tool_json(&data)
 }
@@ -209,7 +211,7 @@ pub async fn ah_premium(
         _ => "1000", // day
     };
     let count_str = p.count.unwrap_or(100).to_string();
-    http_get_tool_unix_dropping(
+    let result = http_get_tool_unix_dropping(
         &client,
         "/v1/quote/ahpremium/klines",
         &[
@@ -220,7 +222,8 @@ pub async fn ah_premium(
         &["klines.*.timestamp"],
         &["price_spread"],
     )
-    .await
+    .await?;
+    Ok(localize_result("ah_premium", result, Some(&p.symbol)))
 }
 
 /// Hoist the per-bar prior-close fields (`apreclose`, `hpreclose`) out of the
@@ -281,6 +284,7 @@ pub async fn ah_premium_intraday(
     let mut value: serde_json::Value =
         serde_json::from_str(&transformed).map_err(Error::Serialize)?;
     convert_unix_paths(&mut value, &["klines.*.timestamp"]);
+    localize_tool_output("ah_premium_intraday", &mut value, Some(&p.symbol));
     // `price_spread` is empty on every intraday minute bar.
     crate::serialize::drop_keys(&mut value, &["price_spread"]);
     hoist_intraday_prev_closes(&mut value);
@@ -307,6 +311,7 @@ pub async fn trade_stats(
         .map(|t| t.text.clone())
         .unwrap_or_default();
     let mut value: serde_json::Value = serde_json::from_str(&json).map_err(Error::Serialize)?;
+    localize_tool_output("trade_stats", &mut value, Some(&p.symbol));
     // Each price-level `price` (and statistics avgprice/preclose) is padded to a
     // fixed decimal width ("435.400"); strip the trailing zeros (lossless). The
     // RFC3339 trade_date strings are not plain decimals and are left untouched.
@@ -332,13 +337,14 @@ pub async fn anomaly(
     // `alert_time` arrives as a raw unix-seconds string (e.g. "1789105515"),
     // which a model cannot interpret; convert it to RFC3339 like every other
     // timestamp field.
-    http_get_tool_unix(
+    let result = http_get_tool_unix(
         &client,
         "/v1/quote/changes",
         &params,
         &["changes.*.alert_time"],
     )
-    .await
+    .await?;
+    Ok(localize_result("anomaly", result, None))
 }
 
 pub async fn constituent(
@@ -482,7 +488,11 @@ pub async fn short_trades(
         &["data.*.timestamp"],
     )
     .await?;
-    Ok(normalize_short_trades(result, is_hk))
+    Ok(localize_result(
+        "short_trades",
+        normalize_short_trades(result, is_hk),
+        Some(&p.symbol),
+    ))
 }
 
 /// Normalize short_trades response to a unified schema regardless of market.
@@ -631,14 +641,15 @@ pub async fn top_movers(
     }
     // Per-event stock display noise: `profile` (~150-word paragraph), `logo`
     // (URL), `full_name` (== name), and constant `latency`/`duplicate` flags.
-    crate::tools::support::http_client::http_post_tool_unix_dropping(
+    let result = crate::tools::support::http_client::http_post_tool_unix_dropping(
         &client,
         "/v1/quote/market/stock-events",
         body,
         &["events.*.timestamp"],
         &["profile", "logo", "full_name", "latency", "duplicate"],
     )
-    .await
+    .await?;
+    Ok(localize_result("top_movers", result, None))
 }
 
 /// Get available rank tab category configurations.

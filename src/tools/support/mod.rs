@@ -5,6 +5,7 @@
 //! modules alongside this one.
 
 pub mod dry_run;
+pub mod exchange_time;
 pub mod http_client;
 pub mod parse;
 pub mod response_limit;
