@@ -1106,7 +1106,7 @@
     },
     "news_search": {
       "title": "新闻搜索",
-      "description": "按关键词搜索新闻文章，按相关度排序，返回数组 [{id, title, description（简短摘要，全文用 news_detail）, source, published_at（RFC3339 时间格式）, url, content_via, source_url, source_logo}]。content_via 为 0 表示长桥原创或版权内容，非 0 表示第三方转载，原文见 source_url",
+      "description": "按关键词搜索新闻文章，按相关度排序，返回数组 [{id, title, description（摘要）, source（来源媒体展示名，按 Accept-Language 本地化）, published_at（RFC3339 时间格式）, url, content_via, source_url, source_logo}]。content_via 为 0 表示长桥原创或版权内容，非 0 表示第三方转载，原文见 source_url",
       "properties": {
         "keyword": "搜索关键词",
         "limit": "最多返回条数（默认 20；上游最多返回 40 条）"

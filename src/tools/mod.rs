@@ -5709,7 +5709,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Search news articles by keyword. Returns an array of {id, title, description (short excerpt; full text via news_detail), source, published_at (RFC3339), url, content_via, source_url, source_logo}, most relevant first. content_via is 0 for Longbridge original or licensed content and non-zero for a third-party repost, whose original is at source_url."
+        description = "Search news articles by keyword. Returns an array of {id, title, description (summary), source (outlet display name, localized by Accept-Language), published_at (RFC3339), url, content_via, source_url, source_logo}, most relevant first. content_via is 0 for Longbridge original or licensed content and non-zero for a third-party repost, whose original is at source_url."
     )]
     async fn news_search(
         &self,

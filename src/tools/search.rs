@@ -71,11 +71,51 @@ fn val_str(v: &serde_json::Value) -> String {
     }
 }
 
+/// The localized `source_name_*` variant that suits an `Accept-Language`
+/// value: traditional Chinese, other Chinese, or English (also the default).
+fn source_name_key(language: Option<&str>) -> &'static str {
+    let lang = language.unwrap_or("").trim().to_ascii_lowercase();
+    if ["zh-hk", "zh-tw", "zh-mo", "zh-hant"]
+        .iter()
+        .any(|tag| lang.starts_with(tag))
+    {
+        "source_name_hk"
+    } else if lang.starts_with("zh") {
+        "source_name_zh"
+    } else {
+        "source_name_en"
+    }
+}
+
+/// A display name for the article's source: the variant for `language`, then
+/// English, then Chinese, then the raw `source_name`, which is sometimes an
+/// internal code such as `benzinga_article`.
+fn display_source(
+    map: &serde_json::Map<String, serde_json::Value>,
+    language: Option<&str>,
+) -> Option<serde_json::Value> {
+    [
+        source_name_key(language),
+        "source_name_en",
+        "source_name_zh",
+        "source_name",
+    ]
+    .iter()
+    .find_map(|key| {
+        map.get(*key)
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+    })
+    .map(|name| serde_json::Value::String(name.to_string()))
+}
+
 /// Reshape one `/v1/search/news` hit to the field names `news` and
 /// `news_detail` use (`description`, `source`, `published_at`), keeping the
 /// citation fields (`content_via`, `source_url`, `source_logo`) a client needs
 /// to tell a Longbridge article from a third-party repost and link the original.
-fn transform_news_item(item: &serde_json::Value) -> serde_json::Value {
+/// `language` is the caller's `Accept-Language`, which picks the source name.
+fn transform_news_item(item: &serde_json::Value, language: Option<&str>) -> serde_json::Value {
     let mut obj = serde_json::Map::new();
     if let Some(map) = item.as_object() {
         for (k, v) in map {
@@ -84,7 +124,9 @@ fn transform_news_item(item: &serde_json::Value) -> serde_json::Value {
                     obj.insert(k.clone(), v.clone());
                 }
                 "source_name" => {
-                    obj.insert("source".to_string(), v.clone());
+                    if let Some(source) = display_source(map, language) {
+                        obj.insert("source".to_string(), source);
+                    }
                 }
                 "title" => {
                     obj.insert(
@@ -103,12 +145,11 @@ fn transform_news_item(item: &serde_json::Value) -> serde_json::Value {
                     }
                 }
                 "description" => {
-                    // A short excerpt keeps 40 hits small; `news_detail` has the
-                    // full text.
-                    let excerpt = truncate_chars(&strip_html(&val_str(v)), 80);
+                    // The whole summary, like `news`, so it can serve as
+                    // citation text.
                     obj.insert(
                         "description".to_string(),
-                        serde_json::Value::String(excerpt),
+                        serde_json::Value::String(strip_html(&val_str(v)).trim().to_string()),
                     );
                 }
                 _ => {}
@@ -198,7 +239,12 @@ pub async fn news_search(
         serde_json::from_str(json_str).map_err(crate::error::Error::Serialize)?;
     let items: Vec<serde_json::Value> = data["news_list"]
         .as_array()
-        .map(|arr| arr.iter().take(limit).map(transform_news_item).collect())
+        .map(|arr| {
+            arr.iter()
+                .take(limit)
+                .map(|item| transform_news_item(item, mctx.language.as_deref()))
+                .collect()
+        })
         .unwrap_or_default();
     Ok(make_result(serde_json::Value::Array(items)))
 }
@@ -237,7 +283,7 @@ mod tests {
     fn string_timestamp_parses_to_real_time() {
         // 2025-09-16T00:00:00Z
         let item = serde_json::json!({"id": "1", "publish_at_timestamp": "1757980800"});
-        let time = transform_news_item(&item)["published_at"]
+        let time = transform_news_item(&item, None)["published_at"]
             .as_str()
             .unwrap()
             .to_string();
@@ -258,7 +304,7 @@ mod tests {
     fn numeric_timestamp_parses_to_real_time() {
         let item = serde_json::json!({"id": "1", "publish_at_timestamp": 1757980800_i64});
         assert!(
-            transform_news_item(&item)["published_at"]
+            transform_news_item(&item, None)["published_at"]
                 .as_str()
                 .unwrap()
                 .starts_with("2025-09-16")
@@ -277,7 +323,7 @@ mod tests {
             serde_json::json!({"id": "1", "publish_at_timestamp": "not-a-number"}),
             serde_json::json!({"id": "1", "publish_at_timestamp": serde_json::Value::Null}),
         ] {
-            let out = transform_news_item(&bad);
+            let out = transform_news_item(&bad, None);
             assert!(
                 out.get("published_at").is_none(),
                 "expected no `published_at` for {bad}, got {:?}",
@@ -286,32 +332,52 @@ mod tests {
         }
     }
 
-    /// Trimming and the `...` marker are intentional — `truncate_chars`
-    /// (shared with `measured_tool_call`'s error logging) applies both, a
-    /// deliberate change from the plain `.chars().take(80)` this call site
-    /// used before. Pinned here so it reads as a decision, not drift.
+    /// `description` is the whole summary (HTML stripped, trimmed), like
+    /// `news`, so it can serve as citation text.
     #[test]
-    fn excerpt_is_trimmed_and_marked_when_truncated() {
+    fn description_is_the_full_summary() {
+        let long = "a".repeat(400);
         let item = serde_json::json!({
             "id": "1",
-            "description": format!("  <p>{}</p>  ", "a".repeat(100)),
+            "description": format!("  <p>{long}</p>  "),
         });
-        let excerpt = transform_news_item(&item)["description"]
-            .as_str()
-            .unwrap()
-            .to_string();
-        assert!(excerpt.ends_with("..."));
-        assert!(!excerpt.starts_with(' ') && !excerpt.trim_end_matches("...").ends_with(' '));
+        assert_eq!(transform_news_item(&item, None)["description"], long);
+        let short = serde_json::json!({"id": "1", "description": "  <p>short</p>  "});
+        assert_eq!(transform_news_item(&short, None)["description"], "short");
     }
 
+    /// `source` is a display name: the localized name for the request
+    /// language, then English, then Chinese, then the raw `source_name` (live
+    /// values from `/v1/search/news`).
     #[test]
-    fn short_excerpt_is_trimmed_but_unmarked() {
-        let item = serde_json::json!({
-            "id": "1",
-            "description": "  <p>short</p>  ",
+    fn source_prefers_a_localized_display_name() {
+        let benzinga = serde_json::json!({
+            "id": "1", "source_name": "benzinga_article",
+            "source_name_zh": "Benzinga", "source_name_hk": "", "source_name_en": "",
         });
-        let transformed = transform_news_item(&item);
-        assert_eq!(transformed["description"].as_str().unwrap(), "short");
+        let zhitong = serde_json::json!({
+            "id": "2", "source_name": "Zhitong",
+            "source_name_zh": "智通财经", "source_name_hk": "智通財經", "source_name_en": "Zhitong",
+        });
+        let bare = serde_json::json!({"id": "3", "source_name": "businessinsider"});
+        let source = |item: &serde_json::Value, lang: Option<&str>| {
+            transform_news_item(item, lang)["source"].clone()
+        };
+        assert_eq!(source(&benzinga, None), "Benzinga");
+        assert_eq!(source(&benzinga, Some("zh-HK")), "Benzinga");
+        assert_eq!(source(&zhitong, None), "Zhitong");
+        assert_eq!(
+            source(&zhitong, Some("zh-CN,zh;q=0.9,en;q=0.8")),
+            "智通财经"
+        );
+        assert_eq!(source(&zhitong, Some("zh-HK")), "智通財經");
+        assert_eq!(source(&zhitong, Some("zh-TW")), "智通財經");
+        assert_eq!(source(&bare, Some("zh-CN")), "businessinsider");
+        // The localized variants never leak into the output.
+        let out = transform_news_item(&zhitong, None);
+        for gone in ["source_name_zh", "source_name_hk", "source_name_en"] {
+            assert!(out.get(gone).is_none(), "unexpected `{gone}`");
+        }
     }
 
     /// A third-party article keeps the citation fields the upstream sends, under
@@ -332,7 +398,7 @@ mod tests {
             "index": "news_v2_20261101",
             "kind": 1,
         });
-        let item = transform_news_item(&raw);
+        let item = transform_news_item(&raw, None);
         assert_eq!(item["id"], "304086865");
         assert_eq!(item["source"], "MSN");
         assert_eq!(item["content_via"], 3);
@@ -367,7 +433,7 @@ mod tests {
             "source_url": "https://www.zhitongcaijing.com/content/detail/1518081.html",
             "source_logo": "https://pub.pbkrs.com/logo.png",
         });
-        let item = transform_news_item(&raw);
+        let item = transform_news_item(&raw, None);
         assert_eq!(item["content_via"], 0);
         assert_eq!(item["source_logo"], "https://pub.pbkrs.com/logo.png");
     }
@@ -406,7 +472,7 @@ mod tests {
         let taken: Vec<_> = upstream
             .iter()
             .take(effective_limit(Some(3)))
-            .map(transform_news_item)
+            .map(|item| transform_news_item(item, None))
             .collect();
         assert_eq!(taken.len(), 3);
     }

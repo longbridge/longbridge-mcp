@@ -1106,7 +1106,7 @@
     },
     "news_search": {
       "title": "新聞搜尋",
-      "description": "按關鍵詞搜尋新聞文章，按相關度排序，返回陣列 [{id, title, description（簡短摘要，全文用 news_detail）, source, published_at（RFC3339 時間格式）, url, content_via, source_url, source_logo}]。content_via 為 0 表示長橋原創或版權內容，非 0 表示第三方轉載，原文見 source_url",
+      "description": "按關鍵詞搜尋新聞文章，按相關度排序，返回陣列 [{id, title, description（摘要）, source（來源媒體展示名，按 Accept-Language 本地化）, published_at（RFC3339 時間格式）, url, content_via, source_url, source_logo}]。content_via 為 0 表示長橋原創或版權內容，非 0 表示第三方轉載，原文見 source_url",
       "properties": {
         "keyword": "搜尋關鍵詞",
         "limit": "最多返回條數（預設 20；上游最多返回 40 條）"
