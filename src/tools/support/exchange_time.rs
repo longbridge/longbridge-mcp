@@ -753,6 +753,74 @@ mod tests {
         );
     }
 
+    /// Tools that turn unix-second time fields into RFC3339 but are deliberately
+    /// not rendered in exchange time, each with the reason.
+    const NOT_LOCALIZED: &[(&str, &str)] = &[
+        (
+            "institution_rating",
+            "analyst start/end dates are not verified as local-midnight stamps",
+        ),
+        (
+            "institution_rating_detail",
+            "`date` and `timestamp` disagree by a day upstream; the intended one is unclear",
+        ),
+        (
+            "forecast_eps",
+            "dates are UTC midnight; a local offset would name the previous day",
+        ),
+        (
+            "ipo_calendar",
+            "empty at review time, so its stamps could not be checked against live data",
+        ),
+        (
+            "profit_analysis",
+            "account-level times, not a market series",
+        ),
+    ];
+
+    /// A tool that converts a unix time field must either be localized (in
+    /// [`SPECS`]) or be listed in [`NOT_LOCALIZED`] with a reason, so a new tool
+    /// cannot slip through with raw UTC stamps unnoticed.
+    #[test]
+    fn unix_time_tools_are_localized_or_explicitly_excluded() {
+        let sources = [
+            include_str!("../quote.rs"),
+            include_str!("../market.rs"),
+            include_str!("../fundamental.rs"),
+            include_str!("../calendar.rs"),
+            include_str!("../ipo.rs"),
+            include_str!("../portfolio.rs"),
+        ];
+        let known: std::collections::BTreeSet<&str> = SPECS
+            .iter()
+            .map(|spec| spec.tool.split(':').next().expect("tool name"))
+            .chain(NOT_LOCALIZED.iter().map(|(tool, _)| *tool))
+            .collect();
+        let time_words = ["timestamp", "_time", "datetime", "_date", "alert_time"];
+
+        let mut unaccounted = Vec::new();
+        for source in sources {
+            // Test fixtures after the module are not tool code.
+            let code = source.split("#[cfg(test)]").next().expect("source");
+            for chunk in code.split("pub async fn ").skip(1) {
+                let name = chunk.split('(').next().expect("fn name").trim();
+                let converts_unix = chunk.contains("convert_unix_paths") || chunk.contains("_unix");
+                let names_a_time_field = chunk
+                    .split('"')
+                    .skip(1)
+                    .step_by(2)
+                    .any(|literal| time_words.iter().any(|word| literal.contains(word)));
+                if converts_unix && names_a_time_field && !known.contains(name) {
+                    unaccounted.push(name.to_string());
+                }
+            }
+        }
+        assert!(
+            unaccounted.is_empty(),
+            "these tools convert a unix time field but are in neither SPECS nor NOT_LOCALIZED: {unaccounted:?}"
+        );
+    }
+
     #[test]
     fn localize_result_rewrites_json_text_and_ignores_the_rest() {
         let text =

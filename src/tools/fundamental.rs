@@ -440,11 +440,12 @@ pub async fn valuation(
     if crate::tools::support::us_market::is_us_fundamental(mctx, &p.symbol).await {
         let ctx = longbridge::fundamental::FundamentalContext::new(mctx.create_config());
         let result = ctx
-            .us_valuation_overview(p.symbol)
+            .us_valuation_overview(p.symbol.clone())
             .await
             .map_err(crate::error::Error::longbridge)?;
         let mut value = serde_json::to_value(&result).map_err(crate::error::Error::Serialize)?;
         crate::tools::support::us_normalize::fix_valuation_value(&mut value);
+        localize_tool_output("valuation", &mut value, Some(&p.symbol));
         return crate::tools::tool_json(&value);
     }
     let client = mctx.create_http_client();
