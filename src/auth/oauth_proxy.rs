@@ -1,20 +1,23 @@
-//! Minimal OAuth token and revocation proxy.
+//! Minimal OAuth authorize redirect plus token and revocation proxy.
 //!
-//! Authorization, dynamic registration, and browser callbacks stay directly
-//! between the MCP client and Longbridge. Only credential-bearing POSTs pass
-//! through this module so the server can derive and attach `x-dc-region`.
+//! Dynamic registration and browser callbacks stay directly between the MCP
+//! client and Longbridge. The authorization endpoint is a same-origin redirect
+//! so clients that enforce issuer binding (e.g. Codex) accept the metadata.
+//! Only credential-bearing POSTs are proxied so the server can derive and
+//! attach `x-dc-region`.
 
 use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
 use axum::body::Bytes;
-use axum::extract::State;
+use axum::extract::{RawQuery, State};
 use axum::http::{HeaderMap, StatusCode, header};
-use axum::response::{IntoResponse, Response};
+use axum::response::{IntoResponse, Redirect, Response};
 use longbridge::DcRegion;
 
 use crate::auth::AppState;
 use crate::auth::metadata::{oauth_upstream_url, public_url_from_headers};
+use crate::metrics::{record_oauth_authorize, record_oauth_revoke, record_oauth_token};
 
 static OAUTH_HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
     reqwest::Client::builder()
@@ -55,8 +58,48 @@ fn result_label(is_success: bool) -> &'static str {
 /// 按操作类型记录对应的 OAuth 指标。
 fn record(op: OAuthOp, grant_type: &str, result: &str) {
     match op {
-        OAuthOp::Token => crate::metrics::record_oauth_token(grant_type, result),
-        OAuthOp::Revoke => crate::metrics::record_oauth_revoke(result),
+        OAuthOp::Token => record_oauth_token(grant_type, result),
+        OAuthOp::Revoke => record_oauth_revoke(result),
+    }
+}
+
+/// Redirect the browser to the upstream authorization endpoint.
+///
+/// The advertised `authorization_endpoint` must share the issuer's origin:
+/// clients such as Codex reject cross-origin authorization endpoints unless
+/// the server supports RFC 9207 issuer-bound callbacks. The query string is
+/// forwarded verbatim so PKCE, `state`, and `redirect_uri` reach Longbridge
+/// unchanged.
+pub async fn authorize(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    RawQuery(query): RawQuery,
+) -> Response {
+    let public = public_url_from_headers(&headers, &state.base_url);
+    let upstream = oauth_upstream_url(public.via_global_entry);
+    record_oauth_authorize();
+    // Each redirect carries per-login `state` and PKCE values; never let an
+    // edge cache replay one user's redirect to another.
+    (
+        [
+            (header::CACHE_CONTROL, "no-store"),
+            (header::PRAGMA, "no-cache"),
+        ],
+        Redirect::to(&authorize_redirect_url(&upstream, query.as_deref())),
+    )
+        .into_response()
+}
+
+/// Join an upstream OAuth base URL and a leading-slash endpoint path.
+fn upstream_endpoint(upstream: &str, path: &str) -> String {
+    format!("{}{path}", upstream.trim_end_matches('/'))
+}
+
+fn authorize_redirect_url(upstream: &str, query: Option<&str>) -> String {
+    let base = upstream_endpoint(upstream, "/oauth2/authorize");
+    match query.filter(|query| !query.is_empty()) {
+        Some(query) => format!("{base}?{query}"),
+        None => base,
     }
 }
 
@@ -119,7 +162,7 @@ async fn forward(
     let grant_type = grant_type_of(&pairs);
     let public = public_url_from_headers(headers, &state.base_url);
     let upstream = oauth_upstream_url(public.via_global_entry);
-    let url = format!("{}{upstream_path}", upstream.trim_end_matches('/'));
+    let url = upstream_endpoint(&upstream, upstream_path);
 
     match upstream_request(&url, region, body).send().await {
         Ok(response) => {
@@ -179,6 +222,27 @@ mod tests {
             .iter()
             .map(|(key, value)| ((*key).to_string(), (*value).to_string()))
             .collect()
+    }
+
+    #[test]
+    fn authorize_redirect_preserves_query_verbatim() {
+        let query = "response_type=code&client_id=abc&redirect_uri=http%3A%2F%2F127.0.0.1%3A1455%2Fcallback&code_challenge=x&code_challenge_method=S256&state=s%2B1";
+        assert_eq!(
+            authorize_redirect_url("https://openapi.longbridge.com/", Some(query)),
+            format!("https://openapi.longbridge.com/oauth2/authorize?{query}")
+        );
+    }
+
+    #[test]
+    fn authorize_redirect_without_query() {
+        assert_eq!(
+            authorize_redirect_url("https://openapi.longbridge.com", None),
+            "https://openapi.longbridge.com/oauth2/authorize"
+        );
+        assert_eq!(
+            authorize_redirect_url("https://openapi.longbridge.com", Some("")),
+            "https://openapi.longbridge.com/oauth2/authorize"
+        );
     }
 
     #[test]

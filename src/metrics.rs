@@ -1,6 +1,6 @@
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
-use prometheus::{Encoder, HistogramVec, IntCounterVec, Opts, Registry, TextEncoder};
+use prometheus::{Encoder, HistogramVec, IntCounter, IntCounterVec, Opts, Registry, TextEncoder};
 
 use std::sync::LazyLock;
 
@@ -95,6 +95,16 @@ static OAUTH_TOKEN_TOTAL: LazyLock<IntCounterVec> = LazyLock::new(|| {
             "OAuth token exchanges proxied through this server",
         ),
         &["grant_type", "result"],
+    )
+    .unwrap();
+    REGISTRY.register(Box::new(counter.clone())).unwrap();
+    counter
+});
+
+static OAUTH_AUTHORIZE_TOTAL: LazyLock<IntCounter> = LazyLock::new(|| {
+    let counter = IntCounter::new(
+        "mcp_oauth_authorize_total",
+        "OAuth authorization requests redirected to the upstream authorize endpoint",
     )
     .unwrap();
     REGISTRY.register(Box::new(counter.clone())).unwrap();
@@ -308,6 +318,11 @@ pub fn record_oauth_token(grant_type: &str, result: &str) {
         .inc();
 }
 
+/// 记录一次经本服务重定向到上游的 OAuth 授权请求(新登录发起信号)。
+pub fn record_oauth_authorize() {
+    OAUTH_AUTHORIZE_TOTAL.inc();
+}
+
 /// 记录一次经本服务代理的 OAuth token 撤销(断连信号)。`result` 为
 /// `"success"`(上游 2xx)或 `"error"`。
 pub fn record_oauth_revoke(result: &str) {
@@ -414,6 +429,13 @@ mod tests {
             .with_label_values(&["authorization_code", "success"])
             .get();
         assert_eq!(after - before, 1);
+    }
+
+    #[test]
+    fn record_oauth_authorize_increments() {
+        let before = OAUTH_AUTHORIZE_TOTAL.get();
+        record_oauth_authorize();
+        assert_eq!(OAUTH_AUTHORIZE_TOTAL.get() - before, 1);
     }
 
     #[test]

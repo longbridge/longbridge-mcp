@@ -276,9 +276,16 @@ pub(crate) fn oauth_upstream_url(via_global_entry: bool) -> String {
 }
 
 /// RFC 8414 metadata for the minimal OAuth facade hosted by this MCP server.
-/// Authorization and registration remain direct Longbridge endpoints; only
-/// token exchange and revocation return through this server so it can attach
+/// Registration remains a direct Longbridge endpoint. Authorization is a
+/// same-origin redirect to Longbridge so the endpoint shares the issuer's
+/// origin, which clients enforcing issuer binding (e.g. Codex) require. Token
+/// exchange and revocation return through this server so it can attach
 /// Longbridge's private DC routing header.
+///
+/// The `issuer` is derived from request headers, so it must stay stable per
+/// public entry point: Codex binds refresh tokens to the issuer and forces a
+/// fresh login when it changes (e.g. after a Host-forwarding or
+/// `LONGBRIDGE_PUBLIC_HOSTS` change).
 #[derive(Serialize)]
 pub(crate) struct AuthorizationServerMetadata {
     issuer: String,
@@ -302,7 +309,7 @@ fn build_authorization_server_metadata(
     let upstream = upstream.trim_end_matches('/');
     AuthorizationServerMetadata {
         issuer: issuer.to_string(),
-        authorization_endpoint: format!("{upstream}/oauth2/authorize"),
+        authorization_endpoint: format!("{issuer}/oauth2/authorize"),
         token_endpoint: format!("{issuer}/oauth2/token"),
         revocation_endpoint: format!("{issuer}/oauth2/revoke"),
         registration_endpoint: format!("{upstream}/oauth2/register"),
@@ -359,7 +366,7 @@ static SERVER_CARD: LazyLock<ServerCard> = LazyLock::new(|| ServerCard {
 
 /// Static MCP server card served at `/.well-known/mcp/server-card.json`.
 ///
-/// Lets directory scanners (e.g. Smithery) discover server metadata and the
+/// Lets MCP directory scanners discover server metadata and the
 /// full tool list without performing the authenticated `tools/list` probe.
 /// Declaring `authentication.schemes = ["oauth2"]` signals that the client
 /// should follow the RFC 9728 protected-resource-metadata flow rather than
@@ -592,7 +599,7 @@ mod tests {
     }
 
     #[test]
-    fn oauth_facade_only_proxies_credential_bearing_endpoints() {
+    fn oauth_facade_keeps_authorize_on_issuer_origin() {
         let metadata = build_authorization_server_metadata(
             "https://mcp.longbridge.com/".to_string(),
             "https://openapi.longbridge.com/".to_string(),
@@ -601,7 +608,7 @@ mod tests {
         assert_eq!(metadata.issuer, "https://mcp.longbridge.com");
         assert_eq!(
             metadata.authorization_endpoint,
-            "https://openapi.longbridge.com/oauth2/authorize"
+            "https://mcp.longbridge.com/oauth2/authorize"
         );
         assert_eq!(
             metadata.registration_endpoint,
