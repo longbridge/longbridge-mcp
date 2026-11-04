@@ -292,7 +292,7 @@ static SERVER_CARD: LazyLock<ServerCard> = LazyLock::new(|| ServerCard {
 
 /// Static MCP server card served at `/.well-known/mcp/server-card.json`.
 ///
-/// Lets directory scanners (e.g. Smithery) discover server metadata and the
+/// Lets MCP directory scanners discover server metadata and the
 /// full tool list without performing the authenticated `tools/list` probe.
 /// Declaring `authentication.schemes = ["oauth2"]` signals that the client
 /// should follow the RFC 9728 protected-resource-metadata flow rather than

@@ -255,8 +255,8 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         )
         .with_state(state.clone());
 
-    // Serve the static server card at both the host-root path Smithery's docs
-    // specify and the `/mcp/`-prefixed path (some upstream gateways only forward
+    // Serve the static server card at both the host-root well-known path and
+    // the `/mcp/`-prefixed path (some upstream gateways only forward
     // `/mcp/*` to this service, so the prefixed copy is a fallback).
     let server_card_route = Router::new()
         .route(
