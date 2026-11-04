@@ -6,6 +6,7 @@ use rmcp::schemars::JsonSchema;
 use rmcp::serde::Deserialize;
 
 use crate::error::Error;
+use crate::tools::support::parse;
 use crate::tools::support::tolerant::{
     tolerant_option_i32, tolerant_option_usize, tolerant_option_vec_string,
 };
@@ -81,9 +82,10 @@ pub async fn news(
     // Raw passthrough of `GET /v1/content/{symbol}/news` rather than the SDK's
     // typed `NewsItem`, so fields the upstream adds (the `content_via` /
     // `source*` citation fields) reach callers without an SDK release.
+    let symbol = parse::path_segment("symbol", &p.symbol)?;
     let resp = mctx
         .create_http_client()
-        .request(Method::GET, format!("/v1/content/{}/news", p.symbol))
+        .request(Method::GET, format!("/v1/content/{symbol}/news"))
         .response::<Json<serde_json::Value>>()
         .send()
         .await
