@@ -120,6 +120,15 @@ pub struct NewsDetailResponse {
     pub published_at: Option<String>,
     /// Related stock tickers, format `<CODE>.<MARKET>` (e.g. "AAPL.US").
     pub tickers: Option<Vec<String>>,
+    /// 0 for Longbridge-original or licensed content; non-zero for a
+    /// third-party repost, whose original is at `source_url`.
+    pub content_via: Option<i32>,
+    /// Source outlet name, e.g. "MSN".
+    pub source: Option<String>,
+    /// URL of the original article, for third-party content.
+    pub source_url: Option<String>,
+    /// Source outlet logo URL.
+    pub source_logo: Option<String>,
 }
 
 /// Author of a news article.
@@ -129,8 +138,6 @@ pub struct NewsAuthor {
     pub member_id: Option<String>,
     /// Display name.
     pub name: Option<String>,
-    /// Avatar URL.
-    pub avatar: Option<String>,
 }
 
 /// An image attached to a news article.

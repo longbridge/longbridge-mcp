@@ -827,7 +827,7 @@
     },
     "news": {
       "title": "资讯",
-      "description": "获取证券的最新新闻，按时间从新到旧（默认 20 条，更多用 count 指定），返回顶层数组（无包装对象）{id, title, description, url, published_at, comments_count, likes_count, shares_count}",
+      "description": "获取证券的最新新闻，按时间从新到旧（默认 20 条，更多用 count 指定），返回顶层数组（无包装对象）{id, title, description, url, published_at, comments_count, likes_count, shares_count}。带引用字段（上游提供时返回）：content_via（0 = 长桥原创或版权内容；非 0 = 第三方转载）、source、source_url（原文地址）、source_logo。",
       "properties": {
         "symbol": "证券代码，例如 `\"700.HK\"`。请用规范代码，补零的代码（如 \"00700.HK\"）会返回空记录而非报错",
         "count": "返回的文章数量，从新到旧。默认 20（每条约 700 字节），上游约返回 50 条"
@@ -835,7 +835,7 @@
     },
     "news_detail": {
       "title": "资讯详情",
-      "description": "按 id 获取单篇资讯的完整内容（id 来自 news / news_search）。返回 {id, title, description, body (Markdown), url, author{member_id, name}, images[], comments_count, likes_count, shares_count, published_at, tickers[]}",
+      "description": "按 id 获取单篇资讯的完整内容（id 来自 news / news_search）。返回 {id, title, description, body (Markdown), url, author{member_id, name}, images[], comments_count, likes_count, shares_count, published_at, tickers[]}。带引用字段（上游提供时返回）：content_via（0 = 长桥原创或版权内容；非 0 = 第三方转载）、source、source_url（原文地址）、source_logo。",
       "properties": {
         "id": "资讯文章 ID（数字），例如 \"7123456789012345678\"。可从 news 或 news_search 获取"
       }
@@ -1106,7 +1106,7 @@
     },
     "news_search": {
       "title": "新闻搜索",
-      "description": "按关键词搜索新闻文章，按相关度排序，返回数组 [{id, title, excerpt, source_name, time（RFC3339 时间格式）, url}]",
+      "description": "按关键词搜索新闻文章，按相关度排序，返回数组 [{id, title, description（简短摘要，全文用 news_detail）, source, published_at（RFC3339 时间格式）, url, content_via, source_url, source_logo}]。content_via 为 0 表示长桥原创或版权内容，非 0 表示第三方转载，原文见 source_url",
       "properties": {
         "keyword": "搜索关键词",
         "limit": "最多返回条数（默认 20；上游最多返回 40 条）"

@@ -827,7 +827,7 @@
     },
     "news": {
       "title": "資訊",
-      "description": "獲取證券相關最新新聞，按時間從新到舊（預設 20 條，更多用 count 指定），返回頂層數組（無外層物件）{id, title, description, url, published_at, comments_count, likes_count, shares_count}",
+      "description": "獲取證券相關最新新聞，按時間從新到舊（預設 20 條，更多用 count 指定），返回頂層數組（無外層物件）{id, title, description, url, published_at, comments_count, likes_count, shares_count}。帶引用欄位（上游提供時返回）：content_via（0 = 長橋原創或版權內容；非 0 = 第三方轉載）、source、source_url（原文地址）、source_logo。",
       "properties": {
         "symbol": "證券代碼，例如 `\"700.HK\"`。請用規範代碼，補零的代碼（如 \"00700.HK\"）會返回空記錄而非報錯",
         "count": "返回的文章數量，從新到舊。預設 20（每條約 700 字節），上游約返回 50 條"
@@ -835,7 +835,7 @@
     },
     "news_detail": {
       "title": "資訊詳情",
-      "description": "按 id 獲取單篇資訊的完整內容（id 來自 news / news_search）。返回 {id, title, description, body (Markdown), url, author{member_id, name}, images[], comments_count, likes_count, shares_count, published_at, tickers[]}",
+      "description": "按 id 獲取單篇資訊的完整內容（id 來自 news / news_search）。返回 {id, title, description, body (Markdown), url, author{member_id, name}, images[], comments_count, likes_count, shares_count, published_at, tickers[]}。帶引用欄位（上游提供時返回）：content_via（0 = 長橋原創或版權內容；非 0 = 第三方轉載）、source、source_url（原文地址）、source_logo。",
       "properties": {
         "id": "資訊文章 ID（數字），例如 \"7123456789012345678\"。可從 news 或 news_search 獲取"
       }
@@ -1106,7 +1106,7 @@
     },
     "news_search": {
       "title": "新聞搜尋",
-      "description": "按關鍵詞搜尋新聞文章，按相關度排序，返回陣列 [{id, title, excerpt, source_name, time（RFC3339 時間格式）, url}]",
+      "description": "按關鍵詞搜尋新聞文章，按相關度排序，返回陣列 [{id, title, description（簡短摘要，全文用 news_detail）, source, published_at（RFC3339 時間格式）, url, content_via, source_url, source_logo}]。content_via 為 0 表示長橋原創或版權內容，非 0 表示第三方轉載，原文見 source_url",
       "properties": {
         "keyword": "搜尋關鍵詞",
         "limit": "最多返回條數（預設 20；上游最多返回 40 條）"

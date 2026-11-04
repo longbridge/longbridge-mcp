@@ -71,13 +71,20 @@ fn val_str(v: &serde_json::Value) -> String {
     }
 }
 
+/// Reshape one `/v1/search/news` hit to the field names `news` and
+/// `news_detail` use (`description`, `source`, `published_at`), keeping the
+/// citation fields (`content_via`, `source_url`, `source_logo`) a client needs
+/// to tell a Longbridge article from a third-party repost and link the original.
 fn transform_news_item(item: &serde_json::Value) -> serde_json::Value {
     let mut obj = serde_json::Map::new();
     if let Some(map) = item.as_object() {
         for (k, v) in map {
             match k.as_str() {
-                "id" | "source_name" => {
+                "id" | "content_via" | "source_url" | "source_logo" => {
                     obj.insert(k.clone(), v.clone());
+                }
+                "source_name" => {
+                    obj.insert("source".to_string(), v.clone());
                 }
                 "title" => {
                     obj.insert(
@@ -86,18 +93,23 @@ fn transform_news_item(item: &serde_json::Value) -> serde_json::Value {
                     );
                 }
                 "publish_at_timestamp" => {
-                    // Omit `time` on a missing/zero/unparseable timestamp rather
-                    // than emit a misleading `1970-01-01T00:00:00Z`.
+                    // Omit `published_at` on a missing/zero/unparseable timestamp
+                    // rather than emit a misleading `1970-01-01T00:00:00Z`.
                     if let Some(ts) = as_unix_ts(v) {
                         obj.insert(
-                            "time".to_string(),
+                            "published_at".to_string(),
                             serde_json::Value::String(fmt_unix_ts(ts)),
                         );
                     }
                 }
                 "description" => {
+                    // A short excerpt keeps 40 hits small; `news_detail` has the
+                    // full text.
                     let excerpt = truncate_chars(&strip_html(&val_str(v)), 80);
-                    obj.insert("excerpt".to_string(), serde_json::Value::String(excerpt));
+                    obj.insert(
+                        "description".to_string(),
+                        serde_json::Value::String(excerpt),
+                    );
                 }
                 _ => {}
             }
@@ -225,7 +237,7 @@ mod tests {
     fn string_timestamp_parses_to_real_time() {
         // 2025-09-16T00:00:00Z
         let item = serde_json::json!({"id": "1", "publish_at_timestamp": "1757980800"});
-        let time = transform_news_item(&item)["time"]
+        let time = transform_news_item(&item)["published_at"]
             .as_str()
             .unwrap()
             .to_string();
@@ -246,7 +258,7 @@ mod tests {
     fn numeric_timestamp_parses_to_real_time() {
         let item = serde_json::json!({"id": "1", "publish_at_timestamp": 1757980800_i64});
         assert!(
-            transform_news_item(&item)["time"]
+            transform_news_item(&item)["published_at"]
                 .as_str()
                 .unwrap()
                 .starts_with("2025-09-16")
@@ -267,9 +279,9 @@ mod tests {
         ] {
             let out = transform_news_item(&bad);
             assert!(
-                out.get("time").is_none(),
-                "expected no `time` for {bad}, got {:?}",
-                out.get("time")
+                out.get("published_at").is_none(),
+                "expected no `published_at` for {bad}, got {:?}",
+                out.get("published_at")
             );
         }
     }
@@ -284,7 +296,7 @@ mod tests {
             "id": "1",
             "description": format!("  <p>{}</p>  ", "a".repeat(100)),
         });
-        let excerpt = transform_news_item(&item)["excerpt"]
+        let excerpt = transform_news_item(&item)["description"]
             .as_str()
             .unwrap()
             .to_string();
@@ -299,7 +311,65 @@ mod tests {
             "description": "  <p>short</p>  ",
         });
         let transformed = transform_news_item(&item);
-        assert_eq!(transformed["excerpt"].as_str().unwrap(), "short");
+        assert_eq!(transformed["description"].as_str().unwrap(), "short");
+    }
+
+    /// A third-party article keeps the citation fields the upstream sends, under
+    /// the same names `news` and `news_detail` use (live sample, 2026-11-04).
+    #[test]
+    fn news_item_carries_source_fields_with_aligned_names() {
+        let raw = serde_json::json!({
+            "id": "304086865",
+            "title": "NVDA shares inch higher overnight",
+            "description": "Nvidia shares rose 0.8% overnight.",
+            "source_name": "MSN",
+            "source_name_zh": "MSN",
+            "content_via": 3,
+            "source_url": "https://www.msn.com/en-us/money/top-stocks/ar-AA2gDMOO",
+            "publish_at_timestamp": "1793697522",
+            "publish_at": "2026-11-03 09:18:42",
+            "score": "259.08334",
+            "index": "news_v2_20261101",
+            "kind": 1,
+        });
+        let item = transform_news_item(&raw);
+        assert_eq!(item["id"], "304086865");
+        assert_eq!(item["source"], "MSN");
+        assert_eq!(item["content_via"], 3);
+        assert_eq!(
+            item["source_url"],
+            "https://www.msn.com/en-us/money/top-stocks/ar-AA2gDMOO"
+        );
+        assert_eq!(item["published_at"], "2026-11-03T09:18:42Z");
+        assert_eq!(item["description"], "Nvidia shares rose 0.8% overnight.");
+        // Old names and search-ranking internals are gone.
+        for gone in [
+            "source_name",
+            "excerpt",
+            "time",
+            "score",
+            "index",
+            "publish_at",
+            "publish_at_timestamp",
+        ] {
+            assert!(item.get(gone).is_none(), "unexpected `{gone}` in {item}");
+        }
+    }
+
+    /// Longbridge-original or licensed content says so with `content_via: 0`,
+    /// and `source_logo` passes through whenever the upstream starts sending it.
+    #[test]
+    fn news_item_passes_content_via_zero_and_source_logo() {
+        let raw = serde_json::json!({
+            "id": "1",
+            "content_via": 0,
+            "source_name": "Zhitong",
+            "source_url": "https://www.zhitongcaijing.com/content/detail/1518081.html",
+            "source_logo": "https://pub.pbkrs.com/logo.png",
+        });
+        let item = transform_news_item(&raw);
+        assert_eq!(item["content_via"], 0);
+        assert_eq!(item["source_logo"], "https://pub.pbkrs.com/logo.png");
     }
 
     /// MCP requires `structuredContent` to be an object. `news_search` /
