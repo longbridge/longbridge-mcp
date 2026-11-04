@@ -18,6 +18,7 @@ use rmcp::serde::Deserialize;
 
 use crate::error::Error;
 use crate::tools::support::http_client::http_get_tool;
+use crate::tools::support::parse;
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ScreenerRecommendStrategiesParam {
@@ -123,7 +124,8 @@ pub async fn screener_strategy(
     p: ScreenerStrategyParam,
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
-    let path = format!("/v1/quote/ai/screener/strategy/{}", p.id);
+    let id = parse::path_segment("id", &p.id)?;
+    let path = format!("/v1/quote/ai/screener/strategy/{id}");
     let result = http_get_tool(&client, &path, &[]).await?;
     Ok(strip_strategy_keys(result))
 }
@@ -326,6 +328,7 @@ pub async fn screener_search(
     let mut suspects: Vec<String> = Vec::new();
     let (market, filters, returns) = if let Some(ref sid) = p.strategy_id {
         // Mode A: fetch strategy and build filters/returns automatically
+        let sid = parse::path_segment("strategy_id", sid)?;
         let strategy_path = format!("/v1/quote/ai/screener/strategy/{sid}");
         let raw: String = client
             .request(Method::GET, &strategy_path)

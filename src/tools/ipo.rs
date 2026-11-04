@@ -4,6 +4,7 @@ use rmcp::schemars::JsonSchema;
 use rmcp::serde::Deserialize;
 
 use crate::tools::support::http_client::{http_get_tool, http_get_tool_unix};
+use crate::tools::support::parse;
 
 fn make_result(json: String) -> CallToolResult {
     // Cap bogus decimal precision (e.g. investor `capital_ratio` values like
@@ -212,7 +213,8 @@ pub async fn ipo_order_detail(
     p: IpoOrderDetailParam,
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
-    let path = format!("/v1/ipo/orders/{}", p.order_id);
+    let order_id = parse::path_segment("order_id", &p.order_id)?;
+    let path = format!("/v1/ipo/orders/{order_id}");
     http_get_tool(&client, &path, &[]).await
 }
 

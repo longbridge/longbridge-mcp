@@ -365,6 +365,36 @@ mod tests {
         }
     }
 
+    /// Tool code must not interpolate a raw parameter (`p.xxx`) into a `/v1/`
+    /// request path; bind it through [`super::path_segment`] first.
+    #[test]
+    fn tool_paths_do_not_interpolate_raw_params() {
+        let sources = [
+            ("content.rs", include_str!("../content.rs")),
+            ("ipo.rs", include_str!("../ipo.rs")),
+            ("screener.rs", include_str!("../screener.rs")),
+            ("sharelist.rs", include_str!("../sharelist.rs")),
+            ("trade.rs", include_str!("../trade.rs")),
+            ("quote.rs", include_str!("../quote.rs")),
+            ("market.rs", include_str!("../market.rs")),
+            ("fundamental.rs", include_str!("../fundamental.rs")),
+            ("portfolio.rs", include_str!("../portfolio.rs")),
+        ];
+        let mut offenders = Vec::new();
+        for (file, source) in sources {
+            for (at, _) in source.match_indices("format!(\"/v1/") {
+                let call: String = source[at..].chars().take_while(|c| *c != ';').collect();
+                if call.contains(", p.") || call.contains("{p.") {
+                    offenders.push(format!("{file}: {}", call.lines().next().unwrap_or("")));
+                }
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "raw params interpolated into request paths: {offenders:#?}"
+        );
+    }
+
     /// Each of these would reach another endpoint once `..` is normalized, e.g.
     /// `/v1/sharelists/../trade/order?order_id=1` becomes `/v1/trade/order`.
     #[test]

@@ -200,6 +200,8 @@ pub async fn topic(
     mctx: &crate::tools::McpContext,
     p: SymbolParam,
 ) -> Result<CallToolResult, McpError> {
+    // The SDK interpolates the symbol into `/v1/content/{symbol}/topics`.
+    parse::path_segment("symbol", &p.symbol)?;
     let ctx = ContentContext::new(mctx.create_config());
     let result = ctx.topics(p.symbol).await.map_err(Error::longbridge)?;
     // Community posts wrap every ticker mention in `[st]…#Name.HK[/st]` markup;
