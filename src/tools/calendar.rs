@@ -7,6 +7,7 @@ use rmcp::serde::Deserialize;
 
 use crate::error::{Error, sanitize_longbridge_error};
 use crate::serialize::{convert_unix_paths, transform_json};
+use crate::tools::support::exchange_time::localize_tool_output;
 use crate::tools::support::parse;
 
 /// Maximum pages to fetch per request (matches CLI behaviour).
@@ -312,6 +313,8 @@ pub async fn finance_calendar(
     let mut value: serde_json::Value =
         serde_json::from_str(&transformed).map_err(Error::Serialize)?;
     convert_unix_paths(&mut value, &["list.*.infos.*.datetime"]);
+    // Per category: dividend dates are UTC midnight and must stay as they are.
+    localize_tool_output(&format!("finance_calendar:{category}"), &mut value, None);
     // Drop always-empty (chart_uid, financial_market_time), constant
     // (source_type=0), and display-only (icon URL, widget_short_display_date, the
     // empty data_kv `key`) fields from each event. These names collide with

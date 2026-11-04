@@ -7,6 +7,7 @@ use rmcp::schemars::JsonSchema;
 use rmcp::serde::Deserialize;
 
 use crate::error::Error;
+use crate::tools::support::exchange_time::{localize_result, localize_tool_output};
 use crate::tools::support::http_client::{
     http_get_tool, http_get_tool_unix, http_get_tool_unix_dropping, http_post_raw,
     http_post_tool_reshape, http_post_value,
@@ -455,6 +456,15 @@ where
     }
 }
 
+/// Unix-second fields of a `/quote/quotes` entry (after `over_night_quote` is
+/// renamed): the quote's own timestamp and those of its extended sessions.
+const QUOTE_UNIX_PATHS: &[&str] = &[
+    "*.timestamp",
+    "*.pre_market_quote.timestamp",
+    "*.post_market_quote.timestamp",
+    "*.overnight_quote.timestamp",
+];
+
 pub async fn quote(
     mctx: &crate::tools::McpContext,
     p: SymbolsParam,
@@ -472,11 +482,13 @@ pub async fn quote(
         Some("secu_quote"),
         &[("over_night_quote", "overnight_quote")],
         &["volume_str"],
-        &["*.timestamp"],
+        QUOTE_UNIX_PATHS,
     )
     .await?;
     map_enum_path::<longbridge::quote::TradeStatus>(&mut value, &["*", "trade_status"]);
     normalize_extended_sessions(&mut value);
+    // One call can mix markets, so each entry follows its own exchange.
+    localize_tool_output("quote", &mut value, None);
     // Non-US symbols carry `pre_market_quote`/`post_market_quote`/
     // `overnight_quote` as `null`; drop those (and any other absent optional).
     crate::serialize::strip_nulls(&mut value);
@@ -608,6 +620,7 @@ pub async fn option_quote(
         }
     }
 
+    localize_tool_output("option_quote", &mut value, None);
     tool_json(&value)
 }
 
@@ -643,6 +656,7 @@ pub async fn warrant_quote(
         }
     }
     map_enum_path::<longbridge::quote::TradeStatus>(&mut value, &["*", "trade_status"]);
+    localize_tool_output("warrant_quote", &mut value, None);
     crate::serialize::round_decimals(&mut value, 6);
     Ok(crate::tools::tool_result(
         serde_json::to_string(&value).map_err(Error::Serialize)?,
@@ -739,6 +753,7 @@ pub async fn trades(
         &["*", "trade_session"],
     );
     crate::serialize::strip_trailing_zeros(&mut value);
+    localize_tool_output("trades", &mut value, Some(&p.symbol));
     Ok(crate::tools::tool_result(
         serde_json::to_string(&value).map_err(Error::Serialize)?,
     ))
@@ -755,7 +770,7 @@ pub async fn intraday(
     // WS→HTTP (id 511, POST /quote/intraday). Unwrap `lines`, drop the redundant
     // `volume_str`, convert unix `timestamp` to RFC3339, strip padded price zeros.
     let client = mctx.create_http_client();
-    http_post_tool_reshape(
+    let result = http_post_tool_reshape(
         &client,
         "/quote/intraday",
         serde_json::json!({ "symbol": p.symbol, "trade_session": sessions as i32 }),
@@ -765,7 +780,10 @@ pub async fn intraday(
         &["*.timestamp"],
         true,
     )
-    .await
+    .await?;
+    // Pre/post/overnight minutes cross UTC midnight for US symbols, so render
+    // them in the exchange's own time.
+    Ok(localize_result("intraday", result, Some(&p.symbol)))
 }
 
 /// Upstream's own "symbol count out of limit" business code — seen firing
@@ -810,10 +828,12 @@ where
 /// Reshape a `/quote/candlesticks` or `/quote/history-candlesticks` raw response
 /// (candlestick list) to the SDK `Candlestick` shape: unwrap `candlesticks`, drop
 /// the redundant `volume_str`, convert unix `timestamp`, map `trade_session` int
-/// → SDK name, strip padded price/turnover trailing zeros.
+/// → SDK name, strip padded price/turnover trailing zeros. `timestamp` is
+/// rendered in `symbol`'s exchange-local time so its date prefix is the trading
+/// date (see [`exchange_time`](crate::tools::support::exchange_time)).
 /// NOTE: the REST payload omits the SDK's `open_updated` flag — pending a
 /// gateway/backend addition (see verification report); not synthesized here.
-fn reshape_candlesticks(resp: &str) -> Result<CallToolResult, McpError> {
+fn reshape_candlesticks(resp: &str, symbol: &str) -> Result<CallToolResult, McpError> {
     let transformed =
         crate::serialize::transform_json(resp.as_bytes()).map_err(Error::Serialize)?;
     let mut value: serde_json::Value =
@@ -823,6 +843,7 @@ fn reshape_candlesticks(resp: &str) -> Result<CallToolResult, McpError> {
     }
     crate::serialize::drop_keys(&mut value, &["volume_str"]);
     crate::serialize::convert_unix_paths(&mut value, &["*.timestamp"]);
+    localize_tool_output("candlesticks", &mut value, Some(symbol));
     map_enum_path_via::<longbridge_proto::quote::TradeSession, longbridge::quote::TradeSession>(
         &mut value,
         &["*", "trade_session"],
@@ -863,7 +884,7 @@ pub async fn candlesticks(
     })
     .await
     .map_err(|e| Error::longbridge(*e))?;
-    reshape_candlesticks(&resp)
+    reshape_candlesticks(&resp, &p.symbol)
 }
 
 pub async fn history_candlesticks_by_offset(
@@ -922,7 +943,7 @@ pub async fn history_candlesticks_by_offset(
             return Err(err);
         }
     };
-    reshape_candlesticks(&resp)
+    reshape_candlesticks(&resp, &p.symbol)
 }
 
 pub async fn history_candlesticks_by_date(
@@ -969,7 +990,7 @@ pub async fn history_candlesticks_by_date(
             return Err(err);
         }
     };
-    let result = reshape_candlesticks(&resp)?;
+    let result = reshape_candlesticks(&resp, &p.symbol)?;
     // With no range, upstream returns ~1000 bars (~170k chars), past what MCP
     // clients accept for one tool result. Keep the newest, like `candlesticks`.
     Ok(if unbounded {
@@ -1216,7 +1237,7 @@ pub async fn capital_flow(
     // backend has confirmed this and will fix it (align REST to WS). Not scaled
     // here on purpose, so nothing double-scales once the backend fix lands.
     let client = mctx.create_http_client();
-    http_post_tool_reshape(
+    let result = http_post_tool_reshape(
         &client,
         "/quote/capital-flow",
         serde_json::json!({ "symbol": p.symbol }),
@@ -1226,7 +1247,8 @@ pub async fn capital_flow(
         &["*.timestamp"],
         false,
     )
-    .await
+    .await?;
+    Ok(localize_result("capital_flow", result, Some(&p.symbol)))
 }
 
 pub async fn capital_distribution(
@@ -1257,6 +1279,7 @@ pub async fn capital_distribution(
     });
     let data_available = raw_ts.map(|n| n != 0).unwrap_or(false);
     crate::serialize::convert_unix_paths(&mut value, &["timestamp"]);
+    localize_tool_output("capital_distribution", &mut value, Some(&p.symbol));
     // The backend sends `""` for a zero bucket; the SDK rendered that as `"0"`.
     for group in ["capital_in", "capital_out"] {
         if let Some(obj) = value.get_mut(group).and_then(|g| g.as_object_mut()) {
@@ -1343,7 +1366,9 @@ pub async fn market_temperature(
         mctx.evict_quote_context();
         Error::longbridge(e)
     })?;
-    tool_json(&result)
+    let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;
+    localize_tool_output("market_temperature", &mut value, Some(&p.market));
+    tool_json(&value)
 }
 
 pub async fn history_market_temperature(
@@ -1366,6 +1391,7 @@ pub async fn history_market_temperature(
     // across markets and years. Drop it.
     let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;
     crate::serialize::drop_keys(&mut value, &["description"]);
+    localize_tool_output("history_market_temperature", &mut value, Some(&p.market));
     tool_json(&value)
 }
 
@@ -1743,7 +1769,7 @@ pub async fn short_positions(
         &["data.*.timestamp"]
     };
     let result = http_get_tool_unix(&client, path, &params, unix_paths).await?;
-    Ok(normalize_short_positions(result, is_hk))
+    Ok(normalize_short_positions(result, is_hk, &p.symbol))
 }
 
 /// Normalize short_positions response to a unified schema regardless of market.
@@ -1756,7 +1782,7 @@ pub async fn short_positions(
 ///   days_to_cover US only
 ///   avg_daily_vol US only (from avg_daily_share_volume)
 ///   balance       HK only — outstanding short position value (HKD)
-fn normalize_short_positions(result: CallToolResult, is_hk: bool) -> CallToolResult {
+fn normalize_short_positions(result: CallToolResult, is_hk: bool, symbol: &str) -> CallToolResult {
     let Some(text) = result
         .content
         .first()
@@ -1801,6 +1827,9 @@ fn normalize_short_positions(result: CallToolResult, is_hk: bool) -> CallToolRes
         }
     }
 
+    // HKEX dates are stamped at Hong Kong midnight, the previous day in UTC.
+    localize_tool_output("short_positions", &mut d, Some(symbol));
+
     let Ok(json) = serde_json::to_string(&d) else {
         return result;
     };
@@ -1834,18 +1863,122 @@ pub async fn option_volume_daily(
         ("direction", "1"),
     ];
     // `underlying_symbol` on every row == the queried `symbol`.
-    http_get_tool_unix_dropping(
+    let result = http_get_tool_unix_dropping(
         &client,
         "/v1/quote/option-volume-stats/daily",
         &params,
         &["stats.*.timestamp"],
         &["underlying_symbol"],
     )
-    .await
+    .await?;
+    Ok(localize_result(
+        "option_volume_daily",
+        result,
+        Some(&p.symbol),
+    ))
 }
 
 #[cfg(test)]
 mod tests {
+
+    fn bar_timestamps(result: rmcp::model::CallToolResult) -> Vec<String> {
+        let text = result
+            .content
+            .first()
+            .and_then(|c| c.as_text())
+            .map(|t| t.text.clone())
+            .expect("reshaped candlesticks should be a text result");
+        let bars: serde_json::Value = serde_json::from_str(&text).expect("valid JSON result");
+        bars.as_array()
+            .expect("candlesticks reshape to a top-level array")
+            .iter()
+            .map(|bar| {
+                bar["timestamp"]
+                    .as_str()
+                    .expect("timestamp string")
+                    .to_string()
+            })
+            .collect()
+    }
+
+    /// The REST payload stamps a daily bar at exchange-local midnight as unix
+    /// seconds. For Hong Kong that is the previous UTC day, so the date prefix
+    /// of a `Z` timestamp named the wrong trading day (the T13 report).
+    #[test]
+    fn candlestick_timestamps_carry_the_exchange_offset() {
+        // 1793635200 = 2026-11-02T16:00:00Z, the HK/A-share bar for 2026-11-03.
+        let hk = r#"{"candlesticks":[{"timestamp":"1793635200","close":"23784.000"}]}"#;
+        assert_eq!(
+            bar_timestamps(super::reshape_candlesticks(hk, "HSI.HK").unwrap()),
+            ["2026-11-03T00:00:00+08:00"]
+        );
+        assert_eq!(
+            bar_timestamps(super::reshape_candlesticks(hk, "600519.SH").unwrap()),
+            ["2026-11-03T00:00:00+08:00"]
+        );
+        // 1793332800 = 2026-10-30T04:00:00Z, the US bar for 2026-10-30 (EDT).
+        let us = r#"{"candlesticks":[{"timestamp":"1793332800","close":"344.630"}]}"#;
+        assert_eq!(
+            bar_timestamps(super::reshape_candlesticks(us, "AAPL.US").unwrap()),
+            ["2026-10-30T00:00:00-04:00"]
+        );
+    }
+
+    #[test]
+    fn short_position_timestamps_carry_the_exchange_offset() {
+        // HKEX short-position dates are stamped at Hong Kong midnight:
+        // 2026-10-08T16:00:00Z is the 2026-10-09 record.
+        let raw = r#"{"data":[{"timestamp":"2026-10-08T16:00:00Z","amount":"1"}]}"#;
+        let result = rmcp::model::CallToolResult::success(vec![rmcp::model::Content::text(raw)]);
+        let text = super::normalize_short_positions(result, true, "700.HK")
+            .content
+            .first()
+            .and_then(|c| c.as_text())
+            .map(|t| t.text.clone())
+            .expect("text result");
+        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(value["data"][0]["timestamp"], "2026-10-09T00:00:00+08:00");
+    }
+
+    #[test]
+    fn quote_extended_session_timestamps_are_converted_from_unix() {
+        // Live `quote` returned these as raw unix strings (e.g. "1793753993").
+        let mut value = serde_json::json!([{
+            "symbol": "AAPL.US",
+            "timestamp": "1793739601",
+            "pre_market_quote": { "timestamp": "1793716201" },
+            "post_market_quote": { "timestamp": "1793753993" },
+            "overnight_quote": { "timestamp": "1793773746" },
+        }, {
+            "symbol": "700.HK",
+            "timestamp": "1793773769",
+            "pre_market_quote": null,
+        }]);
+        crate::serialize::convert_unix_paths(&mut value, super::QUOTE_UNIX_PATHS);
+        assert_eq!(value[0]["timestamp"], "2026-11-03T21:00:01Z");
+        assert_eq!(
+            value[0]["pre_market_quote"]["timestamp"],
+            "2026-11-03T14:30:01Z"
+        );
+        assert_eq!(
+            value[0]["post_market_quote"]["timestamp"],
+            "2026-11-04T00:59:53Z"
+        );
+        assert_eq!(
+            value[0]["overnight_quote"]["timestamp"],
+            "2026-11-04T06:29:06Z"
+        );
+        assert!(value[1]["pre_market_quote"].is_null());
+    }
+
+    #[test]
+    fn candlestick_timestamps_stay_utc_for_unknown_markets() {
+        let raw = r#"{"candlesticks":[{"timestamp":"1793635200","close":"1.000"}]}"#;
+        assert_eq!(
+            bar_timestamps(super::reshape_candlesticks(raw, "XYZ").unwrap()),
+            ["2026-11-02T16:00:00Z"]
+        );
+    }
 
     #[test]
     fn exchange_today_follows_the_exchange_clock() {

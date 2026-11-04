@@ -2323,7 +2323,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get latest price quotes. Returns a top-level array, one entry per symbol: symbol, last_done, prev_close, open, high, low, volume, turnover, trade_status, timestamp, plus pre_market / post_market / overnight objects {last_done, prev_close, high, low, volume, turnover, timestamp} when that session has data. No change fields: compute change from last_done and prev_close."
+        description = "Get latest price quotes. Returns a top-level array, one entry per symbol: symbol, last_done, prev_close, open, high, low, volume, turnover, trade_status, timestamp, plus pre_market / post_market / overnight objects {last_done, prev_close, high, low, volume, turnover, timestamp} when that session has data. No change fields: compute change from last_done and prev_close. Timestamps are in each symbol's own exchange local time (HK/CN/SG +08:00, US America/New_York)."
     )]
     async fn quote(
         &self,
@@ -2460,7 +2460,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get intraday minute-by-minute price/volume data. trade_sessions: \"intraday\" (default, regular hours) or \"all\" (include pre-market and post-market). Returns a top-level array of {timestamp, price, avg_price, volume, turnover}."
+        description = "Get intraday minute-by-minute price/volume data. trade_sessions: \"intraday\" (default, regular hours) or \"all\" (include pre-market and post-market). Returns a top-level array of {timestamp, price, avg_price, volume, turnover}. timestamp is the minute in the exchange's local time (HK/CN/SG +08:00, US America/New_York)."
     )]
     async fn intraday(
         &self,
@@ -2480,7 +2480,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get candlestick data (OHLCV). Only symbol is required; period defaults to day, count to 100 (max 1000), forward_adjust to false, trade_sessions to all. period: 1m/5m/15m/30m/60m/day/week/month/year. trade_sessions: intraday/all. If the account's entitlement caps out below the requested count, this returns as many candles as allowed instead of erroring — check the returned array length against count if an exact number matters."
+        description = "Get candlestick data (OHLCV). Only symbol is required; period defaults to day, count to 100 (max 1000), forward_adjust to false, trade_sessions to all. period: 1m/5m/15m/30m/60m/day/week/month/year. trade_sessions: intraday/all. If the account's entitlement caps out below the requested count, this returns as many candles as allowed instead of erroring — check the returned array length against count if an exact number matters. Each bar's timestamp is its open time in the exchange's local time (HK/CN/SG +08:00, US America/New_York), so for day/week/month/year bars its date part is the trading date."
     )]
     async fn candlesticks(
         &self,
@@ -2503,7 +2503,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get historical candlestick data by offset from a reference time. Only symbol is required; period defaults to day (1m/5m/15m/30m/60m/day/week/month/year), count to 100, forward_adjust/forward to false, trade_sessions to all. If the account's entitlement caps out below the requested count, this returns as many candles as allowed instead of erroring — check the returned array length against count if an exact number matters."
+        description = "Get historical candlestick data by offset from a reference time. Only symbol is required; period defaults to day (1m/5m/15m/30m/60m/day/week/month/year), count to 100, forward_adjust/forward to false, trade_sessions to all. If the account's entitlement caps out below the requested count, this returns as many candles as allowed instead of erroring — check the returned array length against count if an exact number matters. Each bar's timestamp is its open time in the exchange's local time (HK/CN/SG +08:00, US America/New_York), so for day/week/month/year bars its date part is the trading date."
     )]
     async fn history_candlesticks_by_offset(
         &self,
@@ -2526,7 +2526,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get historical candlestick data by date range. Only symbol is required (with no start/end, the most recent 100 bars are returned — pass start/end for a specific range); period defaults to day (1m/5m/15m/30m/60m/day/week/month/year), forward_adjust to false, trade_sessions to all. Returns a top-level array of {timestamp, open, high, low, close, volume, turnover, trade_session}."
+        description = "Get historical candlestick data by date range. Only symbol is required (with no start/end, the most recent 100 bars are returned — pass start/end for a specific range); period defaults to day (1m/5m/15m/30m/60m/day/week/month/year), forward_adjust to false, trade_sessions to all. Returns a top-level array of {timestamp, open, high, low, close, volume, turnover, trade_session}. Each bar's timestamp is its open time in the exchange's local time (HK/CN/SG +08:00, US America/New_York), so for day/week/month/year bars its date part is the trading date."
     )]
     async fn history_candlesticks_by_date(
         &self,
@@ -5034,7 +5034,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get short interest history (open short positions) for HK or US stocks. Market inferred from symbol suffix. count: 1–100 (default 20). Unified data[]{timestamp(RFC3339), short_shares(open short position in shares), rate(decimal ratio e.g. 0.009=0.9%), close}. US-only: avg_daily_vol, days_to_cover. HK-only: balance(outstanding short position in HKD). US source: FINRA bi-weekly. HK source: HKEX daily."
+        description = "Get short interest history (open short positions) for HK or US stocks. Market inferred from symbol suffix. count: 1–100 (default 20). Unified data[]{timestamp(RFC3339), short_shares(open short position in shares), rate(decimal ratio e.g. 0.009=0.9%), close}. US-only: avg_daily_vol, days_to_cover. HK-only: balance(outstanding short position in HKD). US source: FINRA bi-weekly. HK source: HKEX daily. timestamp is the record date in the exchange's local time, so its date part is the record date."
     )]
     async fn short_positions(
         &self,
