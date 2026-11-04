@@ -2343,7 +2343,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get option quotes (max 500 symbols). Symbols must be option contract symbols (e.g. \"AAPL230317P160000.US\"), NOT plain stock symbols — obtain valid ones from the symbol field of each option_chain_info_by_date contract. Returns last_done, prev_close, open, high, low, volume, turnover, implied_volatility, delta, gamma, theta, vega, rho, open_interest per symbol. Greeks are normalized: theta is the per-day value (one day's time decay), vega is the price change per 1% change in implied volatility, and rho is the price change per 1% change in the risk-free interest rate."
+        description = "Get option quotes (max 500 symbols). Symbols must be option contract symbols (e.g. \"AAPL230317P160000.US\"), NOT plain stock symbols — obtain valid ones from the symbol field of each option_chain_info_by_date contract. Returns last_done, prev_close, open, high, low, volume, turnover, implied_volatility, delta, gamma, theta, vega, rho, open_interest per symbol. Greeks are normalized: theta is the per-day value (one day's time decay), vega is the price change per 1% change in implied volatility, and rho is the price change per 1% change in the risk-free interest rate. Timestamps are in the exchange's local time (HK/CN/SG +08:00, US America/New_York)."
     )]
     async fn option_quote(
         &self,
@@ -2366,7 +2366,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get warrant quotes. Returns a top-level array, one entry per symbol: last_done, prev_close, open, high, low, volume, turnover, trade_status, timestamp, implied_volatility, category, strike_price, expiry_date, conversion_ratio, outstanding_ratio, underlying_symbol. Delta and leverage are in warrant_list, not here."
+        description = "Get warrant quotes. Returns a top-level array, one entry per symbol: last_done, prev_close, open, high, low, volume, turnover, trade_status, timestamp, implied_volatility, category, strike_price, expiry_date, conversion_ratio, outstanding_ratio, underlying_symbol. Delta and leverage are in warrant_list, not here. Timestamps are in the exchange's local time (HK/CN/SG +08:00, US America/New_York)."
     )]
     async fn warrant_quote(
         &self,
@@ -2440,7 +2440,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get recent trades (max 1000). Returns a top-level array of {price, volume, timestamp, trade_type, direction, trade_session} for the symbol."
+        description = "Get recent trades (max 1000). Returns a top-level array of {price, volume, timestamp, trade_type, direction, trade_session} for the symbol. Timestamps are in the exchange's local time (HK/CN/SG +08:00, US America/New_York)."
     )]
     async fn trades(
         &self,
@@ -2614,7 +2614,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get capital inflow time series for the symbol (same-day data). Returns a top-level array of {timestamp, inflow}."
+        description = "Get capital inflow time series for the symbol (same-day data). Returns a top-level array of {timestamp, inflow}. Timestamps are in the exchange's local time (HK/CN/SG +08:00, US America/New_York)."
     )]
     async fn capital_flow(
         &self,
@@ -2633,7 +2633,7 @@ impl Longbridge {
         title = "Capital Distribution",
         annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = true),
         output_schema = schema_for::<output::CapitalDistributionResponse>(),
-        description = "Get capital distribution for a symbol. Returns {timestamp, capital_in{large, medium, small}, capital_out{large, medium, small}, data_available} (decimal strings in settlement currency). data_available is false for symbols with no capital-flow data (e.g. indices) — the other fields are still present but meaningless zeros in that case."
+        description = "Get capital distribution for a symbol. Returns {timestamp, capital_in{large, medium, small}, capital_out{large, medium, small}, data_available} (decimal strings in settlement currency). data_available is false for symbols with no capital-flow data (e.g. indices) — the other fields are still present but meaningless zeros in that case. Timestamps are in the exchange's local time (HK/CN/SG +08:00, US America/New_York)."
     )]
     async fn capital_distribution(
         &self,
@@ -2674,7 +2674,7 @@ impl Longbridge {
         title = "Market Temperature",
         annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = true),
         output_schema = schema_for::<output::MarketTemperatureResponse>(),
-        description = "Get current market sentiment temperature. Returns {temperature (0-100), description, valuation (0-100), sentiment (0-100), timestamp}. market: HK/US/CN/SG."
+        description = "Get current market sentiment temperature. Returns {temperature (0-100), description, valuation (0-100), sentiment (0-100), timestamp}. market: HK/US/CN/SG. Timestamps are in the market's local time (HK/CN/SG +08:00, US America/New_York)."
     )]
     async fn market_temperature(
         &self,
@@ -2693,7 +2693,7 @@ impl Longbridge {
         title = "Historical Market Temperature",
         annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = true),
         output_schema = schema_for::<output::HistoryMarketTemperatureResponse>(),
-        description = "Get historical market temperature time series for a market and date range (at most 3 years per call). Returns {type, list[]{temperature, valuation, sentiment, timestamp}}."
+        description = "Get historical market temperature time series for a market and date range (at most 3 years per call). Returns {type, list[]{temperature, valuation, sentiment, timestamp}}. Timestamps are in the market's local time (HK/CN/SG +08:00, US America/New_York)."
     )]
     async fn history_market_temperature(
         &self,
@@ -3445,7 +3445,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::fundamental::ValuationResponse>(),
-        description = "Get the PE valuation overview: historical low/median/high and the PE series. Returns {range (years), metrics: {pe: {low, median, high, desc, list: [{timestamp, value}]}}}. US accounts querying a .US symbol get a US-specific variant (ai_summary plus a metrics.pe object with different sub-fields). The region is detected from the account automatically."
+        description = "Get the PE valuation overview: historical low/median/high and the PE series. Returns {range (years), metrics: {pe: {low, median, high, desc, list: [{timestamp, value}]}}}. US accounts querying a .US symbol get a US-specific variant (ai_summary plus a metrics.pe object with different sub-fields). The region is detected from the account automatically. Timestamps are in the exchange's local time (HK/CN/SG +08:00, US America/New_York)."
     )]
     async fn valuation(
         &self,
@@ -3469,7 +3469,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::fundamental::ValuationHistoryResponse>(),
-        description = "Get PE valuation history for long-term percentile analysis. Returns overview{indicator, metrics.pe{metric, desc, industry_median}, range, date, ccy_symbol}, history{range, metrics.pe{low, median, high, desc, list[]{timestamp, value}}}, peers.pe{industry_median, list[]{symbol, name, value}}, and stocks (industry stocks keyed by counter id, e.g. \"ST/US/AMD\", each {name, market_cap}). PE only; no PB/PS or dividend-yield series."
+        description = "Get PE valuation history for long-term percentile analysis. Returns overview{indicator, metrics.pe{metric, desc, industry_median}, range, date, ccy_symbol}, history{range, metrics.pe{low, median, high, desc, list[]{timestamp, value}}}, peers.pe{industry_median, list[]{symbol, name, value}}, and stocks (industry stocks keyed by counter id, e.g. \"ST/US/AMD\", each {name, market_cap}). PE only; no PB/PS or dividend-yield series. Timestamps are in the exchange's local time (HK/CN/SG +08:00, US America/New_York)."
     )]
     async fn valuation_history(
         &self,
@@ -3493,7 +3493,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::fundamental::IndustryValuationResponse>(),
-        description = "Get industry valuation comparison for peers in the same industry. Returns list[]{symbol, name, market, currency, price_close, market_value, pe, pb, ps, div_yld (dividend yield, %), roe, roa, net_margin, eps, bps, dps, div_payout_ratio, net_income, …, history[]{date, pe, pb, ps}}."
+        description = "Get industry valuation comparison for peers in the same industry. Returns list[]{symbol, name, market, currency, price_close, market_value, pe, pb, ps, div_yld (dividend yield, %), roe, roa, net_margin, eps, bps, dps, div_payout_ratio, net_income, …, history[]{date, pe, pb, ps}}. Timestamps are in the exchange's local time (HK/CN/SG +08:00, US America/New_York)."
     )]
     async fn industry_valuation(
         &self,
@@ -3709,7 +3709,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::market::MarketStatusResponse>(),
-        description = "Get current market trading status for all markets. Returns market_time[]{market, trade_status (Trading/Closed/Mid-Day Break/Pre-Market/Post-Market/Overnight), timestamp}."
+        description = "Get current market trading status for all markets. Returns market_time[]{market, trade_status (Trading/Closed/Mid-Day Break/Pre-Market/Post-Market/Overnight), timestamp}. Timestamps are in the market's local time (HK/CN/SG +08:00, US America/New_York)."
     )]
     async fn market_status(
         &self,
@@ -3803,7 +3803,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get A/H share premium history for a dual-listed HK symbol (e.g. 939.HK). Returns {klines[]{timestamp, aprice, apreclose, hprice, hpreclose, currency_rate, ahpremium_rate}}; ahpremium_rate is a ratio (-0.27 = H trades 27% below A)."
+        description = "Get A/H share premium history for a dual-listed HK symbol (e.g. 939.HK). Returns {klines[]{timestamp, aprice, apreclose, hprice, hpreclose, currency_rate, ahpremium_rate}}; ahpremium_rate is a ratio (-0.27 = H trades 27% below A). Timestamps are in the exchange's local time (HK/CN/SG +08:00, US America/New_York)."
     )]
     async fn ah_premium(
         &self,
@@ -3826,7 +3826,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get today's minute-by-minute A/H share premium for a dual-listed HK symbol (e.g. 939.HK). Returns {klines[]{timestamp, aprice, hprice, ahpremium_rate, currency_rate}, apreclose, hpreclose}; ahpremium_rate is a ratio."
+        description = "Get today's minute-by-minute A/H share premium for a dual-listed HK symbol (e.g. 939.HK). Returns {klines[]{timestamp, aprice, hprice, ahpremium_rate, currency_rate}, apreclose, hpreclose}; ahpremium_rate is a ratio. Timestamps are in the exchange's local time (HK/CN/SG +08:00, US America/New_York)."
     )]
     async fn ah_premium_intraday(
         &self,
@@ -3849,7 +3849,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get trade statistics (buy/sell/neutral distribution by price) for a price-volume profile. Returns {trades[]{price, buy_amount, sell_amount, neutral_amount}, statistics{avgprice, trades_count, total_amount, buy, sell, neutral, preclose, timestamp, trade_date[]}}."
+        description = "Get trade statistics (buy/sell/neutral distribution by price) for a price-volume profile. Returns {trades[]{price, buy_amount, sell_amount, neutral_amount}, statistics{avgprice, trades_count, total_amount, buy, sell, neutral, preclose, timestamp, trade_date[]}}. Timestamps are in the exchange's local time (HK/CN/SG +08:00, US America/New_York)."
     )]
     async fn trade_stats(
         &self,
@@ -3873,7 +3873,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::market::AnomalyResponse>(),
-        description = "Get market anomaly alerts (unusual price/volume changes). market: HK/US/CN/SG. symbol: optional, filter to a specific stock. count: results per page (default 50, max 100). Returns {changes[]{id, symbol, name, alert_type, alert_name (e.g. rapid rise), alert_time, change_values[] (display strings, e.g. \"+2.04%\"), emotion (1 bullish, 2 bearish)}, all_off}."
+        description = "Get market anomaly alerts (unusual price/volume changes). market: HK/US/CN/SG. symbol: optional, filter to a specific stock. count: results per page (default 50, max 100). Returns {changes[]{id, symbol, name, alert_type, alert_name (e.g. rapid rise), alert_time, change_values[] (display strings, e.g. \"+2.04%\"), emotion (1 bullish, 2 bearish)}, all_off}. Timestamps are in the exchange's local time (HK/CN/SG +08:00, US America/New_York)."
     )]
     async fn anomaly(
         &self,
@@ -3917,7 +3917,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::market::FinanceCalendarResponse>(),
-        description = "Finance calendar by category: report (earnings) / dividend / split / ipo / macrodata (CPI, NFP, rates) / closed (holidays). start and end (YYYY-MM-DD) are optional, default today plus 7 days. Pass market (e.g. US) whenever the user cares about one market: an unfiltered week of earnings across all markets is several hundred KB and gets truncated. Returns {list: [{date, infos: [{symbol, counter_name, market, content, type, date, datetime, date_type, data_kv: [{type, value, value_raw}], star (macrodata), currency, …}]}]}, one entry per day."
+        description = "Finance calendar by category: report (earnings) / dividend / split / ipo / macrodata (CPI, NFP, rates) / closed (holidays). start and end (YYYY-MM-DD) are optional, default today plus 7 days. Pass market (e.g. US) whenever the user cares about one market: an unfiltered week of earnings across all markets is several hundred KB and gets truncated. Returns {list: [{date, infos: [{symbol, counter_name, market, content, type, date, datetime, date_type, data_kv: [{type, value, value_raw}], star (macrodata), currency, …}]}]}, one entry per day. For the report, macrodata and closed categories, datetime is in the market's local time (with offset); dividend, split and ipo entries keep UTC dates."
     )]
     async fn finance_calendar(
         &self,
@@ -5080,7 +5080,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get daily historical option stats for a US stock. Returns {stats[]{symbol, timestamp, total_volume, total_call_volume, total_put_volume, put_call_volume_ratio, total_open_interest, total_call_open_interest, total_put_open_interest, put_call_open_interest_ratio}}."
+        description = "Get daily historical option stats for a US stock. Returns {stats[]{symbol, timestamp, total_volume, total_call_volume, total_put_volume, put_call_volume_ratio, total_open_interest, total_call_open_interest, total_put_open_interest, put_call_open_interest_ratio}}. Timestamps are in the exchange's local time (HK/CN/SG +08:00, US America/New_York)."
     )]
     async fn option_volume_daily(
         &self,
@@ -5851,7 +5851,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get daily valuation rank (PE/PB/PS/dividend yield industry percentile) for a security over a date range. start/end in yyyymmdd format; defaults to the last 30 days. Returns {kline_type, max_num, pe, pb, ps, dvd}, each series a list of {timestamp, rank} (rank out of max_num)."
+        description = "Get daily valuation rank (PE/PB/PS/dividend yield industry percentile) for a security over a date range. start/end in yyyymmdd format; defaults to the last 30 days. Returns {kline_type, max_num, pe, pb, ps, dvd}, each series a list of {timestamp, rank} (rank out of max_num). Timestamps are in the exchange's local time (HK/CN/SG +08:00, US America/New_York)."
     )]
     async fn valuation_rank(
         &self,
@@ -6205,7 +6205,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::fundamental::InstitutionalViewsResponse>(),
-        description = "Get monthly institutional rating distribution timeline. Returns {elist[]{date, buy, over (outperform), hold, under (underperform), sell, no_opinion, total}, tlist[]{date, close, high_price, low_price}}, oldest first, for trend analysis."
+        description = "Get monthly institutional rating distribution timeline. Returns {elist[]{date, buy, over (outperform), hold, under (underperform), sell, no_opinion, total}, tlist[]{date, close, high_price, low_price}}, oldest first, for trend analysis. Timestamps are in the exchange's local time (HK/CN/SG +08:00, US America/New_York)."
     )]
     async fn institutional_views(
         &self,
@@ -6348,7 +6348,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::fundamental::ValuationComparisonResponse>(),
-        description = "Stock valuation comparison. Mode A (single): pass only symbol — server returns stock + auto-selected industry peers. Mode B (multi): pass symbol as primary + comparison_symbols (comma-separated, e.g. 'MSFT.US,GOOGL.US') for explicit peer comparison. currency: USD/HKD/CNY. Returns list[]{symbol, name, market_value, price_close, pe, pb, ps, history[]{date, pe, pb, ps}}."
+        description = "Stock valuation comparison. Mode A (single): pass only symbol — server returns stock + auto-selected industry peers. Mode B (multi): pass symbol as primary + comparison_symbols (comma-separated, e.g. 'MSFT.US,GOOGL.US') for explicit peer comparison. currency: USD/HKD/CNY. Returns list[]{symbol, name, market_value, price_close, pe, pb, ps, history[]{date, pe, pb, ps}}. Timestamps are in the exchange's local time (HK/CN/SG +08:00, US America/New_York)."
     )]
     async fn valuation_comparison(
         &self,
@@ -6372,7 +6372,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::market::ShortTradesResponse>(),
-        description = "Get daily short-sale volume history for HK or US stocks. Market inferred from symbol suffix. last_timestamp: unix seconds (omit for latest). page_size: 1–100 (default 20). Unified data[]{timestamp(RFC3339), short_vol(daily short volume in shares), rate(decimal ratio e.g. 0.36=36%), close}. US-only: nasdaq_vol(NASDAQ short), nyse_vol(NYSE short). HK-only: balance(HKD), market_vol(total market volume that day). US source: FINRA/NASDAQ daily. HK source: HKEX daily."
+        description = "Get daily short-sale volume history for HK or US stocks. Market inferred from symbol suffix. last_timestamp: unix seconds (omit for latest). page_size: 1–100 (default 20). Unified data[]{timestamp(RFC3339), short_vol(daily short volume in shares), rate(decimal ratio e.g. 0.36=36%), close}. US-only: nasdaq_vol(NASDAQ short), nyse_vol(NYSE short). HK-only: balance(HKD), market_vol(total market volume that day). US source: FINRA/NASDAQ daily. HK source: HKEX daily. Timestamps are in the exchange's local time (HK/CN/SG +08:00, US America/New_York)."
     )]
     async fn short_trades(
         &self,
@@ -6396,7 +6396,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::market::TopMoversResponse>(),
-        description = "Get stocks whose price fluctuation exceeds the 20-trading-day standard deviation, with correlated news reasons. markets: comma-separated HK/US/CN/SG (omit=all). sort: 0=time 1=change-magnitude 2=popularity/heat (default). limit: results per page (default 20). next_params: pass next_params from previous response to paginate. Returns events[]{timestamp(RFC3339), alert_reason, alert_type, stock{symbol, name, change(decimal ratio e.g. 0.0445=+4.45%), last_done, labels[], intro}}, updated_at, next_params."
+        description = "Get stocks whose price fluctuation exceeds the 20-trading-day standard deviation, with correlated news reasons. markets: comma-separated HK/US/CN/SG (omit=all). sort: 0=time 1=change-magnitude 2=popularity/heat (default). limit: results per page (default 20). next_params: pass next_params from previous response to paginate. Returns events[]{timestamp(RFC3339), alert_reason, alert_type, stock{symbol, name, change(decimal ratio e.g. 0.0445=+4.45%), last_done, labels[], intro}}, updated_at, next_params. Timestamps are in the exchange's local time (HK/CN/SG +08:00, US America/New_York)."
     )]
     async fn top_movers(
         &self,

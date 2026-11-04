@@ -17,8 +17,11 @@ use rmcp::model::CallToolResult;
 use serde_json::Value;
 use time::format_description::well_known::Rfc3339;
 use time::{OffsetDateTime, UtcOffset};
-use time_tz::OffsetDateTimeExt;
 use time_tz::timezones::db::america::NEW_YORK;
+use time_tz::timezones::db::asia::TOKYO;
+use time_tz::timezones::db::australia::SYDNEY;
+use time_tz::timezones::db::europe::{BERLIN, LONDON};
+use time_tz::{OffsetDateTimeExt, Tz};
 
 /// Mainland China, Hong Kong and Singapore exchanges all sit at UTC+8 year round.
 const UTC_PLUS_8: UtcOffset = match UtcOffset::from_hms(8, 0, 0) {
@@ -26,17 +29,38 @@ const UTC_PLUS_8: UtcOffset = match UtcOffset::from_hms(8, 0, 0) {
     Err(_) => panic!("UTC+8 is a valid offset"),
 };
 
-/// `instant` expressed in the local time of the exchange named by `id`: a
-/// symbol (`700.HK`, `600519.SH`, `AAPL.US`, chosen by its market suffix) or a
-/// bare market code (`HK`, `CN`, `US`). US follows America/New_York, so EST/EDT
-/// apply as daylight saving dictates. Other markets, or an id without one, are
-/// returned unchanged.
-pub fn to_exchange_time(instant: OffsetDateTime, id: &str) -> OffsetDateTime {
+/// The clock of one market.
+enum Zone {
+    /// A fixed UTC offset, for markets that do not observe daylight saving.
+    Fixed(UtcOffset),
+    /// A named zone, so EST/EDT, CET/CEST and the like follow the calendar.
+    Named(&'static Tz),
+}
+
+/// The clock of the market `id` names: a symbol (`700.HK`, `600519.SH`,
+/// `AAPL.US`, chosen by its market suffix) or a bare market code (`HK`, `CN`,
+/// `US`, `JP`, `UK`, `DE`, `AU`). `None` for any other market, or an id without
+/// one.
+fn zone_of(id: &str) -> Option<Zone> {
     let market = id.rsplit_once('.').map_or(id, |(_, market)| market);
     match market.to_ascii_uppercase().as_str() {
-        "HK" | "SH" | "SZ" | "BJ" | "SG" | "CN" => instant.to_offset(UTC_PLUS_8),
-        "US" => instant.to_timezone(NEW_YORK),
-        _ => instant,
+        "HK" | "SH" | "SZ" | "BJ" | "SG" | "CN" => Some(Zone::Fixed(UTC_PLUS_8)),
+        "US" => Some(Zone::Named(NEW_YORK)),
+        "JP" => Some(Zone::Named(TOKYO)),
+        "UK" => Some(Zone::Named(LONDON)),
+        "DE" => Some(Zone::Named(BERLIN)),
+        "AU" => Some(Zone::Named(SYDNEY)),
+        _ => None,
+    }
+}
+
+/// `instant` expressed in the local time of the market `id` names (see
+/// [`zone_of`]). A market with no known clock is returned unchanged.
+pub fn to_exchange_time(instant: OffsetDateTime, id: &str) -> OffsetDateTime {
+    match zone_of(id) {
+        Some(Zone::Fixed(offset)) => instant.to_offset(offset),
+        Some(Zone::Named(tz)) => instant.to_timezone(tz),
+        None => instant,
     }
 }
 
@@ -186,10 +210,12 @@ pub fn localize_tool_output(tool: &str, value: &mut Value, symbol: Option<&str>)
         for_each_mut(value, spec.entries, &mut |entry| {
             let id = match &spec.id {
                 Id::Param => symbol.map(str::to_owned),
+                // The first field that names a market we know the clock of: a
+                // symbol without a suffix must not shadow the `market` field.
                 Id::Fields(keys) => keys.iter().find_map(|key| {
                     get_path(entry, key)
                         .and_then(Value::as_str)
-                        .filter(|id| !id.is_empty())
+                        .filter(|id| zone_of(id).is_some())
                         .map(str::to_owned)
                 }),
             };
@@ -347,7 +373,17 @@ mod tests {
     #[test]
     fn instant_is_preserved() {
         let original = OffsetDateTime::parse("2026-11-02T16:00:00Z", &Rfc3339).unwrap();
-        for id in ["700.HK", "AAPL.US", "600519.SH", "CN", "XYZ"] {
+        for id in [
+            "700.HK",
+            "AAPL.US",
+            "600519.SH",
+            "CN",
+            "JP",
+            "UK",
+            "DE",
+            "AU",
+            "XYZ",
+        ] {
             assert_eq!(to_exchange_time(original, id), original, "{id}");
         }
     }
@@ -469,15 +505,62 @@ mod tests {
 
     #[test]
     fn market_temperature_follows_the_requested_market_code() {
-        // Daily points are stamped at market-local midnight (live: HK `16:00Z`).
-        let history = json!({ "list": [{ "timestamp": "2026-11-02T16:00:00Z" }] });
-        let out = localized("history_market_temperature", history.clone(), Some("HK"));
-        assert_eq!(out["list"][0]["timestamp"], "2026-11-03T00:00:00+08:00");
-        let out = localized("history_market_temperature", history, Some("US"));
-        assert_eq!(out["list"][0]["timestamp"], "2026-11-02T11:00:00-05:00");
+        // Live daily points: HK/CN/SG at `16:00Z`, US at New York midnight.
+        let history = |stamp: &str| json!({ "list": [{ "timestamp": stamp }] });
+        for market in ["HK", "CN", "SG"] {
+            let out = localized(
+                "history_market_temperature",
+                history("2026-11-02T16:00:00Z"),
+                Some(market),
+            );
+            assert_eq!(
+                out["list"][0]["timestamp"], "2026-11-03T00:00:00+08:00",
+                "{market}"
+            );
+        }
+        let out = localized(
+            "history_market_temperature",
+            history("2026-11-02T05:00:00Z"),
+            Some("US"),
+        );
+        assert_eq!(out["list"][0]["timestamp"], "2026-11-02T00:00:00-05:00");
         let now = json!({ "timestamp": "2026-11-04T06:50:00Z" });
         let out = localized("market_temperature", now, Some("CN"));
         assert_eq!(out["timestamp"], "2026-11-04T14:50:00+08:00");
+    }
+
+    /// US FINRA series are stamped at New York midnight (live `04:00Z`/`05:00Z`),
+    /// so converting them lands on the record date rather than the day before.
+    #[test]
+    fn us_short_series_keep_their_record_date() {
+        for tool in ["short_positions", "short_trades"] {
+            let out = localized(
+                tool,
+                json!({ "data": [
+                    { "timestamp": "2026-10-29T04:00:00Z" },
+                    { "timestamp": "2026-11-03T05:00:00Z" },
+                ] }),
+                Some("AAPL.US"),
+            );
+            assert_eq!(
+                out["data"][0]["timestamp"], "2026-10-29T00:00:00-04:00",
+                "{tool}"
+            );
+            assert_eq!(
+                out["data"][1]["timestamp"], "2026-11-03T00:00:00-05:00",
+                "{tool}"
+            );
+        }
+    }
+
+    #[test]
+    fn capital_distribution_no_data_sentinel_is_not_a_date() {
+        // A symbol with no capital-flow data comes back stamped "0".
+        let none = json!({ "timestamp": "0", "data_available": false });
+        assert_eq!(
+            localized("capital_distribution", none.clone(), Some("AAPL.US")),
+            none
+        );
     }
 
     #[test]
@@ -523,7 +606,7 @@ mod tests {
             json!({ "market_time": [
                 { "market": "US", "timestamp": "2026-11-04T06:35:36Z" },
                 { "market": "CN", "timestamp": "2026-11-04T06:35:36Z" },
-                { "market": "JP", "timestamp": "2026-11-04T06:35:36Z" },
+                { "market": "KR", "timestamp": "2026-11-04T06:35:36Z" },
             ] }),
             None,
         );
@@ -546,7 +629,7 @@ mod tests {
                 { "symbol": "1785.HK", "market": "HK", "datetime": "2026-11-04T01:30:00Z" },
                 { "symbol": "AXICY.US", "market": "US", "datetime": "2026-11-04T20:00:00Z" },
                 { "symbol": "", "market": "US", "datetime": "2026-11-04T13:30:00Z" },
-                { "market": "JP", "datetime": "2026-11-04T13:30:00Z" },
+                { "market": "KR", "datetime": "2026-11-04T13:30:00Z" },
             ] }] }),
             None,
         );
@@ -572,6 +655,39 @@ mod tests {
         assert_eq!(infos[0]["datetime"], "2026-12-25T00:00:00+08:00");
         assert_eq!(infos[1]["datetime"], "2026-10-01T00:00:00+08:00");
         assert_eq!(infos[2]["datetime"], "2026-11-26T00:00:00-05:00");
+
+        // Other markets stamp their closed days at their own local midnight.
+        let out = localized(
+            "finance_calendar:closed",
+            json!({ "list": [{ "infos": [
+                { "market": "JP", "datetime": "2026-11-02T15:00:00Z" },
+                { "market": "UK", "datetime": "2026-12-25T00:00:00Z" },
+                { "market": "DE", "datetime": "2026-12-24T23:00:00Z" },
+                { "market": "AU", "datetime": "2026-12-24T13:00:00Z" },
+            ] }] }),
+            None,
+        );
+        let infos = &out["list"][0]["infos"];
+        assert_eq!(infos[0]["datetime"], "2026-11-03T00:00:00+09:00");
+        assert_eq!(infos[1]["datetime"], "2026-12-25T00:00:00Z");
+        assert_eq!(infos[2]["datetime"], "2026-12-25T00:00:00+01:00");
+        assert_eq!(infos[3]["datetime"], "2026-12-25T00:00:00+11:00");
+    }
+
+    #[test]
+    fn entry_market_falls_back_when_the_symbol_names_none() {
+        // `BRK` has no market suffix, so the `market` field decides.
+        let out = localized(
+            "finance_calendar:report",
+            json!({ "list": [{ "infos": [
+                { "symbol": "BRK", "market": "HK", "datetime": "2026-11-04T01:30:00Z" },
+                { "symbol": "700", "market": "US", "datetime": "2026-11-04T13:30:00Z" },
+            ] }] }),
+            None,
+        );
+        let infos = &out["list"][0]["infos"];
+        assert_eq!(infos[0]["datetime"], "2026-11-04T09:30:00+08:00");
+        assert_eq!(infos[1]["datetime"], "2026-11-04T08:30:00-05:00");
     }
 
     #[test]
@@ -593,6 +709,48 @@ mod tests {
                 "{tool}"
             );
         }
+    }
+
+    /// The tool name at each call site is a plain string, so a typo or a rename
+    /// would silently stop localizing. Keep call sites and [`SPECS`] in step.
+    #[test]
+    fn call_sites_and_specs_name_the_same_tools() {
+        let sources = [
+            include_str!("../quote.rs"),
+            include_str!("../market.rs"),
+            include_str!("../fundamental.rs"),
+            include_str!("../calendar.rs"),
+        ];
+        let mut wired = std::collections::BTreeSet::new();
+        for source in sources {
+            for call in ["localize_tool_output(", "localize_result("] {
+                for (at, _) in source.match_indices(call) {
+                    // rustfmt may move the name to its own line.
+                    let rest = source[at + call.len()..].trim_start();
+                    // A computed name (`&format!(..)`) is checked separately.
+                    let Some(rest) = rest.strip_prefix('"') else {
+                        continue;
+                    };
+                    let name = rest.split('"').next().expect("closing quote");
+                    wired.insert(name.to_string());
+                }
+            }
+        }
+        // `finance_calendar` builds its name from the category.
+        assert!(
+            include_str!("../calendar.rs").contains("\"finance_calendar:{category}\""),
+            "finance_calendar must pick its rule by category"
+        );
+        let specced: std::collections::BTreeSet<String> = SPECS
+            .iter()
+            .map(|spec| spec.tool)
+            .filter(|tool| !tool.starts_with("finance_calendar:"))
+            .map(str::to_string)
+            .collect();
+        assert_eq!(
+            wired, specced,
+            "tool names at localize call sites differ from SPECS"
+        );
     }
 
     #[test]
