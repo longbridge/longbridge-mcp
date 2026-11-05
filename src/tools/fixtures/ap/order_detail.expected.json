@@ -1,0 +1,70 @@
+{
+  "order_id": "700000000000000001",
+  "status": "FilledStatus",
+  "stock_name": "Example Holdings",
+  "quantity": "100",
+  "executed_quantity": "100",
+  "price": "300",
+  "executed_price": "299.8",
+  "submitted_at": "2023-11-14T22:13:20Z",
+  "side": "Buy",
+  "symbol": "700.HK",
+  "order_type": "LO",
+  "last_done": null,
+  "trigger_price": null,
+  "msg": "",
+  "tag": "Normal",
+  "time_in_force": "Day",
+  "expire_date": null,
+  "updated_at": "2023-11-14T22:15:00Z",
+  "trigger_at": null,
+  "trailing_amount": null,
+  "trailing_percent": null,
+  "limit_offset": null,
+  "trigger_status": null,
+  "currency": "HKD",
+  "outside_rth": null,
+  "limit_depth_level": null,
+  "trigger_count": null,
+  "monitor_price": null,
+  "remark": "",
+  "delayed_until": null,
+  "free_status": "None",
+  "free_amount": null,
+  "free_currency": null,
+  "deductions_status": "NONE",
+  "deductions_amount": null,
+  "deductions_currency": null,
+  "platform_deducted_status": "NONE",
+  "platform_deducted_amount": null,
+  "platform_deducted_currency": null,
+  "history": [
+    {
+      "price": "299.8",
+      "quantity": "100",
+      "status": "FilledStatus",
+      "msg": "",
+      "time": "2023-11-14T22:15:00Z"
+    }
+  ],
+  "charge_detail": {
+    "total_amount": "15.3",
+    "currency": "HKD",
+    "items": [
+      {
+        "code": "BROKER_FEES",
+        "name": "Broker fees",
+        "fees": [
+          {
+            "code": "0001",
+            "name": "Commission",
+            "amount": "15.3",
+            "currency": "HKD"
+          }
+        ]
+      }
+    ]
+  },
+  "attached_orders": [],
+  "multi_leg": null
+}

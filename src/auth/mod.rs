@@ -1,3 +1,4 @@
+pub mod jwt;
 pub mod metadata;
 pub mod middleware;
 mod oauth_proxy;
@@ -254,8 +255,8 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         )
         .with_state(state.clone());
 
-    // Serve the static server card at both the host-root path Smithery's docs
-    // specify and the `/mcp/`-prefixed path (some upstream gateways only forward
+    // Serve the static server card at both the host-root well-known path and
+    // the `/mcp/`-prefixed path (some upstream gateways only forward
     // `/mcp/*` to this service, so the prefixed copy is a fallback).
     let server_card_route = Router::new()
         .route(
@@ -286,6 +287,10 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route("/v2/tools.json", axum::routing::get(v2_tools_json));
 
     let oauth_proxy_routes: Router = Router::new()
+        .route(
+            "/oauth2/authorize",
+            axum::routing::get(oauth_proxy::authorize),
+        )
         .route("/oauth2/token", axum::routing::post(oauth_proxy::token))
         .route("/oauth2/revoke", axum::routing::post(oauth_proxy::revoke))
         .with_state(state.clone());
@@ -367,6 +372,51 @@ pub fn create_router(state: Arc<AppState>) -> Router {
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
+    use std::sync::Arc;
+
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode, header};
+    use tower::ServiceExt;
+
+    use super::{AppState, create_router};
+
+    /// `/oauth2/authorize` must be routed to the redirect handler, not swallowed
+    /// by the Bearer-protected root MCP fallback, and the redirect must not be
+    /// cacheable at the edge.
+    #[tokio::test]
+    async fn authorize_route_redirects_without_bearer_and_is_not_cacheable() {
+        let router = create_router(Arc::new(AppState {
+            base_url: "http://127.0.0.1:8000".to_string(),
+        }));
+        let query = "response_type=code&client_id=abc&state=s%2B1&code_challenge=x";
+        let response = router
+            .oneshot(
+                Request::get(format!("/oauth2/authorize?{query}"))
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("router should respond");
+
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        let location = response
+            .headers()
+            .get(header::LOCATION)
+            .and_then(|value| value.to_str().ok())
+            .expect("redirect should carry a Location header");
+        assert!(
+            location.ends_with(&format!("/oauth2/authorize?{query}")),
+            "query must be forwarded verbatim, got {location}"
+        );
+        assert!(
+            !location.starts_with("http://127.0.0.1:8000"),
+            "authorize must redirect upstream, not to itself: {location}"
+        );
+        assert_eq!(
+            response.headers().get(header::CACHE_CONTROL),
+            Some(&header::HeaderValue::from_static("no-store"))
+        );
+    }
 
     /// Guard: in static tool metadata — descriptions, input schemas, and the
     /// translations — the connect page may only appear as
@@ -465,6 +515,77 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// snake_case identifiers (`last_done`, `published_at`) in `text`: the
+    /// field and parameter names translations keep verbatim in English.
+    fn identifiers(text: &str) -> HashSet<String> {
+        text.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+            .filter(|word| {
+                word.contains('_')
+                    && word.starts_with(|c: char| c.is_ascii_lowercase())
+                    && word.split('_').all(|part| {
+                        !part.is_empty()
+                            && part
+                                .chars()
+                                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+                    })
+            })
+            .map(str::to_string)
+            .collect()
+    }
+
+    /// A translated description must not name a field the English one does
+    /// not: when an English description is corrected (a field renamed or
+    /// dropped) and its translation is not, this fails. Every field the
+    /// translation names must appear in the English description, among the
+    /// tool's parameters, or be another tool's name.
+    #[test]
+    fn locale_descriptions_only_name_fields_the_english_one_names() {
+        let live = crate::tools::list_tools();
+        let tool_names: HashSet<String> = live.iter().map(|t| t.name.to_string()).collect();
+        let mut stale = Vec::new();
+        for (code, raw) in [
+            ("zh-CN", include_str!("../../locales/zh-CN/tools.json")),
+            ("zh-HK", include_str!("../../locales/zh-HK/tools.json")),
+        ] {
+            let parsed: serde_json::Value =
+                serde_json::from_str(raw).expect("locale file must be valid JSON");
+            let tools = parsed["tools"]
+                .as_object()
+                .expect("locale file must have a `tools` object");
+            for tool in &live {
+                let Some(translated) = tools
+                    .get(tool.name.as_ref())
+                    .and_then(|t| t["description"].as_str())
+                else {
+                    continue;
+                };
+                let english = tool.description.as_deref().unwrap_or_default();
+                let mut known = identifiers(english);
+                if let Some(props) = tool
+                    .input_schema
+                    .get("properties")
+                    .and_then(|p| p.as_object())
+                {
+                    known.extend(props.keys().cloned());
+                }
+                let mut unknown: Vec<String> = identifiers(translated)
+                    .into_iter()
+                    .filter(|id| !known.contains(id) && !tool_names.contains(id))
+                    .collect();
+                if !unknown.is_empty() {
+                    unknown.sort();
+                    stale.push(format!("[{code}] {}: {}", tool.name, unknown.join(", ")));
+                }
+            }
+        }
+        assert!(
+            stale.is_empty(),
+            "translated descriptions name fields their English description does not (update the \
+             translation):\n{}",
+            stale.join("\n")
+        );
     }
 
     /// Every scope locale file must cover the same English scope `name`s as

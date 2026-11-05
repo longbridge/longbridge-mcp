@@ -4,6 +4,7 @@ use rmcp::schemars::JsonSchema;
 use rmcp::serde::Deserialize;
 
 use crate::tools::support::http_client::{http_get_tool, http_get_tool_unix};
+use crate::tools::support::parse;
 
 fn make_result(json: String) -> CallToolResult {
     // Cap bogus decimal precision (e.g. investor `capital_ratio` values like
@@ -91,6 +92,11 @@ pub async fn ipo_subscriptions(
     };
     crate::serialize::drop_keys(&mut value, &["icon"]);
     crate::serialize::strip_empty_strings(&mut value);
+    // `sub_deadline` is the subscription cut-off as raw unix seconds.
+    crate::serialize::convert_unix_paths(
+        &mut value,
+        &["hk.list.*.sub_deadline", "us.list.*.sub_deadline"],
+    );
     let json = serde_json::to_string(&value).unwrap_or(combined);
     Ok(make_result(json))
 }
@@ -207,7 +213,8 @@ pub async fn ipo_order_detail(
     p: IpoOrderDetailParam,
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
-    let path = format!("/v1/ipo/orders/{}", p.order_id);
+    let order_id = parse::path_segment("order_id", &p.order_id)?;
+    let path = format!("/v1/ipo/orders/{order_id}");
     http_get_tool(&client, &path, &[]).await
 }
 

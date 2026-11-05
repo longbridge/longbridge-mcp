@@ -16,109 +16,191 @@
 use rmcp::schemars::JsonSchema;
 use rmcp::serde::Serialize;
 
-/// A single IPO entry as it appears in the subscription / calendar / listed
-/// feeds. Subset of the upstream item; field availability varies by feed and
-/// market. Numeric/price fields are stringified by the transform pipeline.
+/// One IPO in `ipo_subscriptions`. Subset of upstream fields; prices and
+/// amounts are strings.
 #[derive(Debug, Serialize, JsonSchema)]
-pub struct IpoItem {
-    /// Security symbol, e.g. "6871.HK" or "ARM.US".
+pub struct IpoSubscriptionItem {
+    /// Security symbol, e.g. "6157.HK".
     #[serde(skip_serializing_if = "Option::is_none")]
     pub symbol: Option<String>,
+    /// Exchange code, e.g. "06157".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
     /// Display name of the security.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
-    /// Market code, e.g. "HK" / "US".
+    /// Business description.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub market: Option<String>,
-    /// Subscription window start date (yyyy-mm-dd).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub sub_start_date: Option<String>,
-    /// Subscription window end date (yyyy-mm-dd).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub sub_end_date: Option<String>,
-    /// Listing date (yyyy-mm-dd).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub listing_date: Option<String>,
-    /// Issue price (stringified decimal).
+    pub description: Option<String>,
+    /// Issue price, or a range such as "3.920 ~ 5.070".
     #[serde(skip_serializing_if = "Option::is_none")]
     pub issue_price: Option<String>,
-    /// Minimum lot size for subscription.
+    /// Cash needed for one lot.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub min_lot_size: Option<String>,
-    /// IPO status (calendar feed), e.g. upcoming / listed.
+    pub entrance_fee: Option<String>,
+    /// Cash needed for one lot when financed.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub status: Option<String>,
+    pub financing_entrance_fee: Option<String>,
+    /// Subscription currency, e.g. "HKD".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub currency: Option<String>,
+    /// Last subscription day, e.g. "2026.10.20".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sub_end_date: Option<String>,
+    /// Subscription cut-off (RFC3339).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sub_deadline: Option<String>,
+    /// Days left to subscribe.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub remaining_day: Option<i64>,
+    /// Shares offered.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub share_planned: Option<String>,
+    /// Whether the account can subscribe now (1 = yes).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub can_subscribe: Option<i64>,
+    /// Subscription state code.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub state: Option<i64>,
+    /// Promotional tags, e.g. financing terms.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tags: Option<Vec<String>>,
 }
 
-/// One side (HK or US) of an IPO feed that splits results by market. Each side
-/// is the raw upstream payload; the documented portion is `items[]`.
+/// One market side of `ipo_subscriptions`.
 #[derive(Debug, Serialize, JsonSchema)]
-pub struct IpoMarketFeed {
-    /// IPO entries for this market (documented subset of upstream fields).
+pub struct IpoSubscriptionFeed {
+    /// IPOs open for subscription in this market.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub items: Option<Vec<IpoItem>>,
+    pub list: Option<Vec<IpoSubscriptionItem>>,
 }
 
-/// Returned by `ipo_subscriptions`. HK and US subscription feeds combined under
-/// a `{hk, us}` wrapper object built by the tool.
+/// Returned by `ipo_subscriptions`: the HK and US feeds under `{hk, us}`.
+/// A side is null when that market has nothing open.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct IpoSubscriptionsResponse {
     /// Hong Kong subscription / pre-filing feed.
-    pub hk: IpoMarketFeed,
-    /// US subscription / pre-filing feed.
-    pub us: IpoMarketFeed,
-}
-
-/// Returned by `ipo_calendar`. Passthrough of the upstream calendar payload;
-/// the documented portion is `items[]`. The upstream `timestamp` is converted
-/// to RFC3339 by the unix-path transform.
-#[derive(Debug, Serialize, JsonSchema)]
-pub struct IpoCalendarResponse {
-    /// Calendar entries for upcoming and recent IPOs.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub items: Option<Vec<IpoItem>>,
+    pub hk: Option<IpoSubscriptionFeed>,
+    /// US subscription / pre-filing feed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub us: Option<IpoSubscriptionFeed>,
 }
 
-/// A single recently-listed IPO entry. Subset of upstream fields; numeric and
-/// price fields are stringified by the transform pipeline.
+/// One IPO in `ipo_calendar`. Milestone dates are RFC3339.
 #[derive(Debug, Serialize, JsonSchema)]
-pub struct IpoListedItem {
-    /// Security symbol, e.g. "6871.HK".
+pub struct IpoCalendarItem {
+    /// Security symbol, e.g. "6157.HK".
     #[serde(skip_serializing_if = "Option::is_none")]
     pub symbol: Option<String>,
+    /// Exchange code, e.g. "06157".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
     /// Display name of the security.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
-    /// Listing date (yyyy-mm-dd).
+    /// Subscription start.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub listing_date: Option<String>,
-    /// Issue price (stringified decimal).
+    pub sub_date: Option<String>,
+    /// Subscription end.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sub_end_date: Option<String>,
+    /// Allotment result date.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub result_date: Option<String>,
+    /// Grey-market (dark pool) trading date.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mart_date: Option<String>,
+    /// Listing date.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ipo_date: Option<String>,
+    /// IPO state code.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub state: Option<i64>,
+    /// IPO stage code.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub state_stage: Option<i64>,
+    /// Display tags.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tags: Option<Vec<String>>,
+}
+
+/// Returned by `ipo_calendar`: counts by stage plus the calendar entries.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct IpoCalendarResponse {
+    /// IPOs in subscription.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sub_num: Option<i64>,
+    /// IPOs awaiting allotment results.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub win_num: Option<i64>,
+    /// IPOs in grey-market trading.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preipo_num: Option<i64>,
+    /// IPOs listing soon.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ipo_num: Option<i64>,
+    /// Snapshot time (RFC3339).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timestamp: Option<String>,
+    /// Calendar entries for upcoming and recent IPOs.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub list: Option<Vec<IpoCalendarItem>>,
+}
+
+/// One recently listed IPO. Prices are strings; changes are percentages.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct IpoListedItem {
+    /// Security symbol, e.g. "2636.HK".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub symbol: Option<String>,
+    /// Exchange code, e.g. "02636".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
+    /// Display name of the security.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Business description.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Listing date (yyyymmdd).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ipo_date: Option<String>,
+    /// Issue price.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub issue_price: Option<String>,
-    /// First-day close price (stringified decimal).
+    /// Previous close.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub first_day_close: Option<String>,
-    /// First-day return (stringified decimal / percentage).
+    pub prev_close: Option<String>,
+    /// Latest price.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub first_day_return: Option<String>,
-    /// First-day trading volume.
+    pub last_done: Option<String>,
+    /// Change since listing versus the issue price (%).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub volume: Option<String>,
-    /// Market code, e.g. "HK" / "US".
+    pub ipo_change: Option<String>,
+    /// Grey-market change versus the issue price (%), HK only.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub market: Option<String>,
+    pub preipo_change: Option<String>,
+    /// Turnover.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub amount: Option<String>,
+    /// Whether today is the listing day.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub listed_day: Option<bool>,
 }
 
-/// One side (HK or US) of the listed feed. The documented portion is `items[]`.
+/// One market side of `ipo_listed`.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct IpoListedMarketFeed {
-    /// Recently-listed IPO entries (documented subset of upstream fields).
+    /// Total recently listed IPOs in this market.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub items: Option<Vec<IpoListedItem>>,
+    pub total: Option<i64>,
+    /// Recently listed IPOs for this page.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub list: Option<Vec<IpoListedItem>>,
 }
 
-/// Returned by `ipo_listed`. HK and US listed feeds combined under a
-/// `{hk, us}` wrapper object built by the tool.
+/// Returned by `ipo_listed`: the HK and US feeds under `{hk, us}`.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct IpoListedResponse {
     /// Hong Kong recently-listed feed.
@@ -171,13 +253,16 @@ pub struct IpoOrderItem {
     pub submitted_at: Option<String>,
 }
 
-/// One side of the IPO orders feed (active or historical). The documented
-/// portion is `orders[]`.
+/// One side of the IPO orders feed (active or historical): `orders[]`, plus
+/// `has_more` on the paginated history feed.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct IpoOrdersFeed {
     /// IPO order entries (documented subset of upstream fields).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub orders: Option<Vec<IpoOrderItem>>,
+    /// Whether more history pages exist (history feed only).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub has_more: Option<bool>,
 }
 
 /// Returned by `ipo_orders`. Active orders and order history combined under an
@@ -221,55 +306,95 @@ pub struct IpoOrderDetailResponse {
     pub submitted_at: Option<String>,
 }
 
-/// A single per-stock IPO profit/loss breakdown item. Subset of upstream
-/// fields; monetary and rate fields are stringified by the transform pipeline.
+/// One IPO in the profit/loss breakdown. Amounts are strings; rates are
+/// fractions (0.2296 = 22.96%).
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct IpoProfitLossItem {
-    /// Security symbol, e.g. "6871.HK".
+    /// Security symbol, e.g. "9611.HK".
     #[serde(skip_serializing_if = "Option::is_none")]
     pub symbol: Option<String>,
-    /// Cost basis for this stock (stringified decimal).
+    /// Display name of the security.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub cost: Option<String>,
-    /// Current market value for this stock (stringified decimal).
+    pub stock_name: Option<String>,
+    /// Market code, e.g. "HK".
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub current_value: Option<String>,
-    /// Return rate for this stock (stringified decimal / percentage).
+    pub market: Option<String>,
+    /// Subscription date (yyyymmdd).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub return_rate: Option<String>,
+    pub ipo_dt: Option<String>,
+    /// Whether shares were allotted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub is_lucky: Option<bool>,
+    /// Profit or loss on this IPO.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub profit: Option<String>,
+    /// Profit rate on this IPO (fraction).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub profit_rate: Option<String>,
 }
 
-/// The summary side of the IPO profit/loss feed. Documented totals are
-/// stringified decimals.
+/// Totals of the IPO profit/loss feed. Amounts are strings; rates are
+/// fractions.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct IpoProfitLossSummary {
-    /// Total cost across all IPO holdings (stringified decimal).
+    /// Period covered, e.g. "all".
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub total_cost: Option<String>,
-    /// Total current value across all IPO holdings (stringified decimal).
+    pub period: Option<String>,
+    /// Net profit across all IPOs.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub total_value: Option<String>,
-    /// Total return across all IPO holdings (stringified decimal).
+    pub sum_profit: Option<String>,
+    /// Net profit rate (fraction).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub total_return: Option<String>,
+    pub sum_profit_rate: Option<String>,
+    /// Total gain on profitable IPOs.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub profit_amount: Option<String>,
+    /// Share of IPOs that made money (fraction).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub profit_percentage: Option<String>,
+    /// Total loss on losing IPOs (negative).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deficit_amount: Option<String>,
+    /// Share of IPOs that lost money (fraction).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deficit_percentage: Option<String>,
+    /// Value of IPO shares still held.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub holding_value: Option<String>,
+    /// Proceeds of IPO shares sold.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sold_value: Option<String>,
+    /// Total cost of allotted IPOs.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ipo_cost: Option<String>,
+    /// Allotment rate (fraction).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lucky_ipo_rate: Option<String>,
+    /// Return on allotted IPOs (fraction).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lucky_ipo_earning_rate: Option<String>,
+    /// Whether any IPO shares were traded.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub is_traded: Option<bool>,
+    /// Last update (RFC3339).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<String>,
 }
 
-/// The items side of the IPO profit/loss feed. The documented portion is
-/// `items[]`.
+/// The per-stock side of the IPO profit/loss feed.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct IpoProfitLossItems {
-    /// Per-stock profit/loss breakdown entries.
+    /// Per-IPO profit/loss entries.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub items: Option<Vec<IpoProfitLossItem>>,
+    pub ipo_stocks: Option<Vec<IpoProfitLossItem>>,
 }
 
-/// Returned by `ipo_profit_loss`. Summary and per-stock breakdown combined
-/// under a `{summary, items}` wrapper object built by the tool.
+/// Returned by `ipo_profit_loss`: `{summary, items}` built by the tool.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct IpoProfitLossResponse {
-    /// Aggregate cost/value/return totals.
+    /// Aggregate profit/loss totals.
     pub summary: IpoProfitLossSummary,
-    /// Per-stock breakdown items.
+    /// Per-IPO breakdown.
     pub items: IpoProfitLossItems,
 }
 
@@ -348,26 +473,24 @@ pub struct ScreenerStrategyResponse {
 }
 
 /// A single indicator value attached to a screener search result row. The
-/// `filter_` prefix is stripped from `key` by the tool.
+/// `filter_` prefix is stripped from `key` by the tool; its display name and
+/// unit are in the response's `legend`.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct ScreenerResultIndicator {
     /// Indicator key (without the `filter_` prefix).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub key: Option<String>,
-    /// Indicator display name.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
     /// Indicator value (stringified by the transform pipeline).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub value: Option<String>,
-    /// Value unit, where applicable.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub unit: Option<String>,
 }
 
 /// A single screener search result row. Subset of upstream fields.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct ScreenerResultItem {
+    /// Internal counter id, e.g. "ST/US/AAPL".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub counter_id: Option<String>,
     /// Security symbol, e.g. "AAPL.US".
     #[serde(skip_serializing_if = "Option::is_none")]
     pub symbol: Option<String>,
@@ -397,38 +520,29 @@ pub struct ScreenerSearchResponse {
     pub items: Option<Vec<ScreenerResultItem>>,
 }
 
-/// Default value range for a screener indicator.
-#[derive(Debug, Serialize, JsonSchema)]
-pub struct ScreenerIndicatorRange {
-    /// Default lower bound (string).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub min: Option<String>,
-    /// Default upper bound (string).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub max: Option<String>,
-}
-
 /// A single screener indicator's metadata. The `filter_` prefix is stripped
 /// from `key` by the tool. `tech_values`, when present, is a synthesized schema
-/// (`{tech_key: [{value, label}, ...]}`) describing the options a technical
-/// indicator accepts.
+/// (`{tech_key: [{value, label}, ...]}`) built from `tech_indicators`.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct ScreenerIndicator {
-    /// Indicator ID.
+    /// Indicator ID (negative for the built-in market/industry scope filters).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub id: Option<String>,
+    pub id: Option<i64>,
     /// Indicator key (without the `filter_` prefix).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub key: Option<String>,
     /// Indicator display name.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
-    /// Value unit, where applicable.
+    /// Value unit; empty when unitless.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub unit: Option<String>,
-    /// Default value range for the indicator.
+    /// Number of decimal places for display.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub default_range: Option<ScreenerIndicatorRange>,
+    pub places: Option<i64>,
+    /// Upstream indicator category code.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub category: Option<i64>,
     /// For technical indicators: synthesized schema of accepted option values,
     /// keyed by technical sub-key, each mapping to a list of `{value, label}`.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -438,6 +552,9 @@ pub struct ScreenerIndicator {
 /// A named group of screener indicators.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct ScreenerIndicatorGroup {
+    /// Group type identifier, e.g. "range", "ScaleFinancials".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub group_type: Option<String>,
     /// Group display name.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub group_name: Option<String>,
@@ -457,7 +574,7 @@ pub struct ScreenerIndicatorsResponse {
 /// A single sharelist summary entry. Subset of upstream fields.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct SharelistSummary {
-    /// Sharelist ID.
+    /// Sharelist ID; pass to sharelist_detail.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
     /// List name.
@@ -468,63 +585,61 @@ pub struct SharelistSummary {
     pub description: Option<String>,
     /// Number of securities in the list.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub symbol_count: Option<i64>,
-    /// Whether the current user owns this list (`sharelist_list` only).
+    pub stocks_count: Option<i64>,
+    /// Number of subscribers.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub is_owner: Option<bool>,
-    /// Number of followers / subscribers of this list.
+    pub subscribers_count: Option<i64>,
+    /// Whether the current user subscribes to the list.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub follower_count: Option<i64>,
-    /// Creator info (`sharelist_popular` only); passthrough, shape
-    /// upstream-defined.
+    pub subscribed: Option<bool>,
+    /// Today's change of the list (fraction).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chg: Option<String>,
+    /// Year-to-date change of the list (fraction).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub this_year_chg: Option<String>,
+    /// Creation time (RFC3339).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<String>,
+    /// Last edit time (RFC3339).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub edited_at: Option<String>,
+    /// Creator profile; passthrough, shape upstream-defined.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub creator: Option<serde_json::Value>,
+    /// Constituents preview; passthrough, shape upstream-defined.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stocks: Option<serde_json::Value>,
 }
 
-/// Returned by `sharelist_list` and `sharelist_popular`. Documented portion is
-/// `lists[]`.
+/// Returned by `sharelist_list` and `sharelist_popular`.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct SharelistListResponse {
-    /// Sharelist summaries.
+    /// Sharelist summaries: the user's own lists for `sharelist_list`, the
+    /// popular lists for `sharelist_popular`.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub lists: Option<Vec<SharelistSummary>>,
+    pub sharelists: Option<Vec<SharelistSummary>>,
+    /// Lists the user subscribes to (`sharelist_list` only).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subscribed_sharelists: Option<Vec<SharelistSummary>>,
 }
 
-/// A single constituent of a sharelist detail. Subset of upstream fields;
-/// quote fields are stringified by the transform pipeline.
-#[derive(Debug, Serialize, JsonSchema)]
-pub struct SharelistConstituent {
-    /// Security symbol, e.g. "AAPL.US".
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub symbol: Option<String>,
-    /// Display name of the security.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-    /// Latest traded price (stringified decimal).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub last_done: Option<String>,
-    /// Change rate (stringified decimal / percentage).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub change_rate: Option<String>,
-}
-
-/// Returned by `sharelist_detail`. Subset of the upstream detail payload: list
-/// metadata plus the constituent rows. Additional quote and subscription
-/// fields may be present but are not enumerated here.
+/// Returned by `sharelist_detail`: the list itself, the user's relation to
+/// it, and per-constituent topics. Constituents carry no prices.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct SharelistDetailResponse {
-    /// Sharelist ID.
+    /// The list: id, name, description, stocks_count, subscribers_count, chg, this_year_chg, creator and its stocks[]{symbol, name, market, code, intro, …} (no prices; pass the symbols to quote).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub id: Option<String>,
-    /// List name.
+    pub sharelist: Option<serde_json::Value>,
+    /// The user's relation to the list: {self, subscription, official, industry}.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-    /// List description.
+    pub scopes: Option<serde_json::Value>,
+    /// Discussion topics per constituent; passthrough.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-    /// Constituent securities with quote snapshots.
+    pub stock_topics: Option<serde_json::Value>,
+    /// Watchlist group the list is synced to, or null.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub constituents: Option<Vec<SharelistConstituent>>,
+    pub group: Option<serde_json::Value>,
 }
 
 /// Returned by `sharelist_create`. The created sharelist object; documented

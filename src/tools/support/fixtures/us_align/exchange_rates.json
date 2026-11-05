@@ -1,0 +1,9 @@
+{"universal_exchanges": {"us_acct_example": {"spec_exchanges": {
+  "am": {"exchanges": [
+    {"base_currency": "USD", "other_currency": "USD", "bid_rate": 1, "offer_rate": 1, "average_rate": 1},
+    {"base_currency": "USD", "other_currency": "HKD", "bid_rate": 0.1286, "offer_rate": 0.1286, "average_rate": 0.1286}
+  ]},
+  "reference": {"exchanges": [
+    {"base_currency": "USD", "other_currency": "USD", "bid_rate": 1, "offer_rate": 1, "average_rate": 1}
+  ]}
+}}}}

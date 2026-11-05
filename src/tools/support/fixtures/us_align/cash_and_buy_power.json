@@ -1,0 +1,7 @@
+{
+  "cash_list": [
+    {"total_amount": "1250.40", "currency": "USD", "available_cash": "1200.40", "withdraw_cash": "1150.00", "external_amount": "0", "settled_cash": "1250.40", "frozen_cash": "50.00", "outstanding": "0"}
+  ],
+  "buy_limit_info": {"cash_buy_power": "1200.40", "overnight_buy_power": "1200.40", "day_trade_buy_power": "0", "option_buy_power": "1200.40", "crypto_buy_power": "1200.40", "currency": "USD", "intraday_margin_buy_power": "1200.40", "instant_buy_power": "0", "mme": "1200.40"},
+  "margin_status": {"margin_maintenance_excess": "1200.40", "reg_t_excess": "1200.40", "margin_equity": "1480.90", "sma": "1200.40", "currency": "USD", "nlv": "1480.90", "mmr": "230.50"}
+}

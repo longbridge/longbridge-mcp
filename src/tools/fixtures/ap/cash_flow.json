@@ -1,0 +1,1 @@
+[{"transaction_flow_name": "Dividend", "direction": 2, "business_type": 1, "balance": "12.50", "currency": "HKD", "business_time": "1700000000", "symbol": "700.HK", "description": "cash dividend"}, {"transaction_flow_name": "Fee", "direction": 1, "business_type": 1, "balance": "-1.54", "currency": "USD", "business_time": "1700000100", "symbol": "", "description": ""}]

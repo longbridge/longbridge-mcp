@@ -1,12 +1,12 @@
 [package]
 name = "longbridge-mcp"
-version = "0.13.0"
+version = "0.16.1"
 edition = "2024"
 
 [dependencies]
 # TODO: swap back to the released version once the forex channel ships in a crates.io release.
-longbridge = { git = "https://github.com/longbridge/openapi.git", rev = "4ef2f7a3fc65b6fca2b57f5d5e0038ed7751f7fd" }
-longbridge-proto = { git = "https://github.com/longbridge/openapi.git", rev = "4ef2f7a3fc65b6fca2b57f5d5e0038ed7751f7fd" }
+longbridge = { git = "https://github.com/longbridge/openapi.git", rev = "ebe1e0b9c326359b77908bcf8eef4d4e2b628d71" }
+longbridge-proto = { git = "https://github.com/longbridge/openapi.git", rev = "ebe1e0b9c326359b77908bcf8eef4d4e2b628d71" }
 rust_decimal = "1"
 rmcp = { version = "1.4", features = [
     "server",
@@ -35,7 +35,9 @@ time = { version = "0.3", features = [
     "parsing",
     "serde-human-readable",
 ] }
-reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
+# Already in the tree via the longbridge SDK; used for US-market-local dates.
+time-tz = "2.0.0"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "http2", "charset"] }
 tower = "0.5"
 tower-http = { version = "0.6", features = ["cors"] }
 prometheus = "0.13"
@@ -47,6 +49,7 @@ serde-transcode = "1.1"
 anyhow = "1"
 rustls = { version = "0.23", features = ["ring"] }
 sha2 = "0.10"
+futures-util = "0.3"
 
 # Embedded jq-compatible response filtering (no external jq executable).
 jaq-core = "3.1"

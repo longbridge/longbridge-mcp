@@ -8,16 +8,52 @@ use rmcp::serde::{Deserialize, Serialize};
 
 use crate::error::Error;
 use crate::serialize::{convert_unix_paths, transform_json};
+use crate::tools::support::exchange_time::{localize_result, localize_tool_output};
 use crate::tools::support::http_client::{
     http_get_tool, http_get_tool_dropping, http_get_tool_trimming_zeros, http_get_tool_unix,
     http_get_tool_unix_dropping,
 };
+use crate::tools::support::tolerant::{tolerant_option_csv, tolerant_option_usize};
 use crate::tools::tool_json;
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct SymbolParam {
     /// Security symbol, e.g. "700.HK". Use the canonical form — a padded code like "00700.HK" returns an empty record, not an error.
     pub symbol: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct BrokerHoldingDetailParam {
+    /// Security symbol, e.g. "700.HK". Use the canonical form — a padded code like "00700.HK" returns an empty record, not an error.
+    pub symbol: String,
+    /// Number of brokers to return, largest holding first. Defaults to 50
+    /// (~230 bytes each); a stock can have 400+.
+    #[serde(default, deserialize_with = "tolerant_option_usize")]
+    #[schemars(extend("default" = 50))]
+    pub count: Option<usize>,
+}
+
+/// Brokers `broker_holding_detail` returns when `count` is omitted.
+const DEFAULT_BROKER_COUNT: usize = 50;
+
+/// Sort `broker_holding_detail` rows by shares held, largest first, and keep
+/// `count`. The upstream order is unrelated to size (its first hundred-odd
+/// rows hold ~0%), so cutting it as-is dropped the major holders.
+fn top_broker_holdings(value: &mut serde_json::Value, count: usize) {
+    let Some(rows) = value
+        .get_mut("list")
+        .and_then(serde_json::Value::as_array_mut)
+    else {
+        return;
+    };
+    let shares = |row: &serde_json::Value| {
+        row.pointer("/shares/value")
+            .and_then(serde_json::Value::as_str)
+            .and_then(|s| s.parse::<f64>().ok())
+            .unwrap_or(0.0)
+    };
+    rows.sort_by(|a, b| shares(b).total_cmp(&shares(a)));
+    rows.truncate(count);
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -94,6 +130,7 @@ pub async fn market_status(mctx: &crate::tools::McpContext) -> Result<CallToolRe
         &mut data,
         &["market_time.*.timestamp", "market_time.*.delay_timestamp"],
     );
+    localize_tool_output("market_status", &mut data, None);
 
     tool_json(&data)
 }
@@ -116,18 +153,28 @@ pub async fn broker_holding(
 
 pub async fn broker_holding_detail(
     mctx: &crate::tools::McpContext,
-    p: SymbolParam,
+    p: BrokerHoldingDetailParam,
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
     // The share-count delta fields (shares.chg_*) are integers padded with a
     // fake ".0000" fractional part across all rows; strip the trailing zeros
     // (lossless) — they are ~half the bytes of this ~100 KB payload.
-    http_get_tool_trimming_zeros(
+    let raw = http_get_tool_trimming_zeros(
         &client,
         "/v1/quote/broker-holding/detail",
         &[("symbol", p.symbol.as_str())],
     )
-    .await
+    .await?;
+    let Some(mut value) = raw
+        .content
+        .first()
+        .and_then(|c| c.as_text())
+        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t.text).ok())
+    else {
+        return Ok(raw);
+    };
+    top_broker_holdings(&mut value, p.count.unwrap_or(DEFAULT_BROKER_COUNT).max(1));
+    tool_json(&value)
 }
 
 pub async fn broker_holding_daily(
@@ -135,7 +182,8 @@ pub async fn broker_holding_daily(
     p: BrokerHoldingDailyParam,
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
-    http_get_tool(
+    // `chg` is an integer share delta padded with a fake ".0000"; strip it.
+    http_get_tool_trimming_zeros(
         &client,
         "/v1/quote/broker-holding/daily",
         &[
@@ -163,7 +211,7 @@ pub async fn ah_premium(
         _ => "1000", // day
     };
     let count_str = p.count.unwrap_or(100).to_string();
-    http_get_tool_unix_dropping(
+    let result = http_get_tool_unix_dropping(
         &client,
         "/v1/quote/ahpremium/klines",
         &[
@@ -174,7 +222,8 @@ pub async fn ah_premium(
         &["klines.*.timestamp"],
         &["price_spread"],
     )
-    .await
+    .await?;
+    Ok(localize_result("ah_premium", result, Some(&p.symbol)))
 }
 
 /// Hoist the per-bar prior-close fields (`apreclose`, `hpreclose`) out of the
@@ -235,6 +284,7 @@ pub async fn ah_premium_intraday(
     let mut value: serde_json::Value =
         serde_json::from_str(&transformed).map_err(Error::Serialize)?;
     convert_unix_paths(&mut value, &["klines.*.timestamp"]);
+    localize_tool_output("ah_premium_intraday", &mut value, Some(&p.symbol));
     // `price_spread` is empty on every intraday minute bar.
     crate::serialize::drop_keys(&mut value, &["price_spread"]);
     hoist_intraday_prev_closes(&mut value);
@@ -261,6 +311,7 @@ pub async fn trade_stats(
         .map(|t| t.text.clone())
         .unwrap_or_default();
     let mut value: serde_json::Value = serde_json::from_str(&json).map_err(Error::Serialize)?;
+    localize_tool_output("trade_stats", &mut value, Some(&p.symbol));
     // Each price-level `price` (and statistics avgprice/preclose) is padded to a
     // fixed decimal width ("435.400"); strip the trailing zeros (lossless). The
     // RFC3339 trade_date strings are not plain decimals and are left untouched.
@@ -286,13 +337,14 @@ pub async fn anomaly(
     // `alert_time` arrives as a raw unix-seconds string (e.g. "1789105515"),
     // which a model cannot interpret; convert it to RFC3339 like every other
     // timestamp field.
-    http_get_tool_unix(
+    let result = http_get_tool_unix(
         &client,
         "/v1/quote/changes",
         &params,
         &["changes.*.alert_time"],
     )
-    .await
+    .await?;
+    Ok(localize_result("anomaly", result, None))
 }
 
 pub async fn constituent(
@@ -436,7 +488,11 @@ pub async fn short_trades(
         &["data.*.timestamp"],
     )
     .await?;
-    Ok(normalize_short_trades(result, is_hk))
+    Ok(localize_result(
+        "short_trades",
+        normalize_short_trades(result, is_hk),
+        Some(&p.symbol),
+    ))
 }
 
 /// Normalize short_trades response to a unified schema regardless of market.
@@ -536,9 +592,10 @@ fn next_params_schema(_: &mut rmcp::schemars::SchemaGenerator) -> rmcp::schemars
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct StockEventsParam {
-    /// Market filter: comma-separated list of markets to include.
-    /// Supported values: "HK", "US", "CN", "SG". Omit to return all markets.
-    /// Example: "HK,US"
+    /// Market filter: markets to include, as a comma-separated string ("HK,US")
+    /// or an array (["HK", "US"]). Supported values: "HK", "US", "CN", "SG".
+    /// Omit to return all markets.
+    #[serde(default, deserialize_with = "tolerant_option_csv")]
     pub markets: Option<String>,
     /// Sort order (default: "2"):
     ///   "0" = by time (most recent first)
@@ -547,7 +604,7 @@ pub struct StockEventsParam {
     pub sort: Option<String>,
     /// Date to query in "YYYY-MM-DD" format. Omit for today's movers.
     pub date: Option<String>,
-    /// Number of events to return per page (default: 20, max: 100)
+    /// Number of events to return per page (default: 10, max: 100)
     pub limit: Option<u32>,
     /// Pagination cursor from previous response next_params field.
     /// Pass the entire next_params object returned by the previous call to get the next page.
@@ -562,7 +619,8 @@ pub async fn top_movers(
     p: StockEventsParam,
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
-    let limit = p.limit.unwrap_or(20);
+    // ~2.6KB per event: 20 was ~51KB, past one tool result.
+    let limit = p.limit.unwrap_or(10);
     let sort: u32 = p.sort.as_deref().unwrap_or("2").parse().unwrap_or(2);
     let markets: Vec<serde_json::Value> = p
         .markets
@@ -583,14 +641,15 @@ pub async fn top_movers(
     }
     // Per-event stock display noise: `profile` (~150-word paragraph), `logo`
     // (URL), `full_name` (== name), and constant `latency`/`duplicate` flags.
-    crate::tools::support::http_client::http_post_tool_unix_dropping(
+    let result = crate::tools::support::http_client::http_post_tool_unix_dropping(
         &client,
         "/v1/quote/market/stock-events",
         body,
         &["events.*.timestamp"],
         &["profile", "logo", "full_name", "latency", "duplicate"],
     )
-    .await
+    .await?;
+    Ok(localize_result("top_movers", result, None))
 }
 
 /// Get available rank tab category configurations.
@@ -648,11 +707,12 @@ pub struct RankListParam {
     /// Tab key from rank_categories second_tags[].key, e.g. "hot_all-us" (US total heat),
     /// "hot_up-hk" (HK rising heat), "trade_heat-us" (US hot trades).
     /// The "ib_" prefix is stripped from rank_categories keys and added back automatically.
+    /// A key without a market suffix (e.g. "hot_all") gets one from `market`.
     pub key: String,
     /// Market override: "US" | "HK" | "CN" | "SG".
-    /// Defaults to the market suffix in the key (e.g. "ib_hot_all-hk" → HK), then "US".
+    /// The key's market suffix wins (e.g. "hot_all-hk" → HK); otherwise defaults to "US".
     pub market: Option<String>,
-    /// Number of results to return (default: 20)
+    /// Number of results to return (default: 20; capped by the board's own length, typically 50)
     pub size: Option<u32>,
     /// Whether to include related news articles (default: false)
     pub need_article: Option<bool>,
@@ -664,20 +724,10 @@ pub async fn rank_list(
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
     let need_article = p.need_article.unwrap_or(false).to_string();
-    // Auto-prepend "ib_" if the key doesn't already start with it.
-    let key = if p.key.starts_with("ib_") {
-        p.key.clone()
-    } else {
-        format!("ib_{}", p.key)
-    };
-    // Infer market from key suffix (e.g. "ib_hot_all-hk" → "HK"), fall back to param or "US".
-    let key_market = key
-        .rsplit_once('-')
-        .map(|(_, m)| m.to_uppercase())
-        .filter(|m| matches!(m.as_str(), "US" | "HK" | "CN" | "SG"))
-        .or_else(|| p.market.as_deref().map(|m| m.to_uppercase()))
-        .unwrap_or_else(|| "US".to_string());
-    let size = p.size.unwrap_or(20).to_string();
+    let (key, key_market) = rank_key_and_market(&p.key, p.market.as_deref());
+    // The endpoint takes no page-size parameter and always returns its full
+    // board (e.g. 50 rows), so `size` is applied here after the fetch.
+    let size = p.size.unwrap_or(20) as usize;
     let raw: String = client
         .request(Method::GET, "/v1/quote/market/rank/list")
         .query_params(vec![
@@ -685,7 +735,6 @@ pub async fn rank_list(
             ("delay_bmp", "false"),
             ("need_article", need_article.as_str()),
             ("market", key_market.as_str()),
-            ("size", size.as_str()),
         ])
         .response::<String>()
         .send()
@@ -693,8 +742,45 @@ pub async fn rank_list(
         .map_err(|e| Error::longbridge(e.into()))?;
     let json = transform_json(raw.as_bytes()).map_err(Error::Serialize)?;
     let mut value: serde_json::Value = serde_json::from_str(&json).map_err(Error::Serialize)?;
+    truncate_rank_list_rows(&mut value, size);
     trim_rank_list_rows(&mut value);
     tool_json(&value)
+}
+
+/// Resolve the upstream board key and market for `rank_list`.
+///
+/// The key gets its "ib_" prefix back. The market comes from the key's suffix
+/// (e.g. "hot_all-hk" → HK), then the `market` argument, then US. A key
+/// without a market suffix (e.g. the `hot_all` group name from
+/// rank_categories) names no board upstream, so the resolved market is
+/// appended to it.
+fn rank_key_and_market(key: &str, market: Option<&str>) -> (String, String) {
+    let key = key.trim();
+    let key = key.strip_prefix("ib_").unwrap_or(key);
+    let suffix = key
+        .rsplit_once('-')
+        .map(|(_, m)| m.to_uppercase())
+        .filter(|m| matches!(m.as_str(), "US" | "HK" | "CN" | "SG"));
+    match suffix {
+        Some(m) => (format!("ib_{key}"), m),
+        None => {
+            let m = market
+                .map(|m| m.trim().to_uppercase())
+                .filter(|m| !m.is_empty())
+                .unwrap_or_else(|| "US".to_string());
+            (format!("ib_{key}-{}", m.to_lowercase()), m)
+        }
+    }
+}
+
+/// Keep only the first `size` rows of a `rank_list` response.
+fn truncate_rank_list_rows(value: &mut serde_json::Value, size: usize) {
+    if let Some(rows) = value
+        .get_mut("lists")
+        .and_then(serde_json::Value::as_array_mut)
+    {
+        rows.truncate(size);
+    }
 }
 
 /// Trim each `rank_list` row: gate the extended-session price/change on their
@@ -747,7 +833,71 @@ fn trim_rank_list_rows(value: &mut serde_json::Value) {
 
 #[cfg(test)]
 mod tests {
-    use super::{hoist_intraday_prev_closes, trade_status_label};
+    use super::{
+        hoist_intraday_prev_closes, rank_key_and_market, top_broker_holdings, trade_status_label,
+    };
+
+    #[test]
+    fn top_broker_holdings_keeps_the_largest_holders() {
+        let mut v = serde_json::json!({"list": [
+            {"name": "small", "shares": {"value": "26000"}},
+            {"name": "big", "shares": {"value": "4200000000"}},
+            {"name": "mid", "shares": {"value": "1500000"}}
+        ]});
+        top_broker_holdings(&mut v, 2);
+        let names: Vec<_> = v["list"]
+            .as_array()
+            .expect("list stays an array")
+            .iter()
+            .map(|r| r["name"].clone())
+            .collect();
+        assert_eq!(
+            names,
+            ["big", "mid"],
+            "the largest holders must come first and survive the cut"
+        );
+    }
+
+    #[test]
+    fn rank_key_keeps_its_own_market_suffix() {
+        assert_eq!(
+            rank_key_and_market("hot_all-hk", Some("US")),
+            ("ib_hot_all-hk".to_string(), "HK".to_string()),
+            "the key's suffix must win over the market argument"
+        );
+        assert_eq!(
+            rank_key_and_market("ib_trade_heat-us", None),
+            ("ib_trade_heat-us".to_string(), "US".to_string()),
+            "an already prefixed key must not be prefixed twice"
+        );
+    }
+
+    #[test]
+    fn rank_key_without_suffix_gets_the_market_appended() {
+        assert_eq!(
+            rank_key_and_market("hot_all", Some("hk")),
+            ("ib_hot_all-hk".to_string(), "HK".to_string()),
+            "a group key must be completed from the market argument"
+        );
+        assert_eq!(
+            rank_key_and_market("hot_all", None),
+            ("ib_hot_all-us".to_string(), "US".to_string()),
+            "a group key with no market must default to US"
+        );
+    }
+
+    #[test]
+    fn truncate_rank_list_keeps_first_rows() {
+        let rows: Vec<_> = (0..50)
+            .map(|i| serde_json::json!({"symbol": format!("S{i}.US")}))
+            .collect();
+        let mut v = serde_json::json!({"lists": rows});
+        super::truncate_rank_list_rows(&mut v, 2);
+        assert_eq!(
+            v["lists"],
+            serde_json::json!([{"symbol": "S0.US"}, {"symbol": "S1.US"}])
+        );
+    }
 
     #[test]
     fn trim_rank_list_gates_extended_prices_on_their_flags() {

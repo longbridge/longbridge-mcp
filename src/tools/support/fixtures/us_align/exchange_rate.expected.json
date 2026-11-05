@@ -1,0 +1,16 @@
+{
+  "exchanges": [
+    {
+      "base_currency": "USD",
+      "other_currency": "USD",
+      "average_rate": 1,
+      "spec_key": "reference"
+    },
+    {
+      "base_currency": "USD",
+      "other_currency": "HKD",
+      "average_rate": 0.1286,
+      "spec_key": "am"
+    }
+  ]
+}

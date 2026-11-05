@@ -1,4 +1,4 @@
-use std::{borrow::Cow, sync::Arc};
+use std::sync::Arc;
 
 use rmcp::ErrorData as McpError;
 use rmcp::RoleServer;
@@ -16,7 +16,7 @@ use rmcp::tool_router;
 use crate::auth::middleware::{AgentEndpoint, BearerToken, RestrictedEndpoint, RestrictedVersion};
 use crate::error::Error;
 use crate::serialize::to_tool_json;
-use crate::tools::support::text::{clip_chars, truncate_chars};
+use crate::tools::support::text::truncate_chars;
 
 /// Registered name of the reverse-auth tool, used as the filter key in both
 /// `tools_main_endpoint` (excluded) and `tools_agent_endpoint` (only this one).
@@ -26,7 +26,6 @@ const AUTHENTICATE_TOOL_NAME: &str = "authenticate";
 const OUTPUT_SCHEMA_RESOURCE_PREFIX: &str = "lb://tools/";
 const OUTPUT_SCHEMA_RESOURCE_SUFFIX: &str = "/output-schema";
 const OUTPUT_SCHEMA_RESOURCE_MIME: &str = "application/schema+json";
-const TOOL_DESCRIPTION_MAX_CHARS: usize = 240;
 
 tokio::task_local! {
     /// The name of the tool currently executing, scoped around each tool call by
@@ -36,6 +35,49 @@ tokio::task_local! {
     /// so server-side stats can attribute requests per tool. Absent outside a
     /// tool call (e.g. server init), in which case no tag is added.
     pub(crate) static CURRENT_TOOL: &'static str;
+
+    /// Server-side rate-limit retry slot, scoped by `call_tool` around the
+    /// first attempt of a read-only tool. When that attempt fails with a
+    /// backoff-class error, [`measured_tool_call`] records the suggested delay
+    /// here *instead of* counting the failure, and `call_tool` retries once.
+    static BACKOFF_RETRY: std::cell::Cell<Option<std::time::Duration>>;
+}
+
+/// Delay before the single server-side retry when the upstream message gives
+/// no usable hint, and the bounds applied to a hint it does give.
+const BACKOFF_DEFAULT: std::time::Duration = std::time::Duration::from_millis(500);
+const BACKOFF_MIN: std::time::Duration = std::time::Duration::from_millis(200);
+const BACKOFF_MAX: std::time::Duration = std::time::Duration::from_millis(1500);
+
+/// How long to wait before retrying a rate-limited call. Reads the wait the
+/// upstream suggests — "请 0.4 秒后重试" (429002; also the traditional-Chinese
+/// "秒後重試" variant) or "retry after: 1s" — and
+/// clamps it; 429003's "minimum interval … 0.02 seconds" is an interval, not a
+/// wait, so it (like any unparseable text) falls back to [`BACKOFF_DEFAULT`].
+fn backoff_delay(message: &str) -> std::time::Duration {
+    fn number_before(text: &str, suffix: &str) -> Option<f64> {
+        let head = text[..text.find(suffix)?].trim_end();
+        let start = head
+            .rfind(|c: char| !(c.is_ascii_digit() || c == '.'))
+            .map_or(0, |i| {
+                i + head[i..].chars().next().map_or(1, char::len_utf8)
+            });
+        head[start..].parse().ok()
+    }
+    fn number_after(text: &str, prefix: &str) -> Option<f64> {
+        let tail = text[text.find(prefix)? + prefix.len()..].trim_start();
+        let end = tail
+            .find(|c: char| !(c.is_ascii_digit() || c == '.'))
+            .unwrap_or(tail.len());
+        tail[..end].parse().ok()
+    }
+    number_before(message, "秒后重试")
+        .or_else(|| number_before(message, "秒後重試"))
+        .or_else(|| number_after(message, "retry after:"))
+        .filter(|secs| secs.is_finite() && *secs >= 0.0)
+        .map_or(BACKOFF_DEFAULT, |secs| {
+            std::time::Duration::from_secs_f64(secs).clamp(BACKOFF_MIN, BACKOFF_MAX)
+        })
 }
 
 /// Cheap per-call correlation id for [`measured_tool_call`]'s log lines.
@@ -62,7 +104,30 @@ where
             let start = std::time::Instant::now();
             let result = f().await;
             let duration = start.elapsed().as_secs_f64();
-            crate::metrics::record_tool_call(name, duration, result.is_err());
+            // A rate-limited first attempt that `call_tool` is about to retry
+            // is not a client-visible failure: hand it the delay and record
+            // nothing, so the retry's outcome is the one that gets counted.
+            let deferred = match &result {
+                // A per-tool no-data code (e.g. 2601500 on consensus) is
+                // terminal: retrying only delays the placeholder.
+                Err(err) if is_backoff(err) && !is_terminal_for(name, err) => BACKOFF_RETRY
+                    .try_with(|slot| {
+                        let delay =
+                            backoff_delay(upstream_message_of(err).unwrap_or(err.message.as_ref()));
+                        slot.set(Some(delay));
+                    })
+                    .is_ok(),
+                _ => false,
+            };
+            if deferred {
+                return Ok(tool_error(name, result.as_ref().unwrap_err()));
+            }
+            // Terminal no-access/no-data conditions reach the client as an
+            // `isError:false` placeholder (see `tool_error`), so they are not
+            // errors from the client's point of view either; they are counted
+            // in `mcp_tool_terminal_degraded_total` instead.
+            let is_error = matches!(&result, Err(err) if !is_terminal_for(name, err));
+            crate::metrics::record_tool_call(name, duration, is_error);
             // Failures only — this is the choke point every `#[tool]` method
             // routes through via `measured_tool_call(name, ...)`, so it's
             // cheaper to log here once than at each of the 100+ call sites.
@@ -173,20 +238,23 @@ where
 /// as tool-result errors, with a `note` making clear the empty payload is a
 /// permission/no-data placeholder — not real quote data.
 fn tool_error(name: &str, err: &McpError) -> CallToolResult {
-    let message = upstream_message_of(err).unwrap_or_else(|| err.message.as_ref());
-    if is_terminal_none(err) {
+    let upstream = upstream_message_of(err).unwrap_or_else(|| err.message.as_ref());
+    let message = if is_no_data(name, err) && upstream.contains("internal server error") {
+        // The gateway's generic text for a masked "record not found".
+        "no data available for this symbol"
+    } else {
+        upstream
+    };
+    if is_terminal_for(name, err) {
         // Count the degraded condition (tools that return the error to
         // `measured_tool_call` land here instead of calling `terminal_none_ok`).
         crate::metrics::record_terminal_degraded(name, openapi_error_code_of(err));
         let envelope = serde_json::json!({
-            "error_code": openapi_error_code_of(err),
+            "error_code": error_code_of(err),
             "message": message,
             "recoverable": "none",
-            "hint": error_hint(err),
-            "note": "These fields are EMPTY because access was denied or no data exists — NOT \
-                     because the values are zero. This is a permission/no-data placeholder, not a \
-                     real quote. Tell the user they lack the required market-data access (or that \
-                     no data exists); do not present the empty values as real.",
+            "hint": terminal_hint(name, err),
+            "note": terminal_note(name, err),
         });
         let mut result = CallToolResult::success(vec![Content::text(envelope.to_string())]);
         if TERMINAL_OBJECT_ROOTED.contains(&name)
@@ -197,14 +265,101 @@ fn tool_error(name: &str, err: &McpError) -> CallToolResult {
         return result;
     }
 
+    // A write that got no response may still have been executed upstream
+    // (the order placed, the alert created); resending it could do it twice.
+    // Only a rate limit proves the write was rejected unexecuted; a timeout or
+    // a 5xx (also classed "backoff" for reads) leaves it unknown.
+    let recoverable = recoverable_of(err);
+    let (recoverable, hint) =
+        if recoverable == "backoff" && !is_rate_limit(err) && !is_read_only_tool(name) {
+            ("none", Some(UNCONFIRMED_WRITE_HINT))
+        } else {
+            (
+                recoverable,
+                us_ap_only_hint(name, err).or_else(|| error_hint(err)),
+            )
+        };
     let envelope = serde_json::json!({
-        "error_code": openapi_error_code_of(err),
+        "error_code": error_code_of(err),
         "message": message,
-        "recoverable": recoverable_of(err),
-        "hint": error_hint(err),
+        "recoverable": recoverable,
+        "hint": hint,
         "data": serde_json::Value::Null,
     });
     CallToolResult::error(vec![Content::text(envelope.to_string())])
+}
+
+/// Hint for a write tool whose request got no response.
+const UNCONFIRMED_WRITE_HINT: &str = "Hint: this write ended without a confirmed result (no \
+     response, a timeout or a server error), so it may or may not have taken effect upstream. \
+     Do NOT resend it: first check the current state (e.g. today_orders for an order) and only \
+     retry if the change is not there.";
+
+/// A rate-limit rejection (429xxx or its message text): the request was
+/// refused before doing anything, so even a write can be resent.
+fn is_rate_limit(err: &McpError) -> bool {
+    let msg = err.message.to_lowercase();
+    openapi_error_code_of(err).is_some_and(|c| (429_000..430_000).contains(&c))
+        || [
+            "rate limit",
+            "too frequent",
+            "区间调用上限",
+            "最小间隔",
+            "區間調用上限",
+            "最小間隔",
+        ]
+        .iter()
+        .any(|needle| msg.contains(needle))
+}
+
+/// Whether `name` is a registered read-only tool. Unknown names count as
+/// writes, the cautious side.
+fn is_read_only_tool(name: &str) -> bool {
+    cached_router()
+        .get(name)
+        .and_then(|tool| tool.annotations.as_ref())
+        .and_then(|annotations| annotations.read_only_hint)
+        == Some(true)
+}
+
+/// `(requested, limit)` when `err` is 301607 "history candlestick symbol count
+/// out of limit" with a non-zero limit already reached — the account's
+/// per-period quota of distinct symbols is used up. (`limit:0` means no history
+/// entitlement at all and is handled as a terminal no-access placeholder.)
+fn history_quota_exhausted(err: &McpError) -> Option<(u64, u64)> {
+    if openapi_error_code_of(err) != Some(301_607) {
+        return None;
+    }
+    let text = upstream_message_of(err).unwrap_or(err.message.as_ref());
+    let tail = &text[text.find("requested:")? + "requested:".len()..];
+    let (requested, rest) = tail.split_once("/limit:")?;
+    let limit: String = rest.chars().take_while(char::is_ascii_digit).collect();
+    let (requested, limit) = (requested.trim().parse().ok()?, limit.parse().ok()?);
+    (limit > 0 && requested >= limit).then_some((requested, limit))
+}
+
+/// The `note` on a terminal no-data placeholder: missing fundamental data is
+/// not a permission problem, so it gets its own wording.
+fn terminal_note(name: &str, err: &McpError) -> &'static str {
+    if is_no_data(name, err) {
+        "There is NO such data — this is a no-data placeholder, not an empty result set to \
+         retry. Tell the user the data isn't available."
+    } else {
+        "These fields are EMPTY because access was denied or no data exists — NOT because the \
+         values are zero. This is a permission/no-data placeholder, not a real quote. Tell the \
+         user they lack the required market-data access (or that no data exists); do not \
+         present the empty values as real."
+    }
+}
+
+/// The hint on a terminal placeholder: per-tool no-data codes get the no-data
+/// hint (`error_hint` has no tool name to tell them from internal errors).
+fn terminal_hint(name: &str, err: &McpError) -> Option<&'static str> {
+    if is_no_data(name, err) {
+        Some(NO_DATA_HINT)
+    } else {
+        error_hint(err)
+    }
 }
 
 /// Business error codes matched structurally in `error_hint()` — see
@@ -214,6 +369,68 @@ fn tool_error(name: &str, err: &McpError) -> CallToolResult {
 /// can misfire on an unrelated field (trace id, order id) that happens to
 /// contain the same digits.
 const NO_QUOTE_ACCESS_CODE: i64 = 301604;
+
+/// `lb-fundamental-app`'s "no record" code: the gateway masks it as HTTP 500
+/// `internal server error`, but its logs show only `get company: record not
+/// found` (financial statements) and `get security: security meta not found`
+/// (institution ratings/views) behind it — the symbol simply has no such data.
+const NO_FUNDAMENTAL_DATA_CODE: i64 = 2_601_400;
+
+/// Codes that mean "no such data" only on particular tools. The gateway masks
+/// the real reason as `internal server error`; its logs show:
+/// - 2601500 on `industry_valuation_dist`: `find security error: record not found`
+/// - 2601500 on `consensus`: `CompanySecurity not found`
+/// - 1901107 on `topic_detail`: "the content does not exist or has been deleted"
+///
+/// On other tools 2601500 stays a retryable internal error.
+const NO_DATA_CODES_BY_TOOL: &[(&str, i64)] = &[
+    ("industry_valuation_dist", 2_601_500),
+    ("consensus", 2_601_500),
+    ("topic_detail", 1_901_107),
+];
+
+/// True when `err` means "this data does not exist" for this tool: the global
+/// no-record code, or a code listed for this tool in [`NO_DATA_CODES_BY_TOOL`].
+fn is_no_data(name: &str, err: &McpError) -> bool {
+    let code = openapi_error_code_of(err);
+    code == Some(NO_FUNDAMENTAL_DATA_CODE)
+        || code.is_some_and(|c| NO_DATA_CODES_BY_TOOL.contains(&(name, c)))
+}
+
+/// True when `err` is answered with an `isError:false` placeholder instead of
+/// an error: terminal quote access/no-data conditions, or [`is_no_data`].
+fn is_terminal_for(name: &str, err: &McpError) -> bool {
+    is_terminal_none(err) || is_no_data(name, err)
+}
+
+const NO_DATA_HINT: &str = "Hint: Longbridge has no data of this kind for this symbol or id \
+     (nothing filed, no coverage, or it is unknown or was deleted). Retrying or changing \
+     parameters won't help — tell the user the data isn't available.";
+
+/// The envelope's `error_code`: the upstream business code (a number) when
+/// there is one, else a string — a tool-supplied `data.error_code` (e.g.
+/// `invalid_tech_values`), or the MCP error class — never `null`, so a caller
+/// can always branch on it.
+fn error_code_of(err: &McpError) -> serde_json::Value {
+    if let Some(code) = openapi_error_code_of(err) {
+        return code.into();
+    }
+    if let Some(code) = err
+        .data
+        .as_ref()
+        .and_then(|d| d.get("error_code"))
+        .and_then(|c| c.as_str())
+    {
+        return code.into();
+    }
+    let class = match err.code {
+        rmcp::model::ErrorCode::INVALID_PARAMS => "invalid_params",
+        rmcp::model::ErrorCode::INVALID_REQUEST => "invalid_request",
+        rmcp::model::ErrorCode::METHOD_NOT_FOUND => "method_not_found",
+        _ => "internal_error",
+    };
+    class.into()
+}
 
 /// The structured `openapi_error_code` from `McpError::data`, when present.
 fn openapi_error_code_of(err: &McpError) -> Option<i64> {
@@ -261,6 +478,11 @@ fn matches_error_class(
 
 /// Actionable follow-up for the error classes users hit most, so the model can
 /// either fix the call itself or tell the user what to do.
+/// reqwest's text for a request that never got a response (connection reset,
+/// DNS or TLS failure, timeout). Transient: read-only tools retry it once, and
+/// the model is told to retry rather than give up.
+const TRANSPORT_ERROR: &str = "error sending request";
+
 fn error_hint(err: &McpError) -> Option<&'static str> {
     if err.code == rmcp::model::ErrorCode::INVALID_PARAMS {
         return Some(
@@ -270,6 +492,23 @@ fn error_hint(err: &McpError) -> Option<&'static str> {
 
     let code = openapi_error_code_of(err);
     let msg = err.message.to_lowercase();
+
+    if msg.contains(TRANSPORT_ERROR) {
+        return Some(
+            "Hint: a transient network error reaching the upstream service (the request got no \
+             response). Wait a moment and retry the same call.",
+        );
+    }
+    // 301600 is a generic invalid-request code, so this matches on the text.
+    if msg.contains("invalid symbol") || msg.contains("symbol not found") {
+        return Some(
+            "Hint: the symbol is not recognised. Use <CODE>.<MARKET> with market US, HK, SH, \
+             SZ or SG — e.g. AAPL.US, 700.HK, 600519.SH, D05.SG; indexes as .SPX.US / \
+             HSI.HK / STI.SG. Other markets (.TW, .JP, .KS, FX pairs, crypto) are not \
+             covered, and OTC tickers, delisted codes and expired options also fail; tell the \
+             user instead of retrying variants.",
+        );
+    }
 
     // Checked before the rate-limit class below: `openapi_error_code()` and
     // `dc_region_restricted()` are mutually exclusive on any given
@@ -303,7 +542,13 @@ fn error_hint(err: &McpError) -> Option<&'static str> {
         // exact-match list that's one upstream addition away from stale.
         |c| (429_000..430_000).contains(&c),
         ErrorClassNeedles {
-            text: &["rate limit", "区间调用上限", "最小间隔"],
+            text: &[
+                "rate limit",
+                "区间调用上限",
+                "最小间隔",
+                "區間調用上限",
+                "最小間隔",
+            ],
             numeric: &["429002", "429003"],
         },
     ) {
@@ -311,6 +556,9 @@ fn error_hint(err: &McpError) -> Option<&'static str> {
             "Hint: this call was rate-limited by the upstream API. Wait a moment and retry — \
              if this recurs, space out repeated calls rather than firing them back-to-back.",
         );
+    }
+    if code == Some(NO_FUNDAMENTAL_DATA_CODE) {
+        return Some(NO_DATA_HINT);
     }
     if matches_error_class(
         code,
@@ -339,6 +587,34 @@ fn error_hint(err: &McpError) -> Option<&'static str> {
             "Hint: this account has no history-candlestick quota (limit:0). The empty result is a \
              permission/subscription gap, not an oversized request — reducing the number of \
              symbols will NOT help. Tell the user their account lacks history market-data access.",
+        );
+    }
+    // 301600 is a generic invalid-request code, so this is matched on its
+    // message text only (`trading_days`' range cap; see its description).
+    if msg.contains("too many query days")
+        || upstream_message_of(err)
+            .is_some_and(|m| m.to_lowercase().contains("too many query days"))
+    {
+        return Some(
+            "Hint: the date range is too long for this endpoint. Split it into consecutive shorter \
+             ranges and call once per range.",
+        );
+    }
+    if code == Some(310_010) || msg.contains("date range cannot exceed") {
+        // history_market_temperature: "The date range cannot exceed three years."
+        return Some(
+            "Hint: the date range is longer than this endpoint allows (history_market_temperature: \
+             at most 3 years). Narrow it, or split it into consecutive ranges and call once per \
+             range.",
+        );
+    }
+    if history_quota_exhausted(err).is_some() {
+        // Not a per-call size limit: fewer symbols per call will not help.
+        return Some(
+            "Hint: this account has used up its history-candlestick symbol quota for the current \
+             period (requested:N/limit:N — N distinct symbols). Querying more symbols fails until \
+             it resets; splitting or retrying the call will not help. Tell the user, and suggest \
+             a higher market-data package if they need more symbols.",
         );
     }
     if matches_error_class(
@@ -398,6 +674,9 @@ fn recoverable_of(err: &McpError) -> &'static str {
     if err.code == rmcp::model::ErrorCode::INVALID_PARAMS {
         return "fix_params";
     }
+    if history_quota_exhausted(err).is_some() {
+        return "none";
+    }
     let code = openapi_error_code_of(err);
     let msg = err.message.to_lowercase();
 
@@ -425,7 +704,15 @@ fn recoverable_of(err: &McpError) -> &'static str {
                 || matches!(c, 500 | 500_000 | 2_301_500 | 2_601_500 | 202_203 | 408)
         },
         ErrorClassNeedles {
-            text: &["rate limit", "too frequent", "区间调用上限", "最小间隔"],
+            text: &[
+                "rate limit",
+                "too frequent",
+                "区间调用上限",
+                "最小间隔",
+                "區間調用上限",
+                "最小間隔",
+                TRANSPORT_ERROR,
+            ],
             numeric: &["429002", "429003"],
         },
     ) {
@@ -434,15 +721,16 @@ fn recoverable_of(err: &McpError) -> &'static str {
     if matches_error_class(
         code,
         &msg,
-        |c| matches!(c, 400 | 301_600 | 301_607 | 701_007),
+        |c| matches!(c, 400 | 301_600 | 301_607 | 310_010 | 701_007),
         ErrorClassNeedles {
             text: &[
                 "too many symbols",
                 "invalid request",
                 "syntax error",
                 "exceed_name_length",
+                "date range cannot exceed",
             ],
-            numeric: &["301607", "301600", "701007"],
+            numeric: &["301607", "301600", "310010", "701007"],
         },
     ) {
         return "fix_params";
@@ -479,10 +767,10 @@ fn is_terminal_none(err: &McpError) -> bool {
     matches_error_class(
         code,
         &msg,
-        |c| matches!(c, 301_604 | 301_603),
+        |c| matches!(c, 301_604 | 301_603 | NO_FUNDAMENTAL_DATA_CODE),
         ErrorClassNeedles {
             text: &["no quote access", "no quotes"],
-            numeric: &["301604", "301603"],
+            numeric: &["301604", "301603", "2601400"],
         },
     )
 }
@@ -499,7 +787,7 @@ fn is_terminal_none(err: &McpError) -> bool {
 /// no `output_schema` (never in `TERMINAL_OBJECT_ROOTED`), so no
 /// `structured_content` is attached.
 pub(crate) fn terminal_none_ok(name: &str, err: &McpError) -> Option<CallToolResult> {
-    if !is_terminal_none(err) {
+    if !is_terminal_for(name, err) {
         return None;
     }
     // Observability: the error rate deliberately won't show these, so count them
@@ -507,14 +795,11 @@ pub(crate) fn terminal_none_ok(name: &str, err: &McpError) -> Option<CallToolRes
     crate::metrics::record_terminal_degraded(name, openapi_error_code_of(err));
     let message = upstream_message_of(err).unwrap_or_else(|| err.message.as_ref());
     let envelope = serde_json::json!({
-        "error_code": openapi_error_code_of(err),
+        "error_code": error_code_of(err),
         "message": message,
         "recoverable": "none",
-        "hint": error_hint(err),
-        "note": "These fields are EMPTY because access was denied or no data exists — NOT \
-                 because the values are zero. This is a permission/no-data placeholder, not a \
-                 real quote. Tell the user they lack the required market-data access (or that \
-                 no data exists); do not present the empty values as real.",
+        "hint": terminal_hint(name, err),
+        "note": terminal_note(name, err),
     });
     Some(CallToolResult::success(vec![Content::text(
         envelope.to_string(),
@@ -530,6 +815,7 @@ mod dca;
 mod forex;
 mod fund;
 mod fundamental;
+mod fx;
 mod grid;
 mod ipo;
 mod jq;
@@ -537,6 +823,7 @@ mod macrodata;
 mod market;
 mod output;
 mod portfolio;
+mod profile;
 mod quant;
 mod quote;
 mod screener;
@@ -846,7 +1133,7 @@ impl McpContext {
     /// Extracts `account_channel` from the JWT bearer token's `sub` claim.
     /// Falls back to `"lb"` when the token cannot be decoded.
     pub fn account_channel(&self) -> String {
-        decode_jwt_account_channel(&self.token).unwrap_or_else(|| "lb".to_string())
+        crate::auth::jwt::account_channel(&self.token).unwrap_or_else(|| "lb".to_string())
     }
 
     /// The DC region (`Us` or `Ap`) this session's credentials resolve to,
@@ -855,57 +1142,6 @@ impl McpContext {
     pub async fn dc_region(&self) -> longbridge::DcRegion {
         self.create_http_client().dc_region().await
     }
-}
-
-/// Decodes the JWT payload (no signature verification) and extracts `account_channel`
-/// from the `sub` claim, which Longbridge encodes as a nested JSON string.
-fn decode_jwt_account_channel(token: &str) -> Option<String> {
-    let payload_b64 = token.split('.').nth(1)?;
-    let bytes = base64url_decode(payload_b64)?;
-    let claims: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
-    let sub_str = claims["sub"].as_str()?;
-    let sub: serde_json::Value = serde_json::from_str(sub_str).ok()?;
-    sub["account_channel"]
-        .as_str()
-        .filter(|s| !s.is_empty())
-        .map(str::to_owned)
-}
-
-/// Minimal base64url decoder (no padding required, no external crate).
-fn base64url_decode(input: &str) -> Option<Vec<u8>> {
-    let mut table = [0xffu8; 256];
-    for (i, &c) in b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
-        .iter()
-        .enumerate()
-    {
-        table[c as usize] = i as u8;
-    }
-    // base64url uses - and _ instead of + and /
-    table[b'-' as usize] = 62;
-    table[b'_' as usize] = 63;
-
-    let input: Vec<u8> = input.bytes().filter(|&b| b != b'=').collect();
-    let mut out = Vec::with_capacity(input.len() * 3 / 4);
-    let mut i = 0;
-    while i < input.len() {
-        let get = |pos: usize| -> Option<u8> {
-            input.get(pos).and_then(|&b| {
-                let v = table[b as usize];
-                if v == 0xff { None } else { Some(v) }
-            })
-        };
-        let b0 = get(i)?;
-        let b1 = get(i + 1)?;
-        out.push((b0 << 2) | (b1 >> 4));
-        if let Some(b2) = get(i + 2) {
-            out.push((b1 << 4) | (b2 >> 2));
-            if let Some(b3) = get(i + 3) {
-                out.push((b2 << 6) | b3);
-            }
-        }
-        i += 4;
-    }
-    Some(out)
 }
 
 /// Headers that must not be forwarded to upstream Longbridge services.
@@ -1035,9 +1271,13 @@ const US_ONLY_TOOLS: &[&str] = &[
 
 /// Tools whose underlying SDK method is AP-DC-only (calls
 /// `.dc_restrict(DcRegion::Ap)` / checks `DcRegion::Ap` internally, confirmed
-/// against the SDK source: broker queue/holding data and the entire
-/// recurring-investment (DCA) API) — hidden from accounts in the US region.
+/// against the SDK source: broker queue/holding data, the entire
+/// recurring-investment (DCA) API, fund positions and margin ratios, whose
+/// endpoints are not deployed in the US data center) — hidden from accounts
+/// in the US region.
 const AP_ONLY_TOOLS: &[&str] = &[
+    "fund_positions",
+    "margin_ratio",
     "brokers",
     "broker_holding",
     "broker_holding_detail",
@@ -1054,6 +1294,60 @@ const AP_ONLY_TOOLS: &[&str] = &[
     "dca_check",
 ];
 
+/// Guidance appended to the rejection of an [`AP_ONLY_TOOLS`] tool called by a
+/// US account: the US tool that covers the same need, or an instruction to
+/// stop when there is none. Either way the call itself cannot succeed, so the
+/// envelope stays `recoverable: none`.
+fn us_alternative_for_ap_only_tool(name: &str) -> &'static str {
+    match name {
+        "margin_ratio" => {
+            "There is no per-symbol US equivalent of the margin ratio. Account-level margin \
+             figures are in account_balance, under us.margin_status."
+        }
+        "operating" => {
+            "There is no US equivalent for operating reviews (management discussion). For a \
+             US symbol, financial_report_key_metrics covers key financial metrics only, a \
+             partial substitute."
+        }
+        "fund_positions" => {
+            "There is no US equivalent for fund holdings; tell the user and \
+             do not retry."
+        }
+        _ => "There is no US equivalent; tell the user and do not retry.",
+    }
+}
+
+/// The rejection for a tool hidden from accounts in `region`: the message
+/// names the region and, for a US account calling an AP-only tool, the US
+/// alternative (or that there is none). [`tool_error`] also delivers that
+/// alternative as the envelope's `hint`.
+fn dc_region_rejection(name: &str, region: longbridge::DcRegion) -> (String, serde_json::Value) {
+    let mut message =
+        format!("Tool `{name}` is not available for accounts in the {region} data center.");
+    let data = serde_json::json!({
+        "error_code": "dc_region_restricted",
+        "dc_region_restricted": { "current": region.to_string() },
+    });
+    if region == longbridge::DcRegion::Us && AP_ONLY_TOOLS.contains(&name) {
+        message = format!("{message} {}", us_alternative_for_ap_only_tool(name));
+    }
+    (message, data)
+}
+
+/// The US alternative for `name` when `err` is a DC-region restriction of an
+/// AP-only tool for a US account — the specific guidance that replaces the
+/// generic "use the equivalent tool" DC-region hint.
+fn us_ap_only_hint(name: &str, err: &McpError) -> Option<&'static str> {
+    let current = err
+        .data
+        .as_ref()?
+        .get("dc_region_restricted")?
+        .get("current")?
+        .as_str()?;
+    (current.eq_ignore_ascii_case("us") && AP_ONLY_TOOLS.contains(&name))
+        .then(|| us_alternative_for_ap_only_tool(name))
+}
+
 /// True when `name` is restricted to the DC region opposite `region` — i.e.
 /// it should be hidden from `tools/list` and rejected by `call_tool` for an
 /// account in `region`.
@@ -1062,6 +1356,246 @@ fn is_hidden_for_dc_region(name: &str, region: longbridge::DcRegion) -> bool {
         longbridge::DcRegion::Us => AP_ONLY_TOOLS.contains(&name),
         longbridge::DcRegion::Ap => US_ONLY_TOOLS.contains(&name),
     }
+}
+
+/// Description phrase marking a tool that returns its US-specific variant for
+/// every US account, whatever its arguments. Tools that switch only for `.US`
+/// symbols say "US accounts querying a .US symbol" instead.
+const US_ACCOUNT_VARIANT_MARKER: &str = "US accounts get a US-specific variant";
+
+/// Names of the tools whose description carries `US_ACCOUNT_VARIANT_MARKER`,
+/// sorted — the account-scoped tools whose shape depends on the region alone.
+fn us_account_variant_tools() -> impl Iterator<Item = &'static str> {
+    all_tools_full_cached()
+        .iter()
+        .filter(|tool| {
+            tool.description
+                .as_deref()
+                .is_some_and(|d| d.contains(US_ACCOUNT_VARIANT_MARKER))
+        })
+        .map(|tool| tool.name.as_ref())
+}
+
+/// Which response variant this connection's tools return: tools whose
+/// description mentions a US-account variant switch on the account's data
+/// center, which the model otherwise cannot see.
+fn region_note(region: longbridge::DcRegion) -> &'static str {
+    static US_NOTE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    match region {
+        longbridge::DcRegion::Us => US_NOTE.get_or_init(|| {
+            format!(
+                "This account is in the US data center: {} return the US-account shape \
+                 described in their descriptions; other tools with a US variant switch to it \
+                 for .US symbols.",
+                us_account_variant_tools().collect::<Vec<_>>().join(", ")
+            )
+        }),
+        longbridge::DcRegion::Ap => {
+            "This account is in the AP (Hong Kong) data center: tools whose description \
+             mentions a US-account variant return their generic shape, not the US one."
+        }
+    }
+}
+
+/// Last step for every tool result: record its size, trim it to what clients
+/// accept (see `support::response_limit`), and drop `structured_content`.
+///
+/// `structured_content` only mirrors the text JSON, and tools/list publishes no
+/// outputSchema (see `jq::describe`), so clients need no structured copy — it
+/// only doubled every object result on the wire.
+fn finish_result(name: &str, result: CallToolResult) -> CallToolResult {
+    let bytes = result
+        .content
+        .iter()
+        .filter_map(|c| c.as_text())
+        .map(|t| t.text.len())
+        .sum();
+    let (mut result, truncated) = support::response_limit::limit(result);
+    crate::metrics::record_response_size(tool_label(name), bytes, truncated);
+    if truncated {
+        tracing::info!(
+            tool = tool_label(name),
+            bytes,
+            "tool result trimmed to the size limit"
+        );
+    }
+    result.structured_content = None;
+    result
+}
+
+/// The tool name to use as a metric label or log field. Names come from the
+/// client, so an unregistered one is collapsed to `unknown_tool`: otherwise a
+/// caller looping over made-up names would create new time series (and
+/// process memory) without bound.
+pub(crate) fn tool_label(name: &str) -> &str {
+    if cached_router().has_route(name) {
+        name
+    } else {
+        "unknown_tool"
+    }
+}
+
+/// Prefix rmcp puts on a tool-argument deserialization failure, which it
+/// returns as a plain-text `isError` result before our tool code runs.
+const ARGUMENT_ERROR_PREFIX: &str = "failed to deserialize parameters:";
+
+/// Replace rmcp's plain-text argument-deserialization error with the standard
+/// envelope (so `recoverable` is present), naming the tool's parameters. It
+/// never reaches `measured_tool_call`, so count and log it here.
+fn wrap_argument_error(name: &str, result: CallToolResult) -> CallToolResult {
+    let Some(reason) = (result.is_error == Some(true))
+        .then(|| result.content.first().and_then(|c| c.as_text()))
+        .flatten()
+        .and_then(|text| text.text.strip_prefix(ARGUMENT_ERROR_PREFIX))
+    else {
+        return result;
+    };
+    let reason = reason.trim().to_string();
+    crate::metrics::record_tool_call(name, 0.0, true);
+    let client = crate::metrics::CURRENT_CLIENT
+        .try_with(|c| *c)
+        .unwrap_or("unknown");
+    tracing::info!(tool = name, client, "tool call rejected: invalid arguments");
+    // The reason can quote the caller's argument values; it goes to the
+    // payload-capped target like every other params/detail field.
+    tracing::info!(
+        target: "longbridge_mcp::tools::error_detail",
+        tool = name,
+        reason = %reason,
+        "tool call argument error detail"
+    );
+    let envelope = serde_json::json!({
+        "error_code": "invalid_arguments",
+        "message": format!("invalid arguments: {reason}"),
+        "recoverable": "fix_params",
+        "hint": format!(
+            "The tool did not run. Parameters (* = required): {}. Fix the arguments and call again.",
+            parameter_summary(name)
+        ),
+        "data": serde_json::Value::Null,
+    });
+    CallToolResult::error(vec![Content::text(envelope.to_string())])
+}
+
+/// `name*: type, …` for a tool's input parameters (excluding `_jq`), so a
+/// bad-argument error tells the model what the call should look like.
+fn parameter_summary(name: &str) -> String {
+    let Some(tool) = cached_router().get(name) else {
+        return "see the tool's input schema".to_string();
+    };
+    let schema = &tool.input_schema;
+    let required: Vec<&str> = schema
+        .get("required")
+        .and_then(|r| r.as_array())
+        .map(|r| r.iter().filter_map(|v| v.as_str()).collect())
+        .unwrap_or_default();
+    let Some(properties) = schema.get("properties").and_then(|p| p.as_object()) else {
+        return "none".to_string();
+    };
+    let params: Vec<String> = properties
+        .iter()
+        .filter(|(key, _)| key.as_str() != "_jq")
+        .map(|(key, prop)| {
+            let ty = match prop.get("type") {
+                Some(serde_json::Value::String(t)) => t.clone(),
+                Some(serde_json::Value::Array(types)) => types
+                    .iter()
+                    .filter_map(|t| t.as_str())
+                    .filter(|t| *t != "null")
+                    .collect::<Vec<_>>()
+                    .join("|"),
+                _ => "any".to_string(),
+            };
+            let mark = if required.contains(&key.as_str()) {
+                "*"
+            } else {
+                ""
+            };
+            format!("{key}{mark}: {ty}")
+        })
+        .collect();
+    if params.is_empty() {
+        "none".to_string()
+    } else {
+        params.join(", ")
+    }
+}
+
+/// Fix the unambiguous shape mistakes models make with array parameters:
+/// passing a single value (`"symbols": "AAPL.US"`), a comma-separated list
+/// (`"AAPL.US, MSFT.US"`) or a JSON-encoded array string
+/// (`"symbols": "[\"AAPL.US\"]"`). Anything else is left for the
+/// deserializer to reject.
+fn coerce_array_arguments(name: &str, arguments: &mut serde_json::Map<String, serde_json::Value>) {
+    let Some(tool) = cached_router().get(name) else {
+        return;
+    };
+    let Some(properties) = tool
+        .input_schema
+        .get("properties")
+        .and_then(|p| p.as_object())
+    else {
+        return;
+    };
+    for (key, value) in arguments.iter_mut() {
+        let is_array_param = properties
+            .get(key)
+            .and_then(|prop| prop.get("type"))
+            .is_some_and(|ty| match ty {
+                serde_json::Value::String(t) => t == "array",
+                serde_json::Value::Array(types) => types.iter().any(|t| t == "array"),
+                _ => false,
+            });
+        let serde_json::Value::String(text) = value else {
+            continue;
+        };
+        if !is_array_param || text.trim().is_empty() {
+            continue;
+        }
+        *value = match serde_json::from_str::<serde_json::Value>(text) {
+            Ok(parsed @ serde_json::Value::Array(_)) => parsed,
+            // "AAPL.US, MSFT.US" is a list of two, not one bogus symbol; for a
+            // write (update_watchlist_group) one bogus entry could replace a
+            // whole group.
+            _ => {
+                let parts: Vec<serde_json::Value> = text
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|part| !part.is_empty())
+                    .map(|part| serde_json::Value::String(part.to_string()))
+                    .collect();
+                // "," names nothing; an empty list could replace a whole
+                // watchlist group, so leave it for the deserializer to reject.
+                if parts.is_empty() {
+                    continue;
+                }
+                serde_json::Value::Array(parts)
+            }
+        };
+    }
+}
+
+/// A call refused before routing (endpoint allowlist, data-center region),
+/// as a standard `isError` envelope instead of a JSON-RPC error: clients render
+/// protocol errors opaquely, so the model would never see why.
+fn rejected_call(
+    name: &str,
+    client: &'static str,
+    message: String,
+    data: serde_json::Value,
+) -> CallToolResult {
+    let label = tool_label(name);
+    crate::metrics::CURRENT_CLIENT.sync_scope(client, || {
+        crate::metrics::record_tool_call(label, 0.0, true);
+    });
+    let code = data["error_code"].as_str().unwrap_or("rejected");
+    tracing::info!(
+        tool = label,
+        client,
+        code,
+        "tool call rejected before routing"
+    );
+    tool_error(name, &McpError::invalid_request(message, Some(data)))
 }
 
 fn extract_context(ctx: &RequestContext<RoleServer>) -> Result<McpContext, McpError> {
@@ -1185,7 +1719,9 @@ fn all_tools_cached() -> &'static [rmcp::model::Tool] {
             .iter()
             .cloned()
             .map(|mut tool| {
-                compact_tool_description_for_tool_list(&mut tool);
+                // Descriptions keep their hand-written "Returns …" shape: the
+                // outputSchema that once made it redundant is not listed (see
+                // `jq::describe`), so it is the model's only structure hint.
                 jq::describe(&mut tool);
                 tool
             })
@@ -1305,6 +1841,8 @@ const TOOL_ENDPOINTS: &[(&str, u8)] = &[
     ("estimate_max_purchase_quantity", V2),
     ("etf_docs", V2),
     ("exchange_rate", V2),
+    ("fx_rate", V2),
+    ("get_me", V2),
     ("executive", V2),
     ("financial_report", V2),
     ("financial_report_key_metrics", V2),
@@ -1624,102 +2162,6 @@ fn strip_nonstandard_formats(value: &mut serde_json::Value) {
     }
 }
 
-fn compact_tool_description_for_tool_list(tool: &mut rmcp::model::Tool) {
-    if tool.output_schema.is_none() {
-        return;
-    }
-    let Some(description) = tool.description.as_ref() else {
-        return;
-    };
-
-    let compacted = compact_typed_output_tool_description(description.as_ref());
-    if compacted != description.as_ref() {
-        tool.description = Some(Cow::Owned(compacted));
-    }
-}
-
-fn compact_typed_output_tool_description(description: &str) -> String {
-    let without_return_shapes = strip_output_shape_sentences(description);
-    trim_description_to_char_limit(&without_return_shapes, TOOL_DESCRIPTION_MAX_CHARS)
-}
-
-fn strip_output_shape_sentences(description: &str) -> String {
-    let mut kept = Vec::new();
-    for sentence in description_sentences(description) {
-        let sentence = sentence.trim();
-        if sentence.is_empty() {
-            continue;
-        }
-        let lower = sentence.to_ascii_lowercase();
-        if lower.starts_with("returns ")
-            || lower.starts_with("return ")
-            || lower.starts_with("unified data[]")
-            || lower.starts_with("us-only:")
-            || lower.starts_with("hk-only:")
-        {
-            continue;
-        }
-        kept.push(sentence.trim_end_matches('.'));
-    }
-
-    if kept.is_empty() {
-        description.trim().to_string()
-    } else {
-        format!("{}.", kept.join(". "))
-    }
-}
-
-fn trim_description_to_char_limit(description: &str, max_chars: usize) -> String {
-    let trimmed = description.trim();
-    if trimmed.chars().count() <= max_chars {
-        return trimmed.to_string();
-    }
-
-    let mut result = String::new();
-    for sentence in description_sentences(trimmed) {
-        let sentence = sentence.trim();
-        if sentence.is_empty() {
-            continue;
-        }
-        let candidate = if result.is_empty() {
-            format!("{}.", sentence.trim_end_matches('.'))
-        } else {
-            format!("{} {}.", result, sentence.trim_end_matches('.'))
-        };
-        if candidate.chars().count() > max_chars {
-            break;
-        }
-        result = candidate;
-    }
-    if !result.is_empty() {
-        return result;
-    }
-
-    let clipped = clip_chars(trimmed, max_chars.saturating_sub(3));
-    let clipped =
-        clipped.trim_end_matches(|c: char| c.is_whitespace() || c == ',' || c == ';' || c == ':');
-    format!("{clipped}...")
-}
-
-fn description_sentences(description: &str) -> Vec<&str> {
-    let mut sentences = Vec::new();
-    let mut start = 0;
-    for (idx, _) in description.match_indices(". ") {
-        let prefix = &description[..idx];
-        let token = prefix.split_whitespace().last().unwrap_or_default();
-        if matches!(token, "e.g" | "i.e") {
-            continue;
-        }
-        sentences.push(&description[start..idx]);
-        start = idx + 2;
-    }
-    let tail = description[start..].trim_end_matches('.');
-    if !tail.trim().is_empty() {
-        sentences.push(tail);
-    }
-    sentences
-}
-
 fn output_schema_resource_uri(tool_name: &str) -> String {
     format!("{OUTPUT_SCHEMA_RESOURCE_PREFIX}{tool_name}{OUTPUT_SCHEMA_RESOURCE_SUFFIX}")
 }
@@ -1792,8 +2234,8 @@ use crate::tools::quote::{
     UpdateWatchlistGroupParam, WarrantListParam,
 };
 use crate::tools::trade::{
-    CashFlowParam, EstimateMaxQtyParam, HistoryOrdersParam, OrderDetailParam, ReplaceOrderParam,
-    SubmitMultiLegOrderParam, SubmitOrderParam,
+    CashFlowParam, EstimateMaxQtyParam, HistoryExecutionsParam, HistoryOrdersParam,
+    OrderDetailParam, ReplaceOrderParam, SubmitMultiLegOrderParam, SubmitOrderParam,
 };
 
 #[tool_router(vis = "pub(crate)")]
@@ -1830,12 +2272,29 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get current UTC time as an RFC3339 string (e.g. \"2025-01-15T08:30:00Z\"). Use to determine current date/time before making date-based queries."
+        description = "Get current UTC time as an RFC3339 string (e.g. \"2025-01-15T08:30:00Z\"). Use to determine current date/time before making date-based queries. Returns a bare JSON string, not an object."
     )]
     async fn now(&self) -> String {
         time::OffsetDateTime::now_utc()
             .format(&time::format_description::well_known::Rfc3339)
             .expect("failed to format current time")
+    }
+
+    /// Identify the trading account the bearer token is bound to.
+    #[tool(
+        title = "Current Account",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        ),
+        meta = profile::profile_tool_meta(),
+        description = "Identify the Longbridge trading account this connection is signed in to (the one account the access token is bound to, not every account the user owns). No parameters. Returns {id, nickname, email, dc_region (AP|US), account_no, member_id}: id is the account's stable identifier (its aaid), nickname a readable name such as \"Longbridge Securities Account H11701971\", email always empty; account_no is null for accounts whose token carries none."
+    )]
+    async fn get_me(&self, ctx: RequestContext<RoleServer>) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("get_me", String::new(), || profile::get_me(&mctx)).await
     }
 
     /// Get basic information of securities.
@@ -1847,7 +2306,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get static info for securities. Returns per symbol: symbol, name_cn, name_en, exchange (e.g. NASDAQ), type (e.g. US_Stock), lot_size, listed_date, delisted (bool). US accounts only: .BKKT crypto symbols (e.g. BTCUSD.BKKT) are routed to a separate US crypto overview endpoint; .HAS/.OSL crypto symbols are unaffected."
+        description = "Get static info for securities. Returns a top-level array, one entry per symbol: symbol, name_cn, name_en, name_hk, exchange (e.g. NASD), currency, lot_size, total_shares, circulating_shares, hk_shares, eps, eps_ttm, bps, dividend_yield, stock_derivatives, board. US accounts only: .BKKT crypto symbols (e.g. BTCUSD.BKKT) are routed to a separate US crypto overview endpoint; .HAS/.OSL crypto symbols are unaffected."
     )]
     async fn static_info(
         &self,
@@ -1870,7 +2329,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get latest price quotes. Returns per symbol: last_done, prev_close, open, high, low, volume, turnover, change_rate, change_value, trade_status, timestamp."
+        description = "Get latest price quotes. Returns a top-level array, one entry per symbol: symbol, last_done, prev_close, open, high, low, volume, turnover, trade_status, timestamp, plus pre_market / post_market / overnight objects {last_done, prev_close, high, low, volume, turnover, timestamp} when that session has data. No change fields: compute change from last_done and prev_close. Timestamps are in each symbol's own exchange local time (HK/CN/SG +08:00, US America/New_York)."
     )]
     async fn quote(
         &self,
@@ -1890,7 +2349,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get option quotes (max 500 symbols). Symbols must be option contract symbols (e.g. \"AAPL230317P160000.US\"), NOT plain stock symbols — obtain valid ones from the symbol field of each option_chain_info_by_date contract. Returns last_done, prev_close, open, high, low, volume, turnover, implied_volatility, delta, gamma, theta, vega, rho, open_interest per symbol. Greeks are normalized: theta is the per-day value (one day's time decay), vega is the price change per 1% change in implied volatility, and rho is the price change per 1% change in the risk-free interest rate."
+        description = "Get option quotes (max 500 symbols). Symbols must be option contract symbols (e.g. \"AAPL230317P160000.US\"), NOT plain stock symbols — obtain valid ones from the symbol field of each option_chain_info_by_date contract. Returns last_done, prev_close, open, high, low, volume, turnover, implied_volatility, delta, gamma, theta, vega, rho, open_interest per symbol. Greeks are normalized: theta is the per-day value (one day's time decay), vega is the price change per 1% change in implied volatility, and rho is the price change per 1% change in the risk-free interest rate. Timestamps are in the exchange's local time (HK/CN/SG +08:00, US America/New_York)."
     )]
     async fn option_quote(
         &self,
@@ -1913,7 +2372,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get warrant quotes. Returns last_done, prev_close, open, high, low, volume, turnover, implied_volatility, delta, leverage_ratio, effective_leverage per symbol."
+        description = "Get warrant quotes. Returns a top-level array, one entry per symbol: last_done, prev_close, open, high, low, volume, turnover, trade_status, timestamp, implied_volatility, category, strike_price, expiry_date, conversion_ratio, outstanding_ratio, underlying_symbol. Delta and leverage are in warrant_list, not here. Timestamps are in the exchange's local time (HK/CN/SG +08:00, US America/New_York)."
     )]
     async fn warrant_quote(
         &self,
@@ -1948,7 +2407,7 @@ impl Longbridge {
         title = "Broker Queue",
         annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = true),
         output_schema = schema_for::<output::BrokersResponse>(),
-        description = "Get broker queue (HK stocks only). Returns bid_brokers/ask_brokers arrays, each with position (1-based) and broker_ids. Map broker IDs to names via participants."
+        description = "Get broker queue (HK stocks only). Returns {bid_brokers[], ask_brokers[]}, best price first, each level {position (1-based), broker_ids[]}. Arrays can be empty. Map broker IDs to names via participants."
     )]
     async fn brokers(
         &self,
@@ -1968,7 +2427,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get HK market participant broker information. Returns participants[]{broker_ids[], name_en, name_cn, name_hk}. Use broker_ids to interpret broker queue data."
+        description = "Get HK market participant broker information. Returns a top-level array of {broker_ids[], name_en, name_cn}. Use broker_ids to interpret broker queue data."
     )]
     async fn participants(
         &self,
@@ -1987,7 +2446,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get recent trades (max 1000). Returns trades[]{price, volume, timestamp, trade_type, direction} for the symbol."
+        description = "Get recent trades (max 1000). Returns a top-level array of {price, volume, timestamp, trade_type, direction, trade_session} for the symbol. Timestamps are in the exchange's local time (HK/CN/SG +08:00, US America/New_York)."
     )]
     async fn trades(
         &self,
@@ -2007,7 +2466,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get intraday minute-by-minute price/volume data. trade_sessions: \"intraday\" (default, regular hours) or \"all\" (include pre-market and post-market)"
+        description = "Get intraday minute-by-minute price/volume data. trade_sessions: \"intraday\" (default, regular hours) or \"all\" (include pre-market and post-market). Returns a top-level array of {timestamp, price, avg_price, volume, turnover}. timestamp is the minute in the exchange's local time (HK/CN/SG +08:00, US America/New_York)."
     )]
     async fn intraday(
         &self,
@@ -2027,7 +2486,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get candlestick data (OHLCV). Only symbol is required; period defaults to day, count to 100 (max 1000), forward_adjust to false, trade_sessions to all. period: 1m/5m/15m/30m/60m/day/week/month/year. trade_sessions: intraday/all. If the account's entitlement caps out below the requested count, this returns as many candles as allowed instead of erroring — check the returned array length against count if an exact number matters."
+        description = "Get candlestick data (OHLCV). Only symbol is required; period defaults to day, count to 100 (max 1000), forward_adjust to false, trade_sessions to all. period: 1m/5m/15m/30m/60m/day/week/month/year. trade_sessions: intraday/all. If the account's entitlement caps out below the requested count, this returns as many candles as allowed instead of erroring — check the returned array length against count if an exact number matters. Each bar's timestamp is its open time in the exchange's local time (HK/CN/SG +08:00, US America/New_York), so for day/week/month/year bars its date part is the trading date."
     )]
     async fn candlesticks(
         &self,
@@ -2050,7 +2509,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get historical candlestick data by offset from a reference time. Only symbol is required; period defaults to day (1m/5m/15m/30m/60m/day/week/month/year), count to 100, forward_adjust/forward to false, trade_sessions to all. If the account's entitlement caps out below the requested count, this returns as many candles as allowed instead of erroring — check the returned array length against count if an exact number matters."
+        description = "Get historical candlestick data by offset from a reference time. Only symbol is required; period defaults to day (1m/5m/15m/30m/60m/day/week/month/year), count to 100, forward_adjust/forward to false, trade_sessions to all. If the account's entitlement caps out below the requested count, this returns as many candles as allowed instead of erroring — check the returned array length against count if an exact number matters. Each bar's timestamp is its open time in the exchange's local time (HK/CN/SG +08:00, US America/New_York), so for day/week/month/year bars its date part is the trading date."
     )]
     async fn history_candlesticks_by_offset(
         &self,
@@ -2073,7 +2532,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get historical candlestick data by date range. Only symbol is required; period defaults to day (1m/5m/15m/30m/60m/day/week/month/year), forward_adjust to false, trade_sessions to all."
+        description = "Get historical candlestick data by date range. Only symbol is required (with no start/end, the most recent 100 bars are returned — pass start/end for a specific range); period defaults to day (1m/5m/15m/30m/60m/day/week/month/year), forward_adjust to false, trade_sessions to all. Returns a top-level array of {timestamp, open, high, low, close, volume, turnover, trade_session}. Each bar's timestamp is its open time in the exchange's local time (HK/CN/SG +08:00, US America/New_York), so for day/week/month/year bars its date part is the trading date."
     )]
     async fn history_candlesticks_by_date(
         &self,
@@ -2092,7 +2551,7 @@ impl Longbridge {
         title = "Trading Days",
         annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = true),
         output_schema = schema_for::<output::TradingDaysResponse>(),
-        description = "Get trading days for a market between dates. Returns trading_days[] and half_trading_days[] as \"yyyy-mm-dd\" strings. market: HK/US/CN/SG."
+        description = "Get trading days for a market between dates. market: HK/US/CN/SG. Ranges up to 400 days are fetched in one call; split longer ones. Returns {trade_days: [date], half_trade_days: [date]}."
     )]
     async fn trading_days(
         &self,
@@ -2115,7 +2574,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get option chain expiry dates for a symbol (e.g. AAPL.US). Returns expiry_dates[] as \"yyyy-mm-dd\" strings. Use with option_chain_info_by_date to get the contracts for one of those dates."
+        description = "Get option chain expiry dates for a symbol (e.g. AAPL.US). Returns a top-level array of \"yyyy-mm-dd\" strings. Use with option_chain_info_by_date to get the contracts for one of those dates."
     )]
     async fn option_chain_expiry_date_list(
         &self,
@@ -2161,7 +2620,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get capital inflow/outflow time series. Returns items[]{timestamp, inflow, outflow, net_flow} for the symbol (same-day data)."
+        description = "Get capital inflow time series for the symbol (same-day data). Returns a top-level array of {timestamp, inflow}. Timestamps are in the exchange's local time (HK/CN/SG +08:00, US America/New_York)."
     )]
     async fn capital_flow(
         &self,
@@ -2180,7 +2639,7 @@ impl Longbridge {
         title = "Capital Distribution",
         annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = true),
         output_schema = schema_for::<output::CapitalDistributionResponse>(),
-        description = "Get capital distribution for a symbol. Returns {timestamp, capital_in{large, medium, small}, capital_out{large, medium, small}, data_available} (decimal strings in settlement currency). data_available is false for symbols with no capital-flow data (e.g. indices) — the other fields are still present but meaningless zeros in that case."
+        description = "Get capital distribution for a symbol. Returns {timestamp, capital_in{large, medium, small}, capital_out{large, medium, small}, data_available} (decimal strings in settlement currency). data_available is false for symbols with no capital-flow data (e.g. indices) — the other fields are still present but meaningless zeros in that case. Timestamps are in the exchange's local time (HK/CN/SG +08:00, US America/New_York)."
     )]
     async fn capital_distribution(
         &self,
@@ -2203,7 +2662,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get trading session schedule for all markets. Returns market_sessions[]{market, trade_sessions[]{beg_time, end_time, trade_session_type}}."
+        description = "Get trading session schedule for all markets. Returns a top-level array of {market, trade_sessions[]{begin_time, end_time, trade_session}}."
     )]
     async fn trading_session(
         &self,
@@ -2221,7 +2680,7 @@ impl Longbridge {
         title = "Market Temperature",
         annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = true),
         output_schema = schema_for::<output::MarketTemperatureResponse>(),
-        description = "Get current market sentiment temperature. Returns {temperature (0-100), description, valuation (0-100), sentiment (0-100), timestamp}. market: HK/US/CN/SG."
+        description = "Get current market sentiment temperature. Returns {temperature (0-100), description, valuation (0-100), sentiment (0-100), timestamp}. market: HK/US/CN/SG. Timestamps are in the market's local time (HK/CN/SG +08:00, US America/New_York)."
     )]
     async fn market_temperature(
         &self,
@@ -2240,7 +2699,7 @@ impl Longbridge {
         title = "Historical Market Temperature",
         annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = true),
         output_schema = schema_for::<output::HistoryMarketTemperatureResponse>(),
-        description = "Get historical market temperature time series. Returns {type, list[]{temperature, description, valuation, sentiment, timestamp}} for the given market and date range."
+        description = "Get historical market temperature time series for a market and date range (at most 3 years per call). Returns {type, list[]{temperature, valuation, sentiment, timestamp}}. Timestamps are in the market's local time (HK/CN/SG +08:00, US America/New_York)."
     )]
     async fn history_market_temperature(
         &self,
@@ -2259,7 +2718,7 @@ impl Longbridge {
         title = "Macro Indicator List",
         annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = true),
         output_schema = schema_for::<output::macrodata::MacroeconomicIndicatorsResponse>(),
-        description = "List macro-economic indicators. Filter by keyword and country (US/CN/HK/EU/JP/SG). Use the returned indicator_code with macrodata. Supports offset/limit pagination."
+        description = "List macro-economic indicators. Filter by keyword and country (US/CN/HK/EU/JP/SG). Use the returned indicator_code with macrodata. Supports offset/limit pagination. Returns {list: [{indicator_code, name, country, importance, periodicity}], count}."
     )]
     async fn macrodata_indicators(
         &self,
@@ -2278,7 +2737,7 @@ impl Longbridge {
         title = "Macro Indicator Data",
         annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = true),
         output_schema = schema_for::<output::macrodata::MacroeconomicResponse>(),
-        description = "Get historical observations for one macro-economic indicator. Use indicator_code from macrodata_indicators; start_date/end_date accept YYYY-MM-DD. Supports offset/limit pagination."
+        description = "Get historical observations for one macro-economic indicator. Use indicator_code from macrodata_indicators; start_date/end_date accept YYYY-MM-DD. Supports offset/limit pagination. Returns {info: {indicator_code, name, country, describe, importance, periodicity}, data: [{period, release_at, actual_value, forecast_value, previous_value, unit}], count}."
     )]
     async fn macrodata(
         &self,
@@ -2301,7 +2760,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get all watchlist groups and their securities. Returns groups[]{id, name, securities[]{symbol, market, name, watched_price, watched_at}}."
+        description = "Get all watchlist groups and their securities. Returns a top-level array of groups {id, name, securities[]{symbol, name, watched_price, watched_at, is_pinned}}."
     )]
     async fn watchlist(&self, ctx: RequestContext<RoleServer>) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
@@ -2317,7 +2776,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get regulatory filings (8-K, 10-Q, 10-K, etc.). Returns items[]{id, title, type, language, filing_date, url} for the symbol."
+        description = "Get regulatory filings (8-K, 10-Q, 10-K, etc.) for the symbol. Returns a top-level array of {id, title, description, file_name, file_urls[], publish_at}."
     )]
     async fn filings(
         &self,
@@ -2337,7 +2796,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get HK warrant issuer information. Returns issuers[]{id, name_en, name_cn}. Use id in warrant_list issuer filter."
+        description = "Get HK warrant issuer information. Returns a top-level array of {issuer_id, name_en, name_cn}. Pass issuer_id in warrant_list's issuer filter."
     )]
     async fn warrant_issuers(
         &self,
@@ -2359,7 +2818,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get filtered warrant list for an underlying symbol. Returns warrants[]{symbol, name, last_done, change_rate, implied_volatility, expiry_date, strike_price, leverage_ratio, outstanding_ratio}."
+        description = "Get filtered warrant list for an underlying symbol. Returns a top-level array of {symbol, name, warrant_type, status, last_done, change_rate, volume, expiry_date (yyyymmdd), strike_price, implied_volatility, delta, premium, leverage_ratio, effective_leverage, outstanding_ratio, conversion_ratio, …}."
     )]
     async fn warrant_list(
         &self,
@@ -2501,7 +2960,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get account cash balance and asset summary. Returns balances[]{currency, total_cash, max_finance_amount, remaining_finance_amount, risk_level, margin_call}. Filter by currency (e.g. \"USD\", \"HKD\")."
+        description = "Get account cash balance and asset summary. Returns a top-level array of {currency, total_cash, net_assets, buy_power, max_finance_amount, remaining_finance_amount, risk_level, margin_call, init_margin, maintenance_margin, cash_infos[]{currency, available_cash, withdraw_cash, frozen_cash, settling_cash}}. Filter by currency (e.g. \"USD\", \"HKD\"). US accounts get a US-specific variant: the same array, one entry for the account currency with currency, total_cash, net_assets, buy_power, maintenance_margin and cash_infos[] (settled_cash in place of settling_cash); max_finance_amount, remaining_finance_amount, risk_level, margin_call and init_margin are absent; US buying-power and margin detail is under us{buy_limit_info, margin_status, cash_list[]}."
     )]
     async fn account_balance(
         &self,
@@ -2520,7 +2979,7 @@ impl Longbridge {
         title = "Stock Positions",
         annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = true),
         output_schema = schema_for::<output::StockPositionsResponse>(),
-        description = "Get current stock positions across all channels. Returns list[].stock_info[]{symbol, symbol_name, quantity, available_quantity, currency, cost_price, market}. US accounts only: an additional us_asset_overview field {cash_list, stock_list, option_list, crypto_list, cash_buy_power, overnight_buy_power} is included alongside the existing data."
+        description = "Get current stock positions across all channels. Returns list[].stock_info[]{symbol, symbol_name, quantity, available_quantity, currency, cost_price, market}. US accounts get a US-specific variant: the same list[].stock_info[] without available_quantity, plus last_done, market_price, prev_close, today_pl, position_side; cash, options, crypto (symbol e.g. BTCUSD.BKKT) and buying power are under us{cash_list, option_list, crypto_list, cash_buy_power, …}."
     )]
     async fn stock_positions(
         &self,
@@ -2579,7 +3038,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get orders placed today. Returns orders[]{order_id, symbol, side, order_type, status, quantity, price, submitted_at, executed_quantity, executed_price, attached_orders[]}, where attached_orders[] holds the order's take-profit/stop-loss legs. Pass symbol to filter by security, or order_id for one order. To fetch an attached leg by its own ID, pass that ID as order_id together with is_attached=true — the leg itself comes back as the order entry. is_attached does nothing without order_id, and neither has any effect for US accounts, which are served by the US order endpoint. US accounts only: us_action (Buy/Sell), us_page, us_limit filter/paginate via a separate US order endpoint."
+        description = "Get orders placed today. Returns a top-level array of orders {order_id, symbol, stock_name, side, order_type, status, quantity, executed_quantity, price, currency, time_in_force, submitted_at, updated_at, msg, …, attached_orders[]}, where attached_orders[] holds the order's take-profit/stop-loss legs. Pass symbol to filter by security, or order_id for one order. To fetch an attached leg by its own ID, pass that ID as order_id together with is_attached=true — the leg itself comes back as the order entry. is_attached does nothing without order_id. US accounts get a US-specific variant: the same array and field names, without time_in_force, tag, expire_date and outside_rth (raw US codes in us_time_in_force, us_tag; plus gtd, security_type, operate_direction); is_attached is ignored, us_action (Buy/Sell) filters, and all of today's orders (up to 500) are returned unless us_page/us_limit pick one page; today spans 20:00 New York time (EST/EDT) yesterday, when the overnight session opens, through 23:59:59 New York time today, so it may include last evening's overnight orders, which also appear in history_orders for yesterday; dedupe by order_id when combining."
     )]
     async fn today_orders(
         &self,
@@ -2598,7 +3057,7 @@ impl Longbridge {
         title = "Order Detail",
         annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = true),
         output_schema = schema_for::<output::OrderDetailResponse>(),
-        description = "Get detailed information about a specific order. Returns {order_id, symbol, status, side, order_type, quantity, price, executed_quantity, executed_price, submitted_at, time_in_force, msg, attached_orders[]}, where attached_orders[] holds the order's take-profit/stop-loss legs with their own order IDs. To look up such a leg by its own ID instead, pass it as order_id with is_attached=true: the response is then that leg, with charge_detail null. US accounts get a US-specific variant served by the US order endpoint, with the order (and its attached legs) nested under `order`. The region is detected from the account automatically."
+        description = "Get detailed information about a specific order. Returns {order_id, symbol, status, side, order_type, quantity, price, executed_quantity, executed_price, submitted_at, time_in_force, msg, attached_orders[]}, where attached_orders[] holds the order's take-profit/stop-loss legs with their own order IDs. To look up such a leg by its own ID instead, pass it as order_id with is_attached=true: the response is then that leg, with charge_detail null. US accounts get a US-specific variant: the same top-level fields and history[], without time_in_force, tag, expire_date, outside_rth or the fee/deduction fields (raw US codes in us_time_in_force, us_tag; plus done_at, gtd, security_type, us_attached_orders, us_charge_detail); is_attached is ignored."
     )]
     async fn order_detail(
         &self,
@@ -2644,7 +3103,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get today's trade executions (fills). Returns executions[]{order_id, trade_id, symbol, side, quantity, price, trade_done_at}. Pass symbol or order_id to filter."
+        description = "Get today's trade executions (fills). Returns a top-level array of {order_id, trade_id, symbol, side, quantity, price, trade_done_at}; side comes from the fill's order and is \"\" when unresolved (US: the order could not be resolved; call order_detail(order_id) for it). Pass symbol or order_id to filter."
     )]
     async fn today_executions(
         &self,
@@ -2667,7 +3126,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get historical orders between dates (excludes today). Returns orders[]{order_id, symbol, side, status, quantity, price, submitted_at}. start_at/end_at in RFC3339. US accounts only: us_page, us_limit paginate via a separate US order endpoint (default page size 20 — pass us_page to see more than the first page)."
+        description = "Get historical orders between dates (AP accounts: excludes today). Returns orders[]{order_id, symbol, side, status, quantity, price, submitted_at}. start_at/end_at in RFC3339. US accounts get a US-specific variant: the same array and field names as today_orders' US variant; a bare yyyy-mm-dd start_at/end_at is read as a New York (EST/EDT) day rather than UTC; the range is applied as given, so it includes today's orders when it covers today, and all orders in it (up to 500) are returned unless us_page/us_limit pick one page. today_orders' US window opens at 20:00 ET on the previous day, so orders placed from 20:00 ET yesterday appear in both a range ending yesterday and today_orders; dedupe by order_id when combining them."
     )]
     async fn history_orders(
         &self,
@@ -2690,12 +3149,12 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get every trade execution (fill) in a date range, filtered by execution time (trade_done_at) and auto-paginated to return the complete set (never truncated at the 1000-per-page cap). Returns executions[]{order_id, trade_id, symbol, side, quantity, price, trade_done_at}; trade_id is the stable dedupe key. start_at/end_at in RFC3339."
+        description = "Get every trade execution (fill) in a date range, auto-paginated to return the complete set (never truncated at the 1000-per-page cap). Returns a top-level array of {order_id, trade_id, symbol, side, quantity, price, trade_done_at}; trade_id is the stable dedupe key; side is \"Unknown\" when unresolved (US: the order could not be resolved; call order_detail(order_id) for it). start_at/end_at in RFC3339, or a bare yyyy-mm-dd read as a UTC day (US accounts: a New York EST/EDT day, matching history_orders). AP accounts are filtered by execution time (trade_done_at). US accounts read v1 history, which is not filtered by execution time and can lag across days near the range edges: widen the range by a day each side and filter on trade_done_at; side is filled from the account's orders in the range, then from order detail."
     )]
     async fn history_executions(
         &self,
         ctx: RequestContext<RoleServer>,
-        Parameters(p): Parameters<HistoryOrdersParam>,
+        Parameters(p): Parameters<HistoryExecutionsParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
         measured_tool_call("history_executions", format!("{p:?}"), || {
@@ -2713,7 +3172,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get cash flow records (deposits, withdrawals, dividends). Returns items[]{transaction_type, amount, currency, balance, created_at, remark}. start_at/end_at in RFC3339."
+        description = "Get cash flow records (deposits, withdrawals, dividends). Returns a top-level array of {transaction_flow_name, direction (In/Out), business_type, balance (the amount moved), currency, business_time, symbol, description}. start_at/end_at: RFC3339 or yyyy-mm-dd. direction and business_type are unreliable upstream (always Out / 0); use the sign of balance. US accounts get a US-specific variant: the same array without business_type (see biz_code, biz_code_name); balance is signed (0 when no cash moved, e.g. crypto transfers) and direction comes from its sign, or the quantity's when it is 0 (Unknown when both are 0); plus quantity, quantity_description, ref_no, equity_type; at most 2000 records, so getting 2000 means narrow the range. Newest first."
     )]
     async fn cash_flow(
         &self,
@@ -2824,7 +3283,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::us_market::FinancialReportResponse>(),
-        description = "Get financial reports (income statement, balance sheet, cash flow). kind: IS/BS/CF/ALL. report_type: af (annual), saf (semi-annual), q1/q2/q3, qf (quarterly full). US accounts querying a .US symbol without kind are routed to a US-specific overview endpoint; passing kind explicitly always uses the generic path."
+        description = "Get financial reports (income statement, balance sheet, cash flow). kind: IS/BS/CF/ALL. report_type: af (annual), saf (semi-annual), q1/q2/q3, qf (quarterly full). Each line item carries its newest 8 periods by default; set periods for more. Returns {report, list: {i_s|b_s|c_f: {indicators: [{title, currency, has_yoy, accounts: [{name, field, percent, tip, industry_ranking, values: [{year, period, fp_end, value, yoy, ratio}]}]}]}}}. US accounts querying a .US symbol without kind are routed to a US-specific overview endpoint (is_list/bs_list/cf_list); passing kind explicitly always uses the generic path."
     )]
     async fn financial_report(
         &self,
@@ -2848,7 +3307,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::fundamental::InstitutionRatingResponse>(),
-        description = "Get institution rating summary. Returns analyst{buy, outperform, hold, underperform, sell counts, target_price, consensus_rating} and instratings list."
+        description = "Get institution rating summary. Returns analyst{evaluate{buy, over, hold, under, sell, no_opinion, total}, target{highest_price, lowest_price, prev_close}, industry_name, industry_rank, industry_total} and instratings{recommend (consensus recommendation), target (consensus mean target price), change (upside of target vs. the current price, %), updated_at}. If one of the two upstream calls fails, the other half is still returned with warnings[] naming what is missing."
     )]
     async fn institution_rating(
         &self,
@@ -2872,7 +3331,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::fundamental::InstitutionRatingDetailResponse>(),
-        description = "Get detailed historical institution ratings and target price history. Returns target.list[]{analyst, firm, rating, target_price, timestamp} per institution."
+        description = "Get historical rating distribution and consensus target price history. Returns evaluate.list[]{date, strong_buy, buy, hold, under, sell} (rating counts per snapshot), target{updated_at, prediction_accuracy, list[]{date, timestamp, price, avg_target, min_target, max_target, meet}} (consensus target range vs. share price), and ccy_symbol. Aggregated across analysts; no per-firm or per-analyst rows."
     )]
     async fn institution_rating_detail(
         &self,
@@ -2896,7 +3355,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::fundamental::DividendResponse>(),
-        description = "Get dividend history for the symbol. US accounts querying a .US symbol get a US-specific variant (e.g. dividend_yield_ttm is a percent value: 0.34 means 0.34%). The region is detected from the account automatically."
+        description = "Get dividend history for the symbol. Returns {total, list: [{id, desc, counter_id, record_date, ex_date, payment_date}]}; the amount is only in the desc text. US accounts querying a .US symbol get a US-specific variant (e.g. dividend_yield_ttm is a percent value: 0.34 means 0.34%). The region is detected from the account automatically."
     )]
     async fn dividend(
         &self,
@@ -2920,7 +3379,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::fundamental::DividendDetailResponse>(),
-        description = "Get detailed dividend distribution scheme. Returns details[]{period, cash_dividend, stock_dividend, record_date, ex_date, pay_date, currency}."
+        description = "Get detailed dividend distribution schemes. Returns list[]{desc, record_date, ex_date, payment_date}, newest first. desc is the localized human-readable scheme (amount and currency in text, may contain a newline); there are no separate cash/stock amount fields."
     )]
     async fn dividend_detail(
         &self,
@@ -2944,7 +3403,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::fundamental::ForecastEpsResponse>(),
-        description = "Get EPS forecast and analyst estimate history. Returns items[]{forecast_start_date, forecast_end_date, eps_estimate, eps_actual, surprise_pct, analyst_count}."
+        description = "Get EPS forecast history. Returns items[], one analyst consensus snapshot per forecast window: {forecast_start_date, forecast_end_date, forecast_eps_mean, forecast_eps_median, forecast_eps_lowest, forecast_eps_highest, institution_total, institution_up, institution_down}. Forecasts only, no actual EPS or surprise; use consensus for estimate-vs-actual."
     )]
     async fn forecast_eps(
         &self,
@@ -2968,7 +3427,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::fundamental::ConsensusResponse>(),
-        description = "Get financial consensus estimates for upcoming periods. US accounts querying a .US symbol get a US-specific variant (ai_summary plus a details[] list per period, instead of items[]). The region is detected from the account automatically."
+        description = "Get financial consensus estimates for upcoming periods. Returns {currency, current_period, opt_periods, current_index, list: [{fiscal_year, fiscal_period, period_text, details: [{key (revenue/ebit/net_income/normalized_net_income/eps/normalized_eps), estimate, actual, is_released, comp, comp_value, comp_desc}]}], legend: {<key>: {name, description}}}. US accounts querying a .US symbol get a US-specific variant (adds ai_summary, with different per-period fields). The region is detected from the account automatically."
     )]
     async fn consensus(
         &self,
@@ -2992,7 +3451,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::fundamental::ValuationResponse>(),
-        description = "Get valuation overview with peer comparison. US accounts querying a .US symbol get a US-specific variant (ai_summary plus a metrics.pe object with different sub-fields). The region is detected from the account automatically."
+        description = "Get the PE valuation overview: historical low/median/high and the PE series. Returns {range (years), metrics: {pe: {low, median, high, desc, list: [{timestamp, value}]}}}. US accounts querying a .US symbol get a US-specific variant (ai_summary plus a metrics.pe object with different sub-fields). The region is detected from the account automatically. Timestamps are in the exchange's local time (HK/CN/SG +08:00, US America/New_York)."
     )]
     async fn valuation(
         &self,
@@ -3016,7 +3475,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::fundamental::ValuationHistoryResponse>(),
-        description = "Get detailed valuation history time series. Returns history.metrics{pe/pb/ps/dividend_yield}[]{timestamp, value} for long-term percentile analysis."
+        description = "Get PE valuation history for long-term percentile analysis. Returns overview{indicator, metrics.pe{metric, desc, industry_median}, range, date, ccy_symbol}, history{range, metrics.pe{low, median, high, desc, list[]{timestamp, value}}}, peers.pe{industry_median, list[]{symbol, name, value}}, and stocks (industry stocks keyed by counter id, e.g. \"ST/US/AMD\", each {name, market_cap}). PE only; no PB/PS or dividend-yield series. Timestamps are in the exchange's local time (HK/CN/SG +08:00, US America/New_York)."
     )]
     async fn valuation_history(
         &self,
@@ -3040,7 +3499,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::fundamental::IndustryValuationResponse>(),
-        description = "Get industry valuation comparison for peers. Returns list[]{symbol, name, pe, pb, ps, dividend_yield, history[]{date, pe, pb}} for peers in the same industry."
+        description = "Get industry valuation comparison for peers in the same industry. Returns list[]{symbol, name, market, currency, price_close, market_value, pe, pb, ps, div_yld (dividend yield, %), roe, roa, net_margin, eps, bps, dps, div_payout_ratio, net_income, …, history[]{date, pe, pb, ps}}. Timestamps are in the exchange's local time (HK/CN/SG +08:00, US America/New_York)."
     )]
     async fn industry_valuation(
         &self,
@@ -3064,7 +3523,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::fundamental::IndustryValuationDistResponse>(),
-        description = "Get industry PE/PB/PS valuation distribution. Returns distributions{pe/pb/ps}{min, p25, median, p75, max, current_percentile} to see where the stock sits in its sector."
+        description = "Get industry PE/PB/PS valuation distribution to see where the stock sits in its sector. Returns {pe, pb, ps}, each {low, median, high, value (the stock's current value), ranking (its percentile within the industry, 0-1), rank_index, rank_total}."
     )]
     async fn industry_valuation_dist(
         &self,
@@ -3088,7 +3547,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::fundamental::CompanyResponse>(),
-        description = "Get company overview. US accounts querying a .US symbol get a US-specific variant (intro, market_cap, top_rank_tags, sharelist, detail_url). The region is detected from the account automatically."
+        description = "Get company overview. Returns a flat object of strings: name, company_name, ticker, market, sector, category, region, founded, listing_date, employees, chairman, manager, website, address, profile, … US accounts querying a .US symbol get a US-specific variant {intro, market_cap, ccy_symbol, top_rank_tags[], share_list[], detail_url}. The region is detected from the account automatically."
     )]
     async fn company(
         &self,
@@ -3112,7 +3571,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::fundamental::ExecutiveResponse>(),
-        description = "Get company executive and board member information. Returns members[]{name, title, appointed_date, age, biography, compensation}."
+        description = "Get company executive and board member information. Returns professional_list[] (one entry per symbol) {symbol, total, forward_url, professionals[]{id, name, title, biography, wiki_url}}."
     )]
     async fn executive(
         &self,
@@ -3136,7 +3595,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::fundamental::ShareholderResponse>(),
-        description = "Get institutional shareholders for a symbol. Returns shareholders[]{institution, shares, ratio, change, change_type, reported_at}."
+        description = "Get major shareholders of a symbol with their latest reported holding change. Returns shareholder_list[]{shareholder_name, percent_of_shares, shares_changed (negative = reduced), report_date, stocks[]{symbol, market, code, chg}}; stocks[] lists securities linked to the holder and is often empty."
     )]
     async fn shareholder(
         &self,
@@ -3160,7 +3619,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::fundamental::FundHolderResponse>(),
-        description = "Get funds and ETFs that hold a given symbol. Returns fund_holders[]{fund_name, fund_symbol, shares, ratio, change, reported_at}."
+        description = "Get funds and ETFs that hold a given symbol. Returns lists[]{symbol (the fund's symbol), name, currency, position_ratio (weight of the queried stock in the fund, in percent), report_date}."
     )]
     async fn fund_holder(
         &self,
@@ -3184,7 +3643,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::fundamental::CorpActionResponse>(),
-        description = "Get corporate actions (splits, buybacks, name changes). Returns items[]{action_type, effective_date, ratio, description} for the symbol."
+        description = "Get corporate events for a symbol: earnings dates, dividends, splits, buybacks, name changes, etc. Returns items[]{id, date (YYYYMMDD), date_type, act_type, act_desc, action (kind code, e.g. ReportDate, DividendExDate), recent, is_delay, delay_content, live}; date_type / act_type / act_desc are localized text, and live is the linked broadcast (e.g. an earnings call: {name, started_at, symbols[]}) or null."
     )]
     async fn corp_action(
         &self,
@@ -3208,7 +3667,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::fundamental::InvestRelationResponse>(),
-        description = "Get investor relations events and announcements. Returns items[]{title, event_type, event_date, url, description} for the symbol."
+        description = "Get the listed companies that a symbol's company holds stakes in (investment relationships, not investor-relations events). Returns invest_securities[]{company_name, symbol, currency, percent_of_shares (stake, %), shares_value (market value of the stake), shares_rank}, plus forward_url. Empty when the company has no listed holdings."
     )]
     async fn invest_relation(
         &self,
@@ -3232,12 +3691,12 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::fundamental::OperatingResponse>(),
-        description = "Get company operating metrics (HK stocks only). Returns items[]{period, metric_name, value, unit} such as passenger traffic, cargo volumes, or store counts."
+        description = "Get company operating reviews by reporting period (HK stocks only; other markets return an empty list). Returns list[], newest first (8 reports by default; set count for more), of {id, report (e.g. saf), title, txt (management commentary / operating review), latest, financial{currency, indicators[]{field_name, indicator_name, indicator_value (display string with localized units), yoy (%)}}}."
     )]
     async fn operating(
         &self,
         ctx: RequestContext<RoleServer>,
-        Parameters(p): Parameters<fundamental::SymbolParam>,
+        Parameters(p): Parameters<fundamental::OperatingParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
         measured_tool_call("operating", format!("{p:?}"), || {
@@ -3256,7 +3715,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::market::MarketStatusResponse>(),
-        description = "Get current market trading status for all markets. Returns market_time[]{market, trade_status (Trading/Closed/Mid-Day Break/Pre-Market/Post-Market/Overnight), timestamp}."
+        description = "Get current market trading status for all markets. Returns market_time[]{market, trade_status (Trading/Closed/Mid-Day Break/Pre-Market/Post-Market/Overnight), timestamp}. Timestamps are in the market's local time (HK/CN/SG +08:00, US America/New_York)."
     )]
     async fn market_status(
         &self,
@@ -3279,7 +3738,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::market::BrokerHoldingResponse>(),
-        description = "Get top broker holding data for a symbol (HK stocks only; sourced from HKEX CCASS participant disclosure). Returns items[]{broker_name, holding_quantity, holding_change, holding_ratio} for the given period (rct_1/rct_5/rct_20/rct_60)."
+        description = "Get top broker holding changes for a symbol (HK stocks only; sourced from HKEX CCASS participant disclosure). The period argument picks the window: last 1 (default), 5, 20 or 60 days. Returns {updated_at (disclosure date, e.g. \"2026.01.02\"), buy[], sell[]}: the participants with the largest net increase / decrease over the window, each {name, parti_number, chg (net change in shares held, negative for sellers), strong}. Pass parti_number to broker_holding_daily for one participant's daily history. Non-HK symbols return empty arrays."
     )]
     async fn broker_holding(
         &self,
@@ -3303,12 +3762,12 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::market::BrokerHoldingDetailResponse>(),
-        description = "Get full broker holding detail list for a symbol (HK stocks only; sourced from HKEX CCASS participant disclosure). Returns items[]{broker_id, broker_name, holding_quantity, holding_ratio, holding_change, date}."
+        description = "Get the broker holding list for a symbol, largest holding first (50 brokers by default; set count for more; HK stocks only; sourced from HKEX CCASS participant disclosure). Returns {updated_at (disclosure date, e.g. \"2026.01.02\"), list[]{name, parti_number, shares{value, chg_1, chg_5, chg_20, chg_60}, ratio{value, chg_1, chg_5, chg_20, chg_60}, strong}}: shares held and the fraction of shares held (ratio, e.g. \"0.0108\"), each with its change over the last 1/5/20/60 days. Non-HK symbols return an empty list."
     )]
     async fn broker_holding_detail(
         &self,
         ctx: RequestContext<RoleServer>,
-        Parameters(p): Parameters<market::SymbolParam>,
+        Parameters(p): Parameters<market::BrokerHoldingDetailParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
         measured_tool_call("broker_holding_detail", format!("{p:?}"), || {
@@ -3327,7 +3786,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::market::BrokerHoldingDailyResponse>(),
-        description = "Get daily holding history for a specific broker (by broker_id) in a symbol (HK stocks only; sourced from HKEX CCASS participant disclosure). Returns items[]{date, holding_quantity, holding_change, holding_ratio}."
+        description = "Get daily holding history for a specific broker (by broker_id) in a symbol (HK stocks only; sourced from HKEX CCASS participant disclosure). Returns {list[]{date (e.g. \"2026.10.15\"), holding (shares held), chg (change vs the prior day), ratio (fraction of issued shares)}}, newest first."
     )]
     async fn broker_holding_daily(
         &self,
@@ -3350,7 +3809,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get A/H share premium historical K-line data. Returns items[]{timestamp, open, high, low, close} representing the premium percentage over the given period."
+        description = "Get A/H share premium history for a dual-listed HK symbol (e.g. 939.HK). Returns {klines[]{timestamp, aprice, apreclose, hprice, hpreclose, currency_rate, ahpremium_rate}}; ahpremium_rate is a ratio (-0.27 = H trades 27% below A). Timestamps are in the exchange's local time (HK/CN/SG +08:00, US America/New_York)."
     )]
     async fn ah_premium(
         &self,
@@ -3373,7 +3832,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get A/H share premium intraday time-share data. Returns items[]{timestamp, premium_rate} showing the intraday A/H premium percentage minute by minute."
+        description = "Get today's minute-by-minute A/H share premium for a dual-listed HK symbol (e.g. 939.HK). Returns {klines[]{timestamp, aprice, hprice, ahpremium_rate, currency_rate}, apreclose, hpreclose}; ahpremium_rate is a ratio. Timestamps are in the exchange's local time (HK/CN/SG +08:00, US America/New_York)."
     )]
     async fn ah_premium_intraday(
         &self,
@@ -3396,7 +3855,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get trade statistics (buy/sell/neutral volume distribution). Returns items[]{price_range, buy_volume, sell_volume, neutral_volume} for price-volume profile."
+        description = "Get trade statistics (buy/sell/neutral distribution by price) for a price-volume profile. Returns {trades[]{price, buy_amount, sell_amount, neutral_amount}, statistics{avgprice, trades_count, total_amount, buy, sell, neutral, preclose, timestamp, trade_date[]}}. Timestamps are in the exchange's local time (HK/CN/SG +08:00, US America/New_York)."
     )]
     async fn trade_stats(
         &self,
@@ -3420,7 +3879,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::market::AnomalyResponse>(),
-        description = "Get market anomaly alerts (unusual price/volume changes). market: HK/US/CN/SG. symbol: optional, filter to a specific stock. count: results per page (default 50, max 100). Returns changes[]{symbol, name, change_rate, volume, ...}, all_off."
+        description = "Get market anomaly alerts (unusual price/volume changes). market: HK/US/CN/SG. symbol: optional, filter to a specific stock. count: results per page (default 50, max 100). Returns {changes[]{id, symbol, name, alert_type, alert_name (e.g. rapid rise), alert_time, change_values[] (display strings, e.g. \"+2.04%\"), emotion (1 bullish, 2 bearish)}, all_off}. Timestamps are in the exchange's local time (HK/CN/SG +08:00, US America/New_York)."
     )]
     async fn anomaly(
         &self,
@@ -3440,7 +3899,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get the constituents of an index or the asset allocation of an ETF. For an index (e.g. HSI.HK, .DJI.US) returns constituents[]{symbol, name, last_done, change_rate, market_cap, weight}. For an ETF (e.g. QQQ.US, 2800.HK) returns the asset allocation as info[] grouped by asset_type: 1=Holdings (top constituents with code, symbol, holding_detail), 2=Regional (country/region breakdown), 3=AssetClass (stock/bond/cash etc.), 4=Industry (sector breakdown). Each group has report_date and lists[]{name, position_ratio, name_locales}; Holdings groups additionally include code, symbol and holding_detail{industry_name, index_name, holding_type_name}."
+        description = "Get the constituents of an index or the asset allocation of an ETF. For an index (e.g. HSI.HK, .DJI.US) returns {total, rise_num, fall_num, flat_num, stocks[]{symbol, name, last_done, prev_close, chg, inflow, balance, amount, total_shares, circulating_shares, tags[]}}. For an ETF (e.g. QQQ.US, 2800.HK) returns the asset allocation as info[] grouped by asset_type: 1=Holdings (top constituents with code, symbol, holding_detail), 2=Regional (country/region breakdown), 3=AssetClass (stock/bond/cash etc.), 4=Industry (sector breakdown). Each group has report_date and lists[]{name, position_ratio, name_locales_map}; Holdings groups additionally include code, symbol and holding_detail{industry_name, index_name, holding_type_name}."
     )]
     async fn constituent(
         &self,
@@ -3464,7 +3923,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::market::FinanceCalendarResponse>(),
-        description = "Finance calendar by category: report (earnings) / dividend / split / ipo / macrodata (CPI, NFP, rates) / closed (holidays). start and end (YYYY-MM-DD) are optional, default today plus 7 days; keep ranges under 2 weeks or results truncate."
+        description = "Finance calendar by category: report (earnings) / dividend / split / ipo / macrodata (CPI, NFP, rates) / closed (holidays). start and end (YYYY-MM-DD) are optional, default today plus 7 days. Pass market (e.g. US) whenever the user cares about one market: an unfiltered week of earnings across all markets is several hundred KB and gets truncated. Returns {list: [{date, infos: [{symbol, counter_name, market, content, type, date, datetime, date_type, data_kv: [{type, value, value_raw}], star (macrodata), currency, …}]}]}, one entry per day. For the report, macrodata and closed categories, datetime is in the market's local time (with offset); dividend, split and ipo entries keep UTC dates."
     )]
     async fn finance_calendar(
         &self,
@@ -3488,7 +3947,7 @@ impl Longbridge {
             destructive_hint = false,
             idempotent_hint = true
         ),
-        description = "List hot-selling funds in the Longbridge fund channel. Each row carries the fund counter_id (e.g. UT/FD/HK0000384492) used by every other fund_* tool. No parameters."
+        description = "List hot-selling funds in the Longbridge fund channel. Each row carries the fund counter_id (e.g. UT/FD/HK0000384492) used by every other fund_* tool. No parameters. Returns a top-level array of {counter_id, name, currency, asset_class_name, risk_level_name, earning_rate, time_interval, purchase_amount, recommendation_text, fund_performances: [{date, last_done}], …}."
     )]
     async fn fund_hot(&self, ctx: RequestContext<RoleServer>) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
@@ -3503,7 +3962,7 @@ impl Longbridge {
             destructive_hint = false,
             idempotent_hint = true
         ),
-        description = "Browse/screen funds. Optional filter (object from fund_filters), quick_ids, and time_interval. Each row carries the fund counter_id used by other fund_* tools."
+        description = "Browse/screen funds. Optional filter (object from fund_filters), quick_ids, and time_interval. Each row carries the fund counter_id used by other fund_* tools. Returns a top-level array of {counter_id, name, code, isin, currency, asset_class_name, risk_level_name, earning_rate, time_interval, unit_value, holding, purchase_amount, …}."
     )]
     async fn fund_list(
         &self,
@@ -3522,7 +3981,7 @@ impl Longbridge {
             destructive_hint = false,
             idempotent_hint = true
         ),
-        description = "Get the filter options (filter object shape and quick-filter ids) accepted by fund_list. No parameters."
+        description = "Get the filter options (filter object shape and quick-filter ids) accepted by fund_list. No parameters. Returns {asset_class, company, currency, industry_category_name, risk_level}, each a list of options such as {key, value}."
     )]
     async fn fund_filters(
         &self,
@@ -3540,7 +3999,7 @@ impl Longbridge {
             destructive_hint = false,
             idempotent_hint = true
         ),
-        description = "Get a single fund's profile and key figures. counter_id (e.g. UT/FD/HK0000384492) comes from fund_hot / fund_list."
+        description = "Get a single fund's profile and key figures. counter_id (e.g. UT/FD/HK0000384492) comes from fund_hot / fund_list. Returns a flat object: name, code, isin, currency, manager, asset_class_name, risk_level/risk_level_name, purchasable, redeemable, purchase_amount, manage_rate, purchase_rate, year_to_date_yield, profile, asset_allocation: {asset_type, report_date, lists: [{name, code, counter_id, position_ratio}]}, …"
     )]
     async fn fund_detail(
         &self,
@@ -3562,7 +4021,7 @@ impl Longbridge {
             destructive_hint = false,
             idempotent_hint = true
         ),
-        description = "Get a fund's top-level analysis (risk/return summary). counter_id from fund_hot / fund_list; optional period selector."
+        description = "Get a fund's top-level analysis (risk/return summary). counter_id from fund_hot / fund_list; optional period selector. Returns {visible, actual_period, updated_at, return_ability, risk_ability, cost_level, value_for_money}, each dimension {visible, score_pct, level}."
     )]
     async fn fund_analysis(
         &self,
@@ -3584,7 +4043,7 @@ impl Longbridge {
             destructive_hint = false,
             idempotent_hint = true
         ),
-        description = "Get a fund's detailed analysis (deeper metrics behind fund_analysis). counter_id from fund_hot / fund_list; optional period selector."
+        description = "Get a fund's detailed analysis (deeper metrics behind fund_analysis). counter_id from fund_hot / fund_list; optional period selector. Returns the fund_analysis shape plus available_periods, and each dimension also carries items: [ … ] (per-metric breakdown)."
     )]
     async fn fund_analysis_detail(
         &self,
@@ -3606,7 +4065,7 @@ impl Longbridge {
             destructive_hint = false,
             idempotent_hint = true
         ),
-        description = "Get a fund's trend chart series. counter_id from fund_hot / fund_list; optional period selector."
+        description = "Get a fund's trend chart series. counter_id from fund_hot / fund_list; optional period selector. Returns {actual_period, available_periods, fund_performances: [ … ], category_average_performances: [ … ], contrast_performances: {benchmark_name, performances: [ … ]} or null}."
     )]
     async fn fund_trend(
         &self,
@@ -3672,7 +4131,7 @@ impl Longbridge {
             destructive_hint = false,
             idempotent_hint = true
         ),
-        description = "Get a fund's daily performance figures. counter_id from fund_hot / fund_list."
+        description = "Get a fund's daily performance figures. counter_id from fund_hot / fund_list. Returns a top-level array of {counter_id, fund_name, performance_return_<period>, performance_rank_<period>, performance_total_<period> (period: one_day … ten_years, ytd), annualized_return_<one…ten>, seven_days_annualized, update_time, …}."
     )]
     async fn fund_performance(
         &self,
@@ -3694,7 +4153,7 @@ impl Longbridge {
             destructive_hint = false,
             idempotent_hint = true
         ),
-        description = "Compare a fund's performance against its benchmark/peers. counter_id from fund_hot / fund_list; optional period selector."
+        description = "Compare a fund's performance against its benchmark/peers. counter_id from fund_hot / fund_list; optional period selector. Returns {fund_performances: [ … ], contrast_performances: [{name, performances: [ … ]}]}."
     )]
     async fn fund_performance_comparison(
         &self,
@@ -3716,7 +4175,7 @@ impl Longbridge {
             destructive_hint = false,
             idempotent_hint = true
         ),
-        description = "Get a fund's latest net asset value (NAV). counter_id from fund_hot / fund_list."
+        description = "Get a fund's latest net asset value (NAV). counter_id from fund_hot / fund_list. Returns a top-level array of {counter_id, counter_name, isin, currency, value, change, change_percent, date_format, last_update_time, …}."
     )]
     async fn fund_nav(
         &self,
@@ -3735,7 +4194,7 @@ impl Longbridge {
             destructive_hint = false,
             idempotent_hint = true
         ),
-        description = "Get a fund's historical NAV series, paged. counter_id from fund_hot / fund_list; optional page / size."
+        description = "Get a fund's historical NAV series, paged. counter_id from fund_hot / fund_list; optional page / size. Returns a top-level array of {value, change, change_percent, date_format, last_update_time, …} (same row shape as fund_nav)."
     )]
     async fn fund_nav_history(
         &self,
@@ -3757,7 +4216,7 @@ impl Longbridge {
             destructive_hint = false,
             idempotent_hint = true
         ),
-        description = "Get a fund's historical NAV over a relative window. counter_id from fund_hot / fund_list; set month_before or year_before."
+        description = "Get a fund's historical NAV over a relative window. counter_id from fund_hot / fund_list; set month_before or year_before. Returns a top-level array of {value, change, change_percent, date_format, last_update_time, …} (same row shape as fund_nav)."
     )]
     async fn fund_nav_range(
         &self,
@@ -3779,7 +4238,7 @@ impl Longbridge {
             destructive_hint = false,
             idempotent_hint = true
         ),
-        description = "Get a fund's top-10 holdings. counter_id from fund_hot / fund_list; optional scene selector."
+        description = "Get a fund's top-10 holdings. counter_id from fund_hot / fund_list; optional scene selector. Returns {report_date, weighting, holdings: [{name, holding_type, weighting, shares, market_value, share_change, share_change_percent, industry_name, country_name, …}]}."
     )]
     async fn fund_holdings(
         &self,
@@ -3801,7 +4260,7 @@ impl Longbridge {
             destructive_hint = false,
             idempotent_hint = true
         ),
-        description = "Reverse-lookup the individual stocks a fund holds. counter_id from fund_hot / fund_list; optional limit."
+        description = "Reverse-lookup the individual stocks a fund holds. counter_id from fund_hot / fund_list; optional limit. Returns a top-level array of {counter_id, code, name, currency, position_ratio, report_date}."
     )]
     async fn fund_stock_holdings(
         &self,
@@ -3823,7 +4282,7 @@ impl Longbridge {
             destructive_hint = false,
             idempotent_hint = true
         ),
-        description = "Get the signed-in user's fund positions overview (all held funds). Requires an authenticated token. No parameters."
+        description = "Get the signed-in user's fund positions overview (all held funds). Requires an authenticated token. No parameters. Returns {account_channel, recent_trading_day, pending_buy_orders, sold_pending_credit_orders, list: [{counter_id, name, currency, holding_units, amount, holding_profit, recent_profit, …}]}."
     )]
     async fn fund_position_overview(
         &self,
@@ -3844,7 +4303,7 @@ impl Longbridge {
             destructive_hint = false,
             idempotent_hint = true
         ),
-        description = "Get one held fund's position detail. Requires auth. counter_id from fund_position_overview / fund_hot / fund_list; optional start / end (YYYY-MM-DD)."
+        description = "Get one held fund's position detail. Requires auth. counter_id from fund_position_overview / fund_hot / fund_list; optional start / end (YYYY-MM-DD). Returns {detail_values: {currency, holding_units, holding_value, holding_cost, holding_profit, holding_profit_rate, recent_profit, recent_unit_value, pending_buy_value, pending_sell_value, …}, sum_profit: [{date, value}], ut_value: [{date, unit_value, total_value, day_increase_rate}]}."
     )]
     async fn fund_position(
         &self,
@@ -3866,7 +4325,7 @@ impl Longbridge {
             destructive_hint = false,
             idempotent_hint = true
         ),
-        description = "Get a held fund's performance figures. Requires auth. counter_id from fund_position_overview / fund_hot / fund_list."
+        description = "Get a held fund's performance figures. Requires auth. counter_id from fund_position_overview / fund_hot / fund_list. Returns a top-level array of {counter_id, fund_name, performance_return_<period> (one_day … ten_years, ytd), annualized_return_<one…ten>, update_time}."
     )]
     async fn fund_position_performance(
         &self,
@@ -3888,7 +4347,7 @@ impl Longbridge {
             destructive_hint = false,
             idempotent_hint = true
         ),
-        description = "Get a held fund's cumulative-profit detail (paged). Requires auth. counter_id from fund_position_overview; optional start / end (YYYY-MM-DD), page / size."
+        description = "Get a held fund's cumulative-profit detail (paged). Requires auth. counter_id from fund_position_overview; optional start / end (YYYY-MM-DD), page / size. Returns {currency, sum_profit, last_update_time, history_value: [{date, value}]}."
     )]
     async fn fund_position_profits(
         &self,
@@ -3910,7 +4369,7 @@ impl Longbridge {
             destructive_hint = false,
             idempotent_hint = true
         ),
-        description = "Get a held fund's NAV history over a relative window. Requires auth. counter_id from fund_position_overview; set month_before or year_before."
+        description = "Get a held fund's NAV history over a relative window. Requires auth. counter_id from fund_position_overview; set month_before or year_before. Returns a top-level array of {counter_id, counter_name, value, change, change_percent, last_update_time}."
     )]
     async fn fund_position_nav(
         &self,
@@ -3932,7 +4391,7 @@ impl Longbridge {
             destructive_hint = false,
             idempotent_hint = true
         ),
-        description = "Get a held fund's dividend records (paged). Requires auth. counter_id from fund_position_overview; optional currency, start / end (unix seconds), page / size."
+        description = "Get a held fund's dividend records (paged). Requires auth. counter_id from fund_position_overview; optional currency, start / end (unix seconds), page / size. Returns {currency, total_div_cash, lastest_date, div_cash_infos: [{counter_id, name, amount, currency, date, div_method}]}."
     )]
     async fn fund_position_dividends(
         &self,
@@ -3954,7 +4413,7 @@ impl Longbridge {
             destructive_hint = false,
             idempotent_hint = true
         ),
-        description = "List the user's fund orders / execution records. Requires auth. Optional counter_ids, actions, states, currency, start / end (unix seconds), page / size."
+        description = "List the user's fund orders / execution records. Requires auth. Optional counter_ids, actions, states, currency, start / end (unix seconds), page / size. Returns a top-level array of {id, counter_id, fund_name, action, state, state_desc, amount, units, net_worth, currency, created_at, is_auto, product_type}."
     )]
     async fn fund_orders(
         &self,
@@ -3976,7 +4435,7 @@ impl Longbridge {
             destructive_hint = false,
             idempotent_hint = true
         ),
-        description = "Get one fund order's detail by order_id (from fund_orders). Requires auth."
+        description = "Get one fund order's detail by order_id (from fund_orders). Requires auth. Returns {order: {id, counter_id, fund_name, action, state, state_desc, amount, units, net_worth, fee, currency, created_at, …}, stages: [{stage, desc, progress, …}], keywords: [{title, content, …}]}."
     )]
     async fn fund_order(
         &self,
@@ -3998,7 +4457,7 @@ impl Longbridge {
             destructive_hint = false,
             idempotent_hint = true
         ),
-        description = "List the user's fund cash-flow records. Requires auth. Optional business_type, category, currencies, start / end (unix seconds), page / size."
+        description = "List the user's fund cash-flow records. Requires auth. Optional business_type, category, currencies, start / end (unix seconds), page / size. Returns a top-level array of {type_name, tx_type, category, description, amount, currency, stock_quantity, quantity_description, ref_no, created_at, done_at, …}."
     )]
     async fn fund_transactions(
         &self,
@@ -4156,7 +4615,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get exchange rates for all supported currencies. Returns list[]{from_currency, to_currency, rate, timestamp} covering USD, HKD, CNY, SGD and others."
+        description = "Get Longbridge's account-conversion exchange rates for all supported currencies (the rates used to value assets in an account's currency). Returns {exchanges[]{base_currency, other_currency, average_rate}}: average_rate is the value of 1 other_currency in base_currency (e.g. base USD, other HKD, 0.12743 = 1 HKD is 0.12743 USD). US accounts get a US-specific variant: the US account's rates in the same shape, one row per pair (the reference rate, else am) with spec_key naming the rate type. For public market reference rates or history, use fx_rate."
     )]
     async fn exchange_rate(
         &self,
@@ -4167,6 +4626,24 @@ impl Longbridge {
             portfolio::exchange_rate(&mctx)
         })
         .await
+    }
+
+    /// Get public ECB reference exchange rates.
+    #[tool(
+        title = "FX Reference Rate",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = true
+        ),
+        description = "Public ECB foreign-exchange reference rates (via Frankfurter): one rate per business day, not live or tradable, no bid/ask. Latest by default, or a historical date / daily series. Returns {base, date, rates{CODE: rate}, source}; a series keys rates by yyyy-mm-dd. rate is CODE per 1 base (base USD, HKD 7.8472), the opposite direction to exchange_rate; for a cross rate, set base instead of dividing. Cite date with the rate: it is the publication day, possibly before today."
+    )]
+    async fn fx_rate(
+        &self,
+        Parameters(p): Parameters<fx::FxRateParam>,
+    ) -> Result<CallToolResult, McpError> {
+        measured_tool_call("fx_rate", format!("{p:?}"), || fx::fx_rate(p)).await
     }
 
     /// Get profit analysis summary.
@@ -4225,7 +4702,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::us_market::PortfolioRealizedPlResponse>(),
-        description = "Get realized P&L for a US account, broken down by category (stock/option/crypto) and period. US accounts only; errors with DcRegionRestricted for AP accounts."
+        description = "Get realized P&L for a US account, broken down by category (stock/option/crypto) and period. Returns {realized_pl_list: [{category, currency, metrics: [{period, amount, rate, rate_unit}]}]}; rate is a decimal fraction. US accounts only; errors with DcRegionRestricted for AP accounts."
     )]
     async fn profit_analysis_realized(
         &self,
@@ -4249,7 +4726,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::social::AlertListResponse>(),
-        description = "Get all configured price alerts. Returns lists[]{symbol, indicators[]{id, indicator_id, condition, price, frequency, enabled, triggered_at}}."
+        description = "Get all configured price alerts. Returns {lists[]{symbol, name, market, price, chg, indicators[]{id, indicator_id, text (the condition, e.g. \"价格涨到 250\"), value_map{price}, frequency, enabled, state}}}."
     )]
     async fn alert_list(
         &self,
@@ -4381,7 +4858,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::signal::SignalItem>(),
-        description = "Get one signal by ID (from `signals`). Same fields as the list, plus `analysis` — the full strategy analysis: fit scores, valuation scenarios, evidence sources and related fact IDs."
+        description = "Get one signal by ID (from `signals`). Same fields as the list, plus `analysis` — the full strategy analysis: fit scores, valuation scenarios, evidence sources and related fact IDs. Returns {id, symbol, company_name, market, title, summary, strategy_id, strategy_name, key_fact_id, key_catalyst, outlook, outlook_desc, analysis_price, conservative_price, benchmark_price, optimistic_price, status, created_at, updated_at, analysis: {confidence, signal: {core_conclusion, evidence_sources, quick_takeaways, releated_facts_ids, …}, strategy_fit_score: {total_score, key_takeaways, …}, strategy_notes, …}}."
     )]
     async fn signal_detail(
         &self,
@@ -4405,7 +4882,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::fact::SecurityFactsResponse>(),
-        description = "List a security's fact (catalyst) events — anomaly detections, factor readings, data sources and natural-language summaries — filtered by time range and count. Facts are what strategies react to: a signal names its trigger in key_fact_id."
+        description = "List a security's fact (catalyst) events — anomaly detections, factor readings, data sources and natural-language summaries — filtered by time range and count. Facts are what strategies react to: a signal names its trigger in key_fact_id. Returns {facts: [{fact_id, fact_type, direction, occur_time, symbols_info: [{symbol, security_name}], factors: [{name, factor_groups, long_short_direction, trigger_condition, anomaly_detection}], data_source: [{source_name, type, url, icon}], nl_info: {title, sub_title, summary, invest_anal, eli_explain}}]}."
     )]
     async fn security_facts(
         &self,
@@ -4428,12 +4905,12 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get latest news articles for a symbol. Returns items[]{id, title, source, publish_time, summary, url, related_symbols[]}."
+        description = "Get latest news articles for a symbol, newest first (20 by default; set count for more). Returns a top-level array (no wrapper object) of {id, title, description, url, published_at, comments_count, likes_count, shares_count}. Citation fields content_via (0 = Longbridge original or licensed; non-zero = third-party repost), source, source_url (the original article) and source_logo are included when the upstream provides them."
     )]
     async fn news(
         &self,
         ctx: RequestContext<RoleServer>,
-        Parameters(p): Parameters<content::SymbolParam>,
+        Parameters(p): Parameters<content::NewsParam>,
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
         measured_tool_call("news", format!("{p:?}"), || content::news(&mctx, p)).await
@@ -4449,7 +4926,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::social::NewsDetailResponse>(),
-        description = "Get one news article's full detail by id (from news/news_search). Returns {id, title, description, body (Markdown), url, author{id,name,avatar}, images[], comments_count, likes_count, shares_count, published_at, tickers[]}."
+        description = "Get one news article's full detail by id (from news/news_search). Returns {id, title, description, body (Markdown), url, author{member_id, name}, images[], comments_count, likes_count, shares_count, published_at, tickers[]}. Citation fields content_via (0 = Longbridge original or licensed; non-zero = third-party repost), source, source_url (the original article) and source_logo are included when the upstream provides them."
     )]
     async fn news_detail(
         &self,
@@ -4472,7 +4949,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get discussion topics for a symbol. Returns items[]{id, title, author, created_at, like_count, comment_count, content_summary}."
+        description = "Get discussion topics for a symbol. Returns a top-level array of {id, title, description, url, published_at, comments_count, likes_count, shares_count}."
     )]
     async fn topic(
         &self,
@@ -4493,7 +4970,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::social::TopicDetailResponse>(),
-        description = "Get discussion topic detail by topic_id. Returns {id, title, content, author, created_at, like_count, comment_count, symbols[]}."
+        description = "Get discussion topic detail by topic_id. Returns {id, title, description, body, author{member_id, name, avatar}, tickers[], hashtags, images[], likes_count, comments_count, shares_count, views_count, created_at, updated_at, detail_url, topic_type}."
     )]
     async fn topic_detail(
         &self,
@@ -4516,7 +4993,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get replies to a discussion topic, paginated (page default 1, size default 20, range 1-50)"
+        description = "Get replies to a discussion topic, paginated (page default 1, size default 20, range 1-50). Returns a top-level array of {id, topic_id, body, reply_to_id, author: {member_id, name}, images, likes_count, comments_count, created_at}."
     )]
     async fn topic_replies(
         &self,
@@ -4588,7 +5065,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::account::StatementListResponse>(),
-        description = "List available account statements (daily/monthly). Returns list[]{id, type (daily/monthly), date, status}. Use the id with statement_export to download."
+        description = "List available account statements (daily/monthly). Returns {list[]{dt (statement date, yyyymmdd), file_key}}. Pass file_key to statement_export to download."
     )]
     async fn statement_list(
         &self,
@@ -4630,7 +5107,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get short interest history (open short positions) for HK or US stocks. Market inferred from symbol suffix. count: 1–100 (default 20). Unified data[]{timestamp(RFC3339), short_shares(open short position in shares), rate(decimal ratio e.g. 0.009=0.9%), close}. US-only: avg_daily_vol, days_to_cover. HK-only: balance(outstanding short position in HKD). US source: FINRA bi-weekly. HK source: HKEX daily."
+        description = "Get short interest history (open short positions) for HK or US stocks. Market inferred from symbol suffix. count: 1–100 (default 20). Unified data[]{timestamp(RFC3339), short_shares(open short position in shares), rate(decimal ratio e.g. 0.009=0.9%), close}. US-only: avg_daily_vol, days_to_cover. HK-only: balance(outstanding short position in HKD). US source: FINRA bi-weekly. HK source: HKEX daily. timestamp is the record date in the exchange's local time, so its date part is the record date."
     )]
     async fn short_positions(
         &self,
@@ -4653,7 +5130,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get real-time option call/put volume stats for a US stock. Returns {call_volume, put_volume, put_call_ratio, call_oi, put_oi} and top active contracts."
+        description = "Get real-time option call/put volume stats for a US stock. Returns {c, p}: today's total call (c) and put (p) contract volume, as strings."
     )]
     async fn option_volume(
         &self,
@@ -4676,7 +5153,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get daily historical option stats for a US stock. Returns items[]{date, call_volume, put_volume, put_call_vol_ratio, call_oi, put_oi, put_call_oi_ratio}."
+        description = "Get daily historical option stats for a US stock. Returns {stats[]{symbol, timestamp, total_volume, total_call_volume, total_put_volume, put_call_volume_ratio, total_open_interest, total_call_open_interest, total_put_open_interest, put_call_open_interest_ratio}}. Timestamps are in the exchange's local time (HK/CN/SG +08:00, US America/New_York)."
     )]
     async fn option_volume_daily(
         &self,
@@ -4700,7 +5177,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::social::DcaListResponse>(),
-        description = "List DCA recurring investment plans. Returns plans[]{plan_id, symbol, amount, currency, frequency, status, next_execution_date}. Filter by status (Active/Suspended/Finished) or symbol."
+        description = "List DCA recurring investment plans. Filter by status (Active/Suspended/Finished) or symbol. Returns plans[]{plan_id, symbol, stock_name, market, status, per_invest_amount, invest_frequency, invest_day_of_week, invest_day_of_month, next_trd_date, cum_amount, cum_profit, average_cost, issue_number, …}. Use plan_id with dca_update / dca_pause / dca_resume / dca_stop."
     )]
     async fn dca_list(
         &self,
@@ -4845,7 +5322,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::social::DcaStatsResponse>(),
-        description = "Get DCA investment statistics. Returns {total_invested, total_value, total_return, return_rate, plan_count, items[]{symbol, invested, value, return_rate}}."
+        description = "Get DCA investment statistics. Returns {total_amount, total_profit, active_count, suspended_count, finished_count, rest_days (days until the next scheduled investment), nearest_plans[] (plans with the nearest upcoming execution, same shape as dca_list plans[]), invested_markets[] (market codes, e.g. [\"US\"])}. Amounts and counts are strings."
     )]
     async fn dca_stats(
         &self,
@@ -4866,7 +5343,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::social::DcaCheckResponse>(),
-        description = "Check whether given symbols support DCA recurring investment. Returns items[]{symbol, support_dca (bool), reason} for each queried symbol."
+        description = "Check whether given symbols support DCA recurring investment. Returns {infos[]{symbol, support_regular_saving (bool), regular_saving_plan_type}}, one entry per queried symbol."
     )]
     async fn dca_check(
         &self,
@@ -4882,7 +5359,7 @@ impl Longbridge {
         title = "Grid Symbol Info",
         annotations(read_only_hint = true, open_world_hint = true),
         output_schema = schema_for::<output::grid::GridSymbolInfoResponse>(),
-        description = "Pre-trade grid setup info for a security (takes a symbol, not an order_id): security name, last price, board lot sizes (buy/sell), price-step (bid_size) table, and channel/authorization info (strategy grant flag, RTH support, supported settlement currencies). Use before grid_submit to learn the symbol's grid constraints."
+        description = "Pre-trade grid setup info for a security (takes a symbol, not an order_id): security name, last price, board lot sizes (buy/sell), price-step (bid_size) table, and channel/authorization info (strategy grant flag, RTH support, supported settlement currencies). Use before grid_submit to learn the symbol's grid constraints. Returns {name, last_done, lot_size, buy_lot_size, sell_lot_size, bid_sizes: [{str_proceed, end_proceed, bid_size}], channel_info: {strategy_granted, support_rth, currency, settlement_currency: [ … ]}}."
     )]
     async fn grid_symbol_info(
         &self,
@@ -4936,7 +5413,7 @@ impl Longbridge {
         title = "Grid Order Detail",
         annotations(read_only_hint = true, open_world_hint = true),
         output_schema = schema_for::<output::grid::GridOrderDetailResponse>(),
-        description = "Full detail for one grid order: rule parameters, status, embedded child orders (grid_sub_orders) and lifecycle history (grid_order_history). Supports history_id cursor + limit paging."
+        description = "Full detail for one grid order: rule parameters, status, embedded child orders (grid_sub_orders) and lifecycle history (grid_order_history). Supports history_id cursor + limit paging. Returns {order_id, symbol, stock_name, status, grid_status, suspend_reason, submitted_base_price, current_base_price, upper_limit_price, lower_limit_price, trigger_* rule fields, settlement_currency, expire_time, …, grid_sub_orders: [{id, price, quantity, executed_qty, action, status, submitted_at, …}], sub_has_more, grid_order_history: [{history_id, status, reason, created_at, …}], history_has_more}."
     )]
     async fn grid_detail(
         &self,
@@ -4955,7 +5432,7 @@ impl Longbridge {
         title = "Grid Trigger History",
         annotations(read_only_hint = true, open_world_hint = true),
         output_schema = schema_for::<output::grid::GridTriggerHistoryResponse>(),
-        description = "Trigger history for one grid order: each triggered child order with price, quantity, executed price/qty, and trigger time. Supports page/limit."
+        description = "Trigger history for one grid order: each triggered child order with price, quantity, executed price/qty, and trigger time. Supports page/limit. Returns {trigger_orders: [{id, symbol, status, action, price, quantity, executed_price, executed_qty, trigger_price, trigger_at, …}], has_more}."
     )]
     async fn grid_trigger_history(
         &self,
@@ -5095,7 +5572,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::discovery::SharelistListResponse>(),
-        description = "List user's own and subscribed community sharelists. Returns lists[]{id, name, description, symbol_count, is_owner, follower_count}."
+        description = "List user's own and subscribed community sharelists. Returns {sharelists[] (the user's own lists), subscribed_sharelists[] (lists the user subscribes to)}, each item {id, name, description, stocks_count, subscribers_count, subscribed, chg, this_year_chg, created_at, stocks, …}."
     )]
     async fn sharelist_list(
         &self,
@@ -5119,7 +5596,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::discovery::SharelistDetailResponse>(),
-        description = "Get community sharelist detail by id. Returns {id, name, description, constituents[]{symbol, name, last_done, change_rate}, quote data, subscription status}."
+        description = "Get community sharelist detail by id. Returns {sharelist{id, name, description, stocks_count, subscribers_count, chg, this_year_chg, creator, stocks[]{symbol, name, market, code, intro, …}}, scopes{self, subscription, official, industry}, stock_topics, group}. Constituents carry no prices: pass their symbols to quote."
     )]
     async fn sharelist_detail(
         &self,
@@ -5259,7 +5736,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::discovery::SharelistListResponse>(),
-        description = "Get popular/trending community sharelists. Returns lists[]{id, name, description, symbol_count, follower_count, creator} sorted by popularity."
+        description = "Get popular/trending community sharelists. Returns {sharelists[]{id, name, description, stocks_count, subscribers_count, chg, this_year_chg, creator{id, name, …}, stocks, …}} sorted by popularity."
     )]
     async fn sharelist_popular(
         &self,
@@ -5305,7 +5782,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Search news articles by keyword. Returns news_list[]{id, title, description, source_name, publish_at (RFC3339), score}. Paginate with score+publish_at_timestamp+id cursors."
+        description = "Search news articles by keyword. Returns an array of {id, title, description (summary), source (outlet display name, localized by Accept-Language), published_at (RFC3339), url, content_via, source_url, source_logo}, most relevant first. content_via is 0 for Longbridge original or licensed content and non-zero for a third-party repost, whose original is at source_url."
     )]
     async fn news_search(
         &self,
@@ -5352,7 +5829,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::us_market::FinancialStatementResponse>(),
-        description = "Get financial statements (income statement, balance sheet, or cash flow) for a security. kind: IS/BS/CF/ALL. report: af (annual, default), saf (semi-annual), qf (quarterly full), q1/q2/q3. US accounts querying a .US symbol are routed to a US-specific statement endpoint (same report vocabulary as the generic path); kind=ALL/default fans out to IS+BS+CF and returns {income_statement, balance_sheet, cash_flow} since the backend doesn't support a combined request; all other symbol/account combinations use the generic path."
+        description = "Get financial statements (income statement, balance sheet, or cash flow) for a security. kind: IS/BS/CF/ALL. report: af (annual, default), saf (semi-annual), qf (quarterly full), q1/q2/q3. Returns {report, currency, empty_fields, list[]}: list[] holds the reporting periods, most recent first, each with its fields[] line items; it can be empty when no data is available. US accounts querying a .US symbol are routed to a US-specific statement endpoint (same report vocabulary as the generic path): a single kind returns the same envelope, while kind=ALL/default fans out to IS+BS+CF and returns {income_statement, balance_sheet, cash_flow}, each holding that envelope, since the backend doesn't support a combined request; all other symbol/account combinations use the generic path."
     )]
     async fn financial_statement(
         &self,
@@ -5376,7 +5853,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::us_market::FinancialReportKeyMetricsResponse>(),
-        description = "Get key financial metrics (fin-keyfactor) for a US symbol. report: af (annual, default), saf, qf, q1/q2/q3. US accounts only; errors with DcRegionRestricted for AP accounts."
+        description = "Get key financial metrics (fin-keyfactor) for a US symbol. report: af (annual, default), saf, qf, q1/q2/q3. Returns {currency, report, empty_fields, list: [{ff_year, ff_period, fp_end, report_txt, rpt_date, fields: [{field, name, value, yoy, …}]}]}. US accounts only; errors with DcRegionRestricted for AP accounts."
     )]
     async fn financial_report_key_metrics(
         &self,
@@ -5400,7 +5877,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::us_market::EtfDocsResponse>(),
-        description = "Get regulatory/prospectus documents (etf-files) for a US ETF. US accounts only; errors with DcRegionRestricted for AP accounts."
+        description = "Get regulatory/prospectus documents (etf-files) for a US ETF. Returns {files: [{file_name, file_path, update_date, code, format}]}. US accounts only; errors with DcRegionRestricted for AP accounts."
     )]
     async fn etf_docs(
         &self,
@@ -5424,7 +5901,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::fundamental::FinancialReportLatestResponse>(),
-        description = "Get the latest financial report summary for a security. Returns {period, revenue, net_income, eps, roe, gross_margin, report_date} and key financial highlights."
+        description = "Get the latest financial report summary for a security. Returns {report (period code, e.g. \"2026.H1\"), report_txt (period label), currency, indicators[]{field_name, indicator_name, indicator_value, yoy}}, one indicator per key metric (revenue, net profit, total assets, total debts, EPS, BPS, ROE, net profit margin), identified by field_name. Ratio values carry a \"%\" suffix; yoy is a fraction (0.1627 = +16.27%), empty for ratios."
     )]
     async fn financial_report_latest(
         &self,
@@ -5447,7 +5924,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get daily valuation rank (PE/PB/PS/dividend yield industry percentile) for a security over a date range. start/end in yyyymmdd format."
+        description = "Get daily valuation rank (PE/PB/PS/dividend yield industry percentile) for a security over a date range. start/end in yyyymmdd format; defaults to the last 30 days. Returns {kline_type, max_num, pe, pb, ps, dvd}, each series a list of {timestamp, rank} (rank out of max_num). Timestamps are in the exchange's local time (HK/CN/SG +08:00, US America/New_York)."
     )]
     async fn valuation_rank(
         &self,
@@ -5471,7 +5948,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::fundamental::InstitutionRatingHistoryResponse>(),
-        description = "Get institution rating history. Returns target_history[]{firm, analyst, old_target, new_target, date} and evaluate_history[]{firm, old_rating, new_rating, date}."
+        description = "Get institution rating history. Returns target_history[]{timestamp, close, high_target_price, low_target_price} (analyst target range vs. close) and evaluate_history[]{start_date, end_date, buy, over, hold, under, sell, no_opinion} (rating counts; consecutive identical distributions are merged into one span). Times are unix epoch seconds as strings. Aggregated counts, no per-firm rating or target changes."
     )]
     async fn institution_rating_history(
         &self,
@@ -5495,7 +5972,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::fundamental::InstitutionRatingIndustryRankResponse>(),
-        description = "Get peers ranked by institution analyst ratings in the same industry. Returns list[]{symbol, name, buy_count, sell_count, consensus_rating, target_price}. Paginated."
+        description = "Get peers ranked by institution analyst ratings in the same industry. Returns {industry_name, industry_rank (the queried stock's rank), industry_total, industry_mean, industry_median, items[]{rank, symbol, name, buy, over, hold, under, sell, no_opinion, total}}. Paginated."
     )]
     async fn institution_rating_industry_rank(
         &self,
@@ -5600,7 +6077,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::discovery::IpoSubscriptionsResponse>(),
-        description = "List IPO stocks in subscription/pre-filing stage (HK+US). Returns items[]{symbol, name, market, sub_start_date, sub_end_date, listing_date, issue_price, min_lot_size}."
+        description = "List IPO stocks in subscription/pre-filing stage (HK+US). Returns {hk, us}, each {list[]{symbol, code, name, issue_price, entrance_fee, min_sub_num, sub_end_date, remaining_day, share_planned, state, …}}."
     )]
     async fn ipo_subscriptions(
         &self,
@@ -5623,7 +6100,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::discovery::IpoCalendarResponse>(),
-        description = "Show the IPO calendar. Returns items[]{symbol, name, market, sub_start_date, sub_end_date, listing_date, status} for upcoming and recent IPOs."
+        description = "Show the IPO calendar. Returns {sub_num, win_num, preipo_num, ipo_num, timestamp, list[]{symbol, code, name, sub_date, sub_end_date, result_date, ipo_date, mart_date, state, state_stage, tags}} for upcoming and recent IPOs."
     )]
     async fn ipo_calendar(
         &self,
@@ -5643,7 +6120,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::discovery::IpoListedResponse>(),
-        description = "List recently listed IPO stocks (HK+US). Returns items[]{symbol, name, listing_date, issue_price, first_day_close, first_day_return, volume, market}."
+        description = "List recently listed IPO stocks (HK+US). Returns {hk, us}, each {total, list[]{symbol, code, name, description, ipo_date, listed_day, issue_price, prev_close, last_done, ipo_change, amount, …}}."
     )]
     async fn ipo_listed(
         &self,
@@ -5753,7 +6230,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get current-period business segment revenue breakdown for a symbol (name, percent, total, currency)"
+        description = "Get current-period business segment revenue breakdown for a symbol. Returns {total, currency, report_txt, fp_start, fp_end, rpt_date, business: [{id, name, value, percent, yoy}], regionals: [same shape; may be empty]}."
     )]
     async fn business_segments(
         &self,
@@ -5801,7 +6278,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::fundamental::InstitutionalViewsResponse>(),
-        description = "Get monthly institutional rating distribution timeline. Returns months[]{date, buy, outperform, hold, underperform, sell, total} for trend analysis."
+        description = "Get monthly institutional rating distribution timeline. Returns {elist[]{date, buy, over (outperform), hold, under (underperform), sell, no_opinion, total}, tlist[]{date, close, high_price, low_price}}, oldest first, for trend analysis. Timestamps are in the exchange's local time (HK/CN/SG +08:00, US America/New_York)."
     )]
     async fn institutional_views(
         &self,
@@ -5848,7 +6325,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::fundamental::IndustryPeersResponse>(),
-        description = "Hierarchical sub-sector tree for an industry group. Accepts an industry symbol from industry_rank (e.g. IN00258.US). Returns chain{name,symbol,stock_num,chg,ytd_chg,next[{...}]} and top{name,market}. Each node shows stock count, daily change, and YTD change."
+        description = "Hierarchical sub-sector tree for an industry group. Accepts an industry symbol from industry_rank (e.g. IN00258.US). Returns chain{name, symbol, code, industry_id, sharelist_id, stock_num, chg, ytd_chg, next[{...}]} and top{name, industry_id}. Each node shows stock count, daily change, and YTD change."
     )]
     async fn industry_peers(
         &self,
@@ -5872,7 +6349,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::fundamental::FinancialReportSnapshotResponse>(),
-        description = "Get financial report snapshot: report_desc (text summary), fo_revenue/fo_ebit/fo_eps (actual vs forecast with yoy/cmp), fr_* financial ratios (ROE, margins, assets, cash flow). report: qf/saf/af."
+        description = "Get financial report snapshot: report_desc (text summary), fo_revenue/fo_ebit/fo_eps (actual vs forecast with yoy/cmp), fr_* financial ratios (ROE, margins, assets, cash flow). report: qf/saf/af. Returns a flat object: name, ticker, market, currency, report, fiscal_year, fiscal_period, fp_start, fp_end, opt_reports, report_desc, fo_* as {value, yoy, …}, and fr_* either a plain string (ratios) or {value, yoy} (amounts)."
     )]
     async fn financial_report_snapshot(
         &self,
@@ -5896,7 +6373,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::fundamental::ShareholderTopResponse>(),
-        description = "Get Top 20 major shareholders (institutions, individuals, insiders) across reporting periods. Returns info[]{period, share_holders[]{object_id, name, title, shares_held, percent_shares_held, shares_changed, filing_date}}. Use object_id with shareholder_detail to drill into a holder's full trade history."
+        description = "Get Top 20 major shareholders (institutions, individuals, insiders) across reporting periods, newest first (4 periods by default; set periods for more). Returns info[]{period, share_holders[]{object_id, name, title, shares_held, percent_shares_held, shares_changed, filing_date}}. Use object_id with shareholder_detail to drill into a holder's full trade history."
     )]
     async fn shareholder_top(
         &self,
@@ -5944,7 +6421,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::fundamental::ValuationComparisonResponse>(),
-        description = "Stock valuation comparison. Mode A (single): pass only symbol — server returns stock + auto-selected industry peers. Mode B (multi): pass symbol as primary + comparison_symbols (comma-separated, e.g. 'MSFT.US,GOOGL.US') for explicit peer comparison. currency: USD/HKD/CNY. Returns list[]{symbol, name, market_value, price_close, pe, pb, ps, history[]{date, pe, pb, ps}}."
+        description = "Stock valuation comparison. Mode A (single): pass only symbol — server returns stock + auto-selected industry peers. Mode B (multi): pass symbol as primary + comparison_symbols (comma-separated, e.g. 'MSFT.US,GOOGL.US') for explicit peer comparison. currency: USD/HKD/CNY. Returns list[]{symbol, name, market_value, price_close, pe, pb, ps, history[]{date, pe, pb, ps}}. Timestamps are in the exchange's local time (HK/CN/SG +08:00, US America/New_York)."
     )]
     async fn valuation_comparison(
         &self,
@@ -5968,7 +6445,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::market::ShortTradesResponse>(),
-        description = "Get daily short-sale volume history for HK or US stocks. Market inferred from symbol suffix. last_timestamp: unix seconds (omit for latest). page_size: 1–100 (default 20). Unified data[]{timestamp(RFC3339), short_vol(daily short volume in shares), rate(decimal ratio e.g. 0.36=36%), close}. US-only: nasdaq_vol(NASDAQ short), nyse_vol(NYSE short). HK-only: balance(HKD), market_vol(total market volume that day). US source: FINRA/NASDAQ daily. HK source: HKEX daily."
+        description = "Get daily short-sale volume history for HK or US stocks. Market inferred from symbol suffix. last_timestamp: unix seconds (omit for latest). page_size: 1–100 (default 20). Unified data[]{timestamp(RFC3339), short_vol(daily short volume in shares), rate(decimal ratio e.g. 0.36=36%), close}. US-only: nasdaq_vol(NASDAQ short), nyse_vol(NYSE short). HK-only: balance(HKD), market_vol(total market volume that day). US source: FINRA/NASDAQ daily. HK source: HKEX daily. Timestamps are in the exchange's local time (HK/CN/SG +08:00, US America/New_York)."
     )]
     async fn short_trades(
         &self,
@@ -5992,7 +6469,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::market::TopMoversResponse>(),
-        description = "Get stocks whose price fluctuation exceeds the 20-trading-day standard deviation, with correlated news reasons. markets: comma-separated HK/US/CN/SG (omit=all). sort: 0=time 1=change-magnitude 2=popularity/heat (default). limit: results per page (default 20). next_params: pass next_params from previous response to paginate. Returns events[]{timestamp(RFC3339), alert_reason, alert_type, stock{symbol, name, change(decimal ratio e.g. 0.0445=+4.45%), last_done, labels[], intro}}, updated_at, next_params."
+        description = "Get stocks whose price fluctuation exceeds the 20-trading-day standard deviation, with correlated news reasons. markets: comma-separated HK/US/CN/SG (omit=all). sort: 0=time 1=change-magnitude 2=popularity/heat (default). limit: results per page (default 20). next_params: pass next_params from previous response to paginate. Returns events[]{timestamp(RFC3339), alert_reason, alert_type, stock{symbol, name, change(decimal ratio e.g. 0.0445=+4.45%), last_done, labels[], intro}}, updated_at, next_params. Timestamps are in the exchange's local time (HK/CN/SG +08:00, US America/New_York)."
     )]
     async fn top_movers(
         &self,
@@ -6039,7 +6516,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::market::RankListResponse>(),
-        description = "Get ranked stock list by leaderboard tab key. key: from rank_categories second_tags[].key (e.g. \"hot_all-us\", \"hot_up-hk\", \"trade_heat-us\"). market: inferred from key suffix (-us/-hk) or pass explicitly. size: results (default 20). Returns lists[]{symbol, name, last_done, chg(decimal), inflow, market_cap, pre_post_price, pre_post_chg, amplitude, turnover_rate, volume_rate, five_day_chg, ten_day_chg, twenty_day_chg, this_year_chg, industry, intro}, updated_at."
+        description = "Get ranked stock list by leaderboard tab key. key: from rank_categories second_tags[].key (e.g. \"hot_all-us\", \"hot_up-hk\", \"trade_heat-us\"). market: inferred from key suffix (-us/-hk) or pass explicitly. size: results (default 20). Returns lists[]{symbol, name, last_done, chg(decimal), inflow, market_cap, pre_post_price, pre_post_chg, amplitude, turnover_rate, volume_rate, five_day_chg, ten_day_chg, twenty_day_chg, this_year_chg, industry}, updated_at."
     )]
     async fn rank_list(
         &self,
@@ -6135,7 +6612,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::discovery::ScreenerSearchResponse>(),
-        description = "Screen stocks. market: US|HK|CN|SG (Mode B required; Mode A uses strategy's market). Mode A: strategy_id from screener_recommend_strategies — auto-runs saved strategy. Mode B: conditions=[{\"key\":\"KEY\",\"min\":\"10\",\"max\":\"50\",\"tech_values\":{}},...]. extra_returns=[\"key\",...] adds display-only columns. sort_by_key: key name to sort by; sort_order: asc|desc (default desc). page: 0-based (default 0). Returns {total, items[]{symbol, name, indicators[]{key, name, value, unit}}}. Fundamental keys: pettm pbmrq roe roa netmargin salesgrowthyoy netincomegrowthyoy marketcap(亿) circulating_marketcap(亿) prevclose prevchg(%) divyld la epsttm netincome(亿) sales(亿) turnover_rate balance(万). Technical keys (call screener_indicators for tech_values schema): macd_day/week rsi_day/week kdj_day/week boll_day/week."
+        description = "Screen stocks. market: US|HK|CN|SG (Mode B required; Mode A uses strategy's market). Mode A: strategy_id from screener_recommend_strategies — auto-runs saved strategy. Mode B: conditions=[{\"key\":\"KEY\",\"min\":\"10\",\"max\":\"50\",\"tech_values\":{}},...]. extra_returns=[\"key\",...] adds display-only columns. sort_by_key: key name to sort by; sort_order: asc|desc (default desc). page: 0-based (default 0). Returns {total, items[]{symbol, name, counter_id, indicators[]{key, value}}, legend{<key>: {name, unit}}}. Fundamental keys: pettm pbmrq roe roa netmargin salesgrowthyoy netincomegrowthyoy marketcap(亿) circulating_marketcap(亿) prevclose prevchg(%) divyld la epsttm netincome(亿) sales(亿) turnover_rate balance(万). Technical keys (call screener_indicators for tech_values schema): macd_day/week rsi_day/week kdj_day/week boll_day/week."
     )]
     async fn screener_search(
         &self,
@@ -6159,7 +6636,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::discovery::ScreenerIndicatorsResponse>(),
-        description = "Get all available screener indicator keys with units and default value ranges. Technical indicators include a tech_values field showing available options (e.g. macd_day: {category:[goldenfork,deadcross], period:[day,week]}). Optional symbol (e.g. AAPL.US) narrows to stock-specific indicators. Returns groups[]{group_name, indicators[]{id, key, name, unit, default_range{min,max}, tech_values?{key:[{value,label},...]}}}."
+        description = "Get all available screener indicator keys with their units. Technical indicators carry tech_values {tech_key: [{value, label}]} listing the accepted values (e.g. macd_day: period [day], category [goldenfork, deadcross, upzero, downzero]); pass one value per tech_key as tech_values in screener_search. Optional symbol (e.g. AAPL.US) narrows to stock-specific indicators. Returns groups[]{group_type, group_name, indicators[]{id, key, name, unit, places, category, tech_values{tech_key: [{value, label}]}}}."
     )]
     async fn screener_indicators(
         &self,
@@ -6243,12 +6720,20 @@ impl ServerHandler for Longbridge {
                 }
             });
         }
+        // Several tools return a different shape for US accounts. The model
+        // cannot see the account's region, so it would have to guess which
+        // shape a `_jq` filter will meet; say it once here.
+        let region_note = match extract_context(&context) {
+            Ok(mctx) => Some(region_note(mctx.dc_region().await)),
+            Err(_) => None,
+        };
         // Shared guidance belongs in initialize once, after endpoint-specific
         // instructions are selected, rather than in every tool's input schema.
         info.instructions = Some(format!(
-            "{}\n\n{}",
+            "{}\n\n{}{}",
             info.instructions.as_deref().unwrap_or_default(),
-            jq::INSTRUCTIONS
+            jq::INSTRUCTIONS,
+            region_note.map_or_else(String::new, |note| format!("\n\n{note}")),
         ));
         Ok(info)
     }
@@ -6276,23 +6761,34 @@ impl ServerHandler for Longbridge {
 
     async fn call_tool(
         &self,
-        request: rmcp::model::CallToolRequestParams,
+        mut request: rmcp::model::CallToolRequestParams,
         context: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> Result<rmcp::model::CallToolResult, rmcp::ErrorData> {
+        let client = client_bucket_from_context(&context);
+        // Rewrite non-canonical US index spellings (`SPX.US`, `^GSPC.US`, …) to
+        // the dotted form upstream accepts, so they don't fail as invalid symbols.
+        if let Some(arguments) = request.arguments.as_mut() {
+            // Coerce first: a `"symbols": "SPX.US"` string only becomes an
+            // array the normalizer can rewrite after coercion.
+            coerce_array_arguments(request.name.as_ref(), arguments);
+            support::symbol_alias::normalize_arguments(arguments);
+        }
         // Execution-layer gate for a restricted endpoint: a tool hidden from
         // `tools/list` must also be un-callable by name, or the listing filter
         // is merely cosmetic. Off-allowlist tools are rejected here.
         if let Some(version) = restricted_version(&context)
             && !is_restricted_tool_allowed(version, request.name.as_ref())
         {
-            return Err(McpError::invalid_request(
+            return Ok(rejected_call(
+                &request.name,
+                client,
                 format!(
                     "Tool `{}` is not available on this endpoint. \
                      This endpoint does not expose trade execution, recurring-investment, \
                      IPO order, or money-movement tools.",
                     request.name
                 ),
-                None,
+                serde_json::json!({ "error_code": "tool_not_on_endpoint" }),
             ));
         }
         // DC-region execution gate, independent of the /v1/v2 restricted-endpoint
@@ -6304,13 +6800,8 @@ impl ServerHandler for Longbridge {
         if let Ok(mctx) = extract_context(&context) {
             let region = mctx.dc_region().await;
             if is_hidden_for_dc_region(request.name.as_ref(), region) {
-                return Err(McpError::invalid_request(
-                    format!(
-                        "Tool `{}` is not available for accounts in the {region} data center.",
-                        request.name
-                    ),
-                    None,
-                ));
+                let (message, data) = dc_region_rejection(request.name.as_ref(), region);
+                return Ok(rejected_call(&request.name, client, message, data));
             }
         }
         // Classify the originating client here — NOT in the HTTP middleware. In
@@ -6320,14 +6811,45 @@ impl ServerHandler for Longbridge {
         // layer. `call_tool` is the innermost funnel that still runs on that
         // same spawned task, so a `CURRENT_CLIENT` scope set here is visible to
         // `record_tool_call`; one set in the middleware would not be.
-        let client = client_bucket_from_context(&context);
-        jq::call(request, |request| async move {
-            let tcc = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
-            crate::metrics::CURRENT_CLIENT
-                .scope(client, cached_router().call(tcc))
+        //
+        // The scope wraps `jq::call` too, so a failed `_jq` filter is labelled
+        // with the same client as the tool call it belongs to.
+        let tool_name = request.name.to_string();
+        let retryable = is_read_only_tool(request.name.as_ref());
+        let call = jq::call(request, |request| async move {
+            use rmcp::handler::server::tool::ToolCallContext;
+            let name = request.name.clone();
+            if !retryable {
+                return cached_router()
+                    .call(ToolCallContext::new(self, request, context))
+                    .await
+                    .map(|result| wrap_argument_error(&name, result));
+            }
+            // Read-only tools get one server-side retry on an upstream rate
+            // limit (429002/429003), which otherwise surfaces to the model as
+            // an error it has to retry itself. Writes are never retried.
+            let first = ToolCallContext::new(self, request.clone(), context.clone());
+            let (result, delay) = BACKOFF_RETRY
+                .scope(std::cell::Cell::new(None), async {
+                    let result = cached_router().call(first).await;
+                    (result, BACKOFF_RETRY.with(std::cell::Cell::get))
+                })
+                .await;
+            let Some(delay) = delay else {
+                return result.map(|result| wrap_argument_error(&name, result));
+            };
+            crate::metrics::record_backoff_retry(request.name.as_ref());
+            tokio::time::sleep(delay).await;
+            cached_router()
+                .call(ToolCallContext::new(self, request, context))
                 .await
-        })
-        .await
+                .map(|result| wrap_argument_error(&name, result))
+        });
+        crate::metrics::CURRENT_CLIENT
+            .scope(client, async {
+                call.await.map(|result| finish_result(&tool_name, result))
+            })
+            .await
     }
 
     async fn list_tools(
@@ -6846,6 +7368,65 @@ mod tests {
     }
 
     #[test]
+    fn ap_only_asset_tools_are_hidden_for_us_accounts() {
+        use longbridge::DcRegion;
+
+        // Their endpoints are not deployed in the US data center, so a US
+        // account could only ever get `code 12 internal server error`.
+        for name in ["fund_positions", "margin_ratio"] {
+            assert!(
+                super::is_hidden_for_dc_region(name, DcRegion::Us),
+                "`{name}` must be hidden for US accounts"
+            );
+            assert!(
+                !super::is_hidden_for_dc_region(name, DcRegion::Ap),
+                "`{name}` must stay visible for AP accounts"
+            );
+        }
+        // These are routed to US endpoints instead, so both regions keep them.
+        for name in [
+            "account_balance",
+            "stock_positions",
+            "cash_flow",
+            "exchange_rate",
+        ] {
+            for region in [DcRegion::Us, DcRegion::Ap] {
+                assert!(
+                    !super::is_hidden_for_dc_region(name, region),
+                    "`{name}` must stay visible for {region:?} accounts"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn stock_positions_schema_shares_the_list_shape_across_regions() {
+        let schema = super::output_schema_map()
+            .get("stock_positions")
+            .expect("stock_positions schema");
+        let properties = schema
+            .get("properties")
+            .and_then(|p| p.as_object())
+            .expect("stock_positions schema must list properties");
+        for key in ["list", "us"] {
+            assert!(
+                properties.contains_key(key),
+                "stock_positions schema must describe `{key}`"
+            );
+        }
+        let required: Vec<_> = schema
+            .get("required")
+            .and_then(|r| r.as_array())
+            .cloned()
+            .unwrap_or_default();
+        assert_eq!(
+            required,
+            [serde_json::json!("list")],
+            "both regions return `list`; only US adds `us`"
+        );
+    }
+
+    #[test]
     fn v2_endpoint_region_filtering_hides_us_only_tools_for_ap() {
         use longbridge::DcRegion;
 
@@ -6982,6 +7563,9 @@ mod tests {
         // schema must impose no required fields — every field optional and no
         // `deny_unknown_fields` — so BOTH the generic and the US variant conform.
         // Otherwise the US structuredContent would violate the declared schema.
+        // Region-branching account tools that keep required fields
+        // (stock_positions, order_detail) are instead validated value-by-value
+        // against their schema in `us_golden_outputs_conform_to_their_output_schemas`.
         let tools = super::all_tools_full_cached();
         for name in ["dividend", "consensus", "valuation", "company"] {
             let tool = tools
@@ -6998,6 +7582,251 @@ mod tests {
                 "tool `{name}`: output_schema must have no required fields so both the generic \
                  and US variants conform, got required={required:?}"
             );
+        }
+    }
+
+    /// Validates `value` against the subset of JSON Schema that schemars
+    /// emits for output schemas (`$ref` into `$defs`, `type`, `properties`,
+    /// `required`, `items`, `additionalProperties`, `anyOf`/`oneOf`/`allOf`,
+    /// `enum`, `const`), pushing one message per violation into `errors`.
+    fn schema_violations(
+        root: &serde_json::Value,
+        schema: &serde_json::Value,
+        value: &serde_json::Value,
+        path: &str,
+        errors: &mut Vec<String>,
+    ) {
+        use serde_json::Value;
+
+        let Value::Object(schema_map) = schema else {
+            if schema == &Value::Bool(false) {
+                errors.push(format!("{path}: schema `false` rejects every value"));
+            }
+            return;
+        };
+        if let Some(Value::String(reference)) = schema_map.get("$ref") {
+            let pointer = reference.trim_start_matches('#');
+            match root.pointer(pointer) {
+                Some(target) => schema_violations(root, target, value, path, errors),
+                None => errors.push(format!("{path}: unresolvable $ref `{reference}`")),
+            }
+        }
+        if let Some(types) = schema_map.get("type") {
+            let allowed: Vec<&str> = match types {
+                Value::String(t) => vec![t.as_str()],
+                Value::Array(ts) => ts.iter().filter_map(Value::as_str).collect(),
+                _ => Vec::new(),
+            };
+            let matches = |t: &str| match t {
+                "null" => value.is_null(),
+                "boolean" => value.is_boolean(),
+                "string" => value.is_string(),
+                "number" => value.is_number(),
+                "integer" => value.is_i64() || value.is_u64(),
+                "array" => value.is_array(),
+                "object" => value.is_object(),
+                _ => true,
+            };
+            if !allowed.iter().any(|t| matches(t)) {
+                errors.push(format!("{path}: expected type {types}, got {value}"));
+                return;
+            }
+        }
+        if let Some(Value::Array(options)) = schema_map.get("enum")
+            && !options.contains(value)
+        {
+            errors.push(format!("{path}: {value} is not one of {options:?}"));
+        }
+        if let Some(expected) = schema_map.get("const")
+            && expected != value
+        {
+            errors.push(format!("{path}: expected const {expected}, got {value}"));
+        }
+        if let Some(Value::Array(all)) = schema_map.get("allOf") {
+            for sub in all {
+                schema_violations(root, sub, value, path, errors);
+            }
+        }
+        for key in ["anyOf", "oneOf"] {
+            if let Some(Value::Array(options)) = schema_map.get(key) {
+                let any_ok = options.iter().any(|sub| {
+                    let mut sub_errors = Vec::new();
+                    schema_violations(root, sub, value, path, &mut sub_errors);
+                    sub_errors.is_empty()
+                });
+                if !any_ok {
+                    errors.push(format!("{path}: matches no `{key}` branch"));
+                }
+            }
+        }
+        if let Value::Object(object) = value {
+            if let Some(Value::Array(required)) = schema_map.get("required") {
+                for key in required.iter().filter_map(Value::as_str) {
+                    if !object.contains_key(key) {
+                        errors.push(format!("{path}: missing required `{key}`"));
+                    }
+                }
+            }
+            let properties = schema_map.get("properties").and_then(Value::as_object);
+            for (key, field) in object {
+                let field_path = format!("{path}.{key}");
+                match properties.and_then(|p| p.get(key)) {
+                    Some(field_schema) => {
+                        schema_violations(root, field_schema, field, &field_path, errors)
+                    }
+                    None => {
+                        if let Some(extra) = schema_map.get("additionalProperties") {
+                            schema_violations(root, extra, field, &field_path, errors);
+                        }
+                    }
+                }
+            }
+        }
+        if let (Value::Array(items), Some(item_schema)) = (value, schema_map.get("items")) {
+            for (i, item) in items.iter().enumerate() {
+                schema_violations(root, item_schema, item, &format!("{path}[{i}]"), errors);
+            }
+        }
+    }
+
+    /// Asserts `value` — a tool's structured output — conforms to that tool's
+    /// declared `output_schema`.
+    fn assert_conforms_to_output_schema(tool: &str, label: &str, value: &serde_json::Value) {
+        let schema = super::output_schema_map()
+            .get(tool)
+            .unwrap_or_else(|| panic!("tool `{tool}` must declare an output_schema"));
+        let root = serde_json::Value::Object((**schema).clone());
+        let mut errors = Vec::new();
+        schema_violations(&root, &root, value, "$", &mut errors);
+        assert!(
+            errors.is_empty(),
+            "{label} violates the `{tool}` output_schema:\n{}",
+            errors.join("\n")
+        );
+    }
+
+    #[test]
+    fn us_golden_outputs_conform_to_their_output_schemas() {
+        // Every US golden (the structured output a US account receives),
+        // paired with the tool that returns it. Array-rooted outputs carry no
+        // structuredContent, so only tools that declare an output_schema are
+        // checked; stock_positions and order_detail must be among them.
+        let goldens: [(&str, &[&str], &str); 6] = [
+            (
+                "account_balance",
+                &["account_balance"],
+                include_str!("support/fixtures/us_align/account_balance.expected.json"),
+            ),
+            (
+                "stock_positions",
+                &["stock_positions"],
+                include_str!("support/fixtures/us_align/stock_positions.expected.json"),
+            ),
+            (
+                "cash_flow",
+                &["cash_flow"],
+                include_str!("support/fixtures/us_align/cash_flow.expected.json"),
+            ),
+            (
+                "exchange_rate",
+                &["exchange_rate"],
+                include_str!("support/fixtures/us_align/exchange_rate.expected.json"),
+            ),
+            (
+                "orders",
+                &["today_orders", "history_orders"],
+                include_str!("support/fixtures/us_align/orders.expected.json"),
+            ),
+            (
+                "order_detail",
+                &["order_detail"],
+                include_str!("support/fixtures/us_align/order_detail.expected.json"),
+            ),
+        ];
+        let mut checked = Vec::new();
+        for (golden, tools, text) in goldens {
+            let value: serde_json::Value =
+                serde_json::from_str(text).expect("US golden is valid JSON");
+            for tool in tools {
+                if super::output_schema_map().contains_key(*tool) {
+                    assert_conforms_to_output_schema(
+                        tool,
+                        &format!("US golden `{golden}`"),
+                        &value,
+                    );
+                    checked.push(*tool);
+                }
+            }
+        }
+        for tool in ["stock_positions", "order_detail"] {
+            assert!(
+                checked.contains(&tool),
+                "`{tool}` US golden must be validated against its output_schema"
+            );
+        }
+    }
+
+    #[test]
+    fn us_stock_positions_with_blank_fields_conform_to_the_output_schema() {
+        use longbridge::trade::{USAssetOverview, USStockEntry};
+
+        let src = USAssetOverview {
+            stock_list: vec![USStockEntry::default()],
+            ..Default::default()
+        };
+        let mut value =
+            crate::tools::support::us_align::stock_positions(&src).expect("US positions map");
+        crate::serialize::strip_trailing_zeros(&mut value);
+        let json = crate::serialize::to_tool_json(&value).expect("tool JSON serializes");
+        let value: serde_json::Value = serde_json::from_str(&json).expect("tool JSON parses");
+        assert_conforms_to_output_schema(
+            "stock_positions",
+            "US positions with a blank stock entry",
+            &value,
+        );
+    }
+
+    #[test]
+    fn schema_validator_rejects_a_golden_missing_a_required_key() {
+        let schema = super::output_schema_map()
+            .get("stock_positions")
+            .expect("stock_positions must declare an output_schema");
+        let root = serde_json::Value::Object((**schema).clone());
+        let mut value: serde_json::Value =
+            serde_json::from_str(include_str!("fixtures/ap/stock_positions.expected.json"))
+                .expect("AP golden is valid JSON");
+        let mut errors = Vec::new();
+        schema_violations(&root, &root, &value, "$", &mut errors);
+        assert!(errors.is_empty(), "the intact golden must pass: {errors:?}");
+        value["list"][0]["stock_info"][0]
+            .as_object_mut()
+            .expect("the golden holds a stock_info entry")
+            .remove("symbol")
+            .expect("the golden stock_info entry carries symbol");
+        schema_violations(&root, &root, &value, "$", &mut errors);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e == "$.list[0].stock_info[0]: missing required `symbol`"),
+            "dropping the required stock_info symbol must fail validation, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn ap_golden_outputs_conform_to_their_output_schemas() {
+        for (tool, text) in [
+            (
+                "stock_positions",
+                include_str!("fixtures/ap/stock_positions.expected.json"),
+            ),
+            (
+                "order_detail",
+                include_str!("fixtures/ap/order_detail.expected.json"),
+            ),
+        ] {
+            let value: serde_json::Value =
+                serde_json::from_str(text).expect("AP golden is valid JSON");
+            assert_conforms_to_output_schema(tool, &format!("AP golden `{tool}`"), &value);
         }
     }
 
@@ -7245,27 +8074,6 @@ mod quote_cmd_tests {
     }
 
     #[test]
-    fn tool_list_output_schema_tools_omit_redundant_return_field_lists() {
-        let screener_search = super::list_tools()
-            .into_iter()
-            .find(|tool| tool.name == "screener_search")
-            .expect("screener_search tool must be registered");
-
-        assert!(
-            super::output_schema_map().contains_key("screener_search"),
-            "fixture must cover a typed-output tool"
-        );
-        assert!(
-            !screener_search
-                .description
-                .as_deref()
-                .unwrap_or_default()
-                .contains("Returns "),
-            "typed-output tools should not duplicate output field lists in top-level descriptions"
-        );
-    }
-
-    #[test]
     fn macrodata_tools_expose_chatgpt_required_metadata() {
         for name in ["macrodata", "macrodata_indicators"] {
             let tool = super::list_tools()
@@ -7322,51 +8130,27 @@ mod quote_cmd_tests {
     }
 
     #[test]
-    fn tool_metadata_lint_keeps_typed_output_descriptions_compact() {
+    fn tool_descriptions_are_present_and_bounded() {
+        // Descriptions are the model's main contract for each tool (the
+        // outputSchema is not listed), so they must exist, but each one is
+        // also paid for in every client's context window.
+        const MAX_CHARS: usize = 1200;
         let offenders: Vec<String> = super::list_tools()
             .into_iter()
-            .filter(|tool| super::output_schema_map().contains_key(tool.name.as_ref()))
             .filter_map(|tool| {
-                let description = tool.description.as_deref().unwrap_or_default();
-                let lower = description.to_ascii_lowercase();
-                let has_return_shape = (lower.contains("returns ")
-                    && (lower.contains("[]") || lower.contains("returns {")))
-                    || lower.contains("unified data[]")
-                    || lower.contains("us-only:")
-                    || lower.contains("hk-only:");
-                (description.chars().count() > 240 || has_return_shape).then(|| {
-                    format!(
-                        "{}: {} chars, return_shape={}",
-                        tool.name,
-                        description.chars().count(),
-                        has_return_shape
-                    )
-                })
+                let chars = tool
+                    .description
+                    .as_deref()
+                    .unwrap_or_default()
+                    .chars()
+                    .count();
+                (chars == 0 || chars > MAX_CHARS).then(|| format!("{}: {chars} chars", tool.name))
             })
             .collect();
-
         assert!(
             offenders.is_empty(),
-            "typed-output tool descriptions should stay under 240 chars and avoid duplicated return field lists:\n{}",
+            "tool descriptions must be non-empty and at most {MAX_CHARS} chars:\n{}",
             offenders.join("\n")
-        );
-    }
-
-    #[test]
-    fn compact_tool_description_does_not_cut_inside_abbreviations() {
-        let valuation = super::list_tools()
-            .into_iter()
-            .find(|tool| tool.name == "valuation_comparison")
-            .expect("valuation_comparison tool must be registered");
-        let description = valuation.description.as_deref().unwrap_or_default();
-
-        assert!(
-            !description.ends_with("e.g."),
-            "description should not be truncated immediately after an abbreviation: {description}"
-        );
-        assert!(
-            !description.ends_with("e.g"),
-            "description should not be truncated inside an abbreviation: {description}"
         );
     }
 
@@ -7520,7 +8304,10 @@ mod quote_cmd_tests {
 
 #[cfg(test)]
 mod tool_error_tests {
-    use super::{error_hint, measured_tool_call, tool_error, tool_result};
+    use super::{
+        BACKOFF_DEFAULT, BACKOFF_MAX, BACKOFF_MIN, backoff_delay, error_hint, measured_tool_call,
+        tool_error, tool_result,
+    };
     use crate::test_support::SharedBuffer;
     use rmcp::ErrorData as McpError;
     use rmcp::model::CallToolResult;
@@ -7550,7 +8337,7 @@ mod tool_error_tests {
             serde_json::from_str(&text_of(&result)).expect("content must be JSON");
         assert_eq!(v["message"], "upstream exploded");
         assert_eq!(v["recoverable"], "none");
-        assert!(v["error_code"].is_null());
+        assert_eq!(v["error_code"], "internal_error");
         assert!(v["data"].is_null());
     }
 
@@ -7905,6 +8692,497 @@ mod tool_error_tests {
         );
     }
 
+    #[tokio::test]
+    async fn rate_limited_first_attempt_is_deferred_not_counted_when_retry_is_armed() {
+        let rate_limited = || async {
+            Err(McpError::internal_error(
+                "openapi error: code=429002: 已达到 1S 区间调用上限，请 0.4 秒后重试",
+                Some(serde_json::json!({ "openapi_error_code": 429002 })),
+            ))
+        };
+        let delay = super::BACKOFF_RETRY
+            .scope(std::cell::Cell::new(None), async {
+                let result = measured_tool_call("retry_probe", String::new(), rate_limited)
+                    .await
+                    .unwrap();
+                assert_eq!(result.is_error, Some(true));
+                super::BACKOFF_RETRY.with(std::cell::Cell::get)
+            })
+            .await;
+        assert_eq!(delay, Some(std::time::Duration::from_millis(400)));
+
+        // Outside an armed scope (writes, or the retry itself) nothing is deferred.
+        let result = measured_tool_call("retry_probe", String::new(), rate_limited)
+            .await
+            .unwrap();
+        assert_eq!(result.is_error, Some(true));
+    }
+
+    #[test]
+    fn a_transport_failure_is_retryable_and_says_so() {
+        let err = McpError::internal_error(
+            "longbridge: error sending request for url (https://openapi.longbridge.com/v1/x): client error (SendRequest)",
+            None,
+        );
+        assert_eq!(
+            super::recoverable_of(&err),
+            "backoff",
+            "a request with no response is transient"
+        );
+        assert!(
+            error_hint(&err).is_some_and(|h| h.contains("retry")),
+            "the hint must tell the model to retry"
+        );
+    }
+
+    #[test]
+    fn a_write_with_no_response_is_not_retried() {
+        let err = McpError::internal_error(
+            "longbridge: error sending request for url (https://openapi.longbridge.com/v1/trade/order): client error (SendRequest)",
+            None,
+        );
+        let v: serde_json::Value =
+            serde_json::from_str(&text_of(&tool_error("submit_order", &err)))
+                .expect("the envelope must be JSON");
+        assert_eq!(
+            v["recoverable"], "none",
+            "an unconfirmed write must not be resent"
+        );
+        assert!(
+            v["hint"]
+                .as_str()
+                .is_some_and(|h| h.contains("Do NOT resend")),
+            "the hint must warn against resending: {v}"
+        );
+        let v: serde_json::Value = serde_json::from_str(&text_of(&tool_error("quote", &err)))
+            .expect("the envelope must be JSON");
+        assert_eq!(v["recoverable"], "backoff", "a read can be retried");
+
+        let server_error = McpError::internal_error(
+            "openapi error: code=500000: internal server error",
+            Some(serde_json::json!({ "openapi_error_code": 500000 })),
+        );
+        let v: serde_json::Value =
+            serde_json::from_str(&text_of(&tool_error("submit_order", &server_error)))
+                .expect("the envelope must be JSON");
+        assert_eq!(
+            v["recoverable"], "none",
+            "a 5xx on a write leaves its outcome unknown"
+        );
+
+        let rate_limited = McpError::internal_error(
+            "openapi error: code=429002: rate limit",
+            Some(serde_json::json!({ "openapi_error_code": 429002 })),
+        );
+        let v: serde_json::Value =
+            serde_json::from_str(&text_of(&tool_error("submit_order", &rate_limited)))
+                .expect("the envelope must be JSON");
+        assert_eq!(
+            v["recoverable"], "backoff",
+            "a rate-limited write was refused, so it can be resent"
+        );
+    }
+
+    #[test]
+    fn an_unknown_symbol_names_the_covered_markets() {
+        let err = McpError::internal_error(
+            "openapi error: code=301600: invalid symbol",
+            Some(serde_json::json!({ "openapi_error_code": 301600 })),
+        );
+        let hint = error_hint(&err).expect("an invalid symbol must carry a hint");
+        assert!(
+            hint.contains("US, HK, SH, SZ or SG") && hint.contains(".TW"),
+            "{hint}"
+        );
+        assert_eq!(
+            super::recoverable_of(&err),
+            "fix_params",
+            "it stays a parameter problem"
+        );
+    }
+
+    #[test]
+    fn too_many_query_days_hints_at_splitting_the_range() {
+        let err = McpError::internal_error(
+            "openapi error: code=301600: too many query days",
+            Some(serde_json::json!({ "openapi_error_code": 301600 })),
+        );
+        let hint = error_hint(&err).expect("301600 too many query days must carry a hint");
+        assert!(hint.contains("Split"), "{hint}");
+    }
+
+    #[test]
+    fn missing_fundamental_data_is_a_terminal_no_data_result() {
+        let err = McpError::internal_error(
+            "longbridge: openapi error: code=2601400: internal server error",
+            Some(serde_json::json!({ "openapi_error_code": 2601400 })),
+        );
+        let result = tool_error("financial_statement", &err);
+        assert_eq!(result.is_error, Some(false));
+        let text = &result.content[0].as_text().unwrap().text;
+        assert!(text.contains("no data available"), "{text}");
+        assert!(!text.contains("internal server error"), "{text}");
+        assert!(
+            error_hint(&err).is_some_and(|h| h.contains("Retrying")),
+            "2601400 needs a do-not-retry hint"
+        );
+    }
+
+    #[test]
+    fn exhausted_history_quota_is_not_a_fix_params_size_error() {
+        let err = |msg: &str| {
+            McpError::internal_error(
+                format!("longbridge: openapi error: code=301607: {msg}"),
+                Some(serde_json::json!({ "openapi_error_code": 301607 })),
+            )
+        };
+        let exhausted =
+            err("history candlestick symbol count out of limit, requested:600/limit:600");
+        assert_eq!(super::history_quota_exhausted(&exhausted), Some((600, 600)));
+        assert_eq!(super::recoverable_of(&exhausted), "none");
+        let hint = error_hint(&exhausted).unwrap();
+        assert!(
+            hint.contains("quota") && !hint.contains("fewer symbols per call"),
+            "{hint}"
+        );
+
+        // A per-call size limit stays fix_params; limit:0 stays terminal.
+        assert_eq!(
+            super::history_quota_exhausted(&err("too many symbols in one page")),
+            None
+        );
+        assert_eq!(
+            super::history_quota_exhausted(&err("symbol count out of limit, requested:1/limit:0")),
+            None
+        );
+    }
+
+    #[test]
+    fn region_note_names_which_variant_tools_return() {
+        let us = super::region_note(longbridge::DcRegion::Us);
+        assert!(
+            us.contains("return the US-account shape") && us.contains("for .US symbols"),
+            "US accounts are told which tools switch by account and which by symbol: {us}"
+        );
+        assert!(
+            super::region_note(longbridge::DcRegion::Ap).contains("generic shape"),
+            "AP accounts are told they get the generic shape"
+        );
+    }
+
+    #[test]
+    fn region_note_names_every_account_scoped_us_variant_tool() {
+        // These switch on the account region alone (no symbol argument), so
+        // the US note must name them rather than imply a .US-symbol switch.
+        let us = super::region_note(longbridge::DcRegion::Us);
+        let names: Vec<_> = super::us_account_variant_tools().collect();
+        for tool in [
+            "account_balance",
+            "stock_positions",
+            "cash_flow",
+            "exchange_rate",
+            "order_detail",
+            "today_orders",
+            "history_orders",
+        ] {
+            assert!(names.contains(&tool), "`{tool}` must carry the marker");
+            assert!(us.contains(tool), "US note must name `{tool}`: {us}");
+        }
+        // Symbol-scoped variants stay out of the account list.
+        for tool in [
+            "dividend",
+            "consensus",
+            "valuation",
+            "company",
+            "financial_report",
+        ] {
+            assert!(
+                !names.contains(&tool),
+                "`{tool}` switches only for .US symbols and must not be listed"
+            );
+        }
+    }
+
+    #[test]
+    fn error_code_is_never_null() {
+        let upstream = McpError::internal_error(
+            "x",
+            Some(serde_json::json!({ "openapi_error_code": 301600 })),
+        );
+        assert_eq!(super::error_code_of(&upstream), serde_json::json!(301600));
+        let tagged = McpError::invalid_params(
+            "x",
+            Some(serde_json::json!({ "error_code": "invalid_tech_values" })),
+        );
+        assert_eq!(
+            super::error_code_of(&tagged),
+            serde_json::json!("invalid_tech_values")
+        );
+        let plain = McpError::invalid_params("x", None);
+        assert_eq!(
+            super::error_code_of(&plain),
+            serde_json::json!("invalid_params")
+        );
+        let internal = McpError::internal_error("x", None);
+        assert_eq!(
+            super::error_code_of(&internal),
+            serde_json::json!("internal_error")
+        );
+    }
+
+    #[test]
+    fn argument_errors_become_an_envelope_naming_the_parameters() {
+        // Logs through `tracing`; serialize with the log-capturing tests so this
+        // callsite's registration cannot race their interest-cache rebuild.
+        let _lock = crate::test_support::LOG_CAPTURE_LOCK.blocking_lock();
+        let raw = CallToolResult::error(vec![rmcp::model::Content::text(
+            "failed to deserialize parameters: missing field `symbol`",
+        )]);
+        let wrapped = super::wrap_argument_error("candlesticks", raw);
+        assert_eq!(wrapped.is_error, Some(true));
+        let v: serde_json::Value =
+            serde_json::from_str(&wrapped.content[0].as_text().unwrap().text).unwrap();
+        assert_eq!(v["error_code"], "invalid_arguments");
+        assert_eq!(v["recoverable"], "fix_params");
+        assert!(
+            v["message"]
+                .as_str()
+                .unwrap()
+                .contains("missing field `symbol`")
+        );
+        let hint = v["hint"].as_str().unwrap();
+        assert!(hint.contains("symbol*: string"), "{hint}");
+        assert!(!hint.contains("_jq"), "{hint}");
+
+        // Other error results pass through untouched.
+        let other = CallToolResult::error(vec![rmcp::model::Content::text("{\"error_code\":1}")]);
+        assert_eq!(
+            super::wrap_argument_error("candlesticks", other.clone()),
+            other
+        );
+    }
+
+    #[test]
+    fn single_values_for_array_parameters_are_wrapped() {
+        let mut args = serde_json::json!({"symbols": "AAPL.US"})
+            .as_object()
+            .unwrap()
+            .clone();
+        super::coerce_array_arguments("quote", &mut args);
+        assert_eq!(args["symbols"], serde_json::json!(["AAPL.US"]));
+
+        let mut args = serde_json::json!({"symbols": "[\"AAPL.US\",\"700.HK\"]"})
+            .as_object()
+            .unwrap()
+            .clone();
+        super::coerce_array_arguments("quote", &mut args);
+        assert_eq!(args["symbols"], serde_json::json!(["AAPL.US", "700.HK"]));
+
+        let mut args = serde_json::json!({"symbols": "AAPL.US, MSFT.US"})
+            .as_object()
+            .unwrap()
+            .clone();
+        super::coerce_array_arguments("quote", &mut args);
+        assert_eq!(
+            args["symbols"],
+            serde_json::json!(["AAPL.US", "MSFT.US"]),
+            "a comma-separated list must become one element per symbol"
+        );
+
+        // Scalars stay scalars.
+        let mut args = serde_json::json!({"symbol": "AAPL.US"})
+            .as_object()
+            .unwrap()
+            .clone();
+        super::coerce_array_arguments("candlesticks", &mut args);
+        assert_eq!(args["symbol"], "AAPL.US");
+    }
+
+    #[test]
+    fn region_rejection_is_an_envelope_with_the_region_hint() {
+        // Logs through `tracing`; serialize with the log-capturing tests so this
+        // callsite's registration cannot race their interest-cache rebuild.
+        let _lock = crate::test_support::LOG_CAPTURE_LOCK.blocking_lock();
+        let result = super::rejected_call(
+            "profit_analysis_realized",
+            "unknown",
+            "Tool `profit_analysis_realized` is not available for accounts in the AP data center."
+                .to_string(),
+            serde_json::json!({
+                "error_code": "dc_region_restricted",
+                "dc_region_restricted": { "current": "AP" },
+            }),
+        );
+        assert_eq!(result.is_error, Some(true));
+        let v: serde_json::Value =
+            serde_json::from_str(&result.content[0].as_text().unwrap().text).unwrap();
+        assert_eq!(v["error_code"], "dc_region_restricted");
+        assert_eq!(v["recoverable"], "none");
+        assert!(v["hint"].as_str().unwrap().contains("data center"), "{v}");
+    }
+
+    #[test]
+    fn ap_only_rejections_name_the_us_alternative() {
+        use longbridge::DcRegion;
+
+        // Logs through `tracing`; see region_rejection_is_an_envelope_with_the_region_hint.
+        let _lock = crate::test_support::LOG_CAPTURE_LOCK.blocking_lock();
+        for name in super::AP_ONLY_TOOLS {
+            let (message, data) = super::dc_region_rejection(name, DcRegion::Us);
+            let alternative = super::us_alternative_for_ap_only_tool(name);
+            assert!(
+                message.ends_with(alternative),
+                "`{name}`: the message must spell out the alternative: {message}"
+            );
+            let result = super::rejected_call(name, "unknown", message, data);
+            let v: serde_json::Value =
+                serde_json::from_str(&result.content[0].as_text().unwrap().text).unwrap();
+            assert_eq!(v["error_code"], "dc_region_restricted", "{name}: {v}");
+            assert_eq!(
+                v["recoverable"], "none",
+                "{name}: retrying cannot help: {v}"
+            );
+            assert!(
+                v["message"].as_str().unwrap().contains(alternative),
+                "{name}: the envelope message must carry the alternative: {v}"
+            );
+            assert_eq!(
+                v["hint"], alternative,
+                "{name}: the delivered hint must be the alternative, not the generic \
+                 \"use the equivalent tool\" DC-region hint: {v}"
+            );
+            assert!(
+                v.get("alternative").is_none() && v["data"].is_null(),
+                "{name}: no field is dropped in transit: {v}"
+            );
+        }
+        let (margin, _) = super::dc_region_rejection("margin_ratio", DcRegion::Us);
+        assert!(
+            margin.contains("no per-symbol US equivalent")
+                && margin.contains("account_balance")
+                && margin.contains("us.margin_status"),
+            "margin_ratio has no per-symbol US equivalent; account-level figures are in \
+             account_balance's us.margin_status: {margin}"
+        );
+        let (operating, _) = super::dc_region_rejection("operating", DcRegion::Us);
+        assert!(
+            operating.contains("no US equivalent")
+                && operating.contains("financial_report_key_metrics"),
+            "operating has no US equivalent; key metrics are only partial: {operating}"
+        );
+        let (funds, _) = super::dc_region_rejection("fund_positions", DcRegion::Us);
+        assert!(
+            funds.contains("no US equivalent") && funds.contains("do not retry"),
+            "fund_positions has no US alternative: {funds}"
+        );
+        let (us_only, data) = super::dc_region_rejection("etf_docs", DcRegion::Ap);
+        assert!(
+            us_only.ends_with("data center."),
+            "US-only tools rejected for AP accounts keep the plain message: {us_only}"
+        );
+        let result = super::rejected_call("etf_docs", "unknown", us_only, data);
+        let v: serde_json::Value =
+            serde_json::from_str(&result.content[0].as_text().unwrap().text).unwrap();
+        assert!(
+            v["hint"].as_str().unwrap().contains("equivalent tool"),
+            "US-only tools rejected for AP accounts keep the generic DC-region hint: {v}"
+        );
+    }
+
+    #[test]
+    fn per_tool_no_data_codes_become_placeholders_only_on_their_tool() {
+        let masked = McpError::internal_error(
+            "longbridge: openapi error: code=2601500: internal server error",
+            Some(serde_json::json!({ "openapi_error_code": 2601500 })),
+        );
+        // No-data on the tools whose gateway logs show "record not found" ...
+        for tool in ["industry_valuation_dist", "consensus"] {
+            let result = tool_error(tool, &masked);
+            assert_eq!(result.is_error, Some(false), "{tool}");
+            let text = &result.content[0].as_text().unwrap().text;
+            assert!(text.contains("no data available"), "{tool}: {text}");
+        }
+        // ... but a retryable internal error everywhere else.
+        let result = tool_error("valuation_comparison", &masked);
+        assert_eq!(result.is_error, Some(true));
+
+        let deleted = McpError::internal_error(
+            "longbridge: openapi error: code=1901107: The content does not exist or has been deleted",
+            Some(serde_json::json!({ "openapi_error_code": 1901107 })),
+        );
+        let result = tool_error("topic_detail", &deleted);
+        assert_eq!(result.is_error, Some(false));
+        assert!(
+            result.content[0]
+                .as_text()
+                .unwrap()
+                .text
+                .contains("deleted")
+        );
+    }
+
+    #[test]
+    fn date_range_too_long_is_fix_params_with_a_hint() {
+        let err = McpError::internal_error(
+            "longbridge: openapi error: code=310010: The date range cannot exceed three years.",
+            Some(serde_json::json!({ "openapi_error_code": 310010 })),
+        );
+        assert_eq!(super::recoverable_of(&err), "fix_params");
+        assert!(
+            error_hint(&err).is_some_and(|h| h.contains("3 years")),
+            "310010 must hint at the 3-year cap"
+        );
+    }
+
+    #[test]
+    fn unregistered_tool_names_share_one_metric_label() {
+        assert_eq!(
+            super::tool_label("quote"),
+            "quote",
+            "registered names are kept"
+        );
+        for made_up in ["made_up_tool", "quote ", "", &"x".repeat(10_000)] {
+            assert_eq!(
+                super::tool_label(made_up),
+                "unknown_tool",
+                "client-supplied unknown names must not become new label values"
+            );
+        }
+    }
+
+    #[test]
+    fn backoff_delay_reads_the_upstream_hint_and_clamps_it() {
+        use std::time::Duration;
+        for (message, expected) in [
+            (
+                "已达到 1S 区间调用上限，请 0.4 秒后重试",
+                Duration::from_millis(400),
+            ),
+            (
+                "已达到 1S 区间调用上限，请 1 秒后重试",
+                Duration::from_secs(1),
+            ),
+            (
+                "rate limit of 1-second interval has been reached, please retry after: 1s",
+                Duration::from_secs(1),
+            ),
+            (
+                "已達到 1s 區間調用上限，請 1 秒後重試",
+                Duration::from_secs(1),
+            ),
+            ("请 0.05 秒后重试", BACKOFF_MIN),
+            ("请 30 秒后重试", BACKOFF_MAX),
+            (
+                "minimum interval between two calls should be 0.02 seconds",
+                BACKOFF_DEFAULT,
+            ),
+            ("两次调用之间的最小间隔应为 0.02 秒", BACKOFF_DEFAULT),
+            ("", BACKOFF_DEFAULT),
+        ] {
+            assert_eq!(backoff_delay(message), expected, "{message}");
+        }
+    }
+
     #[test]
     fn a_rate_limit_code_outside_the_hardcoded_list_still_matches_via_the_429_range() {
         // No text needle matches here on purpose — this must be caught by
@@ -7959,8 +9237,11 @@ mod tool_error_tests {
 
     #[test]
     fn ordinary_errors_get_no_hint() {
-        let err = McpError::internal_error("symbol not found", None);
-        assert!(error_hint(&err).is_none());
+        let err = McpError::internal_error("order already filled", None);
+        assert!(
+            error_hint(&err).is_none(),
+            "an error with no known remedy carries no hint"
+        );
     }
 
     #[tokio::test]

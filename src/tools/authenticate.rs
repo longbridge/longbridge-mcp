@@ -163,8 +163,8 @@ pub async fn authenticate(
         .map(|s| s.split_whitespace().map(str::to_string).collect())
         .unwrap_or_default();
 
-    let account_channel = crate::tools::decode_jwt_account_channel(&token.access_token)
-        .unwrap_or_else(|| "lb".into());
+    let account_channel =
+        crate::auth::jwt::account_channel(&token.access_token).unwrap_or_else(|| "lb".into());
 
     let next_steps = format!(
         "Authentication successful. The full tool set unlocks once requests carry this access token. \
