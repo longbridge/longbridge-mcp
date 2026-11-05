@@ -1,6 +1,6 @@
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
-use prometheus::{Encoder, HistogramVec, IntCounterVec, Opts, Registry, TextEncoder};
+use prometheus::{Encoder, HistogramVec, IntCounter, IntCounterVec, Opts, Registry, TextEncoder};
 
 use std::sync::LazyLock;
 
@@ -101,6 +101,16 @@ static OAUTH_TOKEN_TOTAL: LazyLock<IntCounterVec> = LazyLock::new(|| {
     counter
 });
 
+static OAUTH_AUTHORIZE_TOTAL: LazyLock<IntCounter> = LazyLock::new(|| {
+    let counter = IntCounter::new(
+        "mcp_oauth_authorize_total",
+        "OAuth authorization requests redirected to the upstream authorize endpoint",
+    )
+    .unwrap();
+    REGISTRY.register(Box::new(counter.clone())).unwrap();
+    counter
+});
+
 static OAUTH_REVOKE_TOTAL: LazyLock<IntCounterVec> = LazyLock::new(|| {
     let counter = IntCounterVec::new(
         Opts::new(
@@ -130,6 +140,147 @@ static TOOL_TERMINAL_DEGRADED_TOTAL: LazyLock<IntCounterVec> = LazyLock::new(|| 
     REGISTRY.register(Box::new(counter.clone())).unwrap();
     counter
 });
+
+static TOOL_JQ_ERRORS_TOTAL: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    let counter = IntCounterVec::new(
+        Opts::new(
+            "mcp_tool_jq_errors_total",
+            "Tool calls whose `_jq` response filter failed (stage=compile|runtime). \
+             Returned to the client as isError:true but NOT counted in \
+             mcp_tool_call_errors_total, because the filter runs outside the \
+             measured tool body.",
+        ),
+        &["tool_name", "stage", "client"],
+    )
+    .unwrap();
+    REGISTRY.register(Box::new(counter.clone())).unwrap();
+    counter
+});
+
+static TOOL_BACKOFF_RETRIES_TOTAL: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    let counter = IntCounterVec::new(
+        Opts::new(
+            "mcp_tool_backoff_retries_total",
+            "Read-only tool calls retried once by the server after an upstream \
+             rate-limit (backoff-class) error. The first, retried attempt is not \
+             counted in mcp_tool_call_errors_total.",
+        ),
+        &["tool_name", "client"],
+    )
+    .unwrap();
+    REGISTRY.register(Box::new(counter.clone())).unwrap();
+    counter
+});
+
+static FX_RATE_CACHE_TOTAL: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    let counter = IntCounterVec::new(
+        Opts::new(
+            "mcp_fx_rate_cache_total",
+            "fx_rate lookups by cache outcome: `hit` served from memory (including \
+             callers that waited on an identical in-flight request), `miss` sent \
+             upstream to the rate source",
+        ),
+        &["result"],
+    )
+    .unwrap();
+    REGISTRY.register(Box::new(counter.clone())).unwrap();
+    counter
+});
+
+static AUTH_EXPIRED_TOTAL: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    let counter = IntCounterVec::new(
+        Opts::new(
+            "mcp_auth_expired_total",
+            "MCP requests rejected (or, on /agent, downgraded to unauthenticated) \
+             because the bearer JWT had expired",
+        ),
+        &["client"],
+    )
+    .unwrap();
+    REGISTRY.register(Box::new(counter.clone())).unwrap();
+    counter
+});
+
+/// Record a request whose bearer token had expired. `client` is a
+/// [`classify_client`] bucket (the HTTP layer has no `CURRENT_CLIENT` yet).
+pub fn record_auth_expired(client: &str) {
+    AUTH_EXPIRED_TOTAL.with_label_values(&[client]).inc();
+}
+
+static TOOL_RESPONSE_BYTES: LazyLock<HistogramVec> = LazyLock::new(|| {
+    let histogram = HistogramVec::new(
+        prometheus::HistogramOpts::new(
+            "mcp_tool_response_bytes",
+            "Size of the result text a tool call returned, before any size trimming. Clients \
+             cap a single tool result (Claude Code: 25k tokens), so the upper buckets are calls \
+             that would fail client-side without trimming.",
+        )
+        .buckets(vec![
+            1_000.0,
+            4_000.0,
+            16_000.0,
+            60_000.0,
+            100_000.0,
+            250_000.0,
+            1_000_000.0,
+        ]),
+        &["tool_name", "client"],
+    )
+    .unwrap();
+    REGISTRY.register(Box::new(histogram.clone())).unwrap();
+    histogram
+});
+
+static TOOL_RESPONSE_TRUNCATED_TOTAL: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    let counter = IntCounterVec::new(
+        Opts::new(
+            "mcp_tool_response_truncated_total",
+            "Tool results trimmed to the server's size limit before being returned",
+        ),
+        &["tool_name", "client"],
+    )
+    .unwrap();
+    REGISTRY.register(Box::new(counter.clone())).unwrap();
+    counter
+});
+
+/// Record a tool result's size, and whether it had to be trimmed.
+pub fn record_response_size(tool_name: &str, bytes: usize, truncated: bool) {
+    let client = CURRENT_CLIENT.try_with(|c| *c).unwrap_or("unknown");
+    TOOL_RESPONSE_BYTES
+        .with_label_values(&[tool_name, client])
+        .observe(bytes as f64);
+    if truncated {
+        TOOL_RESPONSE_TRUNCATED_TOTAL
+            .with_label_values(&[tool_name, client])
+            .inc();
+    }
+}
+
+/// Record a failed `_jq` filter. `stage` is `"compile"` (the expression was
+/// rejected before the tool ran) or `"runtime"` (the tool ran but the filter
+/// failed on its response).
+pub fn record_jq_error(tool_name: &str, stage: &str) {
+    let client = CURRENT_CLIENT.try_with(|c| *c).unwrap_or("unknown");
+    TOOL_JQ_ERRORS_TOTAL
+        .with_label_values(&[tool_name, stage, client])
+        .inc();
+}
+
+/// Record a server-side retry of a read-only tool after a rate-limit error.
+pub fn record_backoff_retry(tool_name: &str) {
+    let client = CURRENT_CLIENT.try_with(|c| *c).unwrap_or("unknown");
+    TOOL_BACKOFF_RETRIES_TOTAL
+        .with_label_values(&[tool_name, client])
+        .inc();
+}
+
+/// Record whether an `fx_rate` lookup was served from its cache.
+pub fn record_fx_rate_cache(hit: bool) {
+    FX_RATE_CACHE_TOTAL
+        .with_label_values(&[if hit { "hit" } else { "miss" }])
+        .inc();
+}
 
 /// Record a tool call that resolved to a terminal degraded result (e.g. 301604
 /// no quote access, 301607 with zero history quota). These are deliberately not
@@ -165,6 +316,11 @@ pub fn record_oauth_token(grant_type: &str, result: &str) {
     OAUTH_TOKEN_TOTAL
         .with_label_values(&[grant_type, result])
         .inc();
+}
+
+/// 记录一次经本服务重定向到上游的 OAuth 授权请求(新登录发起信号)。
+pub fn record_oauth_authorize() {
+    OAUTH_AUTHORIZE_TOTAL.inc();
 }
 
 /// 记录一次经本服务代理的 OAuth token 撤销(断连信号)。`result` 为
@@ -273,6 +429,13 @@ mod tests {
             .with_label_values(&["authorization_code", "success"])
             .get();
         assert_eq!(after - before, 1);
+    }
+
+    #[test]
+    fn record_oauth_authorize_increments() {
+        let before = OAUTH_AUTHORIZE_TOTAL.get();
+        record_oauth_authorize();
+        assert_eq!(OAUTH_AUTHORIZE_TOTAL.get() - before, 1);
     }
 
     #[test]

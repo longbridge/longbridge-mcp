@@ -6,6 +6,7 @@ use rmcp::schemars::JsonSchema;
 use rmcp::serde::Deserialize;
 
 use crate::tools::support::http_client::{http_delete_tool, http_get_tool, http_post_tool};
+use crate::tools::support::parse;
 use crate::tools::support::tolerant::{tolerant_option_u32, tolerant_vec_string};
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -57,7 +58,8 @@ pub async fn sharelist_detail(
     p: SharelistIdParam,
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
-    let path = format!("/v1/sharelists/{}", p.id);
+    let id = parse::path_segment("id", &p.id)?;
+    let path = format!("/v1/sharelists/{id}");
     let params = [
         ("constituent", "true"),
         ("quote", "true"),
@@ -85,7 +87,8 @@ pub async fn sharelist_delete(
     p: SharelistIdParam,
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
-    let path = format!("/v1/sharelists/{}", p.id);
+    let id = parse::path_segment("id", &p.id)?;
+    let path = format!("/v1/sharelists/{id}");
     http_delete_tool(&client, &path, serde_json::json!({})).await
 }
 
@@ -94,7 +97,8 @@ pub async fn sharelist_add(
     p: SharelistItemsParam,
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
-    let path = format!("/v1/sharelists/{}/items", p.id);
+    let id = parse::path_segment("id", &p.id)?;
+    let path = format!("/v1/sharelists/{id}/items");
     let body = serde_json::json!({ "symbols": p.symbols.join(",") });
     http_post_tool(&client, &path, body).await
 }
@@ -104,7 +108,8 @@ pub async fn sharelist_remove(
     p: SharelistItemsParam,
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
-    let path = format!("/v1/sharelists/{}/items", p.id);
+    let id = parse::path_segment("id", &p.id)?;
+    let path = format!("/v1/sharelists/{id}/items");
     let body = serde_json::json!({ "symbols": p.symbols.join(",") });
     http_delete_tool(&client, &path, body).await
 }
@@ -114,7 +119,8 @@ pub async fn sharelist_sort(
     p: SharelistItemsParam,
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
-    let path = format!("/v1/sharelists/{}/items/sort", p.id);
+    let id = parse::path_segment("id", &p.id)?;
+    let path = format!("/v1/sharelists/{id}/items/sort");
     let body = serde_json::json!({ "symbols": p.symbols.join(",") });
     http_post_tool(&client, &path, body).await
 }

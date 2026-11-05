@@ -20,6 +20,7 @@ use rmcp::serde::Deserialize;
 
 use crate::error::Error;
 use crate::tools::support::dry_run;
+use crate::tools::support::tolerant::{tolerant_id_i64, tolerant_option_vec_i64};
 use crate::tools::{McpContext, tool_json};
 
 /// Build a [`FundContext`] for this request.
@@ -76,7 +77,8 @@ pub struct FundListParam {
     /// Server-defined filter object (as returned/described by `fund_filters`).
     /// Omit for the unfiltered list.
     pub filter: Option<serde_json::Value>,
-    /// Quick-filter ids (from `fund_filters`).
+    /// Quick-filter ids (from `fund_filters`; numbers or numeric strings).
+    #[serde(default, deserialize_with = "tolerant_option_vec_i64")]
     pub quick_ids: Option<Vec<i64>>,
     /// Earning-rate time intervals to include in each row (e.g. `["1m","1y"]`).
     pub time_interval: Option<Vec<String>>,
@@ -168,7 +170,9 @@ pub struct FundOrdersParam {
 /// Fund order detail by order id.
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct FundOrderParam {
-    /// Fund order id (from `fund_orders`).
+    /// Fund order id (from `fund_orders`, which returns it as a string; a
+    /// number or a numeric string is accepted).
+    #[serde(deserialize_with = "tolerant_id_i64")]
     pub order_id: i64,
 }
 
@@ -187,7 +191,7 @@ pub struct FundTransactionsParam {
     pub end: Option<i64>,
     /// 1-based page number.
     pub page: Option<i32>,
-    /// Page size (rows per page).
+    /// Page size (rows per page, default 20).
     pub size: Option<i32>,
 }
 
@@ -258,7 +262,9 @@ pub struct FundSubmitOrderParam {
 /// Fund order cancellation.
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct FundCancelOrderParam {
-    /// Fund order id to cancel (from `fund_orders`).
+    /// Fund order id to cancel (from `fund_orders`, which returns it as a
+    /// string; a number or a numeric string is accepted).
+    #[serde(deserialize_with = "tolerant_id_i64")]
     pub order_id: i64,
     /// The `confirmation_code` from this order's dry run. WITHOUT IT NOTHING IS
     /// SENT.
@@ -618,9 +624,8 @@ pub async fn fund_transactions(
     if let Some(page) = p.page {
         opts = opts.page(page);
     }
-    if let Some(size) = p.size {
-        opts = opts.size(size);
-    }
+    // Without a size the upstream page was ~211KB, past one tool result.
+    opts = opts.size(p.size.unwrap_or(20));
     let data = context(mctx)
         .transactions(opts)
         .await

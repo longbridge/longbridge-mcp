@@ -1,7 +1,13 @@
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use axum::extract::Request;
 use axum::http::StatusCode;
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
+
+/// Treat a token as expired this many seconds before its `exp`, so a request
+/// doesn't pass here and then expire on its way upstream.
+const EXPIRY_SKEW_SECS: i64 = 30;
 
 /// Bearer token extracted from the Authorization header.
 #[derive(Clone, Debug)]
@@ -93,6 +99,10 @@ pub enum AuthMode {
 /// [`RestrictedEndpoint`] marker carrying that [`RestrictedVersion`] is attached
 /// to every request that proceeds, so handlers expose and accept only that
 /// version's allowlist.
+///
+/// A JWT whose `exp` has passed (or passes within [`EXPIRY_SKEW_SECS`]) is
+/// rejected as `invalid_token`; on the optional `/agent` endpoint it is instead
+/// dropped and the request handled as unauthenticated.
 pub async fn mcp_auth_layer(
     mut req: Request,
     next: Next,
@@ -115,6 +125,47 @@ pub async fn mcp_auth_layer(
         .and_then(|v| v.to_str().ok())
         .and_then(|h| h.strip_prefix("Bearer "))
         .map(|t| t.to_string());
+
+    // An expired JWT would otherwise pass straight through and fail every
+    // tool call upstream with `token is expired` inside an `isError` result —
+    // which MCP clients never treat as a reason to refresh, so the user stays
+    // stuck. Rejecting it here with RFC 6750 `invalid_token` makes OAuth
+    // clients (Claude, ChatGPT) run their refresh-token flow instead.
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs() as i64);
+    let bearer_token = match bearer_token {
+        Some(token) if crate::auth::jwt::is_expired_at(&token, now + EXPIRY_SKEW_SECS) => {
+            let user_agent = req
+                .headers()
+                .get("user-agent")
+                .and_then(|v| v.to_str().ok());
+            crate::metrics::record_auth_expired(crate::metrics::classify_client(user_agent));
+            tracing::info!(
+                path = req.uri().path(),
+                user_agent = user_agent.unwrap_or(""),
+                "rejected request: bearer token expired"
+            );
+            match mode {
+                AuthMode::Required => {
+                    let challenge = format!(
+                        "{www_authenticate}, error=\"invalid_token\", error_description=\"The access token expired\""
+                    );
+                    return (
+                        StatusCode::UNAUTHORIZED,
+                        [("WWW-Authenticate", challenge.as_str())],
+                        "access token expired",
+                    )
+                        .into_response();
+                }
+                // `/agent` clients may have no OAuth support at all; treat the
+                // request as unauthenticated so they are offered `authenticate`
+                // again rather than locked out by a 401.
+                AuthMode::Optional => None,
+            }
+        }
+        other => other,
+    };
 
     match bearer_token {
         Some(token) => {
@@ -187,6 +238,89 @@ mod tests {
                 },
             )),
         )
+    }
+
+    fn now() -> i64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64
+    }
+
+    async fn call(mode: AuthMode, token: &str) -> (StatusCode, String, String) {
+        let app = Router::new().route(
+            "/mcp",
+            get(|req: Request| async move {
+                match req.extensions().get::<BearerToken>() {
+                    Some(_) => "bearer",
+                    None => "anonymous",
+                }
+            })
+            .layer(axum::middleware::from_fn(
+                move |req: Request, next: Next| async move {
+                    mcp_auth_layer(req, next, "https://example.com", mode, None).await
+                },
+            )),
+        );
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/mcp")
+                    .header("Authorization", format!("Bearer {token}"))
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let challenge = response
+            .headers()
+            .get("www-authenticate")
+            .map(|v| v.to_str().unwrap().to_string())
+            .unwrap_or_default();
+        let body = axum::body::to_bytes(response.into_body(), 1024)
+            .await
+            .unwrap();
+        (status, challenge, String::from_utf8(body.to_vec()).unwrap())
+    }
+
+    #[tokio::test]
+    async fn expired_jwt_is_rejected_as_invalid_token() {
+        let expired = crate::auth::jwt::test_token(&format!(r#"{{"exp":{}}}"#, now() - 60));
+        let (status, challenge, _) = call(AuthMode::Required, &expired).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        assert!(
+            challenge.contains(r#"error="invalid_token""#),
+            "{challenge}"
+        );
+        assert!(challenge.contains("resource_metadata="), "{challenge}");
+    }
+
+    #[tokio::test]
+    async fn about_to_expire_jwt_is_rejected_within_the_skew() {
+        let expiring = crate::auth::jwt::test_token(&format!(r#"{{"exp":{}}}"#, now() + 5));
+        let (status, _, _) = call(AuthMode::Required, &expiring).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn valid_or_opaque_tokens_pass_through() {
+        let valid = crate::auth::jwt::test_token(&format!(r#"{{"exp":{}}}"#, now() + 3600));
+        for token in [valid.as_str(), "opaque-token", "a.b.c"] {
+            let (status, _, body) = call(AuthMode::Required, token).await;
+            assert_eq!(
+                (status, body.as_str()),
+                (StatusCode::OK, "bearer"),
+                "{token}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn expired_jwt_on_agent_endpoint_is_downgraded_to_anonymous() {
+        let expired = crate::auth::jwt::test_token(&format!(r#"{{"exp":{}}}"#, now() - 60));
+        let (status, _, body) = call(AuthMode::Optional, &expired).await;
+        assert_eq!((status, body.as_str()), (StatusCode::OK, "anonymous"));
     }
 
     #[tokio::test]

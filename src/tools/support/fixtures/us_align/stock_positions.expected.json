@@ -1,0 +1,65 @@
+{
+  "list": [
+    {
+      "stock_info": [
+        {
+          "symbol": "EXMP.US",
+          "symbol_name": "Example ETF",
+          "quantity": "10",
+          "currency": "USD",
+          "cost_price": "20.5",
+          "market": "US",
+          "asset_type": "STOCK",
+          "position_side": "LONG",
+          "last_done": "22.1",
+          "market_price": "22",
+          "prev_close": "21",
+          "today_pl": "11"
+        }
+      ]
+    }
+  ],
+  "us": {
+    "account_type": "1",
+    "asset_timestamp": "1792000000",
+    "cash_buy_power": "1200.4",
+    "overnight_buy_power": "1200.4",
+    "currency": "USD",
+    "cash_list": [
+      {
+        "currency": "USD",
+        "frozen_buy_cash": "0",
+        "outstanding": "0",
+        "settled_cash": "1250.4",
+        "total_amount": "1250.4",
+        "total_cash": "1250.4"
+      }
+    ],
+    "multi_leg": {
+      "holdings": []
+    },
+    "option_list": [],
+    "crypto_list": [
+      {
+        "asset_type": "CRYPTO",
+        "symbol": "BTCUSD.BKKT",
+        "quantity": "0.0002",
+        "currency": "USD",
+        "average_cost": "80000",
+        "market": "BKKT",
+        "trade_status": "105",
+        "prev_close": "81000",
+        "last_done": "81500",
+        "market_price": "81500",
+        "pretrade_close": "81000",
+        "stock_invest_of_today": "16.3",
+        "today_pl": "0",
+        "pretrade_stock_invest_of_today": "16.3",
+        "pretrade_today_pl": "0",
+        "position_side": "LONG",
+        "open_position_time": "1790000000",
+        "name": "Bitcoin"
+      }
+    ]
+  }
+}

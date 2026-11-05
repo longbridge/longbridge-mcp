@@ -7,6 +7,7 @@ use rmcp::schemars::JsonSchema;
 use rmcp::serde::Deserialize;
 
 use crate::error::Error;
+use crate::tools::support::exchange_time::{localize_result, localize_tool_output};
 use crate::tools::support::http_client::{
     http_get_tool, http_get_tool_unix, http_get_tool_unix_dropping, http_post_raw,
     http_post_tool_reshape, http_post_value,
@@ -169,10 +170,10 @@ pub struct OptionChainByDateParam {
 pub struct WarrantListParam {
     /// Underlying symbol, e.g. "700.HK"
     pub symbol: String,
-    /// Sort field: LastDone, ChangeRate, ChangeValue, Volume, Turnover, ExpiryDate, StrikePrice, UpperStrikePrice, LowerStrikePrice, OutstandingQuantity, OutstandingRatio, Premium, ItmOtm, ImpliedVolatility, Delta
-    pub sort_by: String,
-    /// Sort order: Ascending or Descending
-    pub sort_order: String,
+    /// Sort field (default Volume): LastDone, ChangeRate, ChangeValue, Volume, Turnover, ExpiryDate, StrikePrice, UpperStrikePrice, LowerStrikePrice, OutstandingQuantity, OutstandingRatio, Premium, ItmOtm, ImpliedVolatility, Delta
+    pub sort_by: Option<String>,
+    /// Sort order: Ascending or Descending (default Descending)
+    pub sort_order: Option<String>,
     /// Filter by warrant type (optional): "Call", "Put", "Bull", "Bear", "Inline"
     #[serde(default, deserialize_with = "tolerant_option_vec_string")]
     pub warrant_type: Option<Vec<String>>,
@@ -455,6 +456,15 @@ where
     }
 }
 
+/// Unix-second fields of a `/quote/quotes` entry (after `over_night_quote` is
+/// renamed): the quote's own timestamp and those of its extended sessions.
+const QUOTE_UNIX_PATHS: &[&str] = &[
+    "*.timestamp",
+    "*.pre_market_quote.timestamp",
+    "*.post_market_quote.timestamp",
+    "*.overnight_quote.timestamp",
+];
+
 pub async fn quote(
     mctx: &crate::tools::McpContext,
     p: SymbolsParam,
@@ -472,11 +482,13 @@ pub async fn quote(
         Some("secu_quote"),
         &[("over_night_quote", "overnight_quote")],
         &["volume_str"],
-        &["*.timestamp"],
+        QUOTE_UNIX_PATHS,
     )
     .await?;
     map_enum_path::<longbridge::quote::TradeStatus>(&mut value, &["*", "trade_status"]);
     normalize_extended_sessions(&mut value);
+    // One call can mix markets, so each entry follows its own exchange.
+    localize_tool_output("quote", &mut value, None);
     // Non-US symbols carry `pre_market_quote`/`post_market_quote`/
     // `overnight_quote` as `null`; drop those (and any other absent optional).
     crate::serialize::strip_nulls(&mut value);
@@ -608,6 +620,7 @@ pub async fn option_quote(
         }
     }
 
+    localize_tool_output("option_quote", &mut value, None);
     tool_json(&value)
 }
 
@@ -643,6 +656,7 @@ pub async fn warrant_quote(
         }
     }
     map_enum_path::<longbridge::quote::TradeStatus>(&mut value, &["*", "trade_status"]);
+    localize_tool_output("warrant_quote", &mut value, None);
     crate::serialize::round_decimals(&mut value, 6);
     Ok(crate::tools::tool_result(
         serde_json::to_string(&value).map_err(Error::Serialize)?,
@@ -739,6 +753,7 @@ pub async fn trades(
         &["*", "trade_session"],
     );
     crate::serialize::strip_trailing_zeros(&mut value);
+    localize_tool_output("trades", &mut value, Some(&p.symbol));
     Ok(crate::tools::tool_result(
         serde_json::to_string(&value).map_err(Error::Serialize)?,
     ))
@@ -755,7 +770,7 @@ pub async fn intraday(
     // WS→HTTP (id 511, POST /quote/intraday). Unwrap `lines`, drop the redundant
     // `volume_str`, convert unix `timestamp` to RFC3339, strip padded price zeros.
     let client = mctx.create_http_client();
-    http_post_tool_reshape(
+    let result = http_post_tool_reshape(
         &client,
         "/quote/intraday",
         serde_json::json!({ "symbol": p.symbol, "trade_session": sessions as i32 }),
@@ -765,7 +780,10 @@ pub async fn intraday(
         &["*.timestamp"],
         true,
     )
-    .await
+    .await?;
+    // Pre/post/overnight minutes cross UTC midnight for US symbols, so render
+    // them in the exchange's own time.
+    Ok(localize_result("intraday", result, Some(&p.symbol)))
 }
 
 /// Upstream's own "symbol count out of limit" business code — seen firing
@@ -810,10 +828,12 @@ where
 /// Reshape a `/quote/candlesticks` or `/quote/history-candlesticks` raw response
 /// (candlestick list) to the SDK `Candlestick` shape: unwrap `candlesticks`, drop
 /// the redundant `volume_str`, convert unix `timestamp`, map `trade_session` int
-/// → SDK name, strip padded price/turnover trailing zeros.
+/// → SDK name, strip padded price/turnover trailing zeros. `timestamp` is
+/// rendered in `symbol`'s exchange-local time so its date prefix is the trading
+/// date (see [`exchange_time`](crate::tools::support::exchange_time)).
 /// NOTE: the REST payload omits the SDK's `open_updated` flag — pending a
 /// gateway/backend addition (see verification report); not synthesized here.
-fn reshape_candlesticks(resp: &str) -> Result<CallToolResult, McpError> {
+fn reshape_candlesticks(resp: &str, symbol: &str) -> Result<CallToolResult, McpError> {
     let transformed =
         crate::serialize::transform_json(resp.as_bytes()).map_err(Error::Serialize)?;
     let mut value: serde_json::Value =
@@ -823,6 +843,7 @@ fn reshape_candlesticks(resp: &str) -> Result<CallToolResult, McpError> {
     }
     crate::serialize::drop_keys(&mut value, &["volume_str"]);
     crate::serialize::convert_unix_paths(&mut value, &["*.timestamp"]);
+    localize_tool_output("candlesticks", &mut value, Some(symbol));
     map_enum_path_via::<longbridge_proto::quote::TradeSession, longbridge::quote::TradeSession>(
         &mut value,
         &["*", "trade_session"],
@@ -863,7 +884,7 @@ pub async fn candlesticks(
     })
     .await
     .map_err(|e| Error::longbridge(*e))?;
-    reshape_candlesticks(&resp)
+    reshape_candlesticks(&resp, &p.symbol)
 }
 
 pub async fn history_candlesticks_by_offset(
@@ -922,7 +943,7 @@ pub async fn history_candlesticks_by_offset(
             return Err(err);
         }
     };
-    reshape_candlesticks(&resp)
+    reshape_candlesticks(&resp, &p.symbol)
 }
 
 pub async fn history_candlesticks_by_date(
@@ -936,6 +957,7 @@ pub async fn history_candlesticks_by_date(
     let adjust = parse::parse_adjust_type(p.forward_adjust);
     let sessions = parse::parse_trade_sessions(&p.trade_sessions)?;
     let ymd = |d: time::Date| format!("{:04}{:02}{:02}", d.year(), d.month() as u8, d.day());
+    let unbounded = p.start.is_none() && p.end.is_none();
     let start_s = match p.start {
         Some(ref s) => ymd(parse::parse_date(s)?),
         None => String::new(),
@@ -968,7 +990,57 @@ pub async fn history_candlesticks_by_date(
             return Err(err);
         }
     };
-    reshape_candlesticks(&resp)
+    let result = reshape_candlesticks(&resp, &p.symbol)?;
+    // With no range, upstream returns ~1000 bars (~170k chars), past what MCP
+    // clients accept for one tool result. Keep the newest, like `candlesticks`.
+    Ok(if unbounded {
+        keep_latest_bars(result, DEFAULT_UNBOUNDED_BARS)
+    } else {
+        result
+    })
+}
+
+/// Bars `history_candlesticks_by_date` returns when called without a range.
+const DEFAULT_UNBOUNDED_BARS: usize = 100;
+
+/// Keep the last `count` entries of an ascending candlestick array result.
+fn keep_latest_bars(result: CallToolResult, count: usize) -> CallToolResult {
+    let Some(serde_json::Value::Array(mut bars)) = result
+        .content
+        .first()
+        .and_then(|c| c.as_text())
+        .and_then(|t| serde_json::from_str(&t.text).ok())
+    else {
+        return result;
+    };
+    if bars.len() <= count {
+        return result;
+    }
+    bars.drain(..bars.len() - count);
+    crate::tools::tool_result(serde_json::Value::Array(bars).to_string())
+}
+
+/// Longest span (`end - start`) the trading-days endpoint accepts in one
+/// request; longer ranges fail with "too many query days".
+const TRADING_DAYS_WINDOW: i64 = 40;
+
+/// Longest span `trading_days` covers in one tool call, fetched as
+/// consecutive windows of [`TRADING_DAYS_WINDOW`] days.
+const TRADING_DAYS_MAX_SPAN: i64 = 400;
+
+/// Split `start..=end` into consecutive windows whose `end - start` is at most
+/// [`TRADING_DAYS_WINDOW`] days.
+fn trading_day_windows(start: time::Date, end: time::Date) -> Vec<(time::Date, time::Date)> {
+    let mut windows = Vec::new();
+    let mut from = start;
+    loop {
+        let to = (from + time::Duration::days(TRADING_DAYS_WINDOW)).min(end);
+        windows.push((from, to));
+        if to >= end {
+            return windows;
+        }
+        from = to + time::Duration::days(1);
+    }
 }
 
 pub async fn trading_days(
@@ -982,25 +1054,58 @@ pub async fn trading_days(
     let market = parse::parse_market(&p.market)?;
     let start = parse::parse_date(&p.start)?;
     let end = parse::parse_date(&p.end)?;
+    if end < start {
+        return Err(McpError::invalid_params(
+            format!("end ({end}) is before start ({start})"),
+            None,
+        ));
+    }
+    let span = (end - start).whole_days();
+    if span > TRADING_DAYS_MAX_SPAN {
+        return Err(McpError::invalid_params(
+            format!(
+                "date range spans {span} days; trading_days covers at most \
+                 {TRADING_DAYS_MAX_SPAN} days per call, so split it into consecutive ranges"
+            ),
+            None,
+        ));
+    }
     let market_str = serde_json::to_value(market)
         .ok()
         .and_then(|v| v.as_str().map(str::to_owned))
         .unwrap_or_else(|| p.market.to_uppercase());
     let ymd = |d: time::Date| format!("{:04}{:02}{:02}", d.year(), d.month() as u8, d.day());
     let client = mctx.create_http_client();
-    let mut value = http_post_value(
-        &client,
-        "/quote/markets/trading-days",
-        serde_json::json!({ "market": market_str, "beg_day": ymd(start), "end_day": ymd(end) }),
-        None,
-        &[
-            ("trade_day", "trade_days"),
-            ("half_trade_day", "half_trade_days"),
-        ],
-        &[],
-        &[],
-    )
-    .await?;
+    let mut merged = serde_json::Map::new();
+    for (from, to) in trading_day_windows(start, end) {
+        let value = http_post_value(
+            &client,
+            "/quote/markets/trading-days",
+            serde_json::json!({ "market": market_str, "beg_day": ymd(from), "end_day": ymd(to) }),
+            None,
+            &[
+                ("trade_day", "trade_days"),
+                ("half_trade_day", "half_trade_days"),
+            ],
+            &[],
+            &[],
+        )
+        .await?;
+        for key in ["trade_days", "half_trade_days"] {
+            let days = value
+                .get(key)
+                .and_then(serde_json::Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            let slot = merged
+                .entry(key)
+                .or_insert_with(|| serde_json::Value::Array(Vec::new()));
+            if let Some(arr) = slot.as_array_mut() {
+                arr.extend(days);
+            }
+        }
+    }
+    let mut value = serde_json::Value::Object(merged);
     for key in ["trade_days", "half_trade_days"] {
         if let Some(arr) = value.get_mut(key).and_then(|a| a.as_array_mut()) {
             for v in arr.iter_mut() {
@@ -1047,10 +1152,33 @@ pub async fn option_chain_expiry_date_list(
                 *v = serde_json::Value::String(format!("{}-{}-{}", &s[0..4], &s[4..6], &s[6..8]));
             }
         }
+        // Upstream still lists recently expired dates; a model picking the
+        // first one would query an expired chain. Keep the exchange's today
+        // onward.
+        let today = exchange_today(&p.symbol, time::OffsetDateTime::now_utc());
+        drop_expired(arr, &today);
     }
     Ok(crate::tools::tool_result(
         serde_json::to_string(&value).map_err(Error::Serialize)?,
     ))
+}
+
+/// Today's date (`YYYY-MM-DD`) at the symbol's exchange, from its suffix:
+/// UTC+8 for HK / mainland / SG, UTC-5 for US (EST; during US daylight time
+/// this only keeps an expired date an hour longer, never drops today's),
+/// UTC otherwise.
+fn exchange_today(symbol: &str, now: time::OffsetDateTime) -> String {
+    let hours = match symbol.rsplit_once('.').map(|(_, m)| m.to_ascii_uppercase()) {
+        Some(m) if matches!(m.as_str(), "HK" | "SH" | "SZ" | "SG") => 8,
+        Some(m) if m == "US" => -5,
+        _ => 0,
+    };
+    (now + time::Duration::hours(hours)).date().to_string()
+}
+
+/// Remove `YYYY-MM-DD` dates earlier than `today` (same format).
+fn drop_expired(dates: &mut Vec<serde_json::Value>, today: &str) {
+    dates.retain(|d| d.as_str().is_none_or(|d| d >= today));
 }
 
 pub async fn option_chain_info_by_date(
@@ -1109,7 +1237,7 @@ pub async fn capital_flow(
     // backend has confirmed this and will fix it (align REST to WS). Not scaled
     // here on purpose, so nothing double-scales once the backend fix lands.
     let client = mctx.create_http_client();
-    http_post_tool_reshape(
+    let result = http_post_tool_reshape(
         &client,
         "/quote/capital-flow",
         serde_json::json!({ "symbol": p.symbol }),
@@ -1119,7 +1247,8 @@ pub async fn capital_flow(
         &["*.timestamp"],
         false,
     )
-    .await
+    .await?;
+    Ok(localize_result("capital_flow", result, Some(&p.symbol)))
 }
 
 pub async fn capital_distribution(
@@ -1150,6 +1279,7 @@ pub async fn capital_distribution(
     });
     let data_available = raw_ts.map(|n| n != 0).unwrap_or(false);
     crate::serialize::convert_unix_paths(&mut value, &["timestamp"]);
+    localize_tool_output("capital_distribution", &mut value, Some(&p.symbol));
     // The backend sends `""` for a zero bucket; the SDK rendered that as `"0"`.
     for group in ["capital_in", "capital_out"] {
         if let Some(obj) = value.get_mut(group).and_then(|g| g.as_object_mut()) {
@@ -1236,7 +1366,9 @@ pub async fn market_temperature(
         mctx.evict_quote_context();
         Error::longbridge(e)
     })?;
-    tool_json(&result)
+    let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;
+    localize_tool_output("market_temperature", &mut value, Some(&p.market));
+    tool_json(&value)
 }
 
 pub async fn history_market_temperature(
@@ -1259,6 +1391,7 @@ pub async fn history_market_temperature(
     // across markets and years. Drop it.
     let mut value = serde_json::to_value(&result).map_err(Error::Serialize)?;
     crate::serialize::drop_keys(&mut value, &["description"]);
+    localize_tool_output("history_market_temperature", &mut value, Some(&p.market));
     tool_json(&value)
 }
 
@@ -1309,8 +1442,10 @@ pub async fn warrant_list(
     mctx: &crate::tools::McpContext,
     p: WarrantListParam,
 ) -> Result<CallToolResult, McpError> {
-    let sort_by = parse::parse_warrant_sort_by(&p.sort_by)?;
-    let sort_order = parse::parse_sort_order_type(&p.sort_order)?;
+    // Default to the most-traded warrants first, the usual "list the
+    // warrants on X" intent.
+    let sort_by = parse::parse_warrant_sort_by(p.sort_by.as_deref().unwrap_or("Volume"))?;
+    let sort_order = parse::parse_sort_order_type(p.sort_order.as_deref().unwrap_or("Descending"))?;
 
     let warrant_types: Option<Vec<_>> = p
         .warrant_type
@@ -1520,10 +1655,27 @@ pub async fn update_watchlist_group(
     }
     if let Some(securities) = p.securities {
         req = req.securities(securities);
-        let mode = match p.mode.as_deref() {
+        // An unrecognized mode must not fall back to replace: "Add" used to
+        // wipe the group down to the securities meant to be added.
+        let mode = match p
+            .mode
+            .as_deref()
+            .map(|m| m.trim().to_lowercase())
+            .as_deref()
+        {
             Some("add") => SecuritiesUpdateMode::Add,
             Some("remove") => SecuritiesUpdateMode::Remove,
-            _ => SecuritiesUpdateMode::Replace,
+            // An empty string is how strict-schema clients fill an unused field.
+            None | Some("" | "replace") => SecuritiesUpdateMode::Replace,
+            Some(_) => {
+                return Err(McpError::invalid_params(
+                    format!(
+                        "invalid mode: '{}', expected one of: add, remove, replace",
+                        p.mode.as_deref().unwrap_or_default()
+                    ),
+                    None,
+                ));
+            }
         };
         req = req.mode(mode);
     }
@@ -1617,7 +1769,7 @@ pub async fn short_positions(
         &["data.*.timestamp"]
     };
     let result = http_get_tool_unix(&client, path, &params, unix_paths).await?;
-    Ok(normalize_short_positions(result, is_hk))
+    Ok(normalize_short_positions(result, is_hk, &p.symbol))
 }
 
 /// Normalize short_positions response to a unified schema regardless of market.
@@ -1630,7 +1782,7 @@ pub async fn short_positions(
 ///   days_to_cover US only
 ///   avg_daily_vol US only (from avg_daily_share_volume)
 ///   balance       HK only — outstanding short position value (HKD)
-fn normalize_short_positions(result: CallToolResult, is_hk: bool) -> CallToolResult {
+fn normalize_short_positions(result: CallToolResult, is_hk: bool, symbol: &str) -> CallToolResult {
     let Some(text) = result
         .content
         .first()
@@ -1675,6 +1827,9 @@ fn normalize_short_positions(result: CallToolResult, is_hk: bool) -> CallToolRes
         }
     }
 
+    // HKEX dates are stamped at Hong Kong midnight, the previous day in UTC.
+    localize_tool_output("short_positions", &mut d, Some(symbol));
+
     let Ok(json) = serde_json::to_string(&d) else {
         return result;
     };
@@ -1708,21 +1863,183 @@ pub async fn option_volume_daily(
         ("direction", "1"),
     ];
     // `underlying_symbol` on every row == the queried `symbol`.
-    http_get_tool_unix_dropping(
+    let result = http_get_tool_unix_dropping(
         &client,
         "/v1/quote/option-volume-stats/daily",
         &params,
         &["stats.*.timestamp"],
         &["underlying_symbol"],
     )
-    .await
+    .await?;
+    Ok(localize_result(
+        "option_volume_daily",
+        result,
+        Some(&p.symbol),
+    ))
 }
 
 #[cfg(test)]
 mod tests {
+
+    fn bar_timestamps(result: rmcp::model::CallToolResult) -> Vec<String> {
+        let text = result
+            .content
+            .first()
+            .and_then(|c| c.as_text())
+            .map(|t| t.text.clone())
+            .expect("reshaped candlesticks should be a text result");
+        let bars: serde_json::Value = serde_json::from_str(&text).expect("valid JSON result");
+        bars.as_array()
+            .expect("candlesticks reshape to a top-level array")
+            .iter()
+            .map(|bar| {
+                bar["timestamp"]
+                    .as_str()
+                    .expect("timestamp string")
+                    .to_string()
+            })
+            .collect()
+    }
+
+    /// The REST payload stamps a daily bar at exchange-local midnight as unix
+    /// seconds. For Hong Kong that is the previous UTC day, so the date prefix
+    /// of a `Z` timestamp named the wrong trading day (the T13 report).
+    #[test]
+    fn candlestick_timestamps_carry_the_exchange_offset() {
+        // 1793635200 = 2026-11-02T16:00:00Z, the HK/A-share bar for 2026-11-03.
+        let hk = r#"{"candlesticks":[{"timestamp":"1793635200","close":"23784.000"}]}"#;
+        assert_eq!(
+            bar_timestamps(super::reshape_candlesticks(hk, "HSI.HK").unwrap()),
+            ["2026-11-03T00:00:00+08:00"]
+        );
+        assert_eq!(
+            bar_timestamps(super::reshape_candlesticks(hk, "600519.SH").unwrap()),
+            ["2026-11-03T00:00:00+08:00"]
+        );
+        // 1793332800 = 2026-10-30T04:00:00Z, the US bar for 2026-10-30 (EDT).
+        let us = r#"{"candlesticks":[{"timestamp":"1793332800","close":"344.630"}]}"#;
+        assert_eq!(
+            bar_timestamps(super::reshape_candlesticks(us, "AAPL.US").unwrap()),
+            ["2026-10-30T00:00:00-04:00"]
+        );
+    }
+
+    #[test]
+    fn short_position_timestamps_carry_the_exchange_offset() {
+        // HKEX short-position dates are stamped at Hong Kong midnight:
+        // 2026-10-08T16:00:00Z is the 2026-10-09 record.
+        let raw = r#"{"data":[{"timestamp":"2026-10-08T16:00:00Z","amount":"1"}]}"#;
+        let result = rmcp::model::CallToolResult::success(vec![rmcp::model::Content::text(raw)]);
+        let text = super::normalize_short_positions(result, true, "700.HK")
+            .content
+            .first()
+            .and_then(|c| c.as_text())
+            .map(|t| t.text.clone())
+            .expect("text result");
+        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(value["data"][0]["timestamp"], "2026-10-09T00:00:00+08:00");
+    }
+
+    #[test]
+    fn quote_extended_session_timestamps_are_converted_from_unix() {
+        // Live `quote` returned these as raw unix strings (e.g. "1793753993").
+        let mut value = serde_json::json!([{
+            "symbol": "AAPL.US",
+            "timestamp": "1793739601",
+            "pre_market_quote": { "timestamp": "1793716201" },
+            "post_market_quote": { "timestamp": "1793753993" },
+            "overnight_quote": { "timestamp": "1793773746" },
+        }, {
+            "symbol": "700.HK",
+            "timestamp": "1793773769",
+            "pre_market_quote": null,
+        }]);
+        crate::serialize::convert_unix_paths(&mut value, super::QUOTE_UNIX_PATHS);
+        assert_eq!(value[0]["timestamp"], "2026-11-03T21:00:01Z");
+        assert_eq!(
+            value[0]["pre_market_quote"]["timestamp"],
+            "2026-11-03T14:30:01Z"
+        );
+        assert_eq!(
+            value[0]["post_market_quote"]["timestamp"],
+            "2026-11-04T00:59:53Z"
+        );
+        assert_eq!(
+            value[0]["overnight_quote"]["timestamp"],
+            "2026-11-04T06:29:06Z"
+        );
+        assert!(value[1]["pre_market_quote"].is_null());
+    }
+
+    #[test]
+    fn candlestick_timestamps_stay_utc_for_unknown_markets() {
+        let raw = r#"{"candlesticks":[{"timestamp":"1793635200","close":"1.000"}]}"#;
+        assert_eq!(
+            bar_timestamps(super::reshape_candlesticks(raw, "XYZ").unwrap()),
+            ["2026-11-02T16:00:00Z"]
+        );
+    }
+
+    #[test]
+    fn exchange_today_follows_the_exchange_clock() {
+        // 2026-10-15 20:00 UTC is already 10-16 in Hong Kong, still 10-15 in New York.
+        let now = time::macros::datetime!(2026-10-15 20:00 UTC);
+        assert_eq!(super::exchange_today("700.HK", now), "2026-10-16");
+        assert_eq!(super::exchange_today("NVDA.US", now), "2026-10-15");
+        assert_eq!(super::exchange_today("XYZ", now), "2026-10-15");
+    }
+
+    #[test]
+    fn expired_option_dates_are_dropped() {
+        let mut dates = vec![
+            serde_json::json!("2026-10-12"),
+            serde_json::json!("2026-10-16"),
+            serde_json::json!("2026-10-23"),
+        ];
+        super::drop_expired(&mut dates, "2026-10-16");
+        assert_eq!(
+            dates,
+            vec![
+                serde_json::json!("2026-10-16"),
+                serde_json::json!("2026-10-23")
+            ]
+        );
+    }
     use serde_json::json;
 
     use super::normalize_extended_sessions;
+    use super::{TRADING_DAYS_WINDOW, trading_day_windows};
+
+    #[test]
+    fn trading_day_windows_cover_the_range_without_gaps_or_overlap() {
+        let start = time::macros::date!(2026 - 10 - 01);
+        let end = time::macros::date!(2027 - 12 - 31);
+        let windows = trading_day_windows(start, end);
+        assert_eq!(
+            windows.first().map(|w| w.0),
+            Some(start),
+            "must start at start"
+        );
+        assert_eq!(windows.last().map(|w| w.1), Some(end), "must end at end");
+        for w in &windows {
+            assert!(
+                (w.1 - w.0).whole_days() <= TRADING_DAYS_WINDOW,
+                "each window must fit the endpoint's span limit"
+            );
+        }
+        for pair in windows.windows(2) {
+            assert_eq!(
+                pair[1].0,
+                pair[0].1 + time::Duration::days(1),
+                "windows must be consecutive"
+            );
+        }
+        assert_eq!(
+            trading_day_windows(start, start),
+            vec![(start, start)],
+            "a one-day range is a single window"
+        );
+    }
 
     #[test]
     fn normalizes_sessions_string_last_done() {

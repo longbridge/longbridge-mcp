@@ -2,539 +2,819 @@
 //! [`crate::tools::fundamental`].
 //!
 //! These tools are almost entirely thin pass-throughs (`http_get_tool` /
-//! `http_get_tool_unix`) of the upstream quote API: the SDK has no Rust types
-//! for the responses, so the structs below are reconstructed *solely* from the
-//! `Returns ...` clauses in each tool's `#[tool(description = ...)]`. The
-//! shapes mirror the post-transform JSON produced by `http_get_tool`:
+//! `http_get_tool_unix`) of the upstream quote API, so the SDK has no Rust
+//! types for the responses. The structs below exist only to describe the
+//! response shape to MCP clients via `output_schema`; the tools never
+//! deserialize into them. They mirror the post-transform JSON the tools
+//! actually emit, as captured from live production responses:
 //!
 //! - object keys are camelCase → snake_case
-//! - `*_at` integer / `OffsetDateTime` timestamps → RFC3339 `String`
-//! - the `unix_paths` arg of `http_get_tool_unix` rewrites those unix-epoch
-//!   integer fields into RFC3339 `String`
-//! - `Decimal` / numeric monetary values are stringified
+//! - `*_at` timestamps and the paths each tool lists in `unix_paths` become
+//!   RFC3339 `String`s; other epoch-like fields stay as upstream sent them
+//! - decimal figures stay strings, exactly as upstream sends them
 //!
-//! Accuracy rules followed here, given the shapes are *inferred* from prose:
-//! - every struct documents only the fields the description explicitly lists
-//! - every field is `Option<T>` (nothing is marked required); upstream may
-//!   return additional fields not modelled here
-//! - no fields are invented; nested array elements get their own structs
+//! Every field is `Option<T>` (nothing is marked required): upstream omits
+//! empty fields, and `dividend` / `consensus` / `valuation` / `company`
+//! return a different field set for US accounts querying a `.US` symbol, so
+//! both variants must validate against one schema. Fields that only the US
+//! variant carries say so in their doc comment.
 //!
-//! Each struct is referenced from `#[tool(output_schema = ...)]` on the
-//! corresponding tool method in [`crate::tools`]. We only declare a struct
-//! when the root JSON shape is an object (the MCP spec requires the
+//! Each `*Response` struct is referenced from `#[tool(output_schema = ...)]`
+//! on the corresponding tool method in [`crate::tools`]. We only declare a
+//! struct when the root JSON shape is an object (the MCP spec requires the
 //! `outputSchema` root to be `type: "object"`).
+
+use std::collections::BTreeMap;
 
 use rmcp::schemars::JsonSchema;
 use rmcp::serde::Serialize;
 
 /// Returned by `institution_rating`.
 ///
-/// The tool combines two upstream calls into
-/// `{"analyst": {...}, "instratings": [...]}`. Only the `analyst` fields are
-/// documented; the `instratings` payload shape is unspecified and left as raw
-/// JSON. Subset of documented fields; upstream may return more.
+/// The tool combines two upstream calls into `{"analyst": {...},
+/// "instratings": {...}}`; when one call fails the other half is still
+/// returned and `warnings` explains what is missing.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct InstitutionRatingResponse {
-    /// Analyst rating consensus summary.
+    /// Analyst rating distribution, target-price range and industry
+    /// ranking.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub analyst: Option<InstitutionRatingAnalyst>,
-    /// Per-institution rating list. Shape is unspecified by the tool
-    /// description; passed through as raw JSON.
+    /// Latest consensus recommendation and target price.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub instratings: Option<serde_json::Value>,
-    /// Present when one of the two upstream calls failed: the other half is
-    /// still returned, and this names what is missing and why.
+    pub instratings: Option<InstitutionRatingSummary>,
+    /// Present when one of the two upstream calls failed: the other
+    /// half is still returned, and this names what is missing and why.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub warnings: Option<Vec<String>>,
 }
 
-/// Analyst consensus block of `institution_rating`.
-///
-/// Subset of documented fields; upstream may return more.
+/// `analyst` block of `institution_rating`.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct InstitutionRatingAnalyst {
-    /// Number of analysts rating "buy".
+    /// Current analyst rating distribution.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub buy: Option<i64>,
-    /// Number of analysts rating "outperform".
+    pub evaluate: Option<RatingDistribution>,
+    /// Analyst target-price range.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub outperform: Option<i64>,
-    /// Number of analysts rating "hold".
+    pub target: Option<InstitutionRatingTargetRange>,
+    /// Upstream industry id.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub hold: Option<i64>,
-    /// Number of analysts rating "underperform".
+    pub industry_id: Option<i64>,
+    /// Industry name (localized).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub underperform: Option<i64>,
-    /// Number of analysts rating "sell".
+    pub industry_name: Option<String>,
+    /// The stock's rank within its industry by analyst rating.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub sell: Option<i64>,
-    /// Consensus target price.
+    pub industry_rank: Option<i64>,
+    /// Number of stocks ranked in the industry.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub target_price: Option<String>,
-    /// Consensus rating label.
+    pub industry_total: Option<i64>,
+    /// Industry mean of the ranking metric, as upstream reports it.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub consensus_rating: Option<String>,
+    pub industry_mean: Option<i64>,
+    /// Industry median of the ranking metric, as upstream reports it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub industry_median: Option<i64>,
 }
 
-/// Returned by `institution_rating_detail`.
-///
-/// Detailed historical institution ratings and target price history, grouped
-/// under `target.list[]`. Subset of documented fields; upstream may return
-/// more.
+/// Analyst rating counts in `institution_rating`'s `analyst.evaluate`.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct RatingDistribution {
+    /// Number of "buy" ratings.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub buy: Option<i64>,
+    /// Number of "outperform" ratings.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub over: Option<i64>,
+    /// Number of "hold" ratings.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hold: Option<i64>,
+    /// Number of "underperform" ratings.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub under: Option<i64>,
+    /// Number of "sell" ratings.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sell: Option<i64>,
+    /// Number of analysts with no opinion.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub no_opinion: Option<i64>,
+    /// Total number of ratings.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total: Option<i64>,
+    /// Window start (RFC3339).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start_date: Option<String>,
+    /// Window end (RFC3339), or `"0"` when the window is open-ended.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub end_date: Option<String>,
+}
+
+/// `analyst.target` block of `institution_rating`.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct InstitutionRatingTargetRange {
+    /// Highest analyst target price.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub highest_price: Option<String>,
+    /// Lowest analyst target price.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lowest_price: Option<String>,
+    /// Previous close price, for comparison.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prev_close: Option<String>,
+    /// Window start (RFC3339).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start_date: Option<String>,
+    /// Window end (RFC3339), or `"0"` when the window is open-ended.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub end_date: Option<String>,
+}
+
+/// `instratings` block of `institution_rating`.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct InstitutionRatingSummary {
+    /// Last update date, as a localized display string (e.g. "2026 年 10
+    /// 月 14 日").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<String>,
+    /// Consensus recommendation, e.g. `"strong_buy"`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recommend: Option<String>,
+    /// Consensus (mean) target price.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
+    /// Upside of `target` versus the current price, in percent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub change: Option<String>,
+}
+
+/// Returned by `institution_rating_detail`. Historical rating distribution
+/// (`evaluate.list`) and consensus target-price history (`target.list`).
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct InstitutionRatingDetailResponse {
-    /// Target-price / rating history container.
+    /// Rating distribution history.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub evaluate: Option<InstitutionRatingDetailEvaluate>,
+    /// Consensus target-price history.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target: Option<InstitutionRatingDetailTarget>,
+    /// Currency symbol of the prices, e.g. "$" or "HK$".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ccy_symbol: Option<String>,
+}
+
+/// `evaluate` block of `institution_rating_detail`.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct InstitutionRatingDetailEvaluate {
+    /// One rating-distribution snapshot per date.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub list: Option<Vec<InstitutionRatingDetailEvaluateItem>>,
+}
+
+/// One snapshot in `institution_rating_detail`'s `evaluate.list`.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct InstitutionRatingDetailEvaluateItem {
+    /// Number of "strong buy" ratings.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub strong_buy: Option<i64>,
+    /// Number of "buy" ratings.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub buy: Option<i64>,
+    /// Number of "hold" ratings.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hold: Option<i64>,
+    /// Number of "underperform" ratings.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub under: Option<i64>,
+    /// Number of "sell" ratings.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sell: Option<i64>,
+    /// Snapshot date, e.g. "2021/10/31".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub date: Option<String>,
 }
 
 /// `target` block of `institution_rating_detail`.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct InstitutionRatingDetailTarget {
-    /// Per-institution rating records.
+    /// Last update date, as a localized display string.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<String>,
+    /// Historical accuracy of the consensus target, in percent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prediction_accuracy: Option<String>,
+    /// Data coverage ratio (0-1), as upstream reports it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub data_percent: Option<String>,
+    /// One target-price sample per date.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub list: Option<Vec<InstitutionRatingDetailItem>>,
 }
 
-/// One per-institution record in `institution_rating_detail`'s `target.list`.
-///
-/// Subset of documented fields; upstream may return more.
+/// One sample in `institution_rating_detail`'s `target.list`.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct InstitutionRatingDetailItem {
-    /// Analyst name.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub analyst: Option<String>,
-    /// Issuing firm / institution name.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub firm: Option<String>,
-    /// Rating label.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub rating: Option<String>,
-    /// Target price.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub target_price: Option<String>,
-    /// Rating timestamp (RFC3339; rewritten from a unix-epoch field).
+    /// Sample time (RFC3339, UTC).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timestamp: Option<String>,
+    /// Sample date in the exchange's local calendar, e.g. "2021/10/17".
+    /// Can differ from `timestamp`'s UTC date.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub date: Option<String>,
+    /// Share price at this date.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub price: Option<String>,
+    /// Mean analyst target price.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub avg_target: Option<String>,
+    /// Lowest analyst target price.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_target: Option<String>,
+    /// Highest analyst target price.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_target: Option<String>,
+    /// Upstream `meet` flag for this sample (whether the target was
+    /// met).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub meet: Option<bool>,
 }
 
-/// Returned by `dividend`. Wraps an `items` array of dividend events.
+/// Returned by `dividend`.
 ///
-/// Subset of documented fields; upstream may return more. US-region shape
-/// (confirmed via a live US staging call) uses a completely different set
-/// of fields, listed below `items`.
+/// The generic shape is `{list, total}`. US accounts querying a `.US`
+/// symbol get a US-specific variant with `recent_dividends`,
+/// `dividend_history`, `payout_ratios` and `dividend_payout_history`
+/// instead.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct DividendResponse {
-    /// Dividend events for the symbol. Generic (non-US) shape only.
+    /// Dividend events, newest first. Generic (non-US) shape only.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub items: Option<Vec<DividendItem>>,
-    /// US-region shape only: trailing-twelve-month summary.
+    pub list: Option<Vec<DividendItem>>,
+    /// Number of events in `list`, as a string. Generic (non-US) shape
+    /// only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total: Option<String>,
+    /// US-account variant only: trailing-twelve-month summary.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub recent_dividends: Option<UsRecentDividends>,
-    /// US-region shape only: per-fiscal-year dividend history.
+    /// US-account variant only: per-fiscal-year dividend history.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dividend_history: Option<Vec<UsDividendHistoryYear>>,
-    /// US-region shape only: per-fiscal-year payout ratios.
+    /// US-account variant only: per-fiscal-year payout ratios.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub payout_ratios: Option<Vec<UsDividendHistoryYear>>,
-    /// US-region shape only: individual dividend payment events.
+    /// US-account variant only: individual dividend payment events.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dividend_payout_history: Option<Vec<UsDividendPayout>>,
 }
 
-/// `recent_dividends` block of `dividend`'s US-region shape.
+/// `recent_dividends` block of `dividend`'s US-account variant.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct UsRecentDividends {
+    /// Trailing-twelve-month dividend per share.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dividend_ttm: Option<String>,
-    /// Percent value, e.g. 0.34 means 0.34% (not a 0-1 fraction).
+    /// Trailing-twelve-month yield. Percent value, e.g. 0.34 means
+    /// 0.34% (not a 0-1 fraction).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dividend_yield_ttm: Option<f64>,
+    /// Number of payouts in the trailing twelve months.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub payouts: Option<String>,
+    /// Dividend currency.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub currency: Option<String>,
 }
 
-/// One fiscal year's entry in `dividend`'s US-region `dividend_history` /
+/// One fiscal year's entry in `dividend`'s US-account `dividend_history` /
 /// `payout_ratios`. Both arrays share this shape; only the populated fields
 /// differ per array.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct UsDividendHistoryYear {
+    /// Fiscal year.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fiscal_year: Option<String>,
+    /// Fiscal year date range.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fiscal_year_range: Option<String>,
+    /// Dividend per share for the year.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dividend: Option<String>,
-    /// Percent value (e.g. 0.58 means 0.58%), present in `dividend_history`.
+    /// Percent value (e.g. 0.58 means 0.58%), present in
+    /// `dividend_history`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dividend_yield: Option<f64>,
+    /// Year-over-year dividend growth.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dividend_growth_rate: Option<String>,
+    /// Dividend payout ratio, present in `payout_ratios`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dividend_payout_ratio: Option<String>,
+    /// Dividend-to-cash-flow ratio, present in `payout_ratios`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dividend_to_cashflow_ratio: Option<String>,
+    /// Dividend currency.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub currency: Option<String>,
 }
 
-/// One dividend payment event in `dividend`'s US-region
+/// One dividend payment event in `dividend`'s US-account
 /// `dividend_payout_history`.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct UsDividendPayout {
+    /// Dividend per share.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dividend: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub dividend_type: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub currency: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub ex_date: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub payment_date: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub record_date: Option<String>,
-}
-
-/// One dividend event in `dividend`'s `items`.
-///
-/// Subset of documented fields; upstream may return more.
-#[derive(Debug, Serialize, JsonSchema)]
-pub struct DividendItem {
-    /// Ex-dividend date.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub ex_date: Option<String>,
-    /// Payment date.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub pay_date: Option<String>,
-    /// Record date.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub record_date: Option<String>,
     /// Dividend type.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dividend_type: Option<String>,
-    /// Dividend amount.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub amount: Option<String>,
-    /// Settlement currency.
+    /// Dividend currency.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub currency: Option<String>,
-    /// Dividend status.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub status: Option<String>,
-}
-
-/// Returned by `dividend_detail`. Wraps a `details` array of distribution
-/// schemes.
-///
-/// Subset of documented fields; upstream may return more.
-#[derive(Debug, Serialize, JsonSchema)]
-pub struct DividendDetailResponse {
-    /// Per-period distribution schemes.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub details: Option<Vec<DividendDetailItem>>,
-}
-
-/// One distribution scheme in `dividend_detail`'s `details`.
-///
-/// Subset of documented fields; upstream may return more.
-#[derive(Debug, Serialize, JsonSchema)]
-pub struct DividendDetailItem {
-    /// Reporting period.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub period: Option<String>,
-    /// Cash dividend per share.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cash_dividend: Option<String>,
-    /// Stock dividend ratio / amount.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub stock_dividend: Option<String>,
-    /// Record date.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub record_date: Option<String>,
     /// Ex-dividend date.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ex_date: Option<String>,
     /// Payment date.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub pay_date: Option<String>,
-    /// Settlement currency.
+    pub payment_date: Option<String>,
+    /// Record date.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub currency: Option<String>,
+    pub record_date: Option<String>,
 }
 
-/// Returned by `forecast_eps`. Wraps an `items` array of EPS estimates.
-///
-/// Subset of documented fields; upstream may return more.
+/// One dividend event in `dividend`'s `list`.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct DividendItem {
+    /// Upstream event id.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    /// Human-readable distribution summary, e.g. "每股派息 0.25 USD".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub desc: Option<String>,
+    /// Upstream counter id of the security, e.g. "ST/US/NVDA".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub counter_id: Option<String>,
+    /// Record date, e.g. "2026.09.10".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub record_date: Option<String>,
+    /// Ex-dividend date, e.g. "2026.09.10".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ex_date: Option<String>,
+    /// Payment date, e.g. "2026.10.01".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub payment_date: Option<String>,
+}
+
+/// Returned by `dividend_detail`. Wraps a `list` of distribution schemes.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct DividendDetailResponse {
+    /// Distribution schemes, newest first.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub list: Option<Vec<DividendDetailItem>>,
+}
+
+/// One distribution scheme in `dividend_detail`'s `list`.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct DividendDetailItem {
+    /// Human-readable scheme, e.g. "1股派息 \n0.25美元" (may contain a
+    /// newline).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub desc: Option<String>,
+    /// Upstream counter id; observed empty.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub counter_id: Option<String>,
+    /// Record date, e.g. "2026-09-10".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub record_date: Option<String>,
+    /// Ex-dividend date, e.g. "2026-09-10".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ex_date: Option<String>,
+    /// Payment date, e.g. "2026-10-01".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub payment_date: Option<String>,
+}
+
+/// Returned by `forecast_eps`. Wraps an `items` array of EPS consensus
+/// snapshots over time.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct ForecastEpsResponse {
-    /// EPS forecast / actual records.
+    /// EPS consensus snapshots, one per forecast window.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub items: Option<Vec<ForecastEpsItem>>,
 }
 
-/// One record in `forecast_eps`'s `items`.
-///
-/// Subset of documented fields; upstream may return more.
+/// One snapshot in `forecast_eps`'s `items`.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct ForecastEpsItem {
-    /// Forecast period start (RFC3339; rewritten from a unix-epoch field).
+    /// Snapshot window start (RFC3339; rewritten from a unix-epoch
+    /// field).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub forecast_start_date: Option<String>,
-    /// Forecast period end (RFC3339; rewritten from a unix-epoch field).
+    /// Snapshot window end (RFC3339; rewritten from a unix-epoch
+    /// field).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub forecast_end_date: Option<String>,
-    /// Consensus EPS estimate.
+    /// Mean analyst EPS forecast.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub eps_estimate: Option<String>,
-    /// Actual reported EPS.
+    pub forecast_eps_mean: Option<String>,
+    /// Median analyst EPS forecast.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub eps_actual: Option<String>,
-    /// Surprise percentage (actual vs estimate).
+    pub forecast_eps_median: Option<String>,
+    /// Lowest analyst EPS forecast.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub surprise_pct: Option<String>,
-    /// Number of contributing analysts.
+    pub forecast_eps_lowest: Option<String>,
+    /// Highest analyst EPS forecast.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub analyst_count: Option<i64>,
+    pub forecast_eps_highest: Option<String>,
+    /// Number of contributing institutions.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub institution_total: Option<i64>,
+    /// Number of institutions that revised up.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub institution_up: Option<i64>,
+    /// Number of institutions that revised down.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub institution_down: Option<i64>,
 }
 
-/// Returned by `consensus`. Wraps an `items` array of consensus estimates.
+/// Returned by `consensus`.
 ///
-/// Subset of documented fields; upstream may return more. US-region shape
-/// (confirmed via a live US staging call) uses `ai_summary` plus a
-/// differently-shaped `list` instead of `items`.
+/// Both variants carry a per-period `list`. The generic shape adds
+/// `current_index` / `currency` / `opt_periods` / `current_period` /
+/// `legend` and per-metric `details[]` in each period; the US-account
+/// variant (a `.US` symbol queried by a US account) adds `ai_summary` /
+/// `opt_reports` / `report` and per-metric `revenue` / `eps` / `ebit`
+/// objects instead.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct ConsensusResponse {
-    /// Consensus estimate records for upcoming periods. Generic (non-US)
-    /// shape only.
+    /// Estimate-vs-actual records, one per fiscal period.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub items: Option<Vec<ConsensusItem>>,
-    /// US-region shape only: AI-generated summary of the latest consensus
-    /// vs. actual results.
+    pub list: Option<Vec<ConsensusPeriod>>,
+    /// Index into `list` of the current (latest reported) period.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub ai_summary: Option<String>,
-    /// US-region shape only: valid `report` values for this symbol, e.g.
-    /// `["qf", "af"]`.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub opt_reports: Option<Vec<String>>,
-    /// US-region shape only.
+    pub current_index: Option<i64>,
+    /// Currency of the monetary figures.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub currency: Option<String>,
-    /// US-region shape only: the report period actually used, e.g. "af".
+    /// Period types available for this symbol, e.g. `["qf", "saf",
+    /// "af"]`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub opt_periods: Option<Vec<String>>,
+    /// Period type used for `list`, e.g. "qf".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub current_period: Option<String>,
+    /// Display name and definition of each metric, keyed by the
+    /// `details[].key` value (e.g. "revenue", "eps").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub legend: Option<BTreeMap<String, ConsensusLegendEntry>>,
+    /// US-account variant only: AI-generated summary of the latest
+    /// consensus vs. actual results.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ai_summary: Option<String>,
+    /// US-account variant only: valid `report` values for this symbol,
+    /// e.g. `["qf", "af"]`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub opt_reports: Option<Vec<String>>,
+    /// US-account variant only: the report period actually used, e.g.
+    /// "af".
     #[serde(skip_serializing_if = "Option::is_none")]
     pub report: Option<String>,
-    /// US-region shape only: consensus vs. actual per fiscal year.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub list: Option<Vec<UsConsensusPeriod>>,
 }
 
-/// One fiscal year's estimate-vs-actual in `consensus`'s US-region `list`.
+/// One fiscal period in `consensus`'s `list`.
 #[derive(Debug, Serialize, JsonSchema)]
-pub struct UsConsensusPeriod {
+pub struct ConsensusPeriod {
+    /// Fiscal year.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub fiscal_year: Option<i32>,
+    pub fiscal_year: Option<i64>,
+    /// Fiscal period within the year, e.g. "1".."4" for quarters.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fiscal_period: Option<String>,
+    /// Display label, e.g. "Q1 2027".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub period_text: Option<String>,
+    /// Per-metric estimate vs. actual.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub details: Option<Vec<ConsensusDetail>>,
+    /// US-account variant only: display label of the period.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub report_txt: Option<String>,
+    /// US-account variant only: revenue estimate vs. actual.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub revenue: Option<UsConsensusEstimate>,
+    /// US-account variant only: EPS estimate vs. actual.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub eps: Option<UsConsensusEstimate>,
+    /// US-account variant only: EBIT estimate vs. actual.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ebit: Option<UsConsensusEstimate>,
 }
 
-/// One estimate-vs-actual pair (e.g. `revenue`, `eps`, `ebit`) in
-/// `UsConsensusPeriod`.
+/// One metric in a `consensus` period's `details`.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct ConsensusDetail {
+    /// Metric key, e.g. "revenue", "ebit", "net_income", "eps". See the
+    /// top-level `legend`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
+    /// Whether the actual result for this period has been released.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub is_released: Option<bool>,
+    /// Consensus estimate.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub estimate: Option<String>,
+    /// Actual reported value. Absent until released.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub actual: Option<String>,
+    /// Actual vs. estimate outcome, e.g. "beat_est". Absent until
+    /// released.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub comp: Option<String>,
+    /// Actual minus estimate. Absent until released.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub comp_value: Option<String>,
+    /// Localized description of `comp`, e.g. "超出预期".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub comp_desc: Option<String>,
+}
+
+/// One metric's label in `consensus`'s `legend`.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct ConsensusLegendEntry {
+    /// Localized metric name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Localized metric definition.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
+/// One estimate-vs-actual pair (e.g. `revenue`, `eps`, `ebit`) in a
+/// US-account `consensus` period.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct UsConsensusEstimate {
     /// Actual reported value. Empty string when not yet reported.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub actual: Option<String>,
+    /// Consensus estimate.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub estimate: Option<String>,
 }
 
-/// One record in `consensus`'s `items`.
+/// Returned by `valuation`. The tool always queries the PE indicator, so
+/// `metrics` carries only `pe`.
 ///
-/// Subset of documented fields; upstream may return more.
-#[derive(Debug, Serialize, JsonSchema)]
-pub struct ConsensusItem {
-    /// Estimate period.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub period: Option<String>,
-    /// Revenue estimate.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub revenue_estimate: Option<String>,
-    /// EPS estimate.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub eps_estimate: Option<String>,
-    /// Net income estimate.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub net_income_estimate: Option<String>,
-    /// Number of contributing analysts.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub analyst_count: Option<i64>,
-    /// Last update time.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub last_updated: Option<String>,
-}
-
-/// Returned by `valuation`. The valuation overview groups per-metric blocks
-/// under `metrics`.
-///
-/// Subset of documented fields; upstream may return more. US-region shape
-/// (confirmed via a live US staging call) populates only `metrics.pe`, using
-/// different sub-fields (see `ValuationMetric`), plus the top-level fields
-/// below.
+/// US accounts querying a `.US` symbol get a US-specific variant whose
+/// `metrics.pe` has different sub-fields (see `ValuationMetric`), plus the
+/// top-level fields marked US-account only.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct ValuationResponse {
-    /// Valuation metric blocks keyed by indicator.
+    /// Valuation indicator blocks.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metrics: Option<ValuationMetrics>,
-    /// US-region shape only: which indicator `metrics.pe` describes, e.g.
-    /// "pe".
+    /// Lookback window in years.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub range: Option<i64>,
+    /// US-account variant only: which indicator `metrics.pe` describes,
+    /// e.g. "pe".
     #[serde(skip_serializing_if = "Option::is_none")]
     pub indicator: Option<String>,
-    /// US-region shape only: lookback window in years for the percentile
-    /// calculation.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub range: Option<i32>,
-    /// US-region shape only: as-of date, e.g. "Jul 7, 2026".
+    /// US-account variant only: as-of date, e.g. "Jul 7, 2026".
     #[serde(skip_serializing_if = "Option::is_none")]
     pub date: Option<String>,
-    /// US-region shape only: currency symbol, e.g. "$".
+    /// US-account variant only: currency symbol, e.g. "$".
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ccy_symbol: Option<String>,
-    /// US-region shape only: AI-generated summary (duplicates
+    /// US-account variant only: AI-generated summary (duplicates
     /// `metrics.pe.desc`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ai_summary: Option<String>,
 }
 
-/// `metrics` block of `valuation`. Each indicator carries the same shape.
-///
-/// Subset of documented fields; upstream may return more.
+/// `metrics` block of `valuation`.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct ValuationMetrics {
     /// Price-to-earnings block.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pe: Option<ValuationMetric>,
-    /// Price-to-book block.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub pb: Option<ValuationMetric>,
-    /// Price-to-sales block.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub ps: Option<ValuationMetric>,
-    /// Dividend-yield block.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub dividend_yield: Option<ValuationMetric>,
 }
 
-/// A single valuation indicator block in `valuation`.
-///
-/// Subset of documented fields; upstream may return more.
+/// The `metrics.pe` block of `valuation`.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct ValuationMetric {
-    /// Current value.
+    /// Lower bound of the historical fair range.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub current: Option<String>,
-    /// Industry average.
+    pub low: Option<String>,
+    /// Historical median.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub industry_avg: Option<String>,
-    /// 5-year average. (camelCase `5yr_avg` per description.)
-    #[serde(rename = "5yr_avg", skip_serializing_if = "Option::is_none")]
-    pub five_yr_avg: Option<String>,
-    /// Historical percentile.
+    pub median: Option<String>,
+    /// Upper bound of the historical fair range.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub percentile: Option<String>,
-    /// US-region shape only: industry median value (numeric, not a
-    /// percentile).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub industry_median: Option<f64>,
-    /// US-region shape only: AI-generated description of this metric.
+    pub high: Option<String>,
+    /// Plain-text summary of where the current value sits (percentile,
+    /// industry rank, industry median).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub desc: Option<String>,
-    /// US-region shape only: current metric value (equivalent to
-    /// `current` in the generic shape).
+    /// Daily time series over the lookback window.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub list: Option<Vec<ValuationPoint>>,
+    /// US-account variant only: industry median value.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub industry_median: Option<f64>,
+    /// US-account variant only: current metric value.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metric: Option<f64>,
 }
 
-/// Returned by `valuation_history`. Time-series valuation metrics grouped
-/// under `history.metrics`.
-///
-/// Subset of documented fields; upstream may return more.
+/// One sample in a valuation time series (`valuation` /
+/// `valuation_history`).
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct ValuationPoint {
+    /// Sample time (RFC3339; rewritten from a unix-epoch field).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timestamp: Option<String>,
+    /// Metric value at this time.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub value: Option<String>,
+}
+
+/// Returned by `valuation_history`. PE overview, historical band, industry
+/// peers, and a name / market-cap lookup for the industry's stocks.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct ValuationHistoryResponse {
-    /// History container.
+    /// Current-value overview.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub overview: Option<ValuationHistoryOverview>,
+    /// Historical band and time series.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub history: Option<ValuationHistoryBlock>,
+    /// Industry peer comparison.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub peers: Option<ValuationHistoryPeers>,
+    /// Industry stocks keyed by upstream counter id (e.g. "ST/US/AMD").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stocks: Option<BTreeMap<String, ValuationHistoryStock>>,
+}
+
+/// `overview` block of `valuation_history`.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct ValuationHistoryOverview {
+    /// Current value per indicator.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metrics: Option<ValuationHistoryOverviewMetrics>,
+    /// Indicator the overview describes, e.g. "pe".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub indicator: Option<String>,
+    /// Lookback window in years.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub range: Option<i64>,
+    /// As-of date, as a localized display string.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub date: Option<String>,
+    /// Currency symbol, e.g. "$" or "HK$".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ccy_symbol: Option<String>,
+}
+
+/// `overview.metrics` block of `valuation_history`.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct ValuationHistoryOverviewMetrics {
+    /// Price-to-earnings overview.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pe: Option<ValuationHistoryOverviewMetric>,
+}
+
+/// One indicator in `valuation_history`'s `overview.metrics`.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct ValuationHistoryOverviewMetric {
+    /// Current value as a display string, e.g. "27.65x".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metric: Option<String>,
+    /// Plain-text summary of where the current value sits.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub desc: Option<String>,
+    /// Industry median value.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub industry_median: Option<String>,
 }
 
 /// `history` block of `valuation_history`.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct ValuationHistoryBlock {
-    /// Per-indicator time series.
+    /// Per-indicator historical band.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metrics: Option<ValuationHistoryMetrics>,
+    /// Lookback window in years.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub range: Option<i64>,
 }
 
-/// `history.metrics` block of `valuation_history`. Each indicator is an array
-/// of time-series samples.
-///
-/// Subset of documented fields; upstream may return more.
+/// `history.metrics` block of `valuation_history`.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct ValuationHistoryMetrics {
-    /// Price-to-earnings series.
+    /// Price-to-earnings band and series.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub pe: Option<Vec<ValuationHistoryPoint>>,
-    /// Price-to-book series.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub pb: Option<Vec<ValuationHistoryPoint>>,
-    /// Price-to-sales series.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub ps: Option<Vec<ValuationHistoryPoint>>,
-    /// Dividend-yield series.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub dividend_yield: Option<Vec<ValuationHistoryPoint>>,
+    pub pe: Option<ValuationBand>,
 }
 
-/// One sample in a `valuation_history` metric time series.
-///
-/// Subset of documented fields; upstream may return more.
+/// A historical band and time series in `valuation_history`'s
+/// `history.metrics`.
 #[derive(Debug, Serialize, JsonSchema)]
-pub struct ValuationHistoryPoint {
-    /// Sample timestamp (RFC3339; rewritten from a unix-epoch field).
+pub struct ValuationBand {
+    /// Lower bound of the historical fair range.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub timestamp: Option<String>,
-    /// Metric value at this timestamp.
+    pub low: Option<String>,
+    /// Historical median.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub median: Option<String>,
+    /// Upper bound of the historical fair range.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub high: Option<String>,
+    /// Plain-text summary of where the current value sits.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub desc: Option<String>,
+    /// Monthly time series over the lookback window.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub list: Option<Vec<ValuationPoint>>,
+}
+
+/// `peers` block of `valuation_history`.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct ValuationHistoryPeers {
+    /// Peers compared by price-to-earnings.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pe: Option<ValuationHistoryPeerGroup>,
+}
+
+/// One indicator's peer comparison in `valuation_history`'s `peers`.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct ValuationHistoryPeerGroup {
+    /// Industry median value.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub industry_median: Option<String>,
+    /// Selected peers.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub list: Option<Vec<ValuationHistoryPeer>>,
+}
+
+/// One peer in `valuation_history`'s `peers.*.list`.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct ValuationHistoryPeer {
+    /// Display name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Security symbol, e.g. "AVGO.US".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub symbol: Option<String>,
+    /// The peer's indicator value.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub value: Option<String>,
 }
 
-/// Returned by `industry_valuation`. Wraps a `list` of industry peers.
-///
-/// Subset of documented fields; upstream may return more.
+/// One entry of `valuation_history`'s `stocks` map.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct ValuationHistoryStock {
+    /// Display name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Market capitalization.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub market_cap: Option<String>,
+}
+
+/// Returned by `industry_valuation`. Wraps a `list` of the stock and its
+/// industry peers.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct IndustryValuationResponse {
-    /// Peers in the same industry.
+    /// The queried stock and its peers.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub list: Option<Vec<IndustryValuationItem>>,
 }
 
-/// One peer in `industry_valuation`'s `list`.
-///
-/// Subset of documented fields; upstream may return more.
+/// One stock in `industry_valuation`'s `list`.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct IndustryValuationItem {
-    /// Security symbol, e.g. `"AAPL.US"`.
+    /// Security symbol, e.g. "AAPL.US".
     #[serde(skip_serializing_if = "Option::is_none")]
     pub symbol: Option<String>,
     /// Display name.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// Market code, e.g. "US".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub market: Option<String>,
+    /// Trading currency.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub currency: Option<String>,
+    /// Latest close price.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub price_close: Option<String>,
+    /// Market capitalization.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub market_value: Option<String>,
+    /// Trading volume.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub volume: Option<String>,
     /// Price-to-earnings.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pe: Option<String>,
@@ -544,17 +824,63 @@ pub struct IndustryValuationItem {
     /// Price-to-sales.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ps: Option<String>,
-    /// Dividend yield.
+    /// Dividend yield, in percent.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub dividend_yield: Option<String>,
-    /// Per-date history of PE/PB.
+    pub div_yld: Option<String>,
+    /// Return on assets, in percent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub roa: Option<String>,
+    /// Return on equity, in percent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub roe: Option<String>,
+    /// Asset turnover.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub turnover: Option<String>,
+    /// Net profit margin, in percent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub net_margin: Option<String>,
+    /// Financial leverage (assets / equity).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub leverage: Option<String>,
+    /// Liabilities-to-assets ratio, in percent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub liabilities_assets: Option<String>,
+    /// Earnings per share.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub eps: Option<String>,
+    /// Sales per share.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sales_ps: Option<String>,
+    /// Book value per share.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bps: Option<String>,
+    /// Dividend per share.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dps: Option<String>,
+    /// Five-year average dividend per share.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub five_y_avg_dps: Option<String>,
+    /// Dividend payout ratio, in percent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub div_payout_ratio: Option<String>,
+    /// Total assets.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub assets: Option<String>,
+    /// Total liabilities.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub liabilities: Option<String>,
+    /// Revenue.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sales: Option<String>,
+    /// Net income.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub net_income: Option<String>,
+    /// Historical PE/PB/PS samples.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub history: Option<Vec<IndustryValuationHistoryPoint>>,
 }
 
 /// One history point in `industry_valuation`'s nested `history`.
-///
-/// Subset of documented fields; upstream may return more.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct IndustryValuationHistoryPoint {
     /// Sample date (RFC3339; rewritten from a unix-epoch field).
@@ -566,24 +892,15 @@ pub struct IndustryValuationHistoryPoint {
     /// Price-to-book at this date.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pb: Option<String>,
+    /// Price-to-sales at this date.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ps: Option<String>,
 }
 
-/// Returned by `industry_valuation_dist`. Per-indicator distribution stats
-/// grouped under `distributions`.
-///
-/// Subset of documented fields; upstream may return more.
+/// Returned by `industry_valuation_dist`. Where the stock sits within its
+/// industry's distribution, per indicator.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct IndustryValuationDistResponse {
-    /// Per-indicator distribution blocks.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub distributions: Option<IndustryValuationDistributions>,
-}
-
-/// `distributions` block of `industry_valuation_dist`.
-///
-/// Subset of documented fields; upstream may return more.
-#[derive(Debug, Serialize, JsonSchema)]
-pub struct IndustryValuationDistributions {
     /// Price-to-earnings distribution.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pe: Option<IndustryValuationDistribution>,
@@ -595,427 +912,644 @@ pub struct IndustryValuationDistributions {
     pub ps: Option<IndustryValuationDistribution>,
 }
 
-/// One indicator's distribution stats in `industry_valuation_dist`.
-///
-/// Subset of documented fields; upstream may return more.
+/// One indicator's distribution in `industry_valuation_dist`.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct IndustryValuationDistribution {
-    /// Minimum value.
+    /// Industry low.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub min: Option<String>,
-    /// 25th percentile.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub p25: Option<String>,
-    /// Median.
+    pub low: Option<String>,
+    /// Industry median.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub median: Option<String>,
-    /// 75th percentile.
+    /// Industry high.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub p75: Option<String>,
-    /// Maximum value.
+    pub high: Option<String>,
+    /// The stock's current value.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub max: Option<String>,
-    /// Where the stock currently sits in this distribution.
+    pub value: Option<String>,
+    /// The stock's percentile within the industry (0-1).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub current_percentile: Option<String>,
+    pub ranking: Option<String>,
+    /// The stock's rank position.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rank_index: Option<String>,
+    /// Number of ranked stocks.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rank_total: Option<String>,
 }
 
-/// Returned by `company`. Company overview / profile.
+/// Returned by `company`. Company profile.
 ///
-/// Subset of documented fields; upstream may return more.
+/// US accounts querying a `.US` symbol get a US-specific variant with only
+/// the fields marked US-account only.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct CompanyResponse {
-    /// Company name.
+    /// Short display name.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
-    /// Business profile / description.
+    /// Full legal company name.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-    /// Number of employees.
+    pub company_name: Option<String>,
+    /// Business description.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub employees: Option<i64>,
-    /// Chief Executive Officer.
+    pub profile: Option<String>,
+    /// Founding date or year, e.g. "1999-11-23" or "1993".
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub ceo: Option<String>,
-    /// Year the company was founded.
+    pub founded: Option<String>,
+    /// Listing date.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub founded_year: Option<i64>,
+    pub listing_date: Option<String>,
+    /// Listing exchange name (localized).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub market: Option<String>,
+    /// Exchange ticker code, e.g. "00700".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ticker: Option<String>,
+    /// Market region, e.g. "HK".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub region: Option<String>,
+    /// Upstream sector code.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sector: Option<i64>,
+    /// Company category (localized).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub category: Option<String>,
+    /// Registered address.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub address: Option<String>,
+    /// Office address.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub office_address: Option<String>,
+    /// Postal code.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub zip_code: Option<String>,
     /// Company website.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub website: Option<String>,
-    /// Listing exchange.
+    /// Logo image URL.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub exchange: Option<String>,
-    /// Industry classification.
+    pub icon: Option<String>,
+    /// Phone number.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub industry: Option<String>,
-    /// Market capitalization. Populated by both the generic and US-region
-    /// shapes.
+    pub phone: Option<String>,
+    /// Fax number.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fax: Option<String>,
+    /// Investor-relations email.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub email: Option<String>,
+    /// Number of employees, as a string.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub employees: Option<String>,
+    /// Chairman.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chairman: Option<String>,
+    /// General manager / CEO.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub manager: Option<String>,
+    /// Company secretary.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub secretary: Option<String>,
+    /// Legal representative.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub legal_repr: Option<String>,
+    /// Fiscal year end, e.g. "12 月 31 日".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub year_end: Option<String>,
+    /// IPO issue price.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub issue_price: Option<String>,
+    /// Shares offered at IPO.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shares_offered: Option<String>,
+    /// Auditor.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub audit_inst: Option<String>,
+    /// Accounting firm.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub accounting_firm: Option<String>,
+    /// Legal counsel.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub legal_counsel: Option<String>,
+    /// Securities representative.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub securities_rep: Option<String>,
+    /// Business license number.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bus_license: Option<String>,
+    /// ADS conversion ratio.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ads_ratio: Option<String>,
+    /// US-account variant only: market capitalization.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub market_cap: Option<String>,
-    /// US-region shape only: short company tagline (equivalent to
-    /// `description` in the generic shape).
+    /// US-account variant only: short company tagline.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub intro: Option<String>,
-    /// US-region shape only: currency symbol, e.g. "$".
+    /// US-account variant only: currency symbol, e.g. "$".
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ccy_symbol: Option<String>,
-    /// US-region shape only: badges such as watchlist-popularity rank.
+    /// US-account variant only: badges such as watchlist-popularity
+    /// rank.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub top_rank_tags: Option<Vec<serde_json::Value>>,
-    /// US-region shape only: link to the full company profile page.
+    /// US-account variant only: link to the full company profile page.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub detail_url: Option<String>,
-    /// US-region shape only: watchlist groups containing this symbol. Shape
-    /// not yet observed populated; passed through as raw JSON.
+    /// US-account variant only: community stock lists containing this
+    /// symbol.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub share_list: Option<Vec<serde_json::Value>>,
 }
 
-/// Returned by `executive`. Wraps a `members` array of executives / board
-/// members.
-///
-/// Subset of documented fields; upstream may return more.
+/// Returned by `executive`. Wraps a `professional_list` with one entry per
+/// queried symbol.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct ExecutiveResponse {
-    /// Executive and board members.
+    /// Executive lists, one per symbol.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub members: Option<Vec<ExecutiveMember>>,
+    pub professional_list: Option<Vec<ExecutiveGroup>>,
 }
 
-/// One person in `executive`'s `members`.
-///
-/// Subset of documented fields; upstream may return more.
+/// One symbol's entry in `executive`'s `professional_list`.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct ExecutiveGroup {
+    /// Security symbol.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub symbol: Option<String>,
+    /// Number of executives.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total: Option<i64>,
+    /// Executives and board members.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub professionals: Option<Vec<ExecutiveMember>>,
+    /// Link to the company's management page.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub forward_url: Option<String>,
+}
+
+/// One person in `executive`'s `professionals`.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct ExecutiveMember {
+    /// Upstream person id.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
     /// Full name.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     /// Title / role.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
-    /// Date appointed.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub appointed_date: Option<String>,
-    /// Age.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub age: Option<i64>,
     /// Biography.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub biography: Option<String>,
-    /// Compensation.
+    /// Link to the person's profile page.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub compensation: Option<String>,
+    pub wiki_url: Option<String>,
 }
 
-/// Returned by `shareholder`. Wraps a `shareholders` array.
-///
-/// Subset of documented fields; upstream may return more.
+/// Returned by `shareholder`. Wraps a `shareholder_list` of recent holding
+/// changes.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct ShareholderResponse {
-    /// Institutional shareholders.
+    /// Shareholders with their latest reported change.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub shareholders: Option<Vec<ShareholderItem>>,
+    pub shareholder_list: Option<Vec<ShareholderItem>>,
+    /// Upstream total count (observed as 0 regardless of list length).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total: Option<i64>,
 }
 
-/// One holder in `shareholder`'s `shareholders`.
-///
-/// Subset of documented fields; upstream may return more.
+/// One holder in `shareholder`'s `shareholder_list`.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct ShareholderItem {
-    /// Institution name.
+    /// Shareholder name.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub institution: Option<String>,
-    /// Shares held.
+    pub shareholder_name: Option<String>,
+    /// Ownership, in percent of shares outstanding.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub shares: Option<String>,
-    /// Ownership ratio.
+    pub percent_of_shares: Option<String>,
+    /// Change in shares held (negative = reduced).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub ratio: Option<String>,
-    /// Change in shares.
+    pub shares_changed: Option<String>,
+    /// Report date, e.g. "2026-10-02".
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub change: Option<String>,
-    /// Direction / kind of change.
+    pub report_date: Option<String>,
+    /// Listed securities associated with this shareholder (e.g. the
+    /// holder's own stock).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub change_type: Option<String>,
-    /// Report date.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub reported_at: Option<String>,
+    pub stocks: Option<Vec<ShareholderStock>>,
 }
 
-/// Returned by `fund_holder`. Wraps a `fund_holders` array.
-///
-/// Subset of documented fields; upstream may return more.
+/// One related security in a `shareholder` row's `stocks`.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct ShareholderStock {
+    /// Security symbol, e.g. "BLK.US".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub symbol: Option<String>,
+    /// Ticker code without market suffix.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
+    /// Market code, e.g. "US".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub market: Option<String>,
+    /// Price change, e.g. "0.72%".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chg: Option<String>,
+}
+
+/// Returned by `fund_holder`. Wraps a `lists` array of funds / ETFs holding
+/// the symbol.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct FundHolderResponse {
     /// Funds / ETFs that hold the symbol.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub fund_holders: Option<Vec<FundHolderItem>>,
+    pub lists: Option<Vec<FundHolderItem>>,
 }
 
-/// One holder in `fund_holder`'s `fund_holders`.
-///
-/// Subset of documented fields; upstream may return more.
+/// One fund in `fund_holder`'s `lists`.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct FundHolderItem {
+    /// Fund symbol, e.g. "NVDX.US".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub symbol: Option<String>,
     /// Fund name.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub fund_name: Option<String>,
-    /// Fund symbol.
+    pub name: Option<String>,
+    /// Fund currency.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub fund_symbol: Option<String>,
-    /// Shares held.
+    pub currency: Option<String>,
+    /// Weight of the symbol in the fund's portfolio, in percent.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub shares: Option<String>,
-    /// Ownership ratio.
+    pub position_ratio: Option<String>,
+    /// Holding report date, e.g. "2026.10.12".
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub ratio: Option<String>,
-    /// Change in shares.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub change: Option<String>,
-    /// Report date.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub reported_at: Option<String>,
+    pub report_date: Option<String>,
 }
 
-/// Returned by `corp_action`. Wraps an `items` array of corporate actions.
-///
-/// Subset of documented fields; upstream may return more.
+/// Returned by `corp_action`. Wraps an `items` array of corporate events.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct CorpActionResponse {
-    /// Corporate action events.
+    /// Corporate events (earnings dates, dividends, splits, ...).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub items: Option<Vec<CorpActionItem>>,
 }
 
 /// One event in `corp_action`'s `items`.
-///
-/// Subset of documented fields; upstream may return more.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct CorpActionItem {
-    /// Action type (split, buyback, name change, ...).
+    /// Upstream event id.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub action_type: Option<String>,
-    /// Effective date.
+    pub id: Option<String>,
+    /// Event date, `YYYYMMDD`.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub effective_date: Option<String>,
-    /// Ratio (e.g. for splits).
+    pub date: Option<String>,
+    /// Localized meaning of `date`, e.g. "派息日".
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub ratio: Option<String>,
-    /// Free-text description.
+    pub date_type: Option<String>,
+    /// Localized event category, e.g. "分配方案".
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
+    pub act_type: Option<String>,
+    /// Event description.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub act_desc: Option<String>,
+    /// Event kind code, e.g. "ReportDate", "DividendExDate".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub action: Option<String>,
+    /// Whether the event is the most recent one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recent: Option<bool>,
+    /// Whether the event was delayed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub is_delay: Option<bool>,
+    /// Delay description; empty when not delayed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delay_content: Option<String>,
+    /// Associated live broadcast (e.g. earnings call); null when none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub live: Option<CorpActionLive>,
 }
 
-/// Returned by `invest_relation`. Wraps an `items` array of IR events.
-///
-/// Subset of documented fields; upstream may return more.
+/// `live` block of a `corp_action` event.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct CorpActionLive {
+    /// Upstream live-broadcast id.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    /// Broadcast title.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Upstream broadcast status code.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<i64>,
+    /// Start time (RFC3339).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<String>,
+    /// Whether the user has booked the broadcast.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub booked: Option<bool>,
+    /// Securities linked to the broadcast.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub symbols: Option<Vec<String>>,
+}
+
+/// Returned by `invest_relation`. Wraps an `invest_securities` array of
+/// listed companies the symbol's company holds stakes in.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct InvestRelationResponse {
-    /// Investor-relations events and announcements.
+    /// Invested listed securities.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub items: Option<Vec<InvestRelationItem>>,
+    pub invest_securities: Option<Vec<InvestRelationItem>>,
+    /// Link to the investment-relationship page.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub forward_url: Option<String>,
+    /// Upstream total count (observed as 0 regardless of list length).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total: Option<i64>,
 }
 
-/// One event in `invest_relation`'s `items`.
-///
-/// Subset of documented fields; upstream may return more.
+/// One holding in `invest_relation`'s `invest_securities`.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct InvestRelationItem {
-    /// Event title.
+    /// Invested company name.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub title: Option<String>,
-    /// Event type.
+    pub company_name: Option<String>,
+    /// Invested company symbol, e.g. "HUYA.US".
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub event_type: Option<String>,
-    /// Event date.
+    pub symbol: Option<String>,
+    /// Currency of `shares_value`.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub event_date: Option<String>,
-    /// Related URL.
+    pub currency: Option<String>,
+    /// Stake, in percent of the company's shares.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub url: Option<String>,
-    /// Free-text description.
+    pub percent_of_shares: Option<String>,
+    /// Market value of the stake.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
+    pub shares_value: Option<String>,
+    /// Rank of this holding by value.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shares_rank: Option<String>,
 }
 
-/// Returned by `operating`. Wraps an `items` array of operating metrics
-/// (HK stocks only).
-///
-/// Subset of documented fields; upstream may return more.
+/// Returned by `operating`. Wraps a `list` of reporting periods with
+/// management commentary and key indicators.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct OperatingResponse {
-    /// Operating metric records.
+    /// Reporting periods, newest first.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub items: Option<Vec<OperatingItem>>,
+    pub list: Option<Vec<OperatingReport>>,
 }
 
-/// One record in `operating`'s `items`.
-///
-/// Subset of documented fields; upstream may return more.
+/// One reporting period in `operating`'s `list`.
 #[derive(Debug, Serialize, JsonSchema)]
-pub struct OperatingItem {
-    /// Reporting period.
+pub struct OperatingReport {
+    /// Upstream report id.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub period: Option<String>,
-    /// Metric name (e.g. passenger traffic, cargo volume).
+    pub id: Option<String>,
+    /// Report type, e.g. "qf", "saf", "af".
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub metric_name: Option<String>,
-    /// Metric value.
+    pub report: Option<String>,
+    /// Period title, e.g. "2026 财年中报".
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub value: Option<String>,
-    /// Unit of measure.
+    pub title: Option<String>,
+    /// Management commentary / operating review text.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub unit: Option<String>,
+    pub txt: Option<String>,
+    /// Whether this is the latest report.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub latest: Option<bool>,
+    /// Key financial indicators for the period.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub financial: Option<OperatingFinancial>,
 }
 
-/// Returned by `financial_report_latest`. Latest financial report summary.
-///
-/// Subset of documented fields; upstream may return more.
+/// `financial` block of an `operating` report.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct OperatingFinancial {
+    /// Reporting currency.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub currency: Option<String>,
+    /// Key indicators.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub indicators: Option<Vec<OperatingIndicator>>,
+}
+
+/// One indicator in an `operating` report's `financial.indicators`.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct OperatingIndicator {
+    /// Indicator key, e.g. "operating_revenue".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub field_name: Option<String>,
+    /// Localized indicator name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub indicator_name: Option<String>,
+    /// Display value, e.g. "4592 亿".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub indicator_value: Option<String>,
+    /// Year-over-year change, in percent. Absent when not applicable.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub yoy: Option<String>,
+}
+
+/// Returned by `financial_report_latest`. Key indicators of the latest
+/// financial report.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct FinancialReportLatestResponse {
-    /// Reporting period.
+    /// Report period code, e.g. "2026.H1".
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub period: Option<String>,
-    /// Revenue.
+    pub report: Option<String>,
+    /// Report period label, e.g. "2026 财年中报".
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub revenue: Option<String>,
-    /// Net income.
+    pub report_txt: Option<String>,
+    /// Reporting currency.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub net_income: Option<String>,
-    /// Earnings per share.
+    pub currency: Option<String>,
+    /// Key indicators.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub eps: Option<String>,
-    /// Return on equity.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub roe: Option<String>,
-    /// Gross margin.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub gross_margin: Option<String>,
-    /// Report date.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub report_date: Option<String>,
+    pub indicators: Option<Vec<FinancialReportIndicator>>,
 }
 
-/// Returned by `institution_rating_history`. Two history arrays: target-price
-/// revisions and rating-evaluation changes.
-///
-/// Subset of documented fields; upstream may return more.
+/// One indicator in `financial_report_latest`'s `indicators`.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct FinancialReportIndicator {
+    /// Indicator key, e.g. "operating_revenue", "net_profit", "eps",
+    /// "roe".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub field_name: Option<String>,
+    /// Localized indicator name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub indicator_name: Option<String>,
+    /// Value; ratio indicators carry a "%" suffix, e.g. "20.93%".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub indicator_value: Option<String>,
+    /// Year-over-year change as a fraction (0.1627 = +16.27%); empty
+    /// for ratio indicators.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub yoy: Option<String>,
+}
+
+/// Returned by `institution_rating_history`. Target-price range history and
+/// rating-distribution history.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct InstitutionRatingHistoryResponse {
-    /// Target-price revisions.
+    /// Target-price range samples.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target_history: Option<Vec<TargetHistoryItem>>,
-    /// Rating-evaluation changes.
+    /// Rating distributions; consecutive identical distributions are
+    /// merged into one `start_date`..`end_date` span.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub evaluate_history: Option<Vec<EvaluateHistoryItem>>,
 }
 
-/// One target-price revision in `institution_rating_history`.
-///
-/// Subset of documented fields; upstream may return more.
+/// One sample in `institution_rating_history`'s `target_history`.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct TargetHistoryItem {
-    /// Issuing firm.
+    /// Sample time, unix epoch seconds as a string.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub firm: Option<String>,
-    /// Analyst name.
+    pub timestamp: Option<String>,
+    /// Close price at this time.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub analyst: Option<String>,
-    /// Prior target price.
+    pub close: Option<String>,
+    /// Highest analyst target price.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub old_target: Option<String>,
-    /// New target price.
+    pub high_target_price: Option<String>,
+    /// Lowest analyst target price.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub new_target: Option<String>,
-    /// Revision date.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub date: Option<String>,
+    pub low_target_price: Option<String>,
 }
 
-/// One rating-evaluation change in `institution_rating_history`.
-///
-/// Subset of documented fields; upstream may return more.
+/// One span in `institution_rating_history`'s `evaluate_history`.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct EvaluateHistoryItem {
-    /// Issuing firm.
+    /// Number of "buy" ratings.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub firm: Option<String>,
-    /// Prior rating.
+    pub buy: Option<String>,
+    /// Number of "outperform" ratings.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub old_rating: Option<String>,
-    /// New rating.
+    pub over: Option<String>,
+    /// Number of "hold" ratings.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub new_rating: Option<String>,
-    /// Change date.
+    pub hold: Option<String>,
+    /// Number of "underperform" ratings.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub date: Option<String>,
+    pub under: Option<String>,
+    /// Number of "sell" ratings.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sell: Option<String>,
+    /// Number of analysts with no opinion.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub no_opinion: Option<String>,
+    /// Span start, unix epoch seconds as a string.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start_date: Option<String>,
+    /// Span end, unix epoch seconds as a string.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub end_date: Option<String>,
 }
 
-/// Returned by `institution_rating_industry_rank`. Peers ranked by analyst
-/// ratings.
-///
-/// The tool description says `list[]`, while upstream emits a top-level
-/// `items[]` array. Both names are modelled so the schema matches whichever
-/// the upstream emits. Subset of documented fields; upstream may return more.
+/// Returned by `institution_rating_industry_rank`. Industry peers ranked by
+/// analyst ratings, plus the queried stock's own rank.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct InstitutionRatingIndustryRankResponse {
-    /// Ranked peers (description's documented key).
+    /// Upstream industry id.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub list: Option<Vec<InstitutionRatingIndustryRankItem>>,
-    /// Ranked peers (key the implementation transforms in place).
+    pub industry_id: Option<i64>,
+    /// Industry name (localized).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub industry_name: Option<String>,
+    /// The queried stock's rank within the industry.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub industry_rank: Option<i64>,
+    /// Number of ranked stocks in the industry.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub industry_total: Option<i64>,
+    /// Industry mean of the ranking metric, as upstream reports it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub industry_mean: Option<i64>,
+    /// Industry median of the ranking metric, as upstream reports it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub industry_median: Option<i64>,
+    /// Ranked peers for the requested page.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub items: Option<Vec<InstitutionRatingIndustryRankItem>>,
 }
 
-/// One peer in `institution_rating_industry_rank`.
-///
-/// Subset of documented fields; upstream may return more.
+/// One peer in `institution_rating_industry_rank`'s `items`.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct InstitutionRatingIndustryRankItem {
-    /// Security symbol, e.g. `"AAPL.US"`.
+    /// Rank within the industry.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rank: Option<i64>,
+    /// Security symbol, e.g. "AAPL.US".
     #[serde(skip_serializing_if = "Option::is_none")]
     pub symbol: Option<String>,
     /// Display name.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
-    /// Buy rating count.
+    /// Number of "buy" ratings.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub buy_count: Option<i64>,
-    /// Sell rating count.
+    pub buy: Option<i64>,
+    /// Number of "outperform" ratings.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub sell_count: Option<i64>,
-    /// Consensus rating label.
+    pub over: Option<i64>,
+    /// Number of "hold" ratings.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub consensus_rating: Option<String>,
-    /// Target price.
+    pub hold: Option<i64>,
+    /// Number of "underperform" ratings.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub target_price: Option<String>,
+    pub under: Option<i64>,
+    /// Number of "sell" ratings.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sell: Option<i64>,
+    /// Number of analysts with no opinion.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub no_opinion: Option<i64>,
+    /// Total number of ratings.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total: Option<i64>,
 }
 
 /// Returned by `business_segments_history`. Wraps a `historical` array of
 /// per-period segment snapshots.
-///
-/// Subset of documented fields; upstream may return more.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct BusinessSegmentsHistoryResponse {
-    /// Per-period segment snapshots.
+    /// Per-period segment snapshots, oldest first.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub historical: Option<Vec<BusinessSegmentsHistoryPeriod>>,
+    /// Ids of the business segments that appear across `historical`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bus_ids: Option<Vec<String>>,
 }
 
 /// One period snapshot in `business_segments_history`'s `historical`.
-///
-/// Subset of documented fields; upstream may return more.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct BusinessSegmentsHistoryPeriod {
-    /// Period date.
+    /// Period end date, `YYYYMMDD`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub date: Option<String>,
+    /// Report type, e.g. "qf".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub report: Option<String>,
+    /// Period label, e.g. "2017.Q1".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub report_txt: Option<String>,
+    /// Fiscal period start, e.g. "2016.12.31".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fp_start: Option<String>,
+    /// Fiscal period end.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fp_end: Option<String>,
+    /// Report publication date.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rpt_date: Option<String>,
     /// Total revenue for the period.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub total: Option<String>,
-    /// Settlement currency.
+    /// Year-over-year change of `total`, in percent. Absent for the
+    /// first period.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub yoy: Option<String>,
+    /// Reporting currency.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub currency: Option<String>,
     /// Revenue by business line.
@@ -1024,68 +1558,97 @@ pub struct BusinessSegmentsHistoryPeriod {
     /// Revenue by region.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub regionals: Option<Vec<SegmentBreakdown>>,
+    /// Per-period business segment ids (observed empty).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bus_ids: Option<Vec<String>>,
+    /// Per-period region segment ids (observed empty).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reg_ids: Option<Vec<String>>,
 }
 
-/// One segment breakdown entry in `business_segments_history`
-/// (`business[]` / `regionals[]`).
-///
-/// Subset of documented fields; upstream may return more.
+/// One segment entry in `business_segments_history` (`business[]` /
+/// `regionals[]`).
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct SegmentBreakdown {
+    /// Segment id.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
     /// Segment / region name.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
-    /// Percentage of total.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub percent: Option<String>,
-    /// Absolute value.
+    /// Segment revenue.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub value: Option<String>,
+    /// Share of total revenue, in percent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub percent: Option<String>,
+    /// Year-over-year change, in percent. Absent when there is no
+    /// prior-year base.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub yoy: Option<String>,
 }
 
-/// Returned by `institutional_views`. Wraps a `months` array of monthly
-/// rating-distribution snapshots.
-///
-/// Subset of documented fields; upstream may return more.
+/// Returned by `institutional_views`. Rating-distribution history (`elist`)
+/// and target-price range history (`tlist`).
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct InstitutionalViewsResponse {
-    /// Monthly rating-distribution snapshots.
+    /// Rating-distribution snapshots.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub months: Option<Vec<InstitutionalViewsMonth>>,
+    pub elist: Option<Vec<InstitutionalViewsRating>>,
+    /// Target-price range samples.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tlist: Option<Vec<InstitutionalViewsTarget>>,
 }
 
-/// One month in `institutional_views`'s `months`.
-///
-/// Subset of documented fields; upstream may return more.
+/// One snapshot in `institutional_views`'s `elist`.
 #[derive(Debug, Serialize, JsonSchema)]
-pub struct InstitutionalViewsMonth {
-    /// Month date (RFC3339; rewritten from a unix-epoch field).
+pub struct InstitutionalViewsRating {
+    /// Snapshot date (RFC3339; rewritten from a unix-epoch field).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub date: Option<String>,
-    /// Buy count.
+    /// Number of "buy" ratings.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub buy: Option<i64>,
-    /// Outperform count.
+    pub buy: Option<String>,
+    /// Number of "outperform" ratings.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub outperform: Option<i64>,
-    /// Hold count.
+    pub over: Option<String>,
+    /// Number of "hold" ratings.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub hold: Option<i64>,
-    /// Underperform count.
+    pub hold: Option<String>,
+    /// Number of "underperform" ratings.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub underperform: Option<i64>,
-    /// Sell count.
+    pub under: Option<String>,
+    /// Number of "sell" ratings.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub sell: Option<i64>,
-    /// Total ratings.
+    pub sell: Option<String>,
+    /// Number of analysts with no opinion.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub total: Option<i64>,
+    pub no_opinion: Option<String>,
+    /// Total number of ratings.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total: Option<String>,
 }
 
-/// Returned by `industry_peers`. A hierarchical sub-sector tree (`chain`) plus
-/// the originating industry group (`top`).
-///
-/// Subset of documented fields; upstream may return more.
+/// One sample in `institutional_views`'s `tlist`.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct InstitutionalViewsTarget {
+    /// Sample time, unix epoch seconds as a string.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub date: Option<String>,
+    /// Close price at this time.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub close: Option<String>,
+    /// Highest analyst target price.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub high_price: Option<String>,
+    /// Lowest analyst target price.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub low_price: Option<String>,
+}
+
+/// Returned by `industry_peers`. A hierarchical sub-sector tree (`chain`)
+/// plus the originating industry group (`top`). Both are null when the
+/// symbol is not an industry symbol.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct IndustryPeersResponse {
     /// Root node of the sub-sector tree.
@@ -1097,15 +1660,22 @@ pub struct IndustryPeersResponse {
 }
 
 /// One node in `industry_peers`' `chain` tree. Self-referential via `next`.
-///
-/// Subset of documented fields; upstream may return more.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct IndustryPeersNode {
     /// Node name.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
-    /// Node identifier, an industry symbol such as `"IN00258.US"`. Pass it
-    /// back to `industry_peers` to walk into the sub-sector.
+    /// Industry code.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
+    /// Industry id.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub industry_id: Option<String>,
+    /// Sharelist of the sub-sector's stocks; pass to sharelist_detail.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sharelist_id: Option<String>,
+    /// Node identifier, an industry symbol such as `"IN00258.US"`. Pass
+    /// it back to `industry_peers` to walk into the sub-sector.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub symbol: Option<String>,
     /// Number of stocks in this sub-sector.
@@ -1123,102 +1693,189 @@ pub struct IndustryPeersNode {
 }
 
 /// `top` block of `industry_peers`.
-///
-/// Subset of documented fields; upstream may return more.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct IndustryPeersTop {
     /// Industry group name.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
-    /// Market code.
+    /// Industry id.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub market: Option<String>,
+    pub industry_id: Option<String>,
 }
 
-/// Returned by `financial_report_snapshot`. Actual-vs-forecast comparison
-/// plus financial ratios.
-///
-/// Subset of documented fields; upstream may return more.
+/// Returned by `financial_report_snapshot`. Headline results (`fo_*`) and
+/// financial ratios / statement highlights (`fr_*`) for one fiscal period.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct FinancialReportSnapshotResponse {
-    /// Text summary of the report.
+    /// Company display name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Exchange ticker code.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ticker: Option<String>,
+    /// Market code, e.g. "US".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub market: Option<String>,
+    /// Reporting currency.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub currency: Option<String>,
+    /// Report type of this snapshot, e.g. "qf".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub report: Option<String>,
+    /// Report types available, e.g. `["qf", "saf", "af"]`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub opt_reports: Option<Vec<String>>,
+    /// Fiscal year.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fiscal_year: Option<i64>,
+    /// Fiscal period within the year.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fiscal_period: Option<String>,
+    /// Fiscal period start, e.g. "2026.04.26".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fp_start: Option<String>,
+    /// Fiscal period end.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fp_end: Option<String>,
+    /// Text summary of the results.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub report_desc: Option<String>,
-    /// Revenue: actual vs forecast.
+    /// Revenue.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fo_revenue: Option<ForecastActual>,
-    /// EBIT: actual vs forecast.
+    /// EBIT.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fo_ebit: Option<ForecastActual>,
-    /// EPS: actual vs forecast.
+    /// Earnings per share.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fo_eps: Option<ForecastActual>,
+    /// Revenue.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fr_revenue: Option<SnapshotFigure>,
+    /// Net profit.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fr_profit: Option<SnapshotFigure>,
+    /// Net profit margin, in percent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fr_profit_margin: Option<String>,
+    /// Total assets.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fr_total_assets: Option<SnapshotFigure>,
+    /// Total liabilities.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fr_total_liability: Option<SnapshotFigure>,
+    /// Debt-to-assets ratio, in percent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fr_debt_assets_ratio: Option<String>,
+    /// Operating cash flow.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fr_operate_cash: Option<SnapshotFigure>,
+    /// Investing cash flow.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fr_invest_cash: Option<SnapshotFigure>,
+    /// Financing cash flow.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fr_finance_cash: Option<SnapshotFigure>,
+    /// Trailing-twelve-month return on equity, in percent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fr_roe_ttm: Option<String>,
+    /// Trailing-twelve-month net profit margin, in percent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fr_profit_margin_ttm: Option<String>,
+    /// Trailing-twelve-month asset turnover.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fr_asset_turn_ttm: Option<String>,
+    /// Trailing-twelve-month financial leverage (assets / equity).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fr_leverage_ttm: Option<String>,
 }
 
-/// An actual-vs-forecast comparison block in `financial_report_snapshot`
-/// (`fo_revenue` / `fo_ebit` / `fo_eps`).
-///
-/// Subset of documented fields; upstream may return more.
+/// A headline result block in `financial_report_snapshot` (`fo_revenue` /
+/// `fo_ebit` / `fo_eps`). The estimate / comparison fields are omitted when
+/// upstream leaves them blank.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct ForecastActual {
-    /// Year-over-year change.
+    /// Actual reported value.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub value: Option<String>,
+    /// Year-over-year change, in percent.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub yoy: Option<String>,
-    /// Actual vs forecast comparison.
+    /// Consensus estimate.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub est_value: Option<String>,
+    /// Year-over-year change implied by the estimate, in percent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub est_yoy: Option<String>,
+    /// Actual vs. estimate outcome code.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cmp: Option<String>,
+    /// Localized description of `cmp`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cmp_desc: Option<String>,
+}
+
+/// A value with its year-over-year change in `financial_report_snapshot`'s
+/// `fr_*` blocks.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct SnapshotFigure {
+    /// Value for the period.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub value: Option<String>,
+    /// Year-over-year change, in percent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub yoy: Option<String>,
 }
 
 /// Returned by `shareholder_top`. Wraps an `info` array of per-period
 /// snapshots, each with a `share_holders` list.
-///
-/// Subset of documented fields; upstream may return more.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct ShareholderTopResponse {
+    /// Period labels, in the same order as `info` (the first is "最新",
+    /// the latest).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub periods: Option<Vec<String>>,
     /// Per-period holder snapshots.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub info: Option<Vec<ShareholderTopPeriod>>,
 }
 
 /// One period snapshot in `shareholder_top`'s `info`.
-///
-/// Subset of documented fields; upstream may return more.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct ShareholderTopPeriod {
-    /// Reporting period.
+    /// Period label.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub period: Option<String>,
-    /// Holders for this period.
+    /// Top holders for this period.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub share_holders: Option<Vec<ShareholderTopHolder>>,
 }
 
 /// One holder in `shareholder_top`'s `share_holders`.
-///
-/// Subset of documented fields; upstream may return more.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct ShareholderTopHolder {
-    /// Holder object id. Pass to `shareholder_detail`.
+    /// Holder id, as a numeric string. Pass it (as an integer) to
+    /// `shareholder_detail`.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub object_id: Option<i64>,
+    pub object_id: Option<String>,
     /// Holder name.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
-    /// Holder title / role.
+    /// Filing date, e.g. "2026/06/30".
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub title: Option<String>,
+    pub filing_date: Option<String>,
     /// Shares held.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub shares_held: Option<String>,
-    /// Percentage of shares held.
+    /// Ownership, e.g. "8.04%".
     #[serde(skip_serializing_if = "Option::is_none")]
     pub percent_shares_held: Option<String>,
-    /// Change in shares held.
+    /// Change in shares held versus the prior filing.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub shares_changed: Option<String>,
-    /// Filing date.
+    /// Change in ownership, e.g. "0.12%".
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub filing_date: Option<String>,
+    pub percent_shares_changed: Option<String>,
 }
 
 /// Returned by `shareholder_detail`. A single holder's holding and trade

@@ -12,15 +12,23 @@ use rmcp::{
 use serde_json::Value;
 
 type Filter = jaq_core::Filter<data::JustLut<Val>>;
-pub(super) const INSTRUCTIONS: &str = "All tools accept optional `_jq`, a filter expression using jq CLI syntax applied to the response, e.g. .data | map({symbol}); one output is returned as-is, several as a JSON array. Omit it for the full JSON response.";
+pub(super) const INSTRUCTIONS: &str = "All tools accept optional `_jq`, a filter expression using jq CLI syntax applied to the response; one output is returned as-is, several as a JSON array. Response shapes differ per tool (some are a top-level array, some an object; most have no `data` wrapper) and most tool descriptions say what they return. If unsure, probe cheaply with keys (object) or .[0] | keys (array) rather than fetching the full response. Omit it for the full JSON response.";
 
 /// Per-tool schema description for the injected `_jq` property, so a client
 /// inspecting a single tool's schema learns the contract without depending on
 /// the server-level `instructions` (which many clients drop).
-const JQ_PROPERTY_DESCRIPTION: &str = "Optional jq filter (jaq syntax) applied to this tool's JSON response before it is returned; it never changes the upstream request. One output is returned as-is, several as a JSON array, none as []. Module imports and the `env`/`debug`/`stderr` builtins are unavailable. Example: .data | map({symbol}). Omit for the full response.";
+const JQ_PROPERTY_DESCRIPTION: &str = "Optional jq filter applied to this tool's JSON response; it never changes the request, and several outputs come back as an array. For field names see the tool description, or probe with `keys` / `.[0] | keys`.";
 const MAX_RESULTS: usize = 10_000;
 const MAX_OUTPUT_BYTES: usize = 8 * 1024 * 1024;
 const FILTER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+/// Cap on the jaq error text echoed back. jaq embeds the offending value in
+/// its message (`cannot index [<whole response>] with "data"`), which can be
+/// tens of KB of upstream data the caller never asked to see.
+const MAX_ERROR_CHARS: usize = 200;
+/// Depth/width limits for [`shape_of`], keeping the summary to a few hundred
+/// bytes even for large nested responses.
+const SHAPE_MAX_DEPTH: usize = 3;
+const SHAPE_MAX_KEYS: usize = 25;
 
 pub(super) fn describe(tool: &mut Tool) {
     let schema = std::sync::Arc::make_mut(&mut tool.input_schema);
@@ -35,6 +43,11 @@ pub(super) fn describe(tool: &mut Tool) {
         );
     // A jq projection may return any JSON value. A fixed object schema would
     // reject valid filtered results. Full unfiltered schemas remain resources.
+    //
+    // Not replaced by a shape summary derived from it: most hand-written
+    // output schemas have drifted from the real responses, and advertising
+    // their field names would steer `_jq` filters wrong. A failed filter
+    // reports the real response's shape instead (see `shape_of`).
     tool.output_schema = None;
 }
 
@@ -54,7 +67,14 @@ fn compile(code: &str) -> Result<Filter, McpError> {
     )
     .load(&arena, File { code, path: () })
     .map_err(|errors| {
-        McpError::invalid_params(format!("Invalid _jq expression: {errors:?}"), None)
+        let details: Vec<String> = errors
+            .iter()
+            .flat_map(|(_, error)| load_error_details(code, error))
+            .collect();
+        McpError::invalid_params(
+            format!("Invalid _jq expression: {}", details.join("; ")),
+            None,
+        )
     })?;
     let funs = jaq_core::funs()
         .chain(jaq_std::funs())
@@ -66,8 +86,48 @@ fn compile(code: &str) -> Result<Filter, McpError> {
         .with_funs(funs)
         .compile(modules)
         .map_err(|errors| {
-            McpError::invalid_params(format!("Invalid _jq expression: {errors:?}"), None)
+            let details: Vec<String> = errors
+                .iter()
+                .flat_map(|(_, undefined)| undefined)
+                .map(|(name, kind)| format!("undefined {} `{name}`", kind.as_str()))
+                .collect();
+            McpError::invalid_params(
+                format!("Invalid _jq expression: {}", details.join("; ")),
+                None,
+            )
         })
+}
+
+/// 1-based character column of `part` within `code`, when `part` is a slice of
+/// it (jaq reports error positions as slices of the source).
+fn column_of(code: &str, part: &str) -> Option<usize> {
+    let offset = (part.as_ptr() as usize).checked_sub(code.as_ptr() as usize)?;
+    (offset <= code.len()).then(|| code[..offset].chars().count() + 1)
+}
+
+/// Readable descriptions of a jaq load (lex/parse) error, instead of its
+/// `Debug` dump (`[(File { code: …, path: () }, Lex([(Delim("("), "")]))]`).
+fn load_error_details(code: &str, error: &jaq_core::load::Error<&str>) -> Vec<String> {
+    use jaq_core::load::Error;
+    let at = |found: &str| match (column_of(code, found), found.is_empty()) {
+        (_, true) => "at end of expression".to_string(),
+        (Some(column), false) => format!(
+            "at column {column} (near `{}`)",
+            found.chars().take(12).collect::<String>()
+        ),
+        (None, false) => format!("near `{found}`"),
+    };
+    match error {
+        Error::Io(_) => vec!["imports and includes are not allowed".to_string()],
+        Error::Lex(errors) => errors
+            .iter()
+            .map(|(expect, found)| format!("expected {} {}", expect.as_str(), at(found)))
+            .collect(),
+        Error::Parse(errors) => errors
+            .iter()
+            .map(|(expect, found)| format!("expected {} {}", expect.as_str(), at(found)))
+            .collect(),
+    }
 }
 
 pub(super) async fn call<F, Fut>(
@@ -86,17 +146,20 @@ where
         None | Some(Value::Null) => return invoke(request).await,
         Some(Value::String(code)) => code,
         Some(_) => {
-            return Ok(super::tool_error(
-                &request.name,
-                &McpError::invalid_params("_jq must be a string", None),
-            ));
+            let message = "_jq must be a string";
+            record_failure(&request.name, "compile", "", message);
+            return Ok(syntax_error(message));
         }
     };
     // Compile before any tool execution, particularly before trade writes.
     let filter = match compile(&code) {
         Ok(filter) => filter,
-        Err(error) => return Ok(super::tool_error(&request.name, &error)),
+        Err(error) => {
+            record_failure(&request.name, "compile", &code, &error.message);
+            return Ok(syntax_error(&error.message));
+        }
     };
+    let name = request.name.clone();
     let result = invoke(request).await?;
     if result.is_error == Some(true) || is_error_envelope(&result) {
         return Ok(result);
@@ -113,14 +176,96 @@ where
     // unbounded vector is generative builtins, not caller-supplied data.
     let worker = tokio::task::spawn_blocking(move || apply(filter, result));
     let filtered = tokio::time::timeout(FILTER_TIMEOUT, worker).await;
-    Ok(match filtered {
-        Ok(Ok(Ok(result))) => result,
-        Ok(Ok(Err(message))) => filter_error(&message),
-        Ok(Err(_)) => filter_error("filter worker failed"),
-        Err(_) => filter_error(
-            "filter timed out after 5s; narrow the _jq expression (avoid unbounded ranges or repeats)",
-        ),
-    })
+    let message = match filtered {
+        Ok(Ok(Ok(result))) => return Ok(result),
+        Ok(Ok(Err(message))) => message,
+        Ok(Err(_)) => "filter worker failed".to_string(),
+        Err(_) => "filter timed out after 5s; narrow the _jq expression (avoid unbounded ranges or repeats)".to_string(),
+    };
+    record_failure(&name, "runtime", &code, &message);
+    Ok(filter_error(&message))
+}
+
+/// Count and log a failed `_jq` filter. These calls reach the client as
+/// `isError:true`, but run outside `measured_tool_call`, so without this they
+/// would be invisible in both `mcp_tool_call_errors_total` and the logs.
+fn record_failure(tool: &str, stage: &str, code: &str, message: &str) {
+    // The name comes from the client and the tool may not exist (a compile
+    // failure is reported before routing): label unknown names as one bucket.
+    let tool = super::tool_label(tool);
+    crate::metrics::record_jq_error(tool, stage);
+    let client = crate::metrics::CURRENT_CLIENT
+        .try_with(|c| *c)
+        .unwrap_or("unknown");
+    // INFO, not WARN: a bad filter is a caller mistake, like INVALID_PARAMS.
+    tracing::info!(tool, client, stage, "tool call jq filter failed");
+    // A runtime error quotes the response it ran on (`cannot index [{…}]`),
+    // which for account tools is the user's positions or orders, and the
+    // expression may embed argument values. Both go to the payload-capped
+    // target, off by default (see `logging.rs`).
+    tracing::info!(
+        target: "longbridge_mcp::tools::error_detail",
+        tool,
+        stage,
+        jq = %truncate(code, MAX_ERROR_CHARS),
+        error = %truncate(message, MAX_ERROR_CHARS),
+        "tool call jq filter error detail"
+    );
+}
+
+fn truncate(text: &str, max_chars: usize) -> std::borrow::Cow<'_, str> {
+    match text.char_indices().nth(max_chars) {
+        Some((end, _)) => format!("{}…", &text[..end]).into(),
+        None => text.into(),
+    }
+}
+
+/// A compact, value-free description of a JSON response's structure, e.g.
+/// `array[20] of {id: string, title: string, published_at: string}`. Returned
+/// with a runtime filter error so the caller can fix the path in one retry
+/// without being sent the (potentially large) response itself.
+fn shape_of(value: &Value) -> String {
+    fn walk(value: &Value, depth: usize, out: &mut String) {
+        match value {
+            Value::Null => out.push_str("null"),
+            Value::Bool(_) => out.push_str("boolean"),
+            Value::Number(_) => out.push_str("number"),
+            Value::String(_) => out.push_str("string"),
+            Value::Array(items) => {
+                out.push_str(&format!("array[{}]", items.len()));
+                if let Some(first) = items.first() {
+                    out.push_str(" of ");
+                    if depth >= SHAPE_MAX_DEPTH {
+                        out.push('…');
+                    } else {
+                        walk(first, depth + 1, out);
+                    }
+                }
+            }
+            Value::Object(map) if depth >= SHAPE_MAX_DEPTH => {
+                out.push_str(&format!("object{{{} keys}}", map.len()));
+            }
+            Value::Object(map) => {
+                out.push('{');
+                for (i, (key, child)) in map.iter().enumerate() {
+                    if i == SHAPE_MAX_KEYS {
+                        out.push_str(&format!(", … {} more", map.len() - i));
+                        break;
+                    }
+                    if i > 0 {
+                        out.push_str(", ");
+                    }
+                    out.push_str(key);
+                    out.push_str(": ");
+                    walk(child, depth + 1, out);
+                }
+                out.push('}');
+            }
+        }
+    }
+    let mut out = String::new();
+    walk(value, 0, &mut out);
+    out
 }
 
 fn is_error_envelope(result: &CallToolResult) -> bool {
@@ -137,6 +282,17 @@ fn is_error_envelope(result: &CallToolResult) -> bool {
                     value.get("error_code").is_some() && value.get("recoverable").is_some()
                 })
         })
+}
+
+/// The `_jq` expression itself was rejected, before the tool ran.
+fn syntax_error(message: &str) -> CallToolResult {
+    CallToolResult::error(vec![Content::text(serde_json::json!({
+        "error_code": "jq_syntax_error",
+        "message": message,
+        "recoverable": "fix_params",
+        "hint": "The tool did not run. Fix the _jq expression (jq syntax) and call again, or omit _jq to get the full response.",
+        "data": null
+    }).to_string())])
 }
 
 fn filter_error(message: &str) -> CallToolResult {
@@ -169,12 +325,20 @@ fn apply(filter: Filter, mut result: CallToolResult) -> Result<CallToolResult, S
             Value::Array(values)
         }
     });
+    let shape = shape_of(&input);
     let input: Val = serde_json::from_value(input).map_err(|error| error.to_string())?;
     let ctx = Ctx::<data::JustLut<Val>>::new(&filter.lut, Vars::new([]));
     let mut values = Vec::new();
     let mut bytes = 0;
     for value in filter.id.run((ctx, input)).map(jaq_core::unwrap_valr) {
-        let value = value.map_err(|error| error.to_string())?.to_string();
+        let value = value
+            .map_err(|error| {
+                format!(
+                    "{}; response shape: {shape}",
+                    truncate(&error.to_string(), MAX_ERROR_CHARS)
+                )
+            })?
+            .to_string();
         bytes += value.len();
         if values.len() >= MAX_RESULTS || bytes > MAX_OUTPUT_BYTES {
             return Err(
@@ -287,6 +451,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn syntax_errors_are_readable_and_locate_the_problem() {
+        for (code, expected) in [
+            (".data | map(.x", "end of expression"),
+            (".[0] | {a: .b", "end of expression"),
+            ("map(.x) | nosuchfn", "undefined filter `nosuchfn`"),
+            (".a | ]", "at column 6"),
+        ] {
+            let result = call(request(json!(code)), |_| async {
+                panic!("tool must not execute for {code}")
+            })
+            .await
+            .unwrap();
+            let text = &result.content[0].as_text().unwrap().text;
+            assert!(text.contains("jq_syntax_error"), "{code}: {text}");
+            assert!(text.contains(expected), "{code}: {text}");
+            assert!(
+                !text.contains("File {"),
+                "debug dump leaked for {code}: {text}"
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn absent_and_null_filters_preserve_results() {
         let original = super::super::tool_result(r#"{ "a": 1 }"#.into());
         for arguments in [None, Some(json!({"_jq":null}).as_object().unwrap().clone())] {
@@ -347,6 +534,39 @@ mod tests {
         assert!(result.structured_content.is_none());
     }
 
+    #[test]
+    fn shape_of_summarizes_structure_without_values() {
+        let shape =
+            shape_of(&json!([{"id": "1", "title": "secret", "n": 2, "ok": true, "x": null}]));
+        assert_eq!(
+            shape,
+            "array[1] of {id: string, title: string, n: number, ok: boolean, x: null}"
+        );
+        assert!(
+            !shape.contains("secret"),
+            "the shape summary must not leak values: {shape}"
+        );
+    }
+
+    #[tokio::test]
+    async fn runtime_failure_reports_shape_and_truncates_echoed_values() {
+        let big: Vec<_> = (0..500)
+            .map(|i| json!({"id": i, "title": "x".repeat(100)}))
+            .collect();
+        let result = filtered(".data | map({title})", json!(big)).await;
+        assert_eq!(result.is_error, Some(true));
+        let text = &result.content[0].as_text().unwrap().text;
+        assert!(
+            text.contains("response shape: array[500] of {id: number, title: string}"),
+            "{text}"
+        );
+        assert!(
+            text.len() < 1_000,
+            "error must not echo the response: {} bytes",
+            text.len()
+        );
+    }
+
     #[tokio::test]
     async fn real_mcp_dispatch_filters_a_tool_without_business_arguments() {
         use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -377,11 +597,9 @@ mod tests {
                 let result = &response["result"];
                 assert_eq!(result["isError"], false, "{response}");
                 assert_eq!(serde_json::from_str::<Value>(result["content"][0]["text"].as_str().unwrap()).unwrap(), expected);
-                if expected.is_object() {
-                    assert_eq!(result["structuredContent"], expected);
-                } else {
-                    assert!(result.get("structuredContent").is_none());
-                }
+                // The text JSON is the whole result: no outputSchema is listed, so
+                // `call_tool` drops the structured copy (see `finish_result`).
+                assert!(result.get("structuredContent").is_none(), "{response}");
             }
             drop(writer);
             drop(reader);
