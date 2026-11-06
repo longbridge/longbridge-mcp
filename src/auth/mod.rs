@@ -17,11 +17,13 @@ use crate::tools::{self, Longbridge};
 const TOOL_LOCALES: &[(&str, &str)] = &[
     ("zh-CN", include_str!("../../locales/zh-CN/tools.json")),
     ("zh-HK", include_str!("../../locales/zh-HK/tools.json")),
+    ("ja-JP", include_str!("../../locales/ja-JP/tools.json")),
 ];
 
 const SCOPE_LOCALES: &[(&str, &str)] = &[
     ("zh-CN", include_str!("../../locales/zh-CN/scopes.json")),
     ("zh-HK", include_str!("../../locales/zh-HK/scopes.json")),
+    ("ja-JP", include_str!("../../locales/ja-JP/scopes.json")),
 ];
 
 /// Build the `locales` node merging zero or more per-locale source files
@@ -486,6 +488,7 @@ mod tests {
         for (code, raw) in [
             ("zh-CN", include_str!("../../locales/zh-CN/tools.json")),
             ("zh-HK", include_str!("../../locales/zh-HK/tools.json")),
+            ("ja-JP", include_str!("../../locales/ja-JP/tools.json")),
         ] {
             let parsed: serde_json::Value =
                 serde_json::from_str(raw).expect("locale file must be valid JSON");
@@ -548,6 +551,7 @@ mod tests {
         for (code, raw) in [
             ("zh-CN", include_str!("../../locales/zh-CN/tools.json")),
             ("zh-HK", include_str!("../../locales/zh-HK/tools.json")),
+            ("ja-JP", include_str!("../../locales/ja-JP/tools.json")),
         ] {
             let parsed: serde_json::Value =
                 serde_json::from_str(raw).expect("locale file must be valid JSON");
@@ -609,6 +613,7 @@ mod tests {
         for (code, raw) in [
             ("zh-CN", include_str!("../../locales/zh-CN/scopes.json")),
             ("zh-HK", include_str!("../../locales/zh-HK/scopes.json")),
+            ("ja-JP", include_str!("../../locales/ja-JP/scopes.json")),
         ] {
             let parsed: serde_json::Value =
                 serde_json::from_str(raw).expect("scope locale file must be valid JSON");
