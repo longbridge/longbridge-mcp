@@ -1,0 +1,1667 @@
+{
+  "$schema": "../tools.schema.json",
+  "server_instructions": "Longbridge OpenAPI MCP —— マーケットデータ、取引、分析。注文の書き込み操作（submit_order、cancel_order、replace_order、grid_*、fund_submit_order、fund_cancel_order）はすべて 2 段階確認です。まず execute を付けずに 1 回呼び出して confirmation_code を取得し、プレビューをユーザーに提示します。ユーザーが確認した後、execute=その確認コード を指定して再度呼び出してください。呼び出しに失敗した場合、ツールは `error_code` と `recoverable` フィールドを含む JSON エンベロープを返します：`reauth`（再認証してから再試行）、`backoff`（待機してから再試行）、`fix_params`（パラメータを修正してから再試行）、`none`（再試行せず、ユーザーに伝える）。\n\nすべてのツールはオプションのパラメータ `_jq` を受け付けます。これは jq CLI 構文によるフィルター式で、レスポンスに適用されます。出力が 1 つの場合はそのまま、複数の場合は JSON 配列として返されます。レスポンスの構造はツールごとに異なり（トップレベルが配列のものもあればオブジェクトのものもあり、大半は `data` ラッパーを持ちません）、多くのツールの説明に返却内容が記載されています。不明な場合は、完全なレスポンスを取得する前に keys（オブジェクト）または .[0] | keys（配列）で低コストに構造を確認してください。省略すると完全な JSON レスポンスが返されます。",
+  "tools": {
+    "create_watchlist_group": {
+      "title": "ウォッチリストグループを作成",
+      "description": "ウォッチリストグループを新規作成し、{id, name} を返します。任意で securities（例：[\"AAPL.US\"]）を渡すと銘柄をあらかじめ登録できます",
+      "properties": {
+        "name": "グループ名",
+        "securities": "追加する銘柄コード。例：`[\"700.HK\", \"AAPL.US\"]`"
+      }
+    },
+    "delete_watchlist_group": {
+      "title": "ウォッチリストグループを削除",
+      "description": "グループ id を指定してウォッチリストグループを削除します。purge=true の場合、このグループに含まれる銘柄を他のグループからも同時に削除します",
+      "properties": {
+        "id": "ウォッチリストグループ id",
+        "purge": "これらの銘柄を他のグループからも同時に削除するかどうか"
+      }
+    },
+    "security_list": {
+      "title": "銘柄一覧",
+      "description": "指定した市場の銘柄一覧を取得します。対応市場：US、HK、CN、SG。category は現在 \"Overnight\"（デフォルト）のみ対応。page：ページ番号（1 から開始、デフォルト 1）。count：1 ページあたりの件数（デフォルト 50）。{total, page, count, items[]{symbol, name_en, name_cn}} を返します。",
+      "properties": {
+        "market": "市場コード：US、HK、CN、SG",
+        "category": "カテゴリによる絞り込み。現在 \"Overnight\"（デフォルト）のみ対応",
+        "page": "ページ番号。1 から開始、デフォルト 1",
+        "count": "1 ページあたりの返却件数。デフォルト 50"
+      }
+    },
+    "update_watchlist_group": {
+      "title": "ウォッチリストグループを更新",
+      "description": "ウォッチリストグループを更新します：名前の変更（name）または構成銘柄の変更（securities + mode: add/remove/replace）",
+      "properties": {
+        "id": "ウォッチリストグループ id",
+        "name": "新しいグループ名（任意）",
+        "securities": "銘柄コードのリスト（任意）",
+        "mode": "銘柄の更新モード：`add`（追加）、`remove`（削除）または `replace`（置換、デフォルト）"
+      }
+    },
+    "watchlist": {
+      "title": "ウォッチリスト",
+      "description": "すべてのウォッチリストグループとその銘柄を取得し、グループのトップレベル配列 {id, name, securities[]{symbol, name, watched_price, watched_at, is_pinned}} を返します"
+    },
+    "account_balance": {
+      "title": "口座残高",
+      "description": "口座の現金残高と資産概要を照会し、トップレベル配列 {currency, total_cash, net_assets, buy_power, max_finance_amount, remaining_finance_amount, risk_level, margin_call, init_margin, maintenance_margin, cash_infos[]{currency, available_cash, withdraw_cash, frozen_cash, settling_cash}} を返します。米国株口座も同じ配列を返しますが、口座通貨の 1 件のみです：currency、total_cash、net_assets、buy_power、maintenance_margin と cash_infos[]（settling_cash の代わりに settled_cash）を含み、max_finance_amount、remaining_finance_amount、risk_level、margin_call、init_margin はありません。米国株の買付余力と証拠金の明細は us{buy_limit_info, margin_status, cash_list[]} の下にあります",
+      "properties": {
+        "currency": "通貨コードで絞り込み（例：`\"USD\"`、`\"HKD\"`）。省略するとすべての通貨を返します"
+      }
+    },
+    "cash_flow": {
+      "title": "入出金明細",
+      "description": "入出金明細（入出金、配当金受取など）を照会し、トップレベル配列 {transaction_flow_name, direction（In/Out）, business_type, balance（発生金額）, currency, business_time, symbol, description} を返します。上流の direction と business_type は信頼できない（常に Out / 0）ため、方向は balance の正負で判断してください。米国株口座も同じ配列を返しますが、business_type はありません（biz_code、biz_code_name を参照）。balance は符号付き金額（暗号資産の移管など資金移動がない場合は 0）で、direction はその符号から取り、0 の場合は数量の符号から取ります（両方とも 0 の場合は Unknown）。さらに quantity、quantity_description、ref_no、equity_type を含みます。最大 2000 件で、ちょうど 2000 件の場合はさらにデータがあるため期間を狭めてください。時刻の降順",
+      "properties": {
+        "start_at": "開始時刻：RFC3339（例：2026-09-01T00:00:00Z）、または日付（yyyy-mm-dd、当日 UTC 0 時を表す）",
+        "end_at": "終了時刻：RFC3339（例：2026-09-30T23:59:59Z）、または日付（yyyy-mm-dd、当日 UTC の終わりを表す）"
+      }
+    },
+    "fund_positions": {
+      "title": "保有ファンド",
+      "description": "現在の保有ファンドを照会し、list[].fund_info[]{counter_id, symbol_name, currency, holding_units, current_net_asset_value, cost_net_asset_value, net_asset_value_day} を返します。counter_id はファンド id（例：UT/FD/HK0000384492）で、最後の / 以降の部分が ISIN です。"
+    },
+    "margin_ratio": {
+      "title": "証拠金率",
+      "description": "銘柄の証拠金率を照会し、{im_factor（当初証拠金）, mm_factor（維持証拠金）, fm_factor（強制決済証拠金）} を返します",
+      "properties": {
+        "symbol": "銘柄コード。例：`\"700.HK\"`。正規のコードを使用してください。ゼロ埋めしたコード（例：\"00700.HK\"）はエラーではなく空のレコードを返します"
+      }
+    },
+    "profit_analysis": {
+      "title": "損益分析",
+      "description": "ポートフォリオの損益分析サマリーを取得します。start/end（yyyy-mm-dd）はペアで渡す必要があり、片方のみの場合は空の結果を返します",
+      "properties": {
+        "start": "開始日（`yyyy-mm-dd`）。`end` とペアで渡す必要があり、片方のみの場合は空の結果を返します",
+        "end": "終了日（`yyyy-mm-dd`）。`start` とペアで渡す必要があり、片方のみの場合は空の結果を返します"
+      }
+    },
+    "profit_analysis_detail": {
+      "title": "損益分析明細",
+      "description": "指定銘柄の詳細な損益分析を取得します。start/end（yyyy-mm-dd）はペアで渡す必要があり、片方のみの場合は空の結果を返します",
+      "properties": {
+        "symbol": "銘柄コード。例：`\"700.HK\"`。正規のコードを使用してください。ゼロ埋めしたコード（例：\"00700.HK\"）はエラーではなく空のレコードを返します",
+        "start": "開始日（`yyyy-mm-dd`）。`end` とペアで渡す必要があり、片方のみの場合は空の結果を返します",
+        "end": "終了日（`yyyy-mm-dd`）。`start` とペアで渡す必要があり、片方のみの場合は空の結果を返します"
+      }
+    },
+    "profit_analysis_realized": {
+      "title": "実現損益分析（米国株）",
+      "description": "米国株口座の実現損益を、カテゴリ（株式/オプション/暗号資産）と期間別に取得します。{realized_pl_list: [{category, currency, metrics: [{period, amount, rate, rate_unit}]}]} を返します。rate は小数です。米国株口座のみ。アジア太平洋口座で呼び出すと DcRegionRestricted エラーを返します",
+      "properties": {
+        "currency": "レポート通貨。例：`\"USD\"`（デフォルト `\"USD\"`）。米国株口座のみ",
+        "category": "カテゴリで絞り込み：`\"STOCK\"`、`\"OPTION\"`、`\"CRYPTO\"`。空欄はすべてを表します"
+      }
+    },
+    "statement_export": {
+      "title": "取引報告書のエクスポート",
+      "description": "取引報告書データファイル（statement_list から取得）の署名付きダウンロード URL を取得し、{url} を返します。この URL にアクセスすると取引報告書の JSON を取得できます",
+      "properties": {
+        "file_key": "`statement_list` から取得したファイル key。例：`\"/statement_data/data/.../20975338.json\"`"
+      }
+    },
+    "statement_list": {
+      "title": "取引報告書一覧",
+      "description": "取得可能な口座の取引報告書（日次/月次）を一覧表示し、{list[]{dt（報告書日付、yyyymmdd）, file_key}} を返します。file_key を使って statement_export を呼び出してダウンロードします",
+      "properties": {
+        "statement_type": "報告書の種類：`\"daily\"`（デフォルト、日次）または `\"monthly\"`（月次）",
+        "start_date": "開始日（`yyyy-mm-dd`）。`daily` はデフォルトで 30 日前、`monthly` はデフォルトで 12 か月前",
+        "limit": "返却件数。`daily` はデフォルト 30、`monthly` はデフォルト 12"
+      }
+    },
+    "stock_positions": {
+      "title": "保有株式",
+      "description": "すべてのチャネルにおける現在の保有株式を照会し、list[].stock_info[]{symbol, symbol_name, quantity, available_quantity, currency, cost_price, market} を返します。米国株口座も同じ list[].stock_info[] を返します（available_quantity はなく、さらに last_done、market_price、prev_close、today_pl、position_side を含みます）。現金、オプション、暗号資産（symbol は BTCUSD.BKKT など）および買付余力は us{cash_list, option_list, crypto_list, cash_buy_power, …} の下にあります"
+    },
+    "dca_history": {
+      "title": "積立実行履歴",
+      "description": "plan_id を指定して積立プランの引き落とし実行履歴を照会し、executions[]{date, quantity, amount, price, status, order_id} を返します",
+      "properties": {
+        "plan_id": "積立プラン ID",
+        "page": "ページ番号（デフォルト 1）",
+        "limit": "1 ページあたりの件数（デフォルト 20）"
+      }
+    },
+    "dca_list": {
+      "title": "積立プラン一覧",
+      "description": "積立プランを一覧表示します。ステータス（Active/Suspended/Finished）または銘柄で絞り込めます。plans[]{plan_id, symbol, stock_name, market, status, per_invest_amount, invest_frequency, invest_day_of_week, invest_day_of_month, next_trd_date, cum_amount, cum_profit, average_cost, issue_number, …} を返します。plan_id は dca_update / dca_pause / dca_resume / dca_stop で使用できます",
+      "properties": {
+        "status": "ステータスで絞り込み：`Active`、`Suspended`、`Finished`。省略するとすべて返します",
+        "symbol": "銘柄で絞り込み。例：`\"AAPL.US\"`。省略するとすべてのプランを返します",
+        "page": "ページ番号（デフォルト 1）",
+        "limit": "1 ページあたりの件数（デフォルト 20）"
+      }
+    },
+    "dca_stats": {
+      "title": "積立統計",
+      "description": "積立の統計を取得し、{total_amount, total_profit, active_count, suspended_count, finished_count, rest_days（次回の予定投資日までの日数）, nearest_plans[]（直近に実行予定のプラン、構造は dca_list の plans[] と同じ）, invested_markets[]（市場コード、例：[\"US\"]）} を返します。金額と件数はいずれも文字列です",
+      "properties": {
+        "symbol": "銘柄で絞り込み。例：`\"AAPL.US\"`。省略するとすべてのプランの合計統計を返します"
+      }
+    },
+    "estimate_max_purchase_quantity": {
+      "title": "最大購入可能数量の試算",
+      "description": "指定銘柄の最大購入可能/売却可能数量を試算し、{cash_max_qty, margin_max_qty} を返します",
+      "properties": {
+        "symbol": "銘柄コード",
+        "side": "売買区分：`Buy`（買い）または `Sell`（売り）",
+        "order_type": "注文種別：`LO`（指値注文）/ `ELO`（拡張指値注文）/ `MO`（成行注文）/ `AO`（オークション注文）/ `ALO`（オークション指値注文）",
+        "price": "注文価格（指値系の注文で必要）"
+      }
+    },
+    "history_executions": {
+      "title": "過去の約定",
+      "description": "指定期間内のすべての約定履歴を取得します。自動でページ送りして完全な結果を返します（1 ページ 1000 件の上限で切り捨てられません）。トップレベル配列 {order_id, trade_id, symbol, side, quantity, price, trade_done_at} を返します。trade_id は安定した重複排除キーです。side を特定できない場合は \"Unknown\" になります（米国株口座：所属する注文の方向を解決できなかった場合で、order_detail(order_id) を呼び出して取得できます）。start_at/end_at は RFC3339 形式、または日付のみ（yyyy-mm-dd）を渡すと UTC の当日として解釈されます（米国株口座はニューヨーク時間 EST/EDT で、history_orders と同じ）。アジア太平洋口座は約定時刻（trade_done_at）で絞り込みます。米国株口座は v1 の過去約定を読み取り、約定時刻では絞り込まないため、期間の境界で日付がずれる可能性があります：期間の前後をそれぞれ 1 日広げてから trade_done_at で自分で絞り込んでください。side は口座のその期間内の注文および注文詳細から補完されます",
+      "properties": {
+        "symbol": "銘柄で絞り込み（任意）",
+        "start_at": "開始時刻：RFC3339（例：2026-09-01T00:00:00Z）、または日付（yyyy-mm-dd、当日 UTC 0 時を表す。米国株口座はニューヨーク時間）",
+        "end_at": "終了時刻：RFC3339（例：2026-09-30T23:59:59Z）、または日付（yyyy-mm-dd、当日 UTC の終わりを表す。米国株口座はニューヨーク時間）"
+      }
+    },
+    "history_orders": {
+      "title": "過去の注文",
+      "description": "指定期間内の過去の注文（AP 口座は当日分を含まない）を照会し、orders[]{order_id, symbol, side, status, quantity, price, submitted_at} を返します。米国株口座は today_orders の米国株版と同じ配列とフィールドを返します。start_at/end_at に日付のみ（yyyy-mm-dd）を渡すと UTC ではなくニューヨーク時間（EST/EDT）で解釈されます。期間はそのまま照会され、当日を含む場合は当日の注文も含みます。デフォルトでは期間内のすべての注文（最大 500 件）を返し、us_page/us_limit を渡すとそのページのみを返します。today_orders の米国株版の対象期間は前日のニューヨーク時間 20:00 から始まるため、前日 20:00 ET 以降の注文は前日までの期間と today_orders の両方に表示されます。結合する際は order_id で重複を除いてください",
+      "properties": {
+        "symbol": "銘柄で絞り込み（任意）",
+        "start_at": "開始時刻：RFC3339（例：2026-09-01T00:00:00Z）、または日付（yyyy-mm-dd、当日 UTC 0 時を表す。米国株口座はニューヨーク時間）",
+        "end_at": "終了時刻：RFC3339（例：2026-09-30T23:59:59Z）、または日付（yyyy-mm-dd、当日 UTC の終わりを表す。米国株口座はニューヨーク時間）",
+        "us_page": "米国株口座のみ：このページのみを返します（デフォルトは全ページ、最大 500 件）。アジア太平洋口座では無視されます（リージョンは口座から自動判別されるため指定不要）",
+        "us_limit": "米国株口座のみ：us_page でページングする際の 1 ページあたりの件数（デフォルト 50）。アジア太平洋口座では無視されます"
+      }
+    },
+    "order_detail": {
+      "title": "注文詳細",
+      "description": "単一の注文の詳細を照会し、{order_id, symbol, status, side, order_type, quantity, price, executed_quantity, executed_price, submitted_at, time_in_force, msg, attached_orders[]} を返します。attached_orders[] はこの注文に付随する利確/損切りの付随注文とそれぞれの注文番号です。付随注文自身の注文番号で照会するには is_attached=true を設定します。この場合、その付随注文自体が返され、charge_detail は null になります。米国株口座は同じトップレベルフィールドと history[] を返しますが、time_in_force、tag、expire_date、outside_rth および手数料/控除のフィールドはありません（米国株の元のコードは us_time_in_force、us_tag を参照。さらに done_at、gtd、security_type、us_attached_orders、us_charge_detail を含みます）。is_attached は無効です",
+      "properties": {
+        "order_id": "注文番号：親注文の番号、または（is_attached=true と併用して）利確/損切り付随注文の番号",
+        "is_attached": "true に設定すると order_id が利確/損切り付随注文の番号であることを示し、その付随注文自体を返します（charge_detail は null）。親注文を照会する場合は省略するか false を渡します。米国株口座では無効です"
+      }
+    },
+    "today_executions": {
+      "title": "当日の約定",
+      "description": "当日の約定履歴を取得し、トップレベル配列 {order_id, trade_id, symbol, side, quantity, price, trade_done_at} を返します。side は約定が属する注文から取得し、特定できない場合は \"\" になります（米国株口座：所属する注文の方向を解決できなかった場合で、order_detail(order_id) を呼び出して取得できます）。symbol または order_id で絞り込めます",
+      "properties": {
+        "symbol": "銘柄で絞り込み。例：`\"700.HK\"`",
+        "order_id": "指定した注文番号で絞り込み"
+      }
+    },
+    "today_orders": {
+      "title": "当日の注文",
+      "description": "当日の注文を取得し、注文のトップレベル配列 {order_id, symbol, stock_name, side, order_type, status, quantity, executed_quantity, price, currency, time_in_force, submitted_at, updated_at, msg, …, attached_orders[]} を返します。attached_orders[] はこの注文に付随する利確/損切りの付随注文です。symbol で銘柄を絞り込むか、order_id で単一の注文を照会できます。付随注文自身の注文番号で照会するには、その番号を order_id として渡し、同時に is_attached=true を設定します。返される注文はその付随注文自体です。is_attached は order_id と併用しない場合は無効です。米国株口座は同じ配列とフィールド名を返しますが、time_in_force、tag、expire_date、outside_rth はありません（米国株の元のコードは us_time_in_force、us_tag を参照。さらに gtd、security_type、operate_direction を含みます）。is_attached は無効で、us_action（Buy/Sell）で絞り込めます。デフォルトでは当日のすべての注文（最大 500 件）を返し、us_page/us_limit を渡すとそのページのみを返します。「当日」とは前暦日のニューヨーク時間（EST/EDT）20:00（夜間取引 20:00–04:00 ET の開始）から当日のニューヨーク時間 23:59:59 までを指します。そのため夜間取引の注文はニューヨーク時間の午前 0 時を過ぎても表示され、当日の一覧に前夜の夜間取引の注文が含まれることがあります。前日のニューヨーク時間 20:00 以降の注文はその日の history_orders にも表示されるため、両者を結合する際は order_id で重複を除いてください",
+      "properties": {
+        "symbol": "銘柄で絞り込み。例：`\"700.HK\"`。省略すると当日のすべての注文を返します",
+        "order_id": "注文番号で絞り込み：親注文の番号、または（is_attached=true と併用して）利確/損切り付随注文の番号。米国株口座では親注文の番号のみ一致します",
+        "is_attached": "order_id と同時に渡した場合のみ有効：その order_id が利確/損切り付随注文の番号であることを示し、結果はその付随注文自体になります。単独では無効で、米国株口座でも無効です",
+        "us_action": "米国株口座のみ：方向で絞り込み、`\"Buy\"` または `\"Sell\"`。空欄はすべてを表します。アジア太平洋口座では無視されます（リージョンは口座から自動判別されるため指定不要）",
+        "us_page": "米国株口座のみ：このページのみを返します（デフォルトは全ページ、最大 500 件）。アジア太平洋口座では無視されます（リージョンは口座から自動判別されるため指定不要）",
+        "us_limit": "米国株口座のみ：us_page でページングする際の 1 ページあたりの件数（デフォルト 50）。アジア太平洋口座では無視されます"
+      }
+    },
+    "cancel_order": {
+      "title": "注文の取消",
+      "description": "order_id を指定して未約定の注文を取り消します。成功すると \"order cancelled\" を返し、約定済みまたは取消済みの場合はエラーになります。【2 段階確認が必須】今回の試行で返された confirmation_code を渡さない場合、本ツールは DRY RUN（試行）となり、注文内容の検証とエコーバックのみを行い、取引所には送信しません。まず execute なしで一度呼び出し、返されたプレビューをすべてユーザーに提示してください。ユーザーがこの注文を明確に確認した後に限り、再度呼び出して確認コードを execute に渡すことができます。確認コードは注文そのもの（コード、売買区分、数量、価格）から導出され、まったく同一のこの 1 件のリクエストにのみ有効です。確認コードを独断で入力してはならず、ユーザーが最初に依頼したのと同じターンで入力してもいけません。試行では今回取り消す注文もエコーバックされるため、ユーザーは対象の注文かどうかを確認できます。is_attached=true に設定すると、付随注文自身の order_id で利確/損切り付随注文を個別に取り消せます。親注文を取り消すと、その付随注文も一緒に取り消されます",
+      "properties": {
+        "order_id": "注文番号",
+        "is_attached": "true に設定すると、利確/損切り付随注文自身の order_id でその付随注文を取り消し、親注文はそのまま残ります。省略または false の場合は親注文を取り消します（その付随注文も一緒に取り消されます）",
+        "execute": "今回の試行で返された confirmation_code。省略（デフォルト）すると DRY RUN となり、リクエストの検証とエコーバックのみを行い、同時に 3 桁の確認コードを返します。取引所には送信されません。まずこのパラメータなしで一度呼び出し、プレビューをユーザーに提示し、ユーザーが明確に確認した後に限り再度呼び出してこのコードを入力できます。確認コードは注文そのもの（コード、売買区分、数量、価格）から導出され、まったく同一のこの 1 件のリクエストにのみ有効です。いずれかのフィールドを変更すると無効になります。独断で入力してはいけません。"
+      }
+    },
+    "dca_create": {
+      "title": "積立プランを作成",
+      "description": "積立（DCA）プランを作成します。frequency: Daily/Weekly/Monthly。週次は day_of_week（Mon–Fri）、月次は day_of_month（1-28）に対応します",
+      "properties": {
+        "symbol": "銘柄コード。例：`\"AAPL.US\"`",
+        "amount": "1 回あたりの投資金額。例：`\"100\"`",
+        "frequency": "積立頻度：`Daily`（毎日）、`Weekly`（毎週）、`Monthly`（毎月）",
+        "day_of_week": "週次の場合に指定する曜日：`Mon`、`Tue`、`Wed`、`Thu`、`Fri`",
+        "day_of_month": "月次の場合に指定する日（1-28）",
+        "allow_margin": "信用取引（融資）の利用を許可するかどうか（デフォルト `false`）"
+      }
+    },
+    "dca_pause": {
+      "title": "積立プランを一時停止",
+      "description": "plan_id を指定して積立プランを一時停止します。再開するまでプランの実行は停止します。上流 API のレスポンスを返します。再開には dca_resume を使用してください",
+      "properties": {
+        "plan_id": "積立プラン ID"
+      }
+    },
+    "dca_resume": {
+      "title": "積立プランを再開",
+      "description": "plan_id を指定して一時停止中の積立プランを再開し、元の周期で自動実行を続けます",
+      "properties": {
+        "plan_id": "積立プラン ID"
+      }
+    },
+    "dca_stop": {
+      "title": "積立プランを終了",
+      "description": "plan_id を指定して積立プランを完全に終了します。この操作は取り消せません。一時的に停止する場合は dca_pause を使用してください",
+      "properties": {
+        "plan_id": "積立プラン ID"
+      }
+    },
+    "dca_update": {
+      "title": "積立プランを更新",
+      "description": "plan_id を指定して積立プランを更新します。amount、frequency（Daily/Weekly/Monthly）、day_of_week（Mon-Fri）または day_of_month（1-28）を変更できます",
+      "properties": {
+        "plan_id": "更新する積立プラン ID",
+        "amount": "新しい 1 回あたりの投資金額",
+        "frequency": "新しい積立頻度：`Daily`、`Weekly`、`Monthly`",
+        "day_of_week": "週次の場合に指定する曜日：`Mon`、`Tue`、`Wed`、`Thu`、`Fri`",
+        "day_of_month": "月次の場合に指定する日（1-28）",
+        "allow_margin": "信用取引（融資）の利用を許可するかどうか"
+      }
+    },
+    "replace_order": {
+      "title": "注文の訂正",
+      "description": "未約定の注文の数量、価格、トリガー価格またはトレーリングストップのパラメータを訂正します。成功すると \"order replaced\" を返します。【2 段階確認が必須】今回の試行で返された confirmation_code を渡さない場合、本ツールは DRY RUN（試行）となり、注文内容の検証とエコーバックのみを行い、取引所には送信しません。まず execute なしで一度呼び出し、返されたプレビューをすべてユーザーに提示してください。ユーザーがこの注文を明確に確認した後に限り、再度呼び出して確認コードを execute に渡すことができます。確認コードは注文そのもの（コード、売買区分、数量、価格）から導出され、まったく同一のこの 1 件のリクエストにのみ有効です。確認コードを独断で入力してはならず、ユーザーが最初に依頼したのと同じターンで入力してもいけません。試行では現在の注文と今回の訂正予定の内容が同時にエコーバックされます。利確/損切り付随注文もここで訂正します：attached_order_type と新しい attached_profit_taker_price / attached_stop_loss_price を組み合わせて追加または価格変更ができ、attached_profit_taker_id / attached_stop_loss_id で訂正対象の既存の付随注文を指定します。attached_cancel_all=true にすると親注文を残したまますべての付随注文を取り消します",
+      "properties": {
+        "order_id": "注文番号",
+        "quantity": "新しい注文数量",
+        "price": "新しい注文価格",
+        "trigger_price": "新しいトリガー価格",
+        "limit_offset": "新しい指値オフセット",
+        "trailing_amount": "新しいトレーリングストップ金額",
+        "trailing_percent": "新しいトレーリングストップのパーセンテージ",
+        "attached_cancel_all": "true に設定すると、この注文のすべての利確/損切り付随注文を取り消し、親注文自体はそのまま残ります",
+        "attached_order_type": "追加または訂正する付随注文の種別：`PROFIT_TAKER` / `STOP_LOSS` / `BRACKET`。attached_cancel_all のみを行う場合を除き必須",
+        "attached_profit_taker_id": "訂正する既存の利確注文の番号（order_detail の attached_orders[] から取得）。付随注文を新規追加する場合は省略",
+        "attached_stop_loss_id": "訂正する既存の損切り注文の番号（order_detail の attached_orders[] から取得）。付随注文を新規追加する場合は省略",
+        "attached_profit_taker_price": "新しい利確トリガー価格",
+        "attached_stop_loss_price": "新しい損切りトリガー価格",
+        "attached_profit_taker_submit_price": "新しい利確注文の指値",
+        "attached_stop_loss_submit_price": "新しい損切り注文の指値",
+        "attached_time_in_force": "新しい付随注文の有効期限：`Day` / `GTC` / `GTD`",
+        "attached_expire_time": "新しい付随注文の有効期限日時。Unix タイムスタンプ（秒）。`attached_time_in_force=GTD` の場合は必須",
+        "attached_activate_order_type": "新しいトリガー後の注文種別。例：`LO` または `MO`",
+        "attached_outside_rth": "新しいトリガー後の時間外取引設定：`RTH_ONLY` / `ANY_TIME` / `OVERNIGHT` / `OPTION_PRE_MARKET`",
+        "attached_main_id": "付随注文が属する親注文の番号。親注文を経由せず、特定の付随注文を単独で訂正する場合のみ必要",
+        "attached_quantity": "新しい付随注文の数量",
+        "attached_market_price": "付随注文の参考市場価格",
+        "execute": "今回の試行で返された confirmation_code。省略（デフォルト）すると DRY RUN となり、リクエストの検証とエコーバックのみを行い、同時に 3 桁の確認コードを返します。取引所には送信されません。まずこのパラメータなしで一度呼び出し、プレビューをユーザーに提示し、ユーザーが明確に確認した後に限り再度呼び出してこのコードを入力できます。確認コードは注文そのもの（コード、売買区分、数量、価格）から導出され、まったく同一のこの 1 件のリクエストにのみ有効です。いずれかのフィールドを変更すると無効になります。独断で入力してはいけません。"
+      }
+    },
+    "submit_order": {
+      "title": "注文の発注",
+      "description": "売買注文を発注します。order_type：LO（指値）/ ELO（香港株拡張指値）/ MO（成行）/ AO（香港株オークション）/ ALO（香港株オークション指値）/ ODD（香港株端株）/ LIT（逆指値・指値）/ MIT（逆指値・成行）/ TSLPAMT（金額指定トレーリングストップ）/ TSLPPCT（パーセンテージ指定トレーリングストップ）/ SLO（香港株特別指値）。side：Buy/Sell。time_in_force：Day/GTC/GTD。【2 段階確認が必須】今回の試行で返された confirmation_code を渡さない場合、本ツールは DRY RUN（試行）となり、注文内容の検証とエコーバックのみを行い、取引所には送信しません。まず execute なしで一度呼び出し、返されたプレビューをすべてユーザーに提示してください。ユーザーがこの注文を明確に確認した後に限り、再度呼び出して確認コードを execute に渡すことができます。確認コードは注文そのもの（コード、売買区分、数量、価格）から導出され、まったく同一のこの 1 件のリクエストにのみ有効です。確認コードを独断で入力してはならず、ユーザーが最初に依頼したのと同じターンで入力してもいけません。この注文は実際の資金を動かします。試行は、ユーザーがコード、売買区分、数量または価格の誤りに気付ける唯一の機会です。利確/損切り付随注文を付ける場合：attached_order_type（PROFIT_TAKER / STOP_LOSS / BRACKET）を設定し、attached_profit_taker_price および/または attached_stop_loss_price を入力します。付随注文は試行のプレビューでエコーバックされ、確認コードの算出にも含まれます",
+      "properties": {
+        "symbol": "銘柄コード",
+        "order_type": "注文種別（香港株はすべて対応、米国株は `LO` / `MO` / `LIT` / `MIT` / `TSLPAMT` / `TSLPPCT` のみ対応）：<br>- `LO`（指値注文）：`submitted_price` が必要<br>- `ELO`（拡張指値注文、香港株）：`submitted_price` が必要<br>- `MO`（成行注文）：価格不要<br>- `AO`（オークション注文、香港株）：オークション価格で約定、価格不要<br>- `ALO`（オークション指値注文、香港株）：`submitted_price` が必要<br>- `ODD`（端株注文、香港株）：`submitted_price` が必要、単元未満の数量に使用<br>- `LIT`（逆指値・指値）：`submitted_price` と `trigger_price` が必要、相場がトリガー価格に達すると有効化<br>- `MIT`（逆指値・成行）：`trigger_price` のみ必要、到達後に成行で約定<br>- `TSLPAMT`（金額指定トレーリングストップ指値）：`trailing_amount` と `limit_offset` が必要<br>- `TSLPPCT`（パーセンテージ指定トレーリングストップ指値）：`trailing_percent`（0-1）と `limit_offset` が必要<br>- `SLO`（特別指値注文、香港株）：`submitted_price` が必要、発注後は訂正不可",
+        "side": "売買区分：`Buy`（買い）または `Sell`（売り）",
+        "submitted_quantity": "注文数量",
+        "time_in_force": "注文の有効期限：`Day`（当日限り）、`GTC`（取消まで有効）、`GTD`（指定日まで有効、`expire_date` が必要）",
+        "submitted_price": "注文の指値。`LO` / `ELO` / `ALO` / `ODD` / `LIT` / `SLO` では必須",
+        "trigger_price": "トリガー価格。`LIT` / `MIT` / `TSLPAMT` / `TSLPPCT` では必須",
+        "limit_offset": "トレーリングストップ価格に対する指値オフセット。`TSLPAMT` / `TSLPPCT` では必須",
+        "trailing_amount": "トレーリング金額（価格の絶対差）。`TSLPAMT` では必須",
+        "trailing_percent": "トレーリングのパーセンテージ（小数形式、例：`0.05` は 5% を表す）。`TSLPPCT` では必須",
+        "expire_date": "有効期限日（`yyyy-mm-dd`）。`time_in_force=GTD` の場合は必須",
+        "outside_rth": "時間外取引設定：`RTH_ONLY`（通常取引時間のみ）、`ANY_TIME`（プレマーケット・アフターマーケットを含む任意の時間帯）、`OVERNIGHT`（夜間取引、米国株のみ）、`OPTION_PRE_MARKET`（米国株オプションのプレマーケット時間帯）",
+        "remark": "注文メモ（最大 255 文字）",
+        "client_request_id": "冪等キー。注文ごとに一意（例：UUID）。2 回のリクエストが同じ値を持つ場合、取引所は 1 件のみ発注し、2 回目は元の order_id を返すため、タイムアウトや切断後の再試行で重複約定は発生しません。再試行の可能性がある場合は必ず設定してください。次の新しい注文では必ず新しい値に変更してください",
+        "attached_order_type": "利確/損切り付随注文の種別：`PROFIT_TAKER`（利確のみ）、`STOP_LOSS`（損切りのみ）、`BRACKET`（利確と損切りを同時に設定）。通常の注文では省略してください。このパラメータを渡さない場合、その他の attached_* パラメータはすべて無視されます",
+        "attached_profit_taker_price": "利確トリガー価格。`PROFIT_TAKER` と `BRACKET` では必須",
+        "attached_stop_loss_price": "損切りトリガー価格。`STOP_LOSS` と `BRACKET` では必須",
+        "attached_profit_taker_submit_price": "利確注文がトリガーされた後の注文指値。`attached_activate_order_type=LO` と併用",
+        "attached_stop_loss_submit_price": "損切り注文がトリガーされた後の注文指値。`attached_activate_order_type=LO` と併用",
+        "attached_time_in_force": "付随注文の有効期限：`Day` / `GTC` / `GTD`。省略すると親注文の設定を引き継ぎます",
+        "attached_expire_time": "付随注文の有効期限日時。Unix タイムスタンプ（秒）。例：`\"1767139200\"`。`attached_time_in_force=GTD` の場合は必須",
+        "attached_activate_order_type": "付随注文がトリガーされた後に発注する注文種別。例：`LO`（対応する `attached_*_submit_price` も同時に指定する必要あり）または `MO`",
+        "attached_outside_rth": "付随注文がトリガーされた後の時間外取引設定：`RTH_ONLY` / `ANY_TIME` / `OVERNIGHT` / `OPTION_PRE_MARKET`",
+        "execute": "今回の試行で返された confirmation_code。省略（デフォルト）すると DRY RUN となり、リクエストの検証とエコーバックのみを行い、同時に 3 桁の確認コードを返します。取引所には送信されません。まずこのパラメータなしで一度呼び出し、プレビューをユーザーに提示し、ユーザーが明確に確認した後に限り再度呼び出してこのコードを入力できます。確認コードは注文そのもの（コード、売買区分、数量、価格）から導出され、まったく同一のこの 1 件のリクエストにのみ有効です。いずれかのフィールドを変更すると無効になります。独断で入力してはいけません。"
+      }
+    },
+    "submit_multileg_order": {
+      "title": "オプション組み合わせ注文の発注",
+      "description": "マルチレッグのオプション組み合わせ注文を発注します。各レッグは 1 つの戦略注文としてまとめて約定または発注されます。strategy：CoveredCall（カバードコール）/ CoveredPut（カバードプット）/ VerticalCallSpread（コール・バーティカル・スプレッド）/ VerticalPutSpread（プット・バーティカル・スプレッド）/ Collar（カラー）/ Straddle（ストラドル）/ Strangle（ストラングル）/ CalendarCallSpread（コール・カレンダー・スプレッド）/ CalendarPutSpread（プット・カレンダー・スプレッド）。side：Buy/Sell（戦略全体の方向）。order_type：LO（submitted_price が必要、組み合わせの正味価格）または MO。legs[]：{symbol, ratio_quantity}、戦略の順序で並べ、オプションコードのみ受け付けます。ratio_quantity は常に正の数です。各レッグの売買方向は strategy と side の組み合わせで決まります",
+      "properties": {
+        "strategy": "組み合わせ戦略。必要なレッグ数と各レッグの方向を決定します：`CoveredCall`（カバードコール）/ `CoveredPut`（カバードプット）/ `VerticalCallSpread`（コール・バーティカル・スプレッド）/ `VerticalPutSpread`（プット・バーティカル・スプレッド）/ `Collar`（カラー）/ `Straddle`（ストラドル）/ `Strangle`（ストラングル）/ `CalendarCallSpread`（コール・カレンダー・スプレッド）/ `CalendarPutSpread`（プット・カレンダー・スプレッド）。2 種類のカレンダー・スプレッドは同一の権利行使価格で、限月が異なります",
+        "side": "売買区分：`Buy`（買い）または `Sell`（売り）。戦略全体の方向を指します",
+        "order_type": "注文種別：`LO`（指値、`submitted_price` が必要）または `MO`（成行）",
+        "submitted_quantity": "注文セット数（各セットは `legs` の比率で構成されるレッグ一式）",
+        "legs": "組み合わせの各レッグ。戦略の順序で並べ、オプションコードのみ受け付けます",
+        "submitted_price": "組み合わせ全体の正味指値。`LO` では必須",
+        "remark": "注文メモ（最大 255 文字）",
+        "client_request_id": "冪等キー。注文ごとに一意。submit_order の同名フィールドと同じ意味です"
+      }
+    },
+    "ah_premium": {
+      "title": "A/H プレミアム",
+      "description": "A株・H株の重複上場銘柄（例：939.HK）の A/H 株プレミアム履歴を取得し、{klines[]{timestamp, aprice, apreclose, hprice, hpreclose, currency_rate, ahpremium_rate}} を返します。ahpremium_rate は比率です（-0.27 は H 株が A 株より 27% 安いことを示します）",
+      "properties": {
+        "symbol": "銘柄コード。例：`\"700.HK\"`。正規のコードを使用してください。ゼロ埋めしたコード（例：\"00700.HK\"）はエラーではなく空のレコードを返します",
+        "period": "ローソク足の周期：`1m`、`5m`、`15m`、`30m`、`60m`、`day`（デフォルト）、`week`、`month`、`year`",
+        "count": "返すローソク足の本数（デフォルト 100）"
+      }
+    },
+    "ah_premium_intraday": {
+      "title": "A/H プレミアム（日中）",
+      "description": "A株・H株の重複上場銘柄（例：939.HK）の当日 1 分ごとの A/H 株プレミアムを取得し、{klines[]{timestamp, aprice, hprice, ahpremium_rate, currency_rate}, apreclose, hpreclose} を返します。ahpremium_rate は比率です",
+      "properties": {
+        "symbol": "銘柄コード。例：`\"700.HK\"`。正規のコードを使用してください。ゼロ埋めしたコード（例：\"00700.HK\"）はエラーではなく空のレコードを返します"
+      }
+    },
+    "alert_add": {
+      "title": "価格アラートを追加",
+      "description": "価格アラートを追加し、作成されたアラートオブジェクトを返します。condition：price_rise/price_fall（絶対価格）または percent_rise/percent_fall（騰落率）；frequency：once/daily/every",
+      "properties": {
+        "symbol": "銘柄コード。例：`\"700.HK\"`。正規のコードを使用してください。ゼロ埋めしたコード（例：\"00700.HK\"）はエラーではなく空のレコードを返します",
+        "condition": "アラート条件：`price_rise`、`price_fall`、`percent_rise`、`percent_fall`",
+        "price": "しきい値となる価格またはパーセント値",
+        "frequency": "アラート頻度：`once`（1 回発動後に無効化）、`daily`（1 日 1 回）、`every`（条件を満たすたびに発動）"
+      }
+    },
+    "alert_delete": {
+      "title": "価格アラートを削除",
+      "description": "alert_id（alert_list から得られる数字の文字列）を指定して価格アラートを削除します",
+      "properties": {
+        "alert_id": "アラート指標 id"
+      }
+    },
+    "alert_disable": {
+      "title": "価格アラートを無効化",
+      "description": "alert_id を指定して価格アラートを無効化し、{alert_id, enabled: false} を返します",
+      "properties": {
+        "alert_id": "アラート指標 id"
+      }
+    },
+    "alert_enable": {
+      "title": "価格アラートを有効化",
+      "description": "alert_id を指定して価格アラートを有効化し、{alert_id, enabled: true} を返します",
+      "properties": {
+        "alert_id": "アラート指標 id"
+      }
+    },
+    "alert_list": {
+      "title": "価格アラート一覧",
+      "description": "設定済みのすべての価格アラートを取得し、{lists[]{symbol, name, market, price, chg, indicators[]{id, indicator_id, text（アラート条件のテキスト。例：「価格が 250 まで上昇」）, value_map{price}, frequency, enabled, state}}} を返します"
+    },
+    "anomaly": {
+      "title": "市場の急変動",
+      "description": "市場の急変動アラート（価格・出来高の異常な変動）を取得します。market: HK/US/CN/SG。symbol: 任意。特定の銘柄で絞り込みます。count: 返す件数（デフォルト 50、最大 100）。{changes[]{id, symbol, name, alert_type, alert_name, alert_time, change_values[], emotion (1 強気 / 2 弱気)}, all_off} を返します。",
+      "properties": {
+        "market": "市場コード：HK、US、CN、SG",
+        "symbol": "任意の銘柄コード。例：AAPL.US や 700.HK。特定銘柄の急変動で絞り込みます",
+        "count": "返す件数。デフォルト 50、最大 100"
+      }
+    },
+    "broker_holding": {
+      "title": "証券会社別保有状況",
+      "description": "指定銘柄の主要証券会社による保有変動を取得します（香港株のみ。データは香港取引所の CCASS 参加者開示に基づきます）。period パラメータで集計期間を選択します：直近 1 日（デフォルト）、5 日、20 日、60 日。{updated_at（開示日。例：\"2026.01.02\"）, buy[], sell[]} を返します：期間内に純増・純減が最も大きい参加者で、各項目は {name, parti_number, chg（保有株数の純変動。売り側はマイナス）, strong} です。parti_number を broker_holding_daily に渡すと、個別参加者の日次履歴を取得できます。香港株以外の銘柄では空の配列を返します",
+      "properties": {
+        "symbol": "銘柄コード。例：`\"700.HK\"`。正規のコードを使用してください。ゼロ埋めしたコード（例：\"00700.HK\"）はエラーではなく空のレコードを返します",
+        "period": "期間：`rct_1`（直近 1 日、デフォルト）、`rct_5`（直近 5 日）、`rct_20`（直近 20 日）、`rct_60`（直近 60 日）"
+      }
+    },
+    "broker_holding_daily": {
+      "title": "証券会社別保有状況（日次）",
+      "description": "指定した証券会社（broker_id）によるある銘柄の日次保有履歴を取得し、{list[]{date, holding（保有株数）, chg（前日比の変動）, ratio（発行済株式に占める割合）}} を新しい順に返します",
+      "properties": {
+        "symbol": "銘柄コード。例：`\"700.HK\"`。正規のコードを使用してください。ゼロ埋めしたコード（例：\"00700.HK\"）はエラーではなく空のレコードを返します",
+        "broker_id": "証券会社の参加者番号"
+      }
+    },
+    "broker_holding_detail": {
+      "title": "証券会社別保有明細",
+      "description": "指定銘柄の証券会社別保有一覧を保有株数の多い順に取得します（デフォルト 50 社。それ以上は count で指定。香港株のみ。データは香港取引所の CCASS 参加者開示に基づきます）。{updated_at（開示日。例：\"2026.01.02\"）, list[]{name, parti_number, shares{value, chg_1, chg_5, chg_20, chg_60}, ratio{value, chg_1, chg_5, chg_20, chg_60}, strong}} を返します：保有株数と保有比率（ratio。例：\"0.0108\"）、およびそれぞれの直近 1/5/20/60 日の変動です。香港株以外の銘柄では空の一覧を返します",
+      "properties": {
+        "symbol": "銘柄コード。例：`\"700.HK\"`。正規のコードを使用してください。ゼロ埋めしたコード（例：\"00700.HK\"）はエラーではなく空のレコードを返します",
+        "count": "返す証券会社の数。保有株数の多い順。デフォルト 50（1 件あたり約 230 バイト）。1 銘柄で 400 社以上になる場合があります"
+      }
+    },
+    "brokers": {
+      "title": "ブローカーキュー",
+      "description": "ブローカーの売買気配キューを取得し（香港株のみ）、{bid_brokers[], ask_brokers[]} を返します。価格の有利な順に並び、各段は {position（1 から開始）, broker_ids[]} です。配列は空の場合があります。participants でブローカー ID を名称に対応付けてください",
+      "properties": {
+        "symbol": "銘柄コード。例：`\"700.HK\"`。正規のコードを使用してください。ゼロ埋めしたコード（例：\"00700.HK\"）はエラーではなく空のレコードを返します"
+      }
+    },
+    "calc_indexes": {
+      "title": "指標計算",
+      "description": "銘柄の相場・財務指標（PER、PBR、配当利回り、現在値、売買回転率など）を一括計算します。symbols と indexes のリストを渡すと、各銘柄の指標値を返します。グリークス指標（Delta、Gamma、Theta、Vega、Rho）を要求した場合、返り値は正規化されています：theta は 1 日あたりの値（1 日分の時間的価値の減少）、vega はインプライド・ボラティリティが 1% 変動したときの価格変化、rho は無リスク金利が 1% 変動したときの価格変化です。",
+      "properties": {
+        "symbols": "銘柄コード。例：`[\"700.HK\", \"AAPL.US\"]`",
+        "indexes": "計算する指標：`LastDone`、`ChangeValue`、`ChangeRate`、`Volume`、`Turnover`、`YtdChangeRate`、`TurnoverRate`、`TotalMarketValue`、`CapitalFlow`、`Amplitude`、`VolumeRatio`、`PeTtmRatio`、`PbRatio`、`DividendRatioTtm`、`FiveDayChangeRate`、`TenDayChangeRate`、`HalfYearChangeRate`、`FiveMinutesChangeRate`、`ExpiryDate`、`StrikePrice`、`UpperStrikePrice`、`LowerStrikePrice`、`OutstandingQty`、`OutstandingRatio`、`Premium`、`ItmOtm`、`ImpliedVolatility`、`WarrantDelta`、`CallPrice`、`ToCallPrice`、`EffectiveLeverage`、`LeverageRatio`、`ConversionRatio`、`BalancePoint`、`OpenInterest`、`Delta`、`Gamma`、`Theta`、`Vega`、`Rho`"
+      }
+    },
+    "candlesticks": {
+      "title": "ローソク足データ",
+      "description": "ローソク足データ（OHLCV）を取得します。period：1m/5m/15m/30m/60m/day/week/month/year；trade_sessions：intraday（デフォルト、通常取引時間のみ）または all（プレマーケット・アフターマーケットを含む）。アカウントの権限上限が要求した count を下回る場合、エラーにはならず権限の範囲内で可能な限り多くのデータを返します。正確な件数が必要な場合は、返された配列の長さを確認してください。",
+      "properties": {
+        "symbol": "銘柄コード",
+        "period": "ローソク足の周期：`1m`、`5m`、`15m`、`30m`、`60m`、`day`、`week`、`month`、`year`",
+        "count": "ローソク足の本数（最大 1000）",
+        "forward_adjust": "株式分割・配当について前方修正を行うかどうか",
+        "trade_sessions": "取引セッション：`intraday`（通常取引時間のみ）または `all`（プレマーケット・アフターマーケットを含む）"
+      }
+    },
+    "capital_distribution": {
+      "title": "資金分布",
+      "description": "資金分布（大口・中口・小口注文の流入・流出）を取得し、{timestamp, capital_in{large, medium, small}, capital_out{large, medium, small}, data_available} を返します。data_available が false の場合、その銘柄（指数など）には資金フローデータがないことを示し、その他のフィールドは返されますがすべて意味のないゼロ値です",
+      "properties": {
+        "symbol": "銘柄コード。例：`\"700.HK\"`。正規のコードを使用してください。ゼロ埋めしたコード（例：\"00700.HK\"）はエラーではなく空のレコードを返します"
+      }
+    },
+    "capital_flow": {
+      "title": "資金フロー",
+      "description": "銘柄の当日の資金流入の時系列を取得し、トップレベル配列 {timestamp, inflow} を返します",
+      "properties": {
+        "symbol": "銘柄コード。例：`\"700.HK\"`。正規のコードを使用してください。ゼロ埋めしたコード（例：\"00700.HK\"）はエラーではなく空のレコードを返します"
+      }
+    },
+    "company": {
+      "title": "会社概要",
+      "description": "会社概要を取得し、すべて文字列のフラットなオブジェクトを返します：name、company_name、ticker、market、sector、category、region、founded、listing_date、employees、chairman、manager、website、address、profile など。米国株アカウントで `.US` 銘柄を照会すると、米国株専用のバリアント {intro, market_cap, ccy_symbol, top_rank_tags[], share_list[], detail_url} が返されます。リージョンはアカウントから自動判別されます",
+      "properties": {
+        "symbol": "銘柄コード。例：`\"700.HK\"`。正規のコードを使用してください。ゼロ埋めしたコード（例：\"00700.HK\"）はエラーではなく空のレコードを返します"
+      }
+    },
+    "consensus": {
+      "title": "コンセンサス予想",
+      "description": "今後各期の財務コンセンサス予想を取得し、{currency, current_period, opt_periods, current_index, list: [{fiscal_year, fiscal_period, period_text, details: [{key（revenue/ebit/net_income/normalized_net_income/eps/normalized_eps）, estimate, actual, is_released, comp, comp_value, comp_desc}]}], legend: {<key>: {name, description}}} を返します。米国株アカウントで `.US` 銘柄を照会すると、米国株専用のバリアント（ai_summary が追加され、各期のフィールドが異なる）が返されます。リージョンはアカウントから自動判別されます",
+      "properties": {
+        "symbol": "銘柄コード。例：`\"700.HK\"`。正規のコードを使用してください。ゼロ埋めしたコード（例：\"00700.HK\"）はエラーではなく空のレコードを返します"
+      }
+    },
+    "constituent": {
+      "title": "指数構成銘柄 / ETF 資産配分",
+      "description": "指数の構成銘柄または ETF の資産配分を取得します。指数（例：HSI.HK、.DJI.US）では {total, rise_num, fall_num, flat_num, stocks[]{symbol, name, last_done, prev_close, chg, inflow, balance, amount, total_shares, circulating_shares, tags[]}} を返します。ETF（例：QQQ.US、2800.HK）では asset_type ごとにグループ化された資産配分 info[] を返します：1=Holdings（上位構成銘柄。code、symbol、holding_detail を含む）、2=Regional（国・地域別配分）、3=AssetClass（株式・債券・現金などの資産クラス）、4=Industry（業種別配分）。各グループは report_date と lists[]{name, position_ratio, name_locales_map} を含み、Holdings グループはさらに code、symbol および holding_detail{industry_name, index_name, holding_type_name} を含みます",
+      "properties": {
+        "symbol": "指数または ETF のコード。例：`\"HSI.HK\"`、`\"QQQ.US\"`"
+      }
+    },
+    "corp_action": {
+      "title": "コーポレートアクション",
+      "description": "銘柄のコーポレートイベント（決算発表日、配当、株式分割、自社株買い、社名変更など）を取得します。items[]{id, date（YYYYMMDD）, date_type, act_type, act_desc, action（種類コード。例：ReportDate、DividendExDate）, recent, is_delay, delay_content, live} を返します。date_type / act_type / act_desc はローカライズされたテキストで、live は関連するライブ配信（例：決算説明会：{name, started_at, symbols[]}）または null です",
+      "properties": {
+        "symbol": "銘柄コード。例：`\"700.HK\"`。正規のコードを使用してください。ゼロ埋めしたコード（例：\"00700.HK\"）はエラーではなく空のレコードを返します"
+      }
+    },
+    "dca_check": {
+      "title": "積立投資の対応確認",
+      "description": "指定銘柄が積立投資（DCA）に対応しているかを確認し、{infos[]{symbol, support_regular_saving（ブール値）, regular_saving_plan_type}} を照会した銘柄ごとに 1 件返します",
+      "properties": {
+        "symbols": "確認する銘柄コード。例：`[\"AAPL.US\", \"TSLA.US\"]`"
+      }
+    },
+    "depth": {
+      "title": "板情報",
+      "description": "売買気配の板情報（最大 10 本）を取得し、{bids[]{position, price, volume, order_num}, asks[]{position, price, volume, order_num}} を返します",
+      "properties": {
+        "symbol": "銘柄コード。例：`\"700.HK\"`。正規のコードを使用してください。ゼロ埋めしたコード（例：\"00700.HK\"）はエラーではなく空のレコードを返します"
+      }
+    },
+    "dividend": {
+      "title": "配当履歴",
+      "description": "銘柄の配当履歴を取得し、{total, list: [{id, desc, counter_id, record_date, ex_date, payment_date}]} を返します。金額は desc のテキスト内にのみ記載されます。米国株アカウントで `.US` 銘柄を照会すると、米国株専用のバリアント（例：dividend_yield_ttm はパーセント値：0.34 は 0.34% を意味）が返されます。リージョンはアカウントから自動判別されます",
+      "properties": {
+        "symbol": "銘柄コード。例：`\"700.HK\"`。正規のコードを使用してください。ゼロ埋めしたコード（例：\"00700.HK\"）はエラーではなく空のレコードを返します"
+      }
+    },
+    "dividend_detail": {
+      "title": "配当明細",
+      "description": "詳細な配当方案を取得し、list[]{desc, record_date, ex_date, payment_date} を新しい順に返します。desc はローカライズされた可読な方案テキストです（金額と通貨はテキスト内に記載され、改行を含む場合があります）。現金・株式の金額を示す個別フィールドはありません",
+      "properties": {
+        "symbol": "銘柄コード。例：`\"700.HK\"`。正規のコードを使用してください。ゼロ埋めしたコード（例：\"00700.HK\"）はエラーではなく空のレコードを返します"
+      }
+    },
+    "etf_docs": {
+      "title": "ETF 書類（米国株）",
+      "description": "米国 ETF の規制関連書類・目論見書（etf-files）を取得し、{files: [{file_name, file_path, update_date, code, format}]} を返します。米国株アカウント限定です。アジア太平洋アカウントで呼び出すと DcRegionRestricted エラーが返されます",
+      "properties": {
+        "symbol": "ETF コード。例：`\"SPY.US\"`",
+        "limit": "返す書類の最大数。空欄の場合はすべて返します"
+      }
+    },
+    "exchange_rate": {
+      "title": "為替レート",
+      "description": "Longbridge アカウントの換算為替レート（資産をアカウント通貨に換算するために使用）を取得します。対応する全通貨をカバーし、{exchanges[]{base_currency, other_currency, average_rate}} を返します：average_rate は other_currency 1 単位あたりの base_currency の額です（例：base が USD、other が HKD で 0.12743 の場合、1 HKD = 0.12743 USD）。米国株アカウントでは米国株アカウント自身の為替レートを同じ構造で通貨ペアごとに 1 件返し（reference レートを優先、なければ am）、spec_key でレートの種類を示します。公開市場の参考レートや過去のレートが必要な場合は fx_rate を使用してください"
+    },
+    "fx_rate": {
+      "title": "外国為替参考レート",
+      "description": "欧州中央銀行（ECB）が公表する外国為替参考レート（Frankfurter 経由）：営業日ごとに 1 つのレートで、リアルタイムではなく取引もできず、売値・買値はありません。デフォルトでは最新レートを返し、過去の特定日や日次系列も照会できます。{base, date, rates{通貨コード: レート}, source} を返します。系列の場合 rates は yyyy-mm-dd ごとにグループ化されます。レートは base 1 単位あたりの当該通貨の数量で（base が USD の場合 HKD 7.8472）、exchange_rate とは方向が逆です。クロスレートを求める場合は割り算せず、直接 base を設定してください。レートを引用する際は date を明記してください：これは公表日であり、今日より前の場合があります",
+      "properties": {
+        "base": "基準通貨。ISO 4217 コード（デフォルト `\"USD\"`）。レートは基準通貨 1 単位あたりの各建値通貨の数量です",
+        "currencies": "建値通貨。ISO 4217 コード。例：`[\"HKD\", \"CNY\"]`（\"700.HK\" のような銘柄コードではありません）。指定しない場合は対応する全 30 通貨を返します。`start` を指定する場合は必須で、最大 5 つです。CNH、TWD および暗号資産は含みません",
+        "date": "過去の日付（`yyyy-mm-dd`、1999-01-04 以降）。当日に公表されたレートを返し、非営業日の場合はそれ以前の直近営業日のレートを返します。`start`/`end` と同時には使用できません",
+        "start": "系列の開始日（`yyyy-mm-dd`）。`start` から `end` までの営業日ごとに 1 件返します",
+        "end": "系列の終了日（`yyyy-mm-dd`、デフォルトは最新）。`start` を指定した場合のみ有効で、期間は 366 日以内です"
+      }
+    },
+    "executive": {
+      "title": "経営陣と取締役",
+      "description": "会社の経営陣および取締役会メンバーの情報を取得し、professional_list[]（銘柄ごとに 1 件）{symbol, total, forward_url, professionals[]{id, name, title, biography, wiki_url}} を返します",
+      "properties": {
+        "symbol": "銘柄コード。例：`\"700.HK\"`。正規のコードを使用してください。ゼロ埋めしたコード（例：\"00700.HK\"）はエラーではなく空のレコードを返します"
+      }
+    },
+    "filings": {
+      "title": "適時開示",
+      "description": "銘柄の規制当局への提出書類（8-K、10-Q、10-K など）を取得し、トップレベル配列 {id, title, description, file_name, file_urls[], publish_at} を返します",
+      "properties": {
+        "symbol": "銘柄コード。例：`\"700.HK\"`。正規のコードを使用してください。ゼロ埋めしたコード（例：\"00700.HK\"）はエラーではなく空のレコードを返します"
+      }
+    },
+    "finance_calendar": {
+      "title": "経済カレンダー",
+      "description": "カテゴリ別に経済カレンダーを取得します：report（決算）/ dividend（配当）/ split（株式分割）/ ipo / macrodata（CPI、非農業部門雇用者数、金利）/ closed（休場日）。start、end（YYYY-MM-DD）はいずれも任意で、デフォルトは今日から 7 日間です。特定の市場のみが対象の場合は必ず market（例：US）を指定してください：市場で絞り込まない 1 週間分の全市場決算データは数百 KB に達し、切り詰められます。{list: [{date, infos: [{symbol, counter_name, market, content, type, date, datetime, date_type, data_kv: [{type, value, value_raw}], star（macrodata）, currency, …}]}]} を 1 日 1 件で返します",
+      "properties": {
+        "market": "任意の市場フィルター：HK、US、CN、SG、JP、UK、DE、AU。省略するとすべての市場を含みます",
+        "start": "開始日（`yyyy-mm-dd`、当日を含む）。任意で、デフォルトは今日（UTC）です",
+        "end": "終了日（`yyyy-mm-dd`、当日を含む）。任意で、デフォルトは `start` の 7 日後です",
+        "category": "イベントカテゴリ：`report`（決算。財務諸表を含む）/ `dividend`（配当発表）/ `split`（株式分割および株式併合）/ `ipo`（上場予定の IPO）/ `macrodata`（マクロ経済指標の発表。CPI、非農業部門雇用者数、金利決定など）/ `closed`（市場の休場日）"
+      }
+    },
+    "financial_report": {
+      "title": "財務諸表",
+      "description": "財務報告（損益計算書、貸借対照表、キャッシュフロー計算書）を取得します。kind：IS/BS/CF/ALL；report_type：af（年次報告）、saf（半期報告）、q1/q2/q3、qf（四半期全体）。各勘定科目はデフォルトで直近 8 期分を返し、それ以上は periods で指定します。{report, list: {i_s|b_s|c_f: {indicators: [{title, currency, has_yoy, accounts: [{name, field, percent, tip, industry_ranking, values: [{year, period, fp_end, value, yoy, ratio}]}]}]}}} を返します。米国株アカウントで kind を指定せずに `.US` 銘柄を照会すると、米国株専用の概要エンドポイント（is_list/bs_list/cf_list）にルーティングされます。kind を明示的に指定した場合は常に汎用エンドポイントを使用します",
+      "properties": {
+        "symbol": "銘柄コード。例：`\"AAPL.US\"`",
+        "kind": "諸表の種類：`IS`（損益計算書）、`BS`（貸借対照表）、`CF`（キャッシュフロー計算書）、`ALL`（デフォルト、すべて）",
+        "report_type": "報告期間：`af`（年次）、`saf`（半期）、`q1` / `q2` / `q3`（四半期）、`qf`（四半期全体）",
+        "periods": "各勘定科目で返す期数。新しい順。デフォルト 8。上流は最大約 46 期ですが、1 回ではすべて収まりません"
+      }
+    },
+    "financial_report_key_metrics": {
+      "title": "主要財務指標（米国株）",
+      "description": "米国株銘柄の主要財務指標（fin-keyfactor）を取得します。report：af（年次、デフォルト）、saf、qf、q1/q2/q3。{currency, report, empty_fields, list: [{ff_year, ff_period, fp_end, report_txt, rpt_date, fields: [{field, name, value, yoy, …}]}]} を返します。米国株アカウント限定です。アジア太平洋アカウントで呼び出すと DcRegionRestricted エラーが返されます",
+      "properties": {
+        "symbol": "銘柄コード。例：`\"AAPL.US\"`",
+        "report": "報告期間：`af`（年次、デフォルト）、`saf`（半期）、`qf`（四半期全体）、`q1`/`q2`/`q3`"
+      }
+    },
+    "forecast_eps": {
+      "title": "EPS 予想",
+      "description": "EPS 予想の履歴を取得し、items[] を返します。予想期間ごとにアナリストのコンセンサス予想のスナップショットが 1 件あります：{forecast_start_date, forecast_end_date, forecast_eps_mean, forecast_eps_median, forecast_eps_lowest, forecast_eps_highest, institution_total, institution_up, institution_down}。予想のみを含み、実績 EPS やサプライズ幅は含みません。予想と実績の比較には consensus を使用してください",
+      "properties": {
+        "symbol": "銘柄コード。例：`\"700.HK\"`。正規のコードを使用してください。ゼロ埋めしたコード（例：\"00700.HK\"）はエラーではなく空のレコードを返します"
+      }
+    },
+    "fund_holder": {
+      "title": "保有ファンド",
+      "description": "指定銘柄を保有するファンドおよび ETF を取得します。lists[]{symbol（ファンドコード）, name, currency, position_ratio（照会した銘柄の当該ファンドにおける組入比率、パーセント）, report_date} を返します",
+      "properties": {
+        "symbol": "銘柄コード（例：`\"700.HK\"`）。正規のコードを使用してください。ゼロ埋めしたコード（例：\"00700.HK\"）はエラーではなく空のレコードを返します"
+      }
+    },
+    "grid_symbol_info": {
+      "title": "グリッド銘柄情報",
+      "description": "ある銘柄のグリッド注文発注前の設定情報を取得します（入力は symbol で、order_id ではありません）：銘柄名、最新価格、買い／売りの売買単位株数、呼値（bid_size）テーブル、およびチャネル／権限情報（戦略権限フラグ、RTH 対応可否、対応する決済通貨）。grid_submit の前に呼び出して、その銘柄のグリッド制約を確認してください。{name, last_done, lot_size, buy_lot_size, sell_lot_size, bid_sizes: [{str_proceed, end_proceed, bid_size}], channel_info: {strategy_granted, support_rth, currency, settlement_currency: [ … ]}} を返します",
+      "properties": {
+        "symbol": "銘柄コード（例：\"700.HK\"）"
+      }
+    },
+    "grid_list": {
+      "title": "グリッド注文一覧",
+      "description": "グリッド取引注文を一覧表示します。銘柄またはカンマ区切りのステータス（例：\"Performing,Suspended\"）で絞り込みでき、ページングと並べ替えに対応しています。grid_order[] の概要と has_more を返します。",
+      "properties": {
+        "symbol": "銘柄コード（例：\"700.HK\"）",
+        "status": "カンマ区切りのステータスフィルター（例：\"Performing,Suspended\"）",
+        "page": "ページ番号（デフォルト 1）",
+        "limit": "1ページあたりの件数（デフォルト 20）",
+        "sort_by": "並べ替えフィールド（例：\"created_at\"）",
+        "sort_order": "並べ替え方向（\"asc\"/\"desc\"）"
+      }
+    },
+    "grid_list_by_ids": {
+      "title": "ID でグリッド注文を照会",
+      "description": "注文 ID でグリッド注文を一括取得し、grid_orders[] の概要を返します。",
+      "properties": {
+        "order_ids": "グリッド注文番号の配列（例：[\"123\",\"456\"]）"
+      }
+    },
+    "grid_detail": {
+      "title": "グリッド注文詳細",
+      "description": "単一グリッド注文の完全な詳細：ルールパラメータ、ステータス、内包される子注文（grid_sub_orders）とライフサイクル履歴（grid_order_history）。history_id カーソルと limit によるページングに対応しています。{order_id, symbol, stock_name, status, grid_status, suspend_reason, submitted_base_price, current_base_price, upper_limit_price, lower_limit_price, trigger_* ルールフィールド, settlement_currency, expire_time, …, grid_sub_orders: [{id, price, quantity, executed_qty, action, status, submitted_at, …}], sub_has_more, grid_order_history: [{history_id, status, reason, created_at, …}], history_has_more} を返します",
+      "properties": {
+        "order_id": "グリッド注文番号",
+        "history_id": "履歴カーソル。内包されるトリガー履歴のページ送りに使用",
+        "limit": "内包される子注文／履歴リストの1ページあたりの件数"
+      }
+    },
+    "grid_trigger_history": {
+      "title": "グリッドトリガー履歴",
+      "description": "単一グリッド注文のトリガー履歴：トリガーされた各子注文とその価格、数量、約定価格／約定数量、トリガー時刻。page/limit に対応しています。{trigger_orders: [{id, symbol, status, action, price, quantity, executed_price, executed_qty, trigger_price, trigger_at, …}], has_more} を返します",
+      "properties": {
+        "order_id": "グリッド注文番号",
+        "page": "ページ番号（デフォルト 1）",
+        "limit": "1ページあたりの件数（デフォルト 20）"
+      }
+    },
+    "grid_submit": {
+      "title": "グリッド注文の発注",
+      "description": "グリッド取引注文を発注します。symbol、settlement_currency およびグリッドルールの指定が必要です：基準価格／上限価格／下限価格、trigger_price_type（1=値幅、2=パーセンテージ）と対応する値幅／パーセンテージの上下幅、trigger_quantity、上下限数量、time_in_force（0=当日、1=GTC、6=GTD）、grid_order_type_up/down（GMO/GLO/GTG）、境界イベント（1=無視、2=最新価格で決済）。価格／数量は文字列です。【2段階確認必須】今回のドライランで返された confirmation_code を渡さない場合、本ツールは DRY RUN（試行）となり、リクエスト内容の検証とエコーバックのみを行い、取引所には送信しません。まず execute を付けずに一度呼び出し、返されたプレビューをすべてユーザーに提示してください。ユーザーが明示的に確認した後に限り、再度呼び出してその確認コードを execute に渡すことができます。確認コードは注文そのもの（コード、売買方向、数量、価格）から導出され、まったく同一のこの1件のリクエストにのみ有効です。確認コードを独断で入力することは絶対にしないでください。グリッドは一度有効になると自動的に取引を継続します",
+      "properties": {
+        "symbol": "銘柄コード（例：\"700.HK\"）",
+        "settlement_currency": "決済通貨（例：\"HKD\"）",
+        "submitted_base_price": "基準価格（グリッドのアンカー価格、小数文字列）",
+        "upper_limit_price": "上限価格（小数文字列）",
+        "lower_limit_price": "下限価格（小数文字列）",
+        "trigger_price_type": "トリガー方式：1=値幅、2=パーセンテージ",
+        "trigger_spread_up": "上方向トリガー値幅（絶対値、type=1 と併用、小数文字列）",
+        "trigger_spread_down": "下方向トリガー値幅（絶対値、type=1 と併用、小数文字列）",
+        "trigger_percent_up": "上方向トリガーパーセンテージ（type=2 と併用、小数文字列）",
+        "trigger_percent_down": "下方向トリガーパーセンテージ（type=2 と併用、小数文字列）",
+        "multiple_trigger": "同一グリッドで複数回のトリガーを許可するか",
+        "time_in_force": "有効期限：0=当日、1=GTC、6=GTD",
+        "upper_limit_quantity": "上限到達時に処理する数量（小数文字列）",
+        "lower_limit_quantity": "下限到達時に処理する数量（小数文字列）",
+        "expire_time": "有効期限日時（unix 秒、GTD と併用）",
+        "upper_limit_event": "上限到達時のアクション：1=無視（稼働継続）、2=最新価格で決済",
+        "lower_limit_event": "下限到達時のアクション：1=無視（稼働継続）、2=最新価格で決済",
+        "trigger_sell_depth": "売り側の板の深さ（-5..5、0=grid_order_type_up を使用）",
+        "trigger_buy_depth": "買い側の板の深さ（-5..5、0=grid_order_type_down を使用）",
+        "trigger_quantity": "1回のトリガーあたりの数量（小数文字列）",
+        "support_shortsell": "空売り（信用売り）を許可するか",
+        "rth": "立会時間フラグ：0/1/2",
+        "grid_order_type_up": "深さが 0 のときの売り注文タイプ：GMO/GLO/GTG",
+        "grid_order_type_down": "深さが 0 のときの買い注文タイプ：GMO/GLO/GTG",
+        "execute": "今回のドライランで返された confirmation_code。省略（デフォルト）すると DRY RUN となり、リクエストの検証とエコーバックのみを行い、同時に3桁の確認コードを返します。取引所には送信されません。必ず最初にこのパラメータなしで一度呼び出し、プレビューをユーザーに提示し、ユーザーが明示的に確認した後に限り再度呼び出してそのコードを入力してください。確認コードは注文そのもの（コード、売買方向、数量、価格）から導出され、まったく同一のこの1件のリクエストにのみ有効です——いずれかのフィールドを変更すると無効になります。独断で入力しないでください。"
+      }
+    },
+    "grid_replace": {
+      "title": "グリッド注文の訂正",
+      "description": "order_id を指定してグリッド注文のルールを訂正します。ルールフィールドは grid_submit と同じです。【2段階確認必須】今回のドライランで返された confirmation_code を渡さない場合、本ツールは DRY RUN（試行）となり、リクエスト内容の検証とエコーバックのみを行い、取引所には送信しません。まず execute を付けずに一度呼び出し、返されたプレビューをすべてユーザーに提示してください。ユーザーが明示的に確認した後に限り、再度呼び出してその確認コードを execute に渡すことができます。確認コードは注文そのもの（コード、売買方向、数量、価格）から導出され、まったく同一のこの1件のリクエストにのみ有効です。確認コードを独断で入力することは絶対にしないでください。ドライランでは現在のルールを置き換える新しいルールがエコーバックされます",
+      "properties": {
+        "order_id": "グリッド注文番号",
+        "submitted_base_price": "基準価格（グリッドのアンカー価格、小数文字列）",
+        "upper_limit_price": "上限価格（小数文字列）",
+        "lower_limit_price": "下限価格（小数文字列）",
+        "trigger_price_type": "トリガー方式：1=値幅、2=パーセンテージ",
+        "trigger_spread_up": "上方向トリガー値幅（絶対値、type=1 と併用、小数文字列）",
+        "trigger_spread_down": "下方向トリガー値幅（絶対値、type=1 と併用、小数文字列）",
+        "trigger_percent_up": "上方向トリガーパーセンテージ（type=2 と併用、小数文字列）",
+        "trigger_percent_down": "下方向トリガーパーセンテージ（type=2 と併用、小数文字列）",
+        "multiple_trigger": "同一グリッドで複数回のトリガーを許可するか",
+        "time_in_force": "有効期限：0=当日、1=GTC、6=GTD",
+        "upper_limit_quantity": "上限到達時に処理する数量（小数文字列）",
+        "lower_limit_quantity": "下限到達時に処理する数量（小数文字列）",
+        "expire_time": "有効期限日時（unix 秒、GTD と併用）",
+        "upper_limit_event": "上限到達時のアクション：1=無視（稼働継続）、2=最新価格で決済",
+        "lower_limit_event": "下限到達時のアクション：1=無視（稼働継続）、2=最新価格で決済",
+        "trigger_sell_depth": "売り側の板の深さ（-5..5、0=grid_order_type_up を使用）",
+        "trigger_buy_depth": "買い側の板の深さ（-5..5、0=grid_order_type_down を使用）",
+        "trigger_quantity": "1回のトリガーあたりの数量（小数文字列）",
+        "support_shortsell": "空売り（信用売り）を許可するか",
+        "rth": "立会時間フラグ：0/1/2",
+        "grid_order_type_up": "深さが 0 のときの売り注文タイプ：GMO/GLO/GTG",
+        "grid_order_type_down": "深さが 0 のときの買い注文タイプ：GMO/GLO/GTG",
+        "execute": "今回のドライランで返された confirmation_code。省略（デフォルト）すると DRY RUN となり、リクエストの検証とエコーバックのみを行い、同時に3桁の確認コードを返します。取引所には送信されません。必ず最初にこのパラメータなしで一度呼び出し、プレビューをユーザーに提示し、ユーザーが明示的に確認した後に限り再度呼び出してそのコードを入力してください。確認コードは注文そのもの（コード、売買方向、数量、価格）から導出され、まったく同一のこの1件のリクエストにのみ有効です——いずれかのフィールドを変更すると無効になります。独断で入力しないでください。"
+      }
+    },
+    "grid_cancel": {
+      "title": "グリッド注文の取消",
+      "description": "order_id を指定してグリッド注文を取消（終了）します。【2段階確認必須】今回のドライランで返された confirmation_code を渡さない場合、本ツールは DRY RUN（試行）となり、リクエスト内容の検証とエコーバックのみを行い、取引所には送信しません。まず execute を付けずに一度呼び出し、返されたプレビューをすべてユーザーに提示してください。ユーザーが明示的に確認した後に限り、再度呼び出してその確認コードを execute に渡すことができます。確認コードは注文そのもの（コード、売買方向、数量、価格）から導出され、まったく同一のこの1件のリクエストにのみ有効です。確認コードを独断で入力することは絶対にしないでください",
+      "properties": {
+        "order_id": "グリッド注文番号",
+        "execute": "今回のドライランで返された confirmation_code。省略（デフォルト）すると DRY RUN となり、リクエストの検証とエコーバックのみを行い、同時に3桁の確認コードを返します。取引所には送信されません。必ず最初にこのパラメータなしで一度呼び出し、プレビューをユーザーに提示し、ユーザーが明示的に確認した後に限り再度呼び出してそのコードを入力してください。確認コードは注文そのもの（コード、売買方向、数量、価格）から導出され、まったく同一のこの1件のリクエストにのみ有効です——いずれかのフィールドを変更すると無効になります。独断で入力しないでください。"
+      }
+    },
+    "grid_suspend": {
+      "title": "グリッド注文の一時停止",
+      "description": "order_id を指定して稼働中のグリッド注文を一時停止します。grid_restart で再開できます。【2段階確認必須】今回のドライランで返された confirmation_code を渡さない場合、本ツールは DRY RUN（試行）となり、リクエスト内容の検証とエコーバックのみを行い、取引所には送信しません。まず execute を付けずに一度呼び出し、返されたプレビューをすべてユーザーに提示してください。ユーザーが明示的に確認した後に限り、再度呼び出してその確認コードを execute に渡すことができます。確認コードは注文そのもの（コード、売買方向、数量、価格）から導出され、まったく同一のこの1件のリクエストにのみ有効です。確認コードを独断で入力することは絶対にしないでください",
+      "properties": {
+        "order_id": "グリッド注文番号",
+        "execute": "今回のドライランで返された confirmation_code。省略（デフォルト）すると DRY RUN となり、リクエストの検証とエコーバックのみを行い、同時に3桁の確認コードを返します。取引所には送信されません。必ず最初にこのパラメータなしで一度呼び出し、プレビューをユーザーに提示し、ユーザーが明示的に確認した後に限り再度呼び出してそのコードを入力してください。確認コードは注文そのもの（コード、売買方向、数量、価格）から導出され、まったく同一のこの1件のリクエストにのみ有効です——いずれかのフィールドを変更すると無効になります。独断で入力しないでください。"
+      }
+    },
+    "grid_restart": {
+      "title": "グリッド注文の再開",
+      "description": "order_id を指定して一時停止中のグリッド注文を再開します。【2段階確認必須】今回のドライランで返された confirmation_code を渡さない場合、本ツールは DRY RUN（試行）となり、リクエスト内容の検証とエコーバックのみを行い、取引所には送信しません。まず execute を付けずに一度呼び出し、返されたプレビューをすべてユーザーに提示してください。ユーザーが明示的に確認した後に限り、再度呼び出してその確認コードを execute に渡すことができます。確認コードは注文そのもの（コード、売買方向、数量、価格）から導出され、まったく同一のこの1件のリクエストにのみ有効です。確認コードを独断で入力することは絶対にしないでください。再開後、グリッドは再び自動的に注文を継続します",
+      "properties": {
+        "order_id": "グリッド注文番号",
+        "execute": "今回のドライランで返された confirmation_code。省略（デフォルト）すると DRY RUN となり、リクエストの検証とエコーバックのみを行い、同時に3桁の確認コードを返します。取引所には送信されません。必ず最初にこのパラメータなしで一度呼び出し、プレビューをユーザーに提示し、ユーザーが明示的に確認した後に限り再度呼び出してそのコードを入力してください。確認コードは注文そのもの（コード、売買方向、数量、価格）から導出され、まったく同一のこの1件のリクエストにのみ有効です——いずれかのフィールドを変更すると無効になります。独断で入力しないでください。"
+      }
+    },
+    "get_me": {
+      "title": "現在のアカウント",
+      "description": "この接続でログインしている Longbridge 取引口座（アクセストークンに紐づく1つの口座であり、ユーザー名義のすべての口座ではありません）を識別します。パラメータなし。{id, nickname, email, dc_region（AP|US）, account_no, member_id} を返します：id は口座の安定した識別子（すなわち aaid）、nickname は表示用の名称（例：\"Longbridge Securities Account H11701971\"）、email は常に空です。トークンに口座番号が含まれない場合、account_no は null になります"
+    },
+    "history_candlesticks_by_date": {
+      "title": "過去のローソク足（日付指定）",
+      "description": "日付範囲を指定して過去のローソク足データを取得します。symbol のみ必須です（start/end を指定しない場合は直近 100 本のローソク足を返します —— 特定の期間が必要な場合は start/end を指定してください）。period のデフォルトは day（1m/5m/15m/30m/60m/day/week/month/year）、forward_adjust のデフォルトは false、trade_sessions のデフォルトは all です。トップレベル配列 {timestamp, open, high, low, close, volume, turnover, trade_session} を返します",
+      "properties": {
+        "symbol": "銘柄コード（例：`\"700.HK\"`）。正規のコードを使用してください。ゼロ埋めしたコード（例：\"00700.HK\"）はエラーではなく空のレコードを返します",
+        "period": "ローソク足の期間：`1m`、`5m`、`15m`、`30m`、`60m`、`day`、`week`、`month`、`year`（デフォルト `day`）",
+        "forward_adjust": "株式分割／配当に対して前方調整を行うか（デフォルト `false`、調整なし）",
+        "start": "開始日（`yyyy-mm-dd`）、任意",
+        "end": "終了日（`yyyy-mm-dd`）、任意",
+        "trade_sessions": "取引セッション：`intraday`（通常取引時間のみ）または `all`（プレ・アフターマーケットを含む、デフォルト）"
+      }
+    },
+    "history_candlesticks_by_offset": {
+      "title": "過去のローソク足（オフセット指定）",
+      "description": "基準時刻を起点にオフセット量で過去のローソク足（OHLCV）データを取得します。symbol のみ必須で、period のデフォルトは day、count のデフォルトは 100、forward_adjust と forward のデフォルトは false、trade_sessions のデフォルトは all です。口座の権限上限がリクエストした count を下回る場合、エラーにはならず、権限の範囲内で可能な限り多くのデータを返します——正確な件数が必要な場合は、返された配列の長さを確認してください。",
+      "properties": {
+        "symbol": "銘柄コード",
+        "period": "ローソク足の期間：`1m`、`5m`、`15m`、`30m`、`60m`、`day`、`week`、`month`、`year`（デフォルト `day`）",
+        "forward_adjust": "株式分割／配当に対して前方調整を行うか（デフォルト `false`、調整なし）",
+        "forward": "照会方向：`true` は後方（未来方向）、`false` は前方（過去方向、デフォルト）",
+        "time": "基準時刻（`yyyy-mm-ddTHH:MM:SS`）。省略すると最新時刻を起点とします",
+        "count": "ローソク足の本数（最大 1000、デフォルト 100）",
+        "trade_sessions": "取引セッション：`intraday`（通常取引時間のみ）または `all`（プレ・アフターマーケットを含む、デフォルト）"
+      }
+    },
+    "history_market_temperature": {
+      "title": "過去の市場温度",
+      "description": "指定市場の日付範囲内における市場温度の時系列履歴を取得します（1回の呼び出しで最大 3 年）。{type, list[]{temperature, valuation, sentiment, timestamp}} を返します",
+      "properties": {
+        "market": "市場コード：HK、US、CN、SG",
+        "start": "開始日（`yyyy-mm-dd`）",
+        "end": "終了日（`yyyy-mm-dd`）"
+      }
+    },
+    "industry_valuation": {
+      "title": "業種バリュエーション",
+      "description": "同業種の比較対象企業とのバリュエーション比較を取得します。list[]{symbol, name, market, currency, price_close, market_value, pe, pb, ps, div_yld（配当利回り、%）, roe, roa, net_margin, eps, bps, dps, div_payout_ratio, net_income, …, history[]{date, pe, pb, ps}} を返します",
+      "properties": {
+        "symbol": "銘柄コード（例：`\"700.HK\"`）。正規のコードを使用してください。ゼロ埋めしたコード（例：\"00700.HK\"）はエラーではなく空のレコードを返します"
+      }
+    },
+    "industry_valuation_dist": {
+      "title": "業種バリュエーション分布",
+      "description": "業種の PE/PB/PS バリュエーション分布を取得し、個別銘柄の所属業種内での位置を確認します。{pe, pb, ps} を返し、各項目は {low, median, high, value（個別銘柄の現在値）, ranking（業種内のパーセンタイル、0-1）, rank_index, rank_total} です",
+      "properties": {
+        "symbol": "銘柄コード（例：`\"700.HK\"`）。正規のコードを使用してください。ゼロ埋めしたコード（例：\"00700.HK\"）はエラーではなく空のレコードを返します"
+      }
+    },
+    "institution_rating": {
+      "title": "機関投資家レーティング",
+      "description": "機関投資家レーティングのサマリーを取得します。analyst{evaluate{buy, over, hold, under, sell, no_opinion, total}, target{highest_price, lowest_price, prev_close}, industry_name, industry_rank, industry_total} および instratings{recommend（コンセンサスレーティング）, target（コンセンサス平均目標株価）, change（目標株価の現在値に対する上昇余地、%）, updated_at} を返します。2つの上流呼び出しのうち一方が失敗した場合でも、もう一方のデータは返され、欠落部分は warnings[] で示されます",
+      "properties": {
+        "symbol": "銘柄コード（例：`\"700.HK\"`）。正規のコードを使用してください。ゼロ埋めしたコード（例：\"00700.HK\"）はエラーではなく空のレコードを返します"
+      }
+    },
+    "institution_rating_detail": {
+      "title": "機関投資家レーティング詳細",
+      "description": "過去のレーティング分布とコンセンサス目標株価の履歴を取得します。evaluate.list[]{date, strong_buy, buy, hold, under, sell}（各スナップショットのレーティング社数）、target{updated_at, prediction_accuracy, list[]{date, timestamp, price, avg_target, min_target, max_target, meet}}（コンセンサス目標株価レンジと株価の比較）および ccy_symbol を返します。アナリスト横断の集計データであり、機関別・アナリスト別の明細行は含みません",
+      "properties": {
+        "symbol": "銘柄コード（例：`\"700.HK\"`）。正規のコードを使用してください。ゼロ埋めしたコード（例：\"00700.HK\"）はエラーではなく空のレコードを返します"
+      }
+    },
+    "intraday": {
+      "title": "分足データ",
+      "description": "分足（1分ごと）の価格／出来高データを取得します。trade_sessions：\"intraday\"（デフォルト、通常取引時間のみ）または \"all\"（プレ・アフターマーケットを含む）。トップレベル配列 {timestamp, price, avg_price, volume, turnover} を返します",
+      "properties": {
+        "symbol": "銘柄コード（例：`\"700.HK\"`）。正規のコードを使用してください。ゼロ埋めしたコード（例：\"00700.HK\"）はエラーではなく空のレコードを返します",
+        "trade_sessions": "含める取引セッション：`intraday`（デフォルト、通常取引時間のみ）または `all`（プレ・アフターマーケットを含む）"
+      }
+    },
+    "invest_relation": {
+      "title": "投資関係",
+      "description": "当該銘柄の発行会社が株式を保有する上場企業を取得します（投資関係であり、IR 活動ではありません）。invest_securities[]{company_name, symbol, currency, percent_of_shares（持株比率、%）, shares_value（保有株式時価）, shares_rank} および forward_url を返します。会社が上場企業の株式を保有していない場合は空になります",
+      "properties": {
+        "symbol": "銘柄コード（例：`\"700.HK\"`）。正規のコードを使用してください。ゼロ埋めしたコード（例：\"00700.HK\"）はエラーではなく空のレコードを返します"
+      }
+    },
+    "market_status": {
+      "title": "市場ステータス",
+      "description": "全市場の現在の取引ステータスを取得します。market_time[]{market, trade_status（Trading/Closed/Mid-Day Break/Pre-Market/Post-Market/Overnight など）, timestamp} を返します"
+    },
+    "macrodata_indicators": {
+      "title": "マクロ指標一覧",
+      "description": "マクロ経済指標を一覧表示します。キーワードと国（US/CN/HK/EU/JP/SG）で絞り込めます。返される indicator_code は macrodata で使用します。offset/limit によるページングに対応しています。{list: [{indicator_code, name, country, importance, periodicity}], count} を返します",
+      "properties": {
+        "keyword": "指標名のキーワードで検索（例：`\"CPI\"`、`\"非农\"`）",
+        "country": "国コードで絞り込み：US（米国）、CN（中国本土）、HK（香港）、EU（ユーロ圏）、JP（日本）、SG（シンガポール）",
+        "offset": "ページングのオフセット、デフォルト 0",
+        "limit": "返却件数の上限、デフォルト 30、最大 1000。すべてをページ送りするより、keyword/country で範囲を絞ることを推奨します"
+      }
+    },
+    "macrodata": {
+      "title": "マクロ指標の過去データ",
+      "description": "単一のマクロ経済指標の過去の観測値を取得します。indicator_code は macrodata_indicators から取得します。start_date/end_date の形式は YYYY-MM-DD です。offset/limit によるページングに対応しています。{info: {indicator_code, name, country, describe, importance, periodicity}, data: [{period, release_at, actual_value, forecast_value, previous_value, unit}], count} を返します",
+      "properties": {
+        "indicator_code": "指標コード（例：`\"30771718\"`）。macrodata_indicators から取得",
+        "start_date": "データ開始日（`yyyy-mm-dd`、例：`\"2024-01-01\"`）",
+        "end_date": "データ終了日（`yyyy-mm-dd`、例：`\"2024-12-31\"`）",
+        "offset": "ページングのオフセット、デフォルト 0",
+        "limit": "返却件数の上限、デフォルト 100、最大 100"
+      }
+    },
+    "market_temperature": {
+      "title": "市場温度",
+      "description": "現在の市場センチメント温度を取得します。{temperature（0-100）, description, valuation（0-100）, sentiment（0-100）, timestamp} を返します",
+      "properties": {
+        "market": "市場コード：HK、US、CN、SG"
+      }
+    },
+    "news": {
+      "title": "ニュース",
+      "description": "銘柄の最新ニュースを新しい順に取得します（デフォルト 20 件、それ以上は count で指定）。トップレベル配列（ラッパーオブジェクトなし）{id, title, description, url, published_at, comments_count, likes_count, shares_count} を返します。引用フィールド（上流から提供される場合に返却）：content_via（0 = Longbridge のオリジナルまたは版権取得済みコンテンツ、0 以外 = 第三者からの転載）、source、source_url（原文の URL）、source_logo。",
+      "properties": {
+        "symbol": "銘柄コード（例：`\"700.HK\"`）。正規のコードを使用してください。ゼロ埋めしたコード（例：\"00700.HK\"）はエラーではなく空のレコードを返します",
+        "count": "返す記事の件数（新しい順）。デフォルト 20（1件あたり約 700 バイト）、上流は約 50 件を返します"
+      }
+    },
+    "news_detail": {
+      "title": "ニュース詳細",
+      "description": "id を指定して単一ニュース記事の全文を取得します（id は news / news_search から取得）。{id, title, description, body (Markdown), url, author{member_id, name}, images[], comments_count, likes_count, shares_count, published_at, tickers[]} を返します。引用フィールド（上流から提供される場合に返却）：content_via（0 = Longbridge のオリジナルまたは版権取得済みコンテンツ、0 以外 = 第三者からの転載）、source、source_url（原文の URL）、source_logo。",
+      "properties": {
+        "id": "ニュース記事 ID（数値）、例：\"7123456789012345678\"。news または news_search から取得できます"
+      }
+    },
+    "now": {
+      "title": "現在時刻",
+      "description": "現在の UTC 時刻を取得し、RFC3339 文字列（例：\"2025-01-15T08:30:00Z\"）を返します。日付関連の照会を行う前に現在の日付／時刻を確認するために使用します。返り値はオブジェクトではなく、純粋な JSON 文字列です"
+    },
+    "operating": {
+      "title": "経営実績",
+      "description": "報告期間ごとに会社の経営レビューを取得します（香港株のみ。その他の市場では空のリストを返します）。list[]（新しい順、デフォルト 8 期、それ以上は count で指定）{id, report（例：saf）, title, txt（経営陣のコメント／経営レビュー）, latest, financial{currency, indicators[]{field_name, indicator_name, indicator_value（ローカライズされた単位付きの表示用文字列）, yoy（%）}}} を返します",
+      "properties": {
+        "symbol": "銘柄コード（例：`\"700.HK\"`）。正規のコードを使用してください。ゼロ埋めしたコード（例：\"00700.HK\"）はエラーではなく空のレコードを返します",
+        "count": "返すレポートの件数（新しい順）。デフォルト 8（1件あたり約 1.6KB）、上流は最大 50"
+      }
+    },
+    "option_chain_expiry_date_list": {
+      "title": "オプション満期日一覧",
+      "description": "原資産（例：AAPL.US）のオプションチェーンの満期日を取得し、\"yyyy-mm-dd\" 文字列のトップレベル配列を返します。option_chain_info_by_date と組み合わせて、そのうちある満期日の契約を取得します",
+      "properties": {
+        "symbol": "銘柄コード（例：`\"700.HK\"`）。正規のコードを使用してください。ゼロ埋めしたコード（例：\"00700.HK\"）はエラーではなく空のレコードを返します"
+      }
+    },
+    "option_chain_info_by_date": {
+      "title": "オプションチェーン",
+      "description": "指定満期日のオプション契約一覧を取得します。1契約につき1レコードで、コールとプットは権利行使価格ごとにペアにはなっていません：{symbol, expiry_date, strike_price, direction（Call/Put）, option_type（Monthly/Weekly/Quarterly）, standard_attr（Normal/Old）, days_to_expiry}。direction でコールとプットを区別します。standard_only=true でコーポレートアクションにより残存した旧契約を除外できます。本 API には価格と Greeks は含まれないため、必要な場合は symbol を option_quote に渡してください",
+      "properties": {
+        "symbol": "原資産の銘柄コード（例：`\"AAPL.US\"`）。正規のコードを使用してください。ゼロ埋めしたコード（例：\"00700.HK\"）はエラーではなく空のレコードを返します",
+        "date": "満期日（`yyyy-mm-dd`）、必須。option_chain_expiry_date_list で選択可能な満期日を一覧表示できます",
+        "standard_only": "標準契約のみを返します。省略または false の場合は、コーポレートアクションにより残存した旧契約（`standard_attr: \"Old\"`）を含むすべてを返します"
+      }
+    },
+    "option_quote": {
+      "title": "オプション気配値",
+      "description": "オプションの相場情報を取得します（最大 500 件）。symbols はオプション契約コード（例：\"AAPL230317P160000.US\"）でなければならず、通常の株式コードは使用できません——まず option_chain_info_by_date が返す各契約の symbol フィールドを用いて有効なオプションコードを取得してください。各銘柄について last_done（最新価格）, prev_close, open, high, low, volume（出来高）, turnover（売買代金）, implied_volatility（インプライド・ボラティリティ）, delta/gamma/theta/vega/rho（Greeks）, open_interest（建玉）を返します。Greeks は正規化済みです：theta は1日あたりの値（1日分の時間価値の減少）、vega はインプライド・ボラティリティが 1% 変動したときの価格変化、rho は無リスク金利が 1% 変動したときの価格変化です。",
+      "properties": {
+        "symbols": "オプション契約コード（例：`[\"AAPL230317P160000.US\"]`）。通常の株式コードではありません——まず option_chain_expiry_date_list で満期日を一覧表示し、次に option_chain_info_by_date でその満期日の各契約の symbol フィールドを取得してください"
+      }
+    },
+    "option_volume": {
+      "title": "オプション出来高",
+      "description": "米国株のリアルタイムのオプションのコール／プット出来高統計を取得します。{c, p} を返します：当日のコール（c）とプット（p）の契約総出来高で、いずれも文字列です",
+      "properties": {
+        "symbol": "原資産コード（米国株のみ）、例：`\"AAPL.US\"`"
+      }
+    },
+    "option_volume_daily": {
+      "title": "オプション出来高（日次）",
+      "description": "米国株の日次オプション統計履歴を取得します。{stats[]{symbol, timestamp, total_volume, total_call_volume, total_put_volume, put_call_volume_ratio, total_open_interest, total_call_open_interest, total_put_open_interest, put_call_open_interest_ratio}} を返します",
+      "properties": {
+        "symbol": "原資産コード（米国株のみ）。例：`\"AAPL.US\"`",
+        "count": "返す取引日数（デフォルト 20）"
+      }
+    },
+    "participants": {
+      "title": "市場参加者",
+      "description": "香港株の市場参加者（証券会社）情報を取得します。トップレベル配列 {broker_ids[], name_en, name_cn} を返し、ブローカーキューデータの解析に使用します"
+    },
+    "quote": {
+      "title": "気配値スナップショット",
+      "description": "最新の気配値を取得します。トップレベル配列を返し、銘柄ごとに 1 件：symbol、last_done（現在値）、prev_close（前日終値）、open、high、low、volume（出来高）、turnover（売買代金）、trade_status、timestamp。該当する時間帯にデータがある場合は pre_market / post_market / overnight オブジェクト {last_done, prev_close, high, low, volume, turnover, timestamp} も含まれます。騰落フィールドは含まれないため、last_done と prev_close から各自で計算してください",
+      "properties": {
+        "symbols": "証券コード。例：`[\"700.HK\", \"AAPL.US\"]`。正規のコードを使用してください。ゼロ埋めしたコード（例：\"00700.HK\"）はエラーにならず空のレコードが返されます"
+      }
+    },
+    "shareholder": {
+      "title": "機関株主",
+      "description": "証券の主要株主と、最新の開示に基づく保有株式の変動を取得します。shareholder_list[]{shareholder_name, percent_of_shares, shares_changed（負の値は減少を示す）, report_date, stocks[]{symbol, market, code, chg}} を返します。stocks[] にはその株主に関連する証券が列挙されますが、通常は空です",
+      "properties": {
+        "symbol": "証券コード。例：`\"700.HK\"`。正規のコードを使用してください。ゼロ埋めしたコード（例：\"00700.HK\"）はエラーにならず空のレコードが返されます"
+      }
+    },
+    "sharelist_add": {
+      "title": "シェア銘柄リストに追加",
+      "description": "コミュニティのシェア銘柄リストに証券を追加します。symbols は銘柄コードのリスト（例：[\"AAPL.US\"]）、id は銘柄リスト ID です。成功すると更新後の銘柄リストを返します。",
+      "properties": {
+        "id": "シェア銘柄リスト ID",
+        "symbols": "証券コード。例：`[\"AAPL.US\", \"700.HK\"]`"
+      }
+    },
+    "sharelist_create": {
+      "title": "シェア銘柄リストを作成",
+      "description": "コミュニティのシェア銘柄リストを新規作成し、作成した銘柄リストオブジェクト（id、name、description を含む）を返します",
+      "properties": {
+        "name": "銘柄リスト名（`description` を指定しない場合、名前が説明としても使用されます）",
+        "description": "銘柄リストの説明。省略時はデフォルトで `name` と同じになります"
+      }
+    },
+    "sharelist_delete": {
+      "title": "シェア銘柄リストを削除",
+      "description": "id を指定して自作のコミュニティシェア銘柄リストを削除します（購読中の他人の銘柄リストは削除できません）",
+      "properties": {
+        "id": "シェア銘柄リスト ID"
+      }
+    },
+    "sharelist_detail": {
+      "title": "シェア銘柄リスト詳細",
+      "description": "id を指定してコミュニティシェア銘柄リストの詳細を取得します。{sharelist{id, name, description, stocks_count, subscribers_count, chg, this_year_chg, creator, stocks[]{symbol, name, market, code, intro, …}}, scopes{self, subscription, official, industry}, stock_topics, group} を返します。構成銘柄に価格は含まれないため、symbol を quote に渡してください",
+      "properties": {
+        "id": "シェア銘柄リスト ID"
+      }
+    },
+    "sharelist_list": {
+      "title": "シェア銘柄リスト一覧",
+      "description": "ユーザーが自作した、および購読中のコミュニティシェア銘柄リストを一覧表示します。{sharelists[]（ユーザー自作の銘柄リスト）, subscribed_sharelists[]（ユーザーが購読中の銘柄リスト）} を返し、各項目は {id, name, description, stocks_count, subscribers_count, subscribed, chg, this_year_chg, created_at, stocks, …} です",
+      "properties": {
+        "count": "返す件数（デフォルト 20）"
+      }
+    },
+    "sharelist_popular": {
+      "title": "人気シェア銘柄リスト",
+      "description": "人気/トレンドのコミュニティシェア銘柄リストを取得します。{sharelists[]{id, name, description, stocks_count, subscribers_count, chg, this_year_chg, creator{id, name, …}, stocks, …}} を人気順で返します",
+      "properties": {
+        "count": "返す件数（デフォルト 20）"
+      }
+    },
+    "sharelist_remove": {
+      "title": "シェア銘柄リストから削除",
+      "description": "コミュニティシェア銘柄リストから指定した証券を削除します。symbols は削除する銘柄コードのリスト、id は銘柄リスト ID です。成功すると更新後の銘柄リストを返します。",
+      "properties": {
+        "id": "シェア銘柄リスト ID",
+        "symbols": "証券コード。例：`[\"AAPL.US\", \"700.HK\"]`"
+      }
+    },
+    "sharelist_sort": {
+      "title": "シェア銘柄リストの並べ替え",
+      "description": "コミュニティシェア銘柄リスト内の証券の並び順を変更します（目的の順序で symbols を渡します）",
+      "properties": {
+        "id": "シェア銘柄リスト ID",
+        "symbols": "証券コード。例：`[\"AAPL.US\", \"700.HK\"]`"
+      }
+    },
+    "short_positions": {
+      "title": "空売りポジション",
+      "description": "香港株または米国株の空売りポジション履歴（未決済のショートポジション）を取得します。市場は symbol のサフィックスから自動判定されます。count: 1–100（デフォルト20）。共通で data[]{timestamp(RFC3339), short_shares(ショートポジション株数), rate(小数の比率 例：0.009=0.9%), close} を返します。米国株のみ：avg_daily_vol(平均日次出来高), days_to_cover(買い戻し日数)。香港株のみ：balance(香港ドル建て空売り残高)。米国株のデータソース：FINRA 隔週レポート。香港株のデータソース：HKEX 日次。",
+      "properties": {
+        "symbol": "証券コード。例：AAPL.US（米国株）または 700.HK（香港株）。市場はサフィックスから自動判定されます",
+        "count": "返すレコード数。1–100、デフォルト 20"
+      }
+    },
+    "static_info": {
+      "title": "証券基本情報",
+      "description": "証券の基本情報を取得します。トップレベル配列を返し、銘柄ごとに 1 件：symbol、name_cn、name_en、name_hk、exchange（例：NASD）、currency、lot_size、total_shares、circulating_shares、hk_shares、eps、eps_ttm、bps、dividend_yield、stock_derivatives、board。米国株口座のみ：`.BKKT` 暗号資産コード（例：BTCUSD.BKKT）は米国株専用の暗号資産概要 API にルーティングされます。`.HAS`/`.OSL` 暗号資産コードは影響を受けません",
+      "properties": {
+        "symbols": "証券コード。例：`[\"700.HK\", \"AAPL.US\"]`。正規のコードを使用してください。ゼロ埋めしたコード（例：\"00700.HK\"）はエラーにならず空のレコードが返されます"
+      }
+    },
+    "topic": {
+      "title": "ディスカッション一覧",
+      "description": "証券に関連するディスカッショントピックを取得します。トップレベル配列 {id, title, description, url, published_at, comments_count, likes_count, shares_count} を返します",
+      "properties": {
+        "symbol": "証券コード。例：`\"700.HK\"`。正規のコードを使用してください。ゼロ埋めしたコード（例：\"00700.HK\"）はエラーにならず空のレコードが返されます"
+      }
+    },
+    "topic_create": {
+      "title": "ディスカッションを投稿",
+      "description": "コミュニティにディスカッションを投稿します。topic_type=\"post\"（デフォルト）はプレーンテキスト、\"article\" は空でない title が必要で、本文は Markdown に対応します",
+      "properties": {
+        "title": "ディスカッションのタイトル。`topic_type=\"article\"` の場合は必須、`\"post\"` の場合は任意",
+        "body": "ディスカッション本文。`post` はプレーンテキストのみ、`article` は Markdown に対応",
+        "symbols": "関連する証券コード。例：`[\"700.HK\", \"TSLA.US\"]`（最大 10 個）",
+        "topic_type": "ディスカッションの種類：`post`（デフォルト、プレーンテキスト）または `article`（Markdown、`title` が必要）"
+      }
+    },
+    "topic_create_reply": {
+      "title": "ディスカッションに返信",
+      "description": "ディスカッションに返信を投稿します。reply_to_id を指定するとスレッド内返信、省略するとトップレベルの返信になります",
+      "properties": {
+        "topic_id": "返信先のディスカッション ID",
+        "body": "返信本文（プレーンテキストのみ）",
+        "reply_to_id": "任意の親返信 ID。スレッド内返信に使用し、`topic_replies` から取得します。省略するとトップレベルの返信になります"
+      }
+    },
+    "topic_detail": {
+      "title": "ディスカッション詳細",
+      "description": "topic_id を指定してディスカッションの詳細を取得します。{id, title, description, body, author{member_id, name, avatar}, tickers[], hashtags, images[], likes_count, comments_count, shares_count, views_count, created_at, updated_at, detail_url, topic_type} を返します",
+      "properties": {
+        "topic_id": "ディスカッション ID"
+      }
+    },
+    "topic_replies": {
+      "title": "ディスカッションの返信",
+      "description": "ディスカッショントピックの返信をページ単位で取得します（page はデフォルト 1、size はデフォルト 20、範囲 1-50）。トップレベル配列 {id, topic_id, body, reply_to_id, author: {member_id, name}, images, likes_count, comments_count, created_at} を返します",
+      "properties": {
+        "topic_id": "ディスカッション ID",
+        "page": "ページ番号（1 から開始、デフォルト 1）",
+        "size": "1 ページあたりの件数（1-50、デフォルト 20）"
+      }
+    },
+    "trade_stats": {
+      "title": "約定統計",
+      "description": "価格帯別出来高のための約定統計（価格ごとの能動的買い/能動的売り/中立の分布）を取得します。{trades[]{price, buy_amount, sell_amount, neutral_amount}, statistics{avgprice, trades_count, total_amount, buy, sell, neutral, preclose, timestamp, trade_date[]}} を返します",
+      "properties": {
+        "symbol": "証券コード。例：`\"700.HK\"`。正規のコードを使用してください。ゼロ埋めしたコード（例：\"00700.HK\"）はエラーにならず空のレコードが返されます"
+      }
+    },
+    "trades": {
+      "title": "直近の約定",
+      "description": "直近のティック約定（最大 1000 件）を取得します。トップレベル配列 {price, volume, timestamp, trade_type, direction, trade_session} を返します",
+      "properties": {
+        "symbol": "証券コード",
+        "count": "返す最大件数（最大 1000）"
+      }
+    },
+    "trading_days": {
+      "title": "取引日一覧",
+      "description": "指定市場の期間内の取引日を取得します。market：HK/US/CN/SG。400 日以内の期間は 1 回の呼び出しで返されます。それより長い期間は分割してください。{trade_days: [date], half_trade_days: [date]} を返します",
+      "properties": {
+        "market": "市場コード：HK、US、CN、SG",
+        "start": "開始日（`yyyy-mm-dd`）",
+        "end": "終了日（`yyyy-mm-dd`）"
+      }
+    },
+    "trading_session": {
+      "title": "取引時間帯",
+      "description": "全市場の取引時間帯スケジュールを取得します。トップレベル配列 {market, trade_sessions[]{begin_time, end_time, trade_session}} を返します"
+    },
+    "valuation": {
+      "title": "バリュエーション",
+      "description": "PE バリュエーションの概要（過去の安値圏/中央値/高値圏および PE 系列）を取得します。{range（年数）, metrics: {pe: {low, median, high, desc, list: [{timestamp, value}]}}} を返します。米国株口座で `.US` 銘柄を照会すると、米国株専用のバリアント（ai_summary に加え、サブフィールドの異なる metrics.pe オブジェクト）が返されます。リージョンは口座から自動判別されます",
+      "properties": {
+        "symbol": "証券コード。例：`\"700.HK\"`。正規のコードを使用してください。ゼロ埋めしたコード（例：\"00700.HK\"）はエラーにならず空のレコードが返されます"
+      }
+    },
+    "valuation_history": {
+      "title": "バリュエーション履歴",
+      "description": "長期のパーセンタイル分析用に PE バリュエーション履歴を取得します。overview{indicator, metrics.pe{metric, desc, industry_median}, range, date, ccy_symbol}、history{range, metrics.pe{low, median, high, desc, list[]{timestamp, value}}}、peers.pe{industry_median, list[]{symbol, name, value}}、および stocks（counter id をキーとする業界銘柄。例：\"ST/US/AMD\"、各項目 {name, market_cap}）を返します。PE のみで、PB/PS や配当利回りの系列は含まれません",
+      "properties": {
+        "symbol": "証券コード。例：`\"700.HK\"`。正規のコードを使用してください。ゼロ埋めしたコード（例：\"00700.HK\"）はエラーにならず空のレコードが返されます"
+      }
+    },
+    "warrant_issuers": {
+      "title": "ワラント発行体",
+      "description": "香港株のワラント/CBBC（牛熊証）の発行体情報を取得します。トップレベル配列 {issuer_id, name_en, name_cn} を返し、issuer_id は warrant_list の発行体フィルターに使用できます"
+    },
+    "warrant_list": {
+      "title": "ワラント一覧",
+      "description": "条件を指定して原資産のワラント/CBBC（牛熊証）一覧を絞り込みます。トップレベル配列 {symbol, name, warrant_type, status, last_done, change_rate, volume, expiry_date（yyyymmdd）, strike_price, implied_volatility, delta, premium, leverage_ratio, effective_leverage, outstanding_ratio, conversion_ratio, …} を返します",
+      "properties": {
+        "symbol": "原資産コード。例：`\"700.HK\"`",
+        "sort_by": "並べ替えフィールド（デフォルト `Volume`）：`LastDone`、`ChangeRate`、`ChangeValue`、`Volume`、`Turnover`、`ExpiryDate`、`StrikePrice`、`UpperStrikePrice`、`LowerStrikePrice`、`OutstandingQuantity`、`OutstandingRatio`、`Premium`、`ItmOtm`、`ImpliedVolatility`、`Delta`",
+        "sort_order": "並べ替え方向：`Ascending`（昇順）または `Descending`（降順）。デフォルト `Descending`",
+        "warrant_type": "種類で絞り込み（任意）：`Call`（コールワラント）、`Put`（プットワラント）、`Bull`（ブル証）、`Bear`（ベア証）、`Inline`（インラインワラント）",
+        "issuer": "発行体 ID で絞り込み（任意）。`issuer_id` は `warrant_issuers` から取得します",
+        "expiry_date": "満期までの期間で絞り込み（任意）：`LT_3`（3 か月未満）、`Between_3_6`（3-6 か月）、`Between_6_12`（6-12 か月）、`GT_12`（12 か月超）",
+        "price_type": "レンジ内 / レンジ外で絞り込み（任意）：`In`（レンジ内）、`Out`（レンジ外）。インラインワラントのみ対象",
+        "status": "ステータスで絞り込み（任意）：`Suspend`（売買停止）、`PrepareList`（上場予定）、`Normal`（通常取引）"
+      }
+    },
+    "warrant_quote": {
+      "title": "ワラント気配値",
+      "description": "ワラント/CBBC（牛熊証）の気配値を取得します。トップレベル配列を返し、銘柄ごとに 1 件：last_done（現在値）、prev_close、open、high、low、volume（出来高）、turnover（売買代金）、trade_status、timestamp、implied_volatility（インプライド・ボラティリティ）、category、strike_price、expiry_date、conversion_ratio、outstanding_ratio、underlying_symbol。デルタとレバレッジは warrant_list にあり、ここには含まれません",
+      "properties": {
+        "symbols": "証券コード。例：`[\"700.HK\", \"AAPL.US\"]`。正規のコードを使用してください。ゼロ埋めしたコード（例：\"00700.HK\"）はエラーにならず空のレコードが返されます"
+      }
+    },
+    "quant_run": {
+      "title": "クオンツ指標スクリプトの実行",
+      "description": "サーバー側で過去のローソク足データに対してクオンツ指標スクリプトを実行し、計算された指標/描画値を JSON 形式で返します。期間：1m/5m/15m/30m/1h/day/week/month/year（デフォルト day）。input は JSON 配列で、順序はスクリプト内の input.*() 呼び出しと一致させる必要があります",
+      "properties": {
+        "symbol": "証券コード。`<CODE>.<MARKET>` 形式。例：`TSLA.US`、`700.HK`",
+        "period": "ローソク足の期間：`1m`、`5m`、`15m`、`30m`、`1h`、`day`、`week`、`month`、`year`（デフォルト `day`）",
+        "start": "ローソク足期間の開始日（YYYY-MM-DD）",
+        "end": "ローソク足期間の終了日（YYYY-MM-DD）",
+        "script": "指標スクリプトのソースコード",
+        "input": "スクリプトの入力パラメータ（JSON 配列文字列）。順序はスクリプト内の `input.*()` 呼び出しと一致させる必要があります。例：`\"[14,2.0]\"`"
+      }
+    },
+    "news_search": {
+      "title": "ニュース検索",
+      "description": "キーワードでニュース記事を検索し、関連度順に配列 [{id, title, description（要約）, source（配信元メディアの表示名、Accept-Language に応じてローカライズ）, published_at（RFC3339 時刻形式）, url, content_via, source_url, source_logo}] を返します。content_via が 0 の場合は Longbridge のオリジナルまたは版権取得済みコンテンツ、0 以外の場合は第三者からの転載で、原文は source_url を参照してください",
+      "properties": {
+        "keyword": "検索キーワード",
+        "limit": "最大返却件数（デフォルト 20、上流は最大 40 件まで返します）"
+      }
+    },
+    "topic_search": {
+      "title": "コミュニティトピック検索",
+      "description": "キーワードでコミュニティの投稿/トピックを検索し、id、投稿者、時刻および要約を返します",
+      "properties": {
+        "keyword": "検索キーワード",
+        "limit": "最大返却件数（デフォルト 20、上流は最大 30 件まで返します）"
+      }
+    },
+    "financial_statement": {
+      "title": "財務諸表",
+      "description": "証券の財務諸表（損益計算書、貸借対照表、またはキャッシュフロー計算書）を取得します。kind：IS/BS/CF/ALL。report：af（年次、デフォルト）、saf（半期）、qf（四半期すべて）、q1/q2/q3。{report, currency, empty_fields, list[]} を返します。list[] は各報告期間（最新が先頭）で、各期間に fields[] 明細科目が含まれます。データがない場合は空になることがあります。米国株口座で `.US` 銘柄を照会すると米国株専用の財務諸表 API にルーティングされます（report の語彙は汎用 API と同じ）：単一の kind では同じ構造を返します。kind=ALL/デフォルトでは IS+BS+CF の 3 回のリクエストに分割され、{income_statement, balance_sheet, cash_flow} を返します（各項目は上記の構造）。これはバックエンドが一括リクエストに対応していないためです。その他の証券/口座の組み合わせは汎用 API を使用します",
+      "properties": {
+        "symbol": "証券コード。例：`\"AAPL.US\"`",
+        "kind": "財務諸表の種類：`IS`（損益計算書）、`BS`（貸借対照表）、`CF`（キャッシュフロー計算書）、`ALL`（すべて、デフォルト）",
+        "report": "報告期間：`af`（年次）、`saf`（半期）、`qf`（四半期）、`q1`/`q2`/`q3`"
+      }
+    },
+    "financial_report_latest": {
+      "title": "最新決算報告",
+      "description": "証券の最新期の決算報告サマリーを取得します。{report（報告期間コード。例：\"2026.H1\"）, report_txt（報告期間名）, currency, indicators[]{field_name, indicator_name, indicator_value, yoy}} を返し、主要指標（売上高、純利益、総資産、総負債、EPS、BPS、ROE、純利益率）ごとに 1 件で、field_name で区別します。比率系の値には \"%\" サフィックスが付きます。yoy は小数（0.1627 = +16.27%）で、比率系では空です",
+      "properties": {
+        "symbol": "証券コード。例：`\"700.HK\"`。正規のコードを使用してください。ゼロ埋めしたコード（例：\"00700.HK\"）はエラーにならず空のレコードが返されます"
+      }
+    },
+    "valuation_rank": {
+      "title": "バリュエーション・パーセンタイル",
+      "description": "指定期間における銘柄の日次バリュエーション・パーセンタイル（PE/PB/PS/配当利回りの業界内パーセンタイル）を取得します。start/end の形式は yyyymmdd で、デフォルトは直近 30 日です。{kline_type, max_num, pe, pb, ps, dvd} を返し、各系列は {timestamp, rank} のリストです（rank は max_num を満点とします）",
+      "properties": {
+        "symbol": "銘柄コード。例：`\"AAPL.US\"`",
+        "start": "開始日。yyyymmdd（または yyyy-mm-dd）形式（デフォルトは end の 30 日前）",
+        "end": "終了日。yyyymmdd（または yyyy-mm-dd）形式（デフォルトは本日）"
+      }
+    },
+    "institution_rating_history": {
+      "title": "機関投資家レーティング履歴",
+      "description": "機関投資家レーティングの履歴を取得します。target_history[]{timestamp, close, high_target_price, low_target_price}（アナリスト目標株価レンジと終値の比較）および evaluate_history[]{start_date, end_date, buy, over, hold, under, sell, no_opinion}（レーティング社数。同一の分布が連続する場合は 1 つの区間に統合）を返します。時刻は文字列形式の Unix 秒タイムスタンプです。集計社数のみで、機関ごとのレーティングや目標株価の変更は含みません",
+      "properties": {
+        "symbol": "銘柄コード。例：`\"700.HK\"`。正規のコードを使用してください。ゼロ埋めしたコード（例：\"00700.HK\"）はエラーではなく空のレコードを返します"
+      }
+    },
+    "institution_rating_industry_rank": {
+      "title": "機関投資家レーティング業界ランキング",
+      "description": "同業界の各銘柄をアナリストのレーティングでランク付けしたランキングを取得します。{industry_name, industry_rank（照会銘柄の順位）, industry_total, industry_mean, industry_median, items[]{rank, symbol, name, buy, over, hold, under, sell, no_opinion, total}} を返します。ページングに対応しています",
+      "properties": {
+        "symbol": "銘柄コード。例：`\"AAPL.US\"`",
+        "page": "ページ番号（デフォルト 1）",
+        "size": "1 ページあたりの件数（デフォルト 20）"
+      }
+    },
+    "short_margin": {
+      "title": "空売り証拠金",
+      "description": "現在の口座の空売り証拠金預託明細を取得します。各ショートポジションの margin_amount、margin_rate、interest_rate、symbol、quantity を返します"
+    },
+    "bank_cards": {
+      "title": "登録銀行口座",
+      "description": "現在の口座に登録されている出金用銀行カードを一覧表示します。cards[]{id, bank_name, account_number（マスキング済み）, currency, status} を返します"
+    },
+    "withdrawals": {
+      "title": "出金履歴",
+      "description": "現在の口座の出金履歴を取得します。items[]{id, amount, currency, status, created_at, bank_name, account_number（マスキング済み）} を返します",
+      "properties": {
+        "page": "ページ番号（デフォルト 1）",
+        "size": "1 ページあたりの件数（デフォルト 20）"
+      }
+    },
+    "deposits": {
+      "title": "入金履歴",
+      "description": "現在の口座の入金履歴を取得します。items[]{id, amount, currency, status, created_at, updated_at} を返します。states：カンマ区切りのステータス（Pending/Finished/Failed）、currencies：カンマ区切りの通貨コード",
+      "properties": {
+        "page": "ページ番号（デフォルト 1）",
+        "size": "1 ページあたりの件数（デフォルト 20）",
+        "states": "入金ステータスによるフィルター（カンマ区切り）",
+        "currencies": "通貨コードによるフィルター（カンマ区切り）。例：`\"USD,HKD\"`"
+      }
+    },
+    "ipo_subscriptions": {
+      "title": "IPO 申込受付一覧",
+      "description": "香港株および米国株で現在申込受付中／事前申込段階にある IPO を一覧表示します。{hk, us} を返し、それぞれ {list[]{symbol, code, name, issue_price, entrance_fee, min_sub_num, sub_end_date, remaining_day, share_planned, state, …}} です"
+    },
+    "ipo_calendar": {
+      "title": "IPO カレンダー",
+      "description": "IPO カレンダーを表示します。{sub_num, win_num, preipo_num, ipo_num, timestamp, list[]{symbol, code, name, sub_date, sub_end_date, result_date, ipo_date, mart_date, state, state_stage, tags}} を返し、上場予定および直近に上場した IPO を含みます"
+    },
+    "ipo_listed": {
+      "title": "IPO 上場済み一覧",
+      "description": "香港株および米国株で直近に上場した IPO を一覧表示します。{hk, us} を返し、それぞれ {total, list[]{symbol, code, name, description, ipo_date, listed_day, issue_price, prev_close, last_done, ipo_change, amount, …}} です",
+      "properties": {
+        "page": "ページ番号（デフォルト 1）",
+        "size": "1 ページあたりの件数（デフォルト 20）"
+      }
+    },
+    "ipo_detail": {
+      "title": "IPO 詳細",
+      "description": "IPO の詳細を表示します。profile（事業概要）、timeline[]{event, date}、申込資格（eligibility）、pricing_range、lot_size、割当ルールを返します",
+      "properties": {
+        "symbol": "銘柄コード。例：`\"6871.HK\"` または `\"ARM.US\"`",
+        "market": "市場：`HK` または `US`（デフォルトはコードの接尾辞から推定）"
+      }
+    },
+    "ipo_orders": {
+      "title": "IPO 注文一覧",
+      "description": "現在の口座の IPO 注文（有効および過去分）を一覧表示します。orders[]{order_id, symbol, market, quantity, total_amount, status, submitted_at} を返し、symbol/market/status でフィルターできます",
+      "properties": {
+        "symbol": "銘柄コードでフィルター。例：`\"6871.HK\"`",
+        "market": "市場でフィルター：`HK` または `US`",
+        "status": "注文ステータスでフィルター",
+        "page": "ページ番号（デフォルト 1）",
+        "size": "1 ページあたりの件数（デフォルト 20）"
+      }
+    },
+    "ipo_order_detail": {
+      "title": "IPO 注文詳細",
+      "description": "order_id を指定して IPO 注文の詳細情報を表示します。{order_id, symbol, market, quantity, allotted_quantity, total_amount, status, submitted_at} を返します",
+      "properties": {
+        "order_id": "IPO 注文 ID"
+      }
+    },
+    "ipo_profit_loss": {
+      "title": "IPO 損益",
+      "description": "口座の IPO 申込による損益の合計と銘柄ごとの明細を表示します。{total_cost, total_value, total_return, items[]{symbol, cost, current_value, return_rate}} を返します。period：all/ytd/1y/3y",
+      "properties": {
+        "period": "期間：`all`（全期間、デフォルト）、`ytd`（年初来）、`1y`（直近 1 年）、`3y`（直近 3 年）",
+        "page": "ページ番号（デフォルト 1）",
+        "size": "1 ページあたりの件数（デフォルト 20）"
+      }
+    },
+    "business_segments": {
+      "title": "事業セグメント",
+      "description": "指定銘柄の当期の事業セグメント別売上構成を取得します。{total, currency, report_txt, fp_start, fp_end, rpt_date, business: [{id, name, value, percent, yoy}], regionals: [同一構造。空の場合あり]} を返します",
+      "properties": {
+        "symbol": "銘柄コード。例：`\"AAPL.US\"`"
+      }
+    },
+    "business_segments_history": {
+      "title": "事業セグメント履歴",
+      "description": "事業セグメント別売上の過去推移を取得します。historical[]{date, total, currency, business[{name, percent, value}], regionals[{name, percent, value}]} を返します",
+      "properties": {
+        "symbol": "銘柄コード。例：`\"AAPL.US\"`",
+        "report": "決算期間：`qf`（四半期決算）、`saf`（中間決算）、`af`（通期決算）"
+      }
+    },
+    "institutional_views": {
+      "title": "機関投資家見解の月次推移",
+      "description": "機関投資家レーティングの月次分布の時系列を取得します。{elist[]{date, buy, over（アウトパフォーム）, hold, under（アンダーパフォーム）, sell, no_opinion, total}, tlist[]{date, close, high_price, low_price}} を古い順に返し、レーティングのトレンド分析に使用します",
+      "properties": {
+        "symbol": "銘柄コード。例：`\"AAPL.US\"`"
+      }
+    },
+    "industry_rank": {
+      "title": "業界ランキング",
+      "description": "市場（US/HK/CN/SG）と指標で業界をランク付けします。indicator：0=上昇率上位 1=本日の値動き 2=人気 3=時価総額 4=売上高 5=売上高成長率 6=純利益 7=純利益成長率。sort_type：0=単一階層 1=多階層。items[]{symbol（例：IN00258.US）, name, chg, lists[]} を返し、行の symbol をそのまま industry_peers に渡せます",
+      "properties": {
+        "market": "市場コード：US、HK、CN、SG",
+        "indicator": "ランキング指標：0=上昇率上位、1=本日の値動き、2=人気、3=時価総額、4=売上高、5=売上高成長率、6=純利益、7=純利益成長率",
+        "sort_type": "並べ替えタイプ：0=単一階層、1=多階層"
+      }
+    },
+    "industry_peers": {
+      "title": "業界同業グループツリー",
+      "description": "業界グループの階層的な同業ツリーを取得します。industry_rank から得た業界 symbol（例：IN00258.US）を受け付け、chain{name, symbol, code, industry_id, sharelist_id, stock_num, chg, ytd_chg, next[...]} と top{name, industry_id} を返します",
+      "properties": {
+        "symbol": "industry_rank から得た業界 symbol。例：`\"IN00258.US\"`。BK counter_id 形式（`\"BK/US/IN00258\"`）も受け付けます"
+      }
+    },
+    "financial_report_snapshot": {
+      "title": "決算スナップショット",
+      "description": "決算スナップショットを取得します：report_desc（テキスト要約）、fo_revenue/fo_ebit/fo_eps（実績 vs 予想、yoy/cmp を含む）、fr_* 財務比率（ROE、利益率、資産、キャッシュフロー）。report：qf/saf/af。フラットなオブジェクトを返します：name、ticker、market、currency、report、fiscal_year、fiscal_period、fp_start、fp_end、opt_reports、report_desc。fo_* は {value, yoy, …}、fr_* は単純な文字列（比率）または {value, yoy}（金額）です",
+      "properties": {
+        "symbol": "銘柄コード。例：`\"AAPL.US\"`",
+        "report": "決算期間：`qf`（四半期決算）、`saf`（半期決算）、`af`（通期決算）",
+        "fiscal_year": "会計年度。例：2024",
+        "fiscal_period": "会計期間。例：\"1\" \"2\" \"3\" \"4\""
+      }
+    },
+    "shareholder_top": {
+      "title": "上位 20 大株主",
+      "description": "上位 20 大株主（機関投資家、個人、インサイダー）の複数期間の保有状況を、報告期間の新しい順に取得します（デフォルト 4 期間。それ以上は periods で指定）。info[]{period, share_holders[]{object_id, name, title, shares_held, percent_shares_held, shares_changed, filing_date}} を返します。object_id を shareholder_detail に渡すと、その株主の全取引記録を確認できます。",
+      "properties": {
+        "symbol": "銘柄コード。例：AAPL.US",
+        "periods": "返す報告期間の数（新しい順）：まず「最新」スナップショット、続いて四半期ごと。デフォルト 4（1 期間あたり約 4KB）、最大 15"
+      }
+    },
+    "shareholder_detail": {
+      "title": "株主保有詳細",
+      "description": "指定株主の保有履歴と取引明細を取得します。shareholder_top から得た object_id が必要です。name, owner_source（Company/Institution/Person/Insider）, tradings[]{period, accum_buy, accum_sell, net_buy, trading_details[]{trading_date, trading_type, trading_shares, trading_price, security_type, filing_date}}, holding_summary, holding_periods, trading_periods を返します。注意：機関投資家株主（13F 報告）の trading_details[] は空で、取引明細があるのは個人／インサイダー（Form 4）のみです。",
+      "properties": {
+        "symbol": "銘柄コード。例：AAPL.US",
+        "object_id": "株主の object_id。shareholder_top が返すデータから取得（数値・数値文字列のどちらでも可）"
+      }
+    },
+    "valuation_comparison": {
+      "title": "複数銘柄比較",
+      "description": "銘柄のバリュエーション比較。モード A（単一銘柄）：symbol のみを渡すと、サーバー側がその銘柄と同業界の推奨比較銘柄を自動で返します。モード B（複数銘柄）：symbol を主銘柄として渡し、comparison_symbols（カンマ区切り、例：'MSFT.US,GOOGL.US'）を指定して比較します。currency: USD/HKD/CNY。list[]{symbol, name, market_value, price_close, pe, pb, ps, history[]{date, pe, pb, ps}} を返します。",
+      "properties": {
+        "symbol": "比較する銘柄コード。例：AAPL.US",
+        "currency": "通貨単位：USD/HKD/CNY",
+        "comparison_symbols": "比較対象銘柄。カンマ区切り、最大 5 銘柄。例：MSFT.US,GOOGL.US"
+      }
+    },
+    "screener_strategy": {
+      "title": "ストラテジー詳細",
+      "description": "実行前にストラテジーのフィルター条件の詳細を確認します。market, filter{filters[]{key, min, max, tech_values}} を返します。ストラテジーを直接実行するには、screener_search の strategy_id パラメータを使用してください。",
+      "properties": {
+        "id": "ストラテジー ID。screener_recommend_strategies または screener_user_strategies の strategys[].id から取得"
+      }
+    },
+    "screener_search": {
+      "title": "ストラテジーによる銘柄スクリーニング",
+      "description": "スクリーニングを実行します。market: US|HK|CN|SG（モード B では必須。モード A ではストラテジー内蔵の市場を使用）。モード A：strategy_id（screener_recommend_strategies から取得）を渡すとストラテジーを自動実行します。モード B：conditions=[{\"key\":\"KEY\",\"min\":\"10\",\"max\":\"50\",\"tech_values\":{}},...] をそのまま API に渡します。 extra_returns=[\"key\",...] で表示列を追加、sort_by_key で並べ替えフィールドを指定、sort_order: asc|desc（デフォルト desc）、page: 0 始まり（デフォルト 0）。{total, items[]{symbol, name, counter_id, indicators[]{key, value}}, legend{<key>: {name, unit}}} を返し、各結果にはデフォルトで prevclose、prevchg、marketcap、salesgrowthyoy、pettm、pbmrq、industry の 7 列が含まれます。ファンダメンタルズ key：pettm pbmrq roe roa netmargin salesgrowthyoy netincomegrowthyoy marketcap(億) circulating_marketcap(億) prevclose prevchg(%) divyld la epsttm netincome(億) sales(億) turnover_rate balance(万)。テクニカル key（tech_values は screener_indicators を参照）：macd_day/week rsi_day/week kdj_day/week boll_day/week。注意：key はプラットフォームが動的に管理しているため、不明な場合はまず screener_indicators を呼び出して確認してください。",
+      "properties": {
+        "market": "市場：US/HK/CN/SG。モード B では必須、モード A では省略可（ストラテジーに市場が内蔵されています）"
+      }
+    },
+    "screener_indicators": {
+      "title": "スクリーニング指標設定",
+      "description": "利用可能なすべてのスクリーニング指標の key と単位を取得します。テクニカル指標には tech_values {tech_key: [{value, label}]} があり、受け付ける値を列挙します（例：macd_day：period [day]、category [goldenfork, deadcross, upzero, downzero]）。screener_search では tech_key ごとに 1 つの値を tech_values として渡します。オプションの symbol（例：AAPL.US）でその銘柄に適用可能な指標に絞り込めます。groups[]{group_type, group_name, indicators[]{id, key, name, unit, places, category, tech_values{tech_key: [{value, label}]}}} を返します",
+      "properties": {
+        "symbol": "オプションの銘柄コード。その銘柄がサポートする指標の絞り込みに使用。例：AAPL.US"
+      }
+    },
+    "screener_recommend_strategies": {
+      "title": "プラットフォームのプリセット・スクリーニングストラテジー",
+      "description": "プラットフォームがプリセットしたスクリーニングストラテジーの一覧を取得します。market: US|HK|CN|SG（デフォルト US）。strategys[]{id, name, description, market, three_months_chg, risk} を返します。id を screener_search の strategy_id に渡すとそのストラテジーを直接実行でき、screener_strategy に渡すとフィルター条件を確認できます。"
+    },
+    "screener_user_strategies": {
+      "title": "マイ・スクリーニングストラテジー",
+      "description": "現在のユーザーが保存したスクリーニングストラテジーの一覧を取得します。market: US|HK|CN|SG（デフォルト US）。strategys[]{id, name, description, market, three_months_chg, risk} を返します。id を screener_search の strategy_id に渡すとそのストラテジーを直接実行でき、screener_strategy に渡すとフィルター条件を確認できます。",
+      "properties": {
+        "market": "市場フィルター：US/HK/CN/SG、デフォルト US"
+      }
+    },
+    "top_movers": {
+      "title": "注目銘柄の急変動",
+      "description": "価格変動が直近 20 日の標準偏差を超えた急変動銘柄と、関連ニュースによる要因を取得します。markets: カンマ区切りの HK/US/CN/SG（省略 = 全市場）。sort: 0=時間 1=騰落率 2=注目度（デフォルト）。limit: 1 ページあたりの件数（デフォルト 20）。next_params: ページングカーソル。前回返された next_params オブジェクトを渡します。events[]{timestamp(RFC3339), alert_reason, alert_type, stock{symbol, name, change(小数。例：0.0445=+4.45%), last_done, labels[], intro}}, updated_at, next_params を返します。",
+      "properties": {
+        "markets": "市場フィルター。カンマ区切りで HK/US/CN/SG に対応。省略すると全市場を返します",
+        "sort": "並べ替え方法：0=時間順（新しい順）1=騰落率順（変動幅の大きい順）2=注目度順（デフォルト）",
+        "date": "照会日。形式 YYYY-MM-DD、省略時は本日",
+        "limit": "1 ページあたりの返却件数。デフォルト 10、最大 100",
+        "next_params": "ページングカーソル。前回レスポンスの next_params をそのまま渡すと次のページを取得できます。最初のページでは省略"
+      }
+    },
+    "rank_categories": {
+      "title": "注目度ランキングのカテゴリ設定",
+      "description": "注目度ランキングのカテゴリ設定を取得します。first_tags[]{key, name, second_tags[]{key, name, market}} を返します。second_tags[].key（例：hot_all-us）を rank_list に渡すと該当ランキングを取得できます。"
+    },
+    "rank_list": {
+      "title": "注目度ランキング銘柄一覧",
+      "description": "注目度ランキングの key を指定して銘柄ランキング一覧を取得します。key は rank_categories の second_tags[].key から取得します（例：hot_all-us、hot_up-hk、trade_heat-us）。market: key の接尾辞から推定、または明示的に指定。size: 返却件数（デフォルト 20）。lists[]{symbol, name, last_done, chg(小数), inflow, market_cap, pre_post_price, pre_post_chg, amplitude, turnover_rate, volume_rate, five_day_chg, ten_day_chg, twenty_day_chg, this_year_chg, industry}, updated_at を返します。",
+      "properties": {
+        "key": "ランキング key。rank_categories の second_tags[].key から取得。例：hot_all-us、hot_up-hk。市場接尾辞のない key（例：hot_all）は market に基づいて補完されます",
+        "market": "市場の指定：US/HK/CN/SG。key に市場接尾辞がある場合は接尾辞が優先され、それ以外はデフォルト US",
+        "size": "返却件数。デフォルト 20、ランキング自体の長さ（通常 50）を超えません",
+        "need_article": "関連ニュースを返すかどうか。デフォルト false"
+      }
+    },
+    "short_trades": {
+      "title": "空売り約定",
+      "description": "香港株または米国株の日次空売り出来高の履歴を取得します。市場は symbol の接尾辞から自動判定されます。last_timestamp: Unix 秒（省略時は最新）。page_size: 1–100（デフォルト 20）。共通で data[]{timestamp(RFC3339), short_vol(当日の空売り株数), rate(小数比率。例：0.36=36%), close} を返します。米国株のみ：nasdaq_vol(ナスダック空売り出来高), nyse_vol(NYSE 空売り出来高)。香港株のみ：balance(香港ドル), market_vol(当日の市場全体出来高)。米国株のデータソース：FINRA/NASDAQ。香港株のデータソース：HKEX。",
+      "properties": {
+        "symbol": "銘柄コード。例：AAPL.US（米国株）または 700.HK（香港株）。市場は接尾辞から自動判定",
+        "last_timestamp": "照会の終了タイムスタンプ（秒）。現在のタイムスタンプを渡すと最新データを取得します",
+        "page_size": "1 ページあたりの件数。1–100、デフォルト 20"
+      }
+    },
+    "authenticate": {
+      "title": "認証",
+      "description": "Longbridge の認証情報をまだ取得していない場合（例：クライアントがブラウザでの OAuth フローを完了できない場合）に使用します。ユーザーが https://open.longbridge.com/connect で生成したワンタイム認可コードを貼り付けたら、それを `auth_code` として渡してください。成功するとサーバーがアクセストークンを返すので、以降のリクエストで Bearer 認証情報として使用すると、すべてのツールが利用可能になります。未認証で、ユーザーがまだ認可コードを提供していない場合は、https://open.longbridge.com/connect で生成するよう案内してください。",
+      "properties": {
+        "auth_code": "ユーザーが https://open.longbridge.com/connect で生成したワンタイム OAuth 認可コード。有効期間は 5 分で、1 回のみ使用できます。"
+      }
+    },
+    "signals": {
+      "title": "戦略シグナル",
+      "description": "戦略シグナルを照会します —— 戦略がカタリストに基づいて特定の銘柄について示した判断です。銘柄コード、戦略、カタリスト、期間で絞り込みでき、limit/offset でページングします。タイトル、要約、見通し、弱気/基準/強気の目標株価、およびページ送り用の total を返します。戦略分析の全文は signal_detail で取得してください",
+      "properties": {
+        "symbol_name": "銘柄コードで絞り込み（例：`AAPL.US`、`700.HK`）。省略するとすべての銘柄を返します",
+        "strategy_id": "戦略 id で絞り込み（例：buffett-value）。非推奨の strategy_name より優先され、両方指定した場合はこちらが適用されます",
+        "strategy_name": "戦略名で絞り込み。省略するとすべての戦略のヒット結果を返します",
+        "catalyst_name": "シグナルをトリガーしたファクター名で絞り込み（例：`EARNINGS_RELEASED`、`macd_12_26_9`）——返却結果の `key_catalyst` の表示文言ではありません。省略すると制限なし",
+        "catalyst_type": "シグナルをトリガーしたカタリストの種類で絞り込み（例：News、Fundamental、Technical）。省略するとカタリストの種類を制限しません",
+        "start_time": "この時刻以降に作成されたヒット記録に絞り込み。タイムゾーン付き ISO 8601 形式（例：2024-01-15T10:30:00Z）。省略すると下限なし",
+        "end_time": "この時刻以前に作成されたヒット記録に絞り込み。タイムゾーン付き ISO 8601 形式。省略すると上限なし",
+        "limit": "返却件数の上限。最大 500、デフォルト 5（1 件あたり約 5KB）。それ以上は offset でページ送りしてください",
+        "offset": "ページングでスキップする件数。デフォルト 0"
+      }
+    },
+    "signal_detail": {
+      "title": "シグナル詳細",
+      "description": "ID を指定して単一のシグナルを取得します（ID は `signals` から取得）。フィールドは一覧と同じで、加えて `analysis` —— 戦略分析の全文（適合度スコア、バリュエーションシナリオ、エビデンスの出所、関連ファクト ID）を含みます。{id, symbol, company_name, market, title, summary, strategy_id, strategy_name, key_fact_id, key_catalyst, outlook, outlook_desc, analysis_price, conservative_price, benchmark_price, optimistic_price, status, created_at, updated_at, analysis: {confidence, signal: {core_conclusion, evidence_sources, quick_takeaways, releated_facts_ids, …}, strategy_fit_score: {total_score, key_takeaways, …}, strategy_notes, …}} を返します",
+      "properties": {
+        "signal_id": "シグナル ID（例：sign_992_1a00c9425c3_48ab）。signals から取得できます"
+      }
+    },
+    "security_facts": {
+      "title": "銘柄ファクト（カタリスト）",
+      "description": "指定銘柄のファクト（カタリスト）イベントを照会します —— 異常検知、ファクター値、データソース、自然言語による要約を含み、期間と件数で絞り込めます。ファクトは戦略が反応する対象であり、シグナルは key_fact_id でトリガーとなったファクトを示します。{facts: [{fact_id, fact_type, direction, occur_time, symbols_info: [{symbol, security_name}], factors: [{name, factor_groups, long_short_direction, trigger_condition, anomaly_detection}], data_source: [{source_name, type, url, icon}], nl_info: {title, sub_title, summary, invest_anal, eli_explain}}]} を返します",
+      "properties": {
+        "symbol": "照会する銘柄コード（例：`AAPL.US`、`700.HK`）",
+        "begin_time": "照会開始時刻。UTC タイムゾーン、形式は 2006-01-02T15:04:05Z。空欄の場合は利用可能な最も古いデータから開始します",
+        "end_time": "照会終了時刻。UTC タイムゾーン、形式は 2006-01-02T15:04:05Z。空欄の場合は最新データを返します",
+        "limit": "返却するファクト件数の上限。期間内のファクトがこの上限を超える場合、最新の limit 件のみを返します。デフォルト 3（1 件あたり数 KB）。それ以前のものは end_time でさかのぼってください"
+      }
+    },
+    "fund_hot": {
+      "title": "ファンド人気ランキング",
+      "description": "Longbridge ファンドチャンネルの人気ファンド一覧を取得します。各行には他の fund_* ツールで使用するファンドの counter_id（例：UT/FD/HK0000384492）が含まれます。パラメータなし。トップレベル配列 {counter_id, name, currency, asset_class_name, risk_level_name, earning_rate, time_interval, purchase_amount, recommendation_text, fund_performances: [{date, last_done}], …} を返します"
+    },
+    "fund_list": {
+      "title": "ファンド一覧",
+      "description": "ファンドを閲覧・絞り込みます。filter（fund_filters から取得したオブジェクト）、quick_ids、time_interval は任意です。各行には他の fund_* ツールで使用する counter_id が含まれます。トップレベル配列 {counter_id, name, code, isin, currency, asset_class_name, risk_level_name, earning_rate, time_interval, unit_value, holding, purchase_amount, …} を返します",
+      "properties": {
+        "filter": "サーバー側で定義された絞り込みオブジェクト（fund_filters を参照）。省略すると絞り込みなし",
+        "quick_ids": "クイック絞り込み id（fund_filters から取得）",
+        "time_interval": "各行に含める騰落率の期間（例：[\"1m\",\"1y\"]）"
+      }
+    },
+    "fund_filters": {
+      "title": "ファンド絞り込み条件",
+      "description": "fund_list がサポートする絞り込み条件（filter オブジェクトの構造とクイック絞り込み id）を取得します。パラメータなし。{asset_class, company, currency, industry_category_name, risk_level} を返し、各項目は {key, value} のような選択肢のリストです"
+    },
+    "fund_detail": {
+      "title": "ファンド詳細",
+      "description": "単一ファンドの概要と主要データを取得します。counter_id（例：UT/FD/HK0000384492）は fund_hot / fund_list から取得します。フラットなオブジェクトを返します：name、code、isin、currency、manager、asset_class_name、risk_level/risk_level_name、purchasable、redeemable、purchase_amount、manage_rate、purchase_rate、year_to_date_yield、profile、asset_allocation: {asset_type, report_date, lists: [{name, code, counter_id, position_ratio}]} など",
+      "properties": {
+        "counter_id": "ファンドの counter_id（例：UT/FD/HK0000384492）。fund_hot / fund_list から取得"
+      }
+    },
+    "fund_analysis": {
+      "title": "ファンド分析",
+      "description": "ファンドの一次分析（リスク／リターンの概要）を取得します。counter_id は fund_hot / fund_list から取得、period は任意です。{visible, actual_period, updated_at, return_ability, risk_ability, cost_level, value_for_money} を返し、各指標は {visible, score_pct, level} です",
+      "properties": {
+        "counter_id": "ファンドの counter_id（例：UT/FD/HK0000384492）。fund_hot / fund_list から取得",
+        "period": "分析期間（サーバー側で定義、例：直近 1 か月 / 3 か月 / 1 年）。省略するとデフォルトの期間を使用します"
+      }
+    },
+    "fund_analysis_detail": {
+      "title": "ファンド分析詳細",
+      "description": "ファンドの二次分析（fund_analysis の背後にあるより詳細な指標）を取得します。counter_id は fund_hot / fund_list から取得、period は任意です。fund_analysis の構造に available_periods を加えたものを返し、各指標には items: [ … ]（項目別の指標明細）も含まれます",
+      "properties": {
+        "counter_id": "ファンドの counter_id（例：UT/FD/HK0000384492）。fund_hot / fund_list から取得",
+        "period": "分析期間（サーバー側で定義、例：直近 1 か月 / 3 か月 / 1 年）。省略するとデフォルトの期間を使用します"
+      }
+    },
+    "fund_trend": {
+      "title": "ファンド推移",
+      "description": "ファンドの推移チャートデータを取得します。counter_id は fund_hot / fund_list から取得、period は任意です。{actual_period, available_periods, fund_performances: [ … ], category_average_performances: [ … ], contrast_performances: {benchmark_name, performances: [ … ]} または null} を返します",
+      "properties": {
+        "counter_id": "ファンドの counter_id（例：UT/FD/HK0000384492）。fund_hot / fund_list から取得",
+        "period": "分析期間（サーバー側で定義、例：直近 1 か月 / 3 か月 / 1 年）。省略するとデフォルトの期間を使用します"
+      }
+    },
+    "fund_annual_returns": {
+      "title": "ファンド年間リターン",
+      "description": "ファンドの年ごとのリターンを取得します（ページング）。counter_id は fund_hot / fund_list から取得、page / size は任意です。",
+      "properties": {
+        "counter_id": "ファンドの counter_id（例：UT/FD/HK0000384492）。fund_hot / fund_list から取得",
+        "page": "ページ番号（1 から開始）。省略すると最初のページを取得します",
+        "size": "1 ページあたりの件数。省略するとサーバー側のデフォルトを使用します"
+      }
+    },
+    "fund_quarterly_returns": {
+      "title": "ファンド四半期リターン",
+      "description": "ファンドの四半期ごとのリターンを取得します（ページング）。counter_id は fund_hot / fund_list から取得、page / size は任意です。",
+      "properties": {
+        "counter_id": "ファンドの counter_id（例：UT/FD/HK0000384492）。fund_hot / fund_list から取得",
+        "page": "ページ番号（1 から開始）。省略すると最初のページを取得します",
+        "size": "1 ページあたりの件数。省略するとサーバー側のデフォルトを使用します"
+      }
+    },
+    "fund_performance": {
+      "title": "ファンド日次パフォーマンス",
+      "description": "ファンドの日次パフォーマンスデータを取得します。counter_id は fund_hot / fund_list から取得します。トップレベル配列 {counter_id, fund_name, performance_return_<period>, performance_rank_<period>, performance_total_<period>（period：one_day … ten_years、ytd）, annualized_return_<one…ten>, seven_days_annualized, update_time, …} を返します",
+      "properties": {
+        "counter_id": "ファンドの counter_id（例：UT/FD/HK0000384492）。fund_hot / fund_list から取得"
+      }
+    },
+    "fund_performance_comparison": {
+      "title": "ファンド運用実績比較",
+      "description": "ファンドの運用実績をベンチマーク／同カテゴリと比較します。counter_id は fund_hot / fund_list から取得、period は任意です。{fund_performances: [ … ], contrast_performances: [{name, performances: [ … ]}]} を返します",
+      "properties": {
+        "counter_id": "ファンドの counter_id（例：UT/FD/HK0000384492）。fund_hot / fund_list から取得",
+        "period": "分析期間（サーバー側で定義、例：直近 1 か月 / 3 か月 / 1 年）。省略するとデフォルトの期間を使用します"
+      }
+    },
+    "fund_nav": {
+      "title": "ファンド最新基準価額",
+      "description": "ファンドの最新基準価額（NAV）を取得します。counter_id は fund_hot / fund_list から取得します。トップレベル配列 {counter_id, counter_name, isin, currency, value, change, change_percent, date_format, last_update_time, …} を返します",
+      "properties": {
+        "counter_id": "ファンドの counter_id（例：UT/FD/HK0000384492）。fund_hot / fund_list から取得"
+      }
+    },
+    "fund_nav_history": {
+      "title": "ファンド基準価額履歴",
+      "description": "ファンドの基準価額の履歴系列を取得します（ページング）。counter_id は fund_hot / fund_list から取得、page / size は任意です。トップレベル配列 {value, change, change_percent, date_format, last_update_time, …}（行の構造は fund_nav と同じ）を返します",
+      "properties": {
+        "counter_id": "ファンドの counter_id（例：UT/FD/HK0000384492）。fund_hot / fund_list から取得",
+        "page": "ページ番号（1 から開始）。省略すると最初のページを取得します",
+        "size": "1 ページあたりの件数。省略するとサーバー側のデフォルトを使用します"
+      }
+    },
+    "fund_nav_range": {
+      "title": "ファンド基準価額（期間指定）",
+      "description": "相対期間を指定してファンドの基準価額履歴を取得します。counter_id は fund_hot / fund_list から取得し、month_before または year_before を設定します。トップレベル配列 {value, change, change_percent, date_format, last_update_time, …}（行の構造は fund_nav と同じ）を返します",
+      "properties": {
+        "counter_id": "ファンドの counter_id（例：UT/FD/HK0000384492）。fund_hot / fund_list から取得",
+        "month_before": "現在からの月数。year_before と相補的に使用し、省略するとデフォルトの期間を使用します",
+        "year_before": "現在からの年数"
+      }
+    },
+    "fund_holdings": {
+      "title": "ファンド組入上位 10 銘柄",
+      "description": "ファンドの組入上位 10 銘柄を取得します。counter_id は fund_hot / fund_list から取得、scene は任意です。{report_date, weighting, holdings: [{name, holding_type, weighting, shares, market_value, share_change, share_change_percent, industry_name, country_name, …}]} を返します",
+      "properties": {
+        "counter_id": "ファンドの counter_id（例：UT/FD/HK0000384492）。fund_hot / fund_list から取得",
+        "scene": "組入シーンの選択（サーバー側で定義、例：株式 / 債券の内訳）。省略するとデフォルトを使用します"
+      }
+    },
+    "fund_stock_holdings": {
+      "title": "ファンド主要組入銘柄",
+      "description": "ファンドが保有する個別銘柄を逆引きします。counter_id は fund_hot / fund_list から取得、limit は任意です。トップレベル配列 {counter_id, code, name, currency, position_ratio, report_date} を返します",
+      "properties": {
+        "counter_id": "ファンドの counter_id（例：UT/FD/HK0000384492）。fund_hot / fund_list から取得",
+        "limit": "返却する個別銘柄数の上限。省略するとサーバー側のデフォルトを使用します"
+      }
+    },
+    "fund_position_overview": {
+      "title": "保有ファンド概要",
+      "description": "ログインユーザーの保有ファンド概要（保有中の全ファンド）を取得します。認証済み token が必要です。パラメータなし。{account_channel, recent_trading_day, pending_buy_orders, sold_pending_credit_orders, list: [{counter_id, name, currency, holding_units, amount, holding_profit, recent_profit, …}]} を返します"
+    },
+    "fund_position": {
+      "title": "保有ファンド詳細",
+      "description": "保有中の単一ファンドの保有詳細を取得します。認証が必要です。counter_id は fund_position_overview / fund_hot / fund_list から取得、start / end（YYYY-MM-DD）は任意です。{detail_values: {currency, holding_units, holding_value, holding_cost, holding_profit, holding_profit_rate, recent_profit, recent_unit_value, pending_buy_value, pending_sell_value, …}, sum_profit: [{date, value}], ut_value: [{date, unit_value, total_value, day_increase_rate}]} を返します",
+      "properties": {
+        "counter_id": "ファンドの counter_id（例：UT/FD/HK0000384492）。fund_hot / fund_list から取得",
+        "start": "開始日（yyyy-mm-dd）。省略するとデフォルトの期間を使用します",
+        "end": "終了日（yyyy-mm-dd）"
+      }
+    },
+    "fund_position_performance": {
+      "title": "保有ファンドのパフォーマンス",
+      "description": "保有ファンドのパフォーマンスデータを取得します。認証が必要です。counter_id は fund_position_overview / fund_hot / fund_list から取得します。トップレベル配列 {counter_id, fund_name, performance_return_<period>（one_day … ten_years、ytd）, annualized_return_<one…ten>, update_time} を返します",
+      "properties": {
+        "counter_id": "ファンドの counter_id（例：UT/FD/HK0000384492）。fund_hot / fund_list から取得"
+      }
+    },
+    "fund_position_profits": {
+      "title": "保有ファンド損益明細",
+      "description": "保有ファンドの累計損益明細を取得します（ページング）。認証が必要です。counter_id は fund_position_overview から取得、start / end（YYYY-MM-DD）、page / size は任意です。{currency, sum_profit, last_update_time, history_value: [{date, value}]} を返します",
+      "properties": {
+        "counter_id": "ファンドの counter_id（例：UT/FD/HK0000384492）。fund_hot / fund_list から取得",
+        "start": "開始日（yyyy-mm-dd）。省略するとデフォルトの期間を使用します",
+        "end": "終了日（yyyy-mm-dd）",
+        "page": "ページ番号（1 から開始）。省略すると最初のページを取得します",
+        "size": "1 ページあたりの件数。省略するとサーバー側のデフォルトを使用します"
+      }
+    },
+    "fund_position_nav": {
+      "title": "保有ファンド基準価額履歴",
+      "description": "相対期間を指定して保有ファンドの基準価額履歴を取得します。認証が必要です。counter_id は fund_position_overview から取得し、month_before または year_before を設定します。トップレベル配列 {counter_id, counter_name, value, change, change_percent, last_update_time} を返します",
+      "properties": {
+        "counter_id": "ファンドの counter_id（例：UT/FD/HK0000384492）。fund_hot / fund_list から取得",
+        "month_before": "現在からの月数。year_before と相補的に使用し、省略するとデフォルトの期間を使用します",
+        "year_before": "現在からの年数"
+      }
+    },
+    "fund_position_dividends": {
+      "title": "保有ファンド分配金",
+      "description": "保有ファンドの分配金記録を取得します（ページング）。認証が必要です。counter_id は fund_position_overview から取得、currency、start / end（Unix 秒）、page / size は任意です。{currency, total_div_cash, lastest_date, div_cash_infos: [{counter_id, name, amount, currency, date, div_method}]} を返します",
+      "properties": {
+        "counter_id": "ファンドの counter_id（例：UT/FD/HK0000384492）。fund_hot / fund_list から取得",
+        "currency": "通貨で絞り込み（例：HKD、USD）。省略するとすべて",
+        "start": "開始時刻（Unix 秒）。省略するとデフォルトの期間を使用します",
+        "end": "終了時刻（Unix 秒）",
+        "page": "ページ番号（1 から開始）。省略すると最初のページを取得します",
+        "size": "1 ページあたりの件数。省略するとサーバー側のデフォルトを使用します"
+      }
+    },
+    "fund_orders": {
+      "title": "ファンド注文",
+      "description": "ユーザーのファンド注文／約定記録を取得します。認証が必要です。counter_ids、actions、states、currency、start / end（Unix 秒）、page / size は任意です。トップレベル配列 {id, counter_id, fund_name, action, state, state_desc, amount, units, net_worth, currency, created_at, is_auto, product_type} を返します",
+      "properties": {
+        "counter_ids": "ファンドの counter_id で絞り込み。省略するとすべて",
+        "actions": "操作で絞り込み、カンマ区切り（例：buy,sell）。省略するとすべて",
+        "states": "注文ステータスで絞り込み、カンマ区切り。省略するとすべて",
+        "currency": "通貨で絞り込み（例：HKD、USD）。省略するとすべて",
+        "start": "開始時刻（Unix 秒）。省略するとデフォルトの期間を使用します",
+        "end": "終了時刻（Unix 秒）",
+        "page": "ページ番号（1 から開始）。省略すると最初のページを取得します",
+        "size": "1 ページあたりの件数。省略するとサーバー側のデフォルトを使用します"
+      }
+    },
+    "fund_order": {
+      "title": "ファンド注文詳細",
+      "description": "order_id（fund_orders から取得）を指定して単一のファンド注文の詳細を取得します。認証が必要です。{order: {id, counter_id, fund_name, action, state, state_desc, amount, units, net_worth, fee, currency, created_at, …}, stages: [{stage, desc, progress, …}], keywords: [{title, content, …}]} を返します",
+      "properties": {
+        "order_id": "ファンド注文 id（fund_orders から取得）"
+      }
+    },
+    "fund_transactions": {
+      "title": "ファンド資金移動",
+      "description": "ユーザーのファンド資金移動記録を取得します。認証が必要です。business_type、category、currencies、start / end（Unix 秒）、page / size は任意です。トップレベル配列 {type_name, tx_type, category, description, amount, currency, stock_quantity, quantity_description, ref_no, created_at, done_at, …} を返します",
+      "properties": {
+        "business_type": "業務種別で絞り込み（サーバー側で定義）。省略するとすべて",
+        "category": "カテゴリで絞り込み（サーバー側で定義）。省略するとすべて",
+        "currencies": "通貨で絞り込み、カンマ区切り（例：HKD,USD）。省略するとすべて",
+        "start": "開始時刻（Unix 秒）。省略するとデフォルトの期間を使用します",
+        "end": "終了時刻（Unix 秒）",
+        "page": "ページ番号（1 から開始）。省略すると最初のページを取得します",
+        "size": "1 ページあたりの件数。デフォルト 20"
+      }
+    },
+    "fund_validate_order": {
+      "title": "ファンド注文の事前チェック",
+      "description": "ファンドの売買注文について発注前チェックを行います。発注は行わず、リクエストをファンドチャネルに送信してチェックし、チェック結果（手数料、限度額、見積口数／金額）を返すのみです。認証が必要です。counter_id は fund_hot / fund_list から取得、action は buy または sell、currency は HKD/USD など。amount（金額）と units（口数）はいずれか一方を指定します。",
+      "properties": {
+        "counter_id": "ファンドの counter_id（例：UT/FD/HK0000384492）。fund_hot / fund_list から取得",
+        "action": "注文方向：buy（買付）または sell（売却）",
+        "currency": "注文通貨（例：HKD、USD）",
+        "amount": "買付金額（投入する現金）。金額指定で買い付ける場合に使用。units と同時指定不可",
+        "units": "解約口数（売却口数）。口数指定で売却／買付する場合に使用。amount と同時指定不可",
+        "dividend_option": "分配金の受取方法（サーバー側で定義、例：分配金再投資または現金受取）",
+        "fund_source": "資金源の選択（サーバー側で定義）。省略するとデフォルトを使用します",
+        "account_channel": "口座チャネル（サーバー側で定義）。省略するとデフォルトを使用します"
+      }
+    },
+    "fund_submit_order": {
+      "title": "ファンド注文の発注",
+      "description": "ファンドの売買注文を発注します。【2 段階確認必須】今回のドライランで返された confirmation_code を渡さない場合は DRY RUN（ドライラン）になります：まず execute なしで一度呼び出し、プレビューをすべてユーザーに提示し、ユーザーが明確に確認した後に限り、再度呼び出してその確認コードを execute に渡せます。認証が必要です。counter_id は fund_hot / fund_list から取得、action は buy または sell、currency は HKD/USD など。amount（投入する現金）と units（売却口数）はいずれか一方を指定します。is_sell_all=true で全口数解約。安全な発注前チェックとして、先に fund_validate_order を使用できます。",
+      "properties": {
+        "counter_id": "ファンドの counter_id（例：UT/FD/HK0000384492）。fund_hot / fund_list から取得",
+        "action": "注文方向：buy（買付）または sell（売却）",
+        "currency": "注文通貨（例：HKD、USD）",
+        "amount": "買付金額（投入する現金）。金額指定で買い付ける場合に使用。units と同時指定不可",
+        "units": "解約口数（売却口数）。口数指定で売却／買付する場合に使用。amount と同時指定不可",
+        "dividend_option": "分配金の受取方法（サーバー側で定義、例：分配金再投資または現金受取）",
+        "fee": "手数料額。省略するとサーバー側のデフォルトを使用します",
+        "is_sell_all": "全口数を売却するかどうか。全額解約に使用し、units より優先されます",
+        "remark": "注文メモ",
+        "trade_method": "取引方法の選択（サーバー側で定義）。省略するとデフォルトを使用します",
+        "execute": "今回のドライランで返された confirmation_code。省略（デフォルト）すると DRY RUN となり、リクエストの検証とエコーのみを行い、3 桁の確認コードを返します。ファンドチャネルには送信されません。必ず先にこのパラメータなしで一度呼び出し、プレビューをユーザーに提示し、ユーザーが明確に確認した後に限り、再度呼び出してそのコードを指定できます。確認コードは注文内容そのものから導出され、完全に同一のこの 1 件のリクエストにのみ有効です——いずれかのフィールドを変更すると無効になります。独断でコードを指定してはいけません。"
+      }
+    },
+    "fund_cancel_order": {
+      "title": "ファンド注文の取消",
+      "description": "order_id を指定してファンド注文を取り消します。【2 段階確認必須】今回のドライランで返された confirmation_code を渡さない場合は DRY RUN（ドライラン）になります：まず execute なしで一度呼び出し、返されたプレビュー（取り消す注文がエコーされます）をすべてユーザーに提示し、ユーザーがこの注文を明確に確認した後に限り、再度呼び出してその確認コードを execute に渡せます。認証が必要です。order_id は fund_orders から取得します。",
+      "properties": {
+        "order_id": "取り消すファンド注文 id（fund_orders から取得）",
+        "execute": "今回のドライランで返された confirmation_code。省略（デフォルト）すると DRY RUN となり、リクエストの検証とエコーのみを行い、3 桁の確認コードを返します。ファンドチャネルには送信されません。必ず先にこのパラメータなしで一度呼び出し、プレビューをユーザーに提示し、ユーザーが明確に確認した後に限り、再度呼び出してそのコードを指定できます。確認コードは注文内容そのものから導出され、完全に同一のこの 1 件のリクエストにのみ有効です——いずれかのフィールドを変更すると無効になります。独断でコードを指定してはいけません。"
+      }
+    }
+  }
+}
