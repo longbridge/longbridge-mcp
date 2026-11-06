@@ -83,7 +83,7 @@
         "en": "Longbridge — official MCP server for the Longbridge brokerage. 192 tools across real-time quotes, options, order routing, fundamentals, mutual funds, stock screener, shareholders, short selling, IPO, calendars, alerts, DCA, grid trading and portfolio analytics for US / HK markets.",
         "zh-CN": "长桥证券官方 MCP 服务：192 个工具覆盖美股 / 港股的实时行情、期权、下单路由、基本面、基金、选股器、股东持仓、卖空数据、IPO 打新、财报日历、价格预警、定投计划、网格交易与组合分析。",
         "zh-HK": "長橋證券官方 MCP 伺服器：192 個工具覆蓋美股 / 港股的即時行情、期權、下單路由、基本面、基金、選股器、股東持倉、賣空數據、IPO 打新、財報日曆、價格警示、定投計劃、網格交易與組合分析。",
-        "ja-JP": "Longbridge 証券の公式 MCP サーバー：192 個のツールで、米国株・香港株のリアルタイム株価、オプション、注文ルーティング、ファンダメンタルズ、投資信託、スクリーナー、株主情報、空売りデータ、IPO、決算カレンダー、価格アラート、積立投資、グリッド取引、ポートフォリオ分析をカバーします。"
+        "ja-JP": "Longbridge 証券の公式 MCP サーバー：192 個のツールで、米国株・香港株のリアルタイム株価、オプション、注文ルーティング、ファンダメンタルズ、ファンド、スクリーナー、株主情報、空売りデータ、IPO、決算カレンダー、価格アラート、積立投資、グリッド取引、ポートフォリオ分析をカバーします。"
       },
       "icons": [
         {
