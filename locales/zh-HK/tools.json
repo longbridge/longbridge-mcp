@@ -1388,7 +1388,7 @@
       "title": "策略訊號",
       "description": "查詢策略訊號 —— 策略基於催化劑對某隻證券給出的判斷。支援按股票代碼、策略、催化劑和時間範圍篩選，用 limit/offset 分頁。返回標題、摘要、看法與保守/基準/樂觀目標價，以及用於翻頁的 total。完整策略分析請用 signal_detail 取得",
       "properties": {
-        "symbol_name": "按證券代碼篩選，例如 `AAPL.US` 或 `700.HK`；省略則返回全部股票",
+        "symbol": "按證券代碼篩選，例如 `AAPL.US` 或 `700.HK`；省略則返回全部股票",
         "strategy_id": "按策略 id 篩選，例如 buffett-value。優先於已廢棄的 strategy_name，兩者同時傳入時以此為準",
         "strategy_name": "按策略名稱篩選；省略則返回全部策略的命中結果",
         "catalyst_name": "按觸發訊號的因子名稱篩選，例如 `EARNINGS_RELEASED`、`macd_12_26_9`——不是回傳結果裡 `key_catalyst` 的展示文案；省略則不限",
