@@ -17,7 +17,12 @@ use crate::tools::tool_json;
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct SignalsParam {
     /// Filter by security symbol, e.g. "AAPL.US" or "700.HK". If omitted, returns signals for all symbols.
-    pub symbol_name: Option<String>,
+    // Was `symbol_name`, which models read as a display name and filled with a
+    // bare ticker ("NVDA") or a company name ("歌尔股份"), both of which match
+    // nothing — this is the only symbol filter not called `symbol`. The old
+    // name stays accepted so existing callers keep working.
+    #[serde(alias = "symbol_name")]
+    pub symbol: Option<String>,
     /// Filter by strategy id (e.g., "buffett-value"). Preferred over the deprecated strategy_name; takes precedence when both are provided.
     pub strategy_id: Option<String>,
     /// Filter by strategy name. If omitted, returns signals from all strategies.
@@ -70,7 +75,7 @@ pub async fn signals(
     let ctx = SignalContext::new(mctx.create_config());
     let resp = ctx
         .signals(SignalsOptions {
-            symbol_name: p.symbol_name,
+            symbol_name: p.symbol,
             strategy_id: p.strategy_id,
             strategy_name: p.strategy_name,
             catalyst_name: p.catalyst_name,
@@ -176,6 +181,36 @@ pub async fn security_facts(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn signals_accepts_symbol_and_the_old_symbol_name() {
+        for key in ["symbol", "symbol_name"] {
+            let p: SignalsParam = serde_json::from_value(serde_json::json!({key: "700.HK"}))
+                .expect("both spellings must deserialize");
+            assert_eq!(
+                p.symbol.as_deref(),
+                Some("700.HK"),
+                "`{key}` must fill symbol"
+            );
+        }
+    }
+
+    #[test]
+    fn signals_schema_exposes_symbol_only() {
+        let schema = serde_json::to_value(rmcp::schemars::schema_for!(SignalsParam))
+            .expect("schema must serialize");
+        let properties = schema["properties"]
+            .as_object()
+            .expect("signals schema must list properties");
+        assert!(
+            properties.contains_key("symbol"),
+            "schema must expose `symbol`"
+        );
+        assert!(
+            !properties.contains_key("symbol_name"),
+            "the old `symbol_name` must not be advertised"
+        );
+    }
 
     #[test]
     fn analysis_is_unwrapped_into_json() {
