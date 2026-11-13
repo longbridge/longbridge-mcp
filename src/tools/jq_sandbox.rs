@@ -61,9 +61,9 @@ pub(crate) const ANONYMOUS_CALLER: &str = "anonymous";
 /// the token itself for an opaque token. Hashed either way, so neither the
 /// token nor the member id is kept.
 ///
-/// The claim is read unverified (see `auth::jwt`). A forged token can only
-/// pick its bucket for the moment a write's reservation waits on the upstream
-/// call that rejects it; reads reserve only after the tool succeeded.
+/// The claim is read unverified (see `auth::jwt`). That is enough here: a
+/// slot is taken only after the tool succeeded upstream, which a forged token
+/// never does.
 pub(crate) fn caller_key(token: &str) -> String {
     let member = crate::auth::jwt::subject(token).and_then(|sub| match &sub["member_id"] {
         Value::String(id) if !id.is_empty() => Some(id.clone()),

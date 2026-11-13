@@ -203,14 +203,11 @@ fn load_error_details(code: &str, error: &jaq_core::load::Error<&str>) -> Vec<St
 /// `caller` keys the per-caller worker limit (see [`jq_sandbox::caller_key`]);
 /// `None` for a call without a bearer token.
 ///
-/// A tool that is not `read_only` must never lose its result to `_jq`:
-/// - its worker slot is reserved *before* the tool runs, so a saturated
-///   sandbox rejects the call while nothing has happened yet;
-/// - if the filter then fails, the unfiltered result is returned with a
-///   warning, since the write has already executed.
-///
-/// A call without a token reserves nothing up front: the tool will fail
-/// authentication, and it should not queue on the shared anonymous bucket.
+/// The worker slot is taken only after the tool succeeded, so the sandbox
+/// never delays or blocks the tool itself. A tool that is not `read_only` has
+/// already executed by then, so if the filter cannot run or fails, its
+/// unfiltered result is returned with a warning (see [`with_jq_warning`])
+/// rather than an error.
 pub(super) async fn call<F, Fut>(
     mut request: CallToolRequestParams,
     caller: Option<&str>,
@@ -241,61 +238,40 @@ where
         return Ok(syntax_error(&message));
     }
     let name = request.name.clone();
-    let bucket = caller.unwrap_or(jq_sandbox::ANONYMOUS_CALLER);
-    let reserved = if read_only || caller.is_none() {
-        None
-    } else {
-        match jq_sandbox::acquire(bucket).await {
-            Ok(slot) => Some(slot),
-            Err(error) => {
-                record_failure(&name, "busy", &code, &error.to_string());
-                return Ok(sandbox_busy(false));
-            }
-        }
-    };
     let mut result = invoke(request).await?;
     if result.is_error == Some(true) || is_error_envelope(&result) {
         return Ok(result);
     }
-    // Kept for a write, whose result must survive a failed filter.
-    let unfiltered = (!read_only).then(|| result.clone());
-    let slot = match reserved {
-        Some(slot) => slot,
-        None => match jq_sandbox::acquire(bucket).await {
-            Ok(slot) => slot,
-            Err(error) => {
-                let message = error.to_string();
-                record_failure(&name, "busy", &code, &message);
-                return Ok(match unfiltered {
-                    Some(result) => with_jq_warning(result, &message),
-                    None => sandbox_busy(true),
-                });
-            }
-        },
-    };
     let input = take_input(&mut result);
     let shape = shape_of(&input);
+    // A write has already executed: its result must survive a failed filter.
+    let unfiltered = (!read_only).then(|| input.clone());
+    let bucket = caller.unwrap_or(jq_sandbox::ANONYMOUS_CALLER);
     // The filter runs in a separate, resource-limited worker process. jaq has
     // no step/memory/recursion limit, so in-process evaluation let a single
     // `_jq` abort the server (`def f: 1 + f; f` overflows the stack,
     // `[range(1e9)]` exhausts memory). See `jq_sandbox`.
-    let (stage, message) = match jq_sandbox::run(slot, &code, input).await {
-        Ok(Reply::Values(values)) => return Ok(finish(result, values)),
-        Ok(Reply::FilterError(message)) => {
-            ("runtime", format!("{message}; response shape: {shape}"))
-        }
-        Ok(Reply::Error(message)) => ("runtime", message),
-        Err(error @ SandboxError::Timeout) => ("runtime", error.to_string()),
-        Err(error) => {
-            // Not a caller typo: the filter crashed or the sandbox is saturated
-            // (often deliberate probing), so make it stand out from INFO noise.
-            tracing::warn!(tool = %crate::tools::tool_label(&name), %error, "jq sandbox failure");
-            ("sandbox", error.to_string())
-        }
+    let (stage, message) = match jq_sandbox::acquire(bucket).await {
+        Err(error) => ("busy", error.to_string()),
+        Ok(slot) => match jq_sandbox::run(slot, &code, input).await {
+            Ok(Reply::Values(values)) => return Ok(finish(result, values)),
+            Ok(Reply::FilterError(message)) => {
+                ("runtime", format!("{message}; response shape: {shape}"))
+            }
+            Ok(Reply::Error(message)) => ("runtime", message),
+            Err(error @ SandboxError::Timeout) => ("runtime", error.to_string()),
+            Err(error) => {
+                // Not a caller typo: the filter crashed (often deliberate
+                // probing), so make it stand out from INFO noise.
+                tracing::warn!(tool = %crate::tools::tool_label(&name), %error, "jq sandbox failure");
+                ("sandbox", error.to_string())
+            }
+        },
     };
     record_failure(&name, stage, &code, &message);
     Ok(match unfiltered {
-        Some(result) => with_jq_warning(result, &message),
+        Some(unfiltered) => with_jq_warning(result, unfiltered, &message),
+        None if stage == "busy" => sandbox_busy(),
         None => filter_error(&message),
     })
 }
@@ -308,8 +284,8 @@ where
 /// only the first block (so a trailing note could go unseen and the full
 /// result be mistaken for filter output, while a leading one would hide the
 /// result), and `response_limit` only trims single-block results.
-fn with_jq_warning(mut result: CallToolResult, message: &str) -> CallToolResult {
-    let unfiltered = take_input(&mut result);
+fn with_jq_warning(mut result: CallToolResult, unfiltered: Value, message: &str) -> CallToolResult {
+    result.structured_content = None;
     result.content = vec![Content::text(
         serde_json::json!({
             "jq_warning": format!("_jq was not applied: {message}"),
@@ -430,14 +406,10 @@ fn syntax_error(message: &str) -> CallToolResult {
     }).to_string())])
 }
 
-/// No sandbox worker slot was free. Not the filter's fault, so the caller
-/// should back off and retry rather than rewrite the filter.
-fn sandbox_busy(tool_ran: bool) -> CallToolResult {
-    let hint = if tool_ran {
-        "This is a read-only tool, so retrying is safe: retry shortly, or omit _jq."
-    } else {
-        "The tool did not run. Retry shortly, or omit _jq."
-    };
+/// No sandbox worker slot was free for a read-only tool. Not the filter's
+/// fault, so the caller should back off and retry rather than rewrite it.
+fn sandbox_busy() -> CallToolResult {
+    let hint = "This is a read-only tool, so retrying is safe: retry shortly, or omit _jq.";
     CallToolResult::error(vec![Content::text(serde_json::json!({
         "error_code": "jq_sandbox_busy",
         "message": "Too many _jq filters are running right now; the _jq expression itself is fine.",
@@ -723,34 +695,36 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_saturated_sandbox_never_runs_a_write_and_lets_reads_back_off() {
+    async fn a_saturated_sandbox_returns_writes_unfiltered_and_lets_reads_back_off() {
         // Exhaust this caller's worker slots.
         let caller = "jq-busy-test";
         let _held = (
             jq_sandbox::acquire(caller).await.unwrap(),
             jq_sandbox::acquire(caller).await.unwrap(),
         );
-        let ran = std::sync::atomic::AtomicBool::new(false);
         let (write, read) = tokio::join!(
-            super::call(request(json!(".")), Some(caller), false, |_| async {
-                panic!("a write must not run when no worker slot is free")
+            super::call(request(json!(".id")), Some(caller), false, |_| async {
+                Ok(super::super::tool_result(json!({"id": "701"}).to_string()))
             }),
             super::call(request(json!(".")), Some(caller), true, |_| async {
-                ran.store(true, std::sync::atomic::Ordering::SeqCst);
                 Ok(super::super::tool_result("{}".to_string()))
             }),
         );
-        for (result, hint) in [
-            (write.unwrap(), "did not run"),
-            (read.unwrap(), "read-only"),
-        ] {
-            let text = &result.content[0].as_text().unwrap().text;
-            assert_eq!(result.is_error, Some(true), "{text}");
-            assert!(text.contains("jq_sandbox_busy"), "{text}");
-            assert!(text.contains("\"recoverable\":\"backoff\""), "{text}");
-            assert!(text.contains(hint), "{text}");
-        }
-        assert!(ran.load(std::sync::atomic::Ordering::SeqCst));
+        // The write already happened: its outcome comes back, unfiltered.
+        let write = write.unwrap();
+        assert_ne!(write.is_error, Some(true));
+        let value: Value = serde_json::from_str(&write.content[0].as_text().unwrap().text).unwrap();
+        assert_eq!(value["result"], json!({"id": "701"}));
+        assert!(
+            value["jq_warning"].as_str().unwrap().contains("too many"),
+            "{value}"
+        );
+        // A read is safe to retry.
+        let read = read.unwrap();
+        let text = &read.content[0].as_text().unwrap().text;
+        assert_eq!(read.is_error, Some(true), "{text}");
+        assert!(text.contains("jq_sandbox_busy"), "{text}");
+        assert!(text.contains("\"recoverable\":\"backoff\""), "{text}");
     }
 
     #[tokio::test]
@@ -788,7 +762,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_unauthenticated_write_does_not_queue_for_a_worker() {
+    async fn a_failed_tool_never_waits_for_a_worker() {
         // Saturate the shared anonymous bucket.
         let _held = (
             jq_sandbox::acquire(jq_sandbox::ANONYMOUS_CALLER)

@@ -6748,10 +6748,16 @@ impl ServerHandler for Longbridge {
         // with the same client as the tool call it belongs to.
         let tool_name = request.name.to_string();
         let retryable = is_read_only_tool(request.name.as_ref());
-        // Per-account key for the `_jq` sandbox's worker limit; `None` for a
-        // token-less call (stdio, unauthenticated).
-        let caller = extract_context(&context)
-            .ok()
+        // Per-account key for the `_jq` sandbox's worker limit, computed only
+        // when a filter is present; `None` for a token-less call (stdio,
+        // unauthenticated).
+        let has_jq = request
+            .arguments
+            .as_ref()
+            .is_some_and(|args| args.get("_jq").is_some_and(|jq| !jq.is_null()));
+        let caller = has_jq
+            .then(|| extract_context(&context).ok())
+            .flatten()
             .map(|mctx| jq_sandbox::caller_key(&mctx.token));
         let call = jq::call(
             request,
