@@ -812,12 +812,17 @@ mod authenticate;
 mod calendar;
 mod content;
 mod dca;
+pub(crate) use jq_sandbox::{
+    is_worker_invocation as is_jq_worker_invocation, worker_main as jq_worker_main,
+};
+
 mod fund;
 mod fundamental;
 mod fx;
 mod grid;
 mod ipo;
 mod jq;
+mod jq_sandbox;
 mod macrodata;
 mod market;
 mod output;

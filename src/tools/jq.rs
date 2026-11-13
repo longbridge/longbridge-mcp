@@ -11,6 +11,8 @@ use rmcp::{
 };
 use serde_json::Value;
 
+use crate::tools::jq_sandbox::{self, Reply, SandboxError};
+
 type Filter = jaq_core::Filter<data::JustLut<Val>>;
 pub(super) const INSTRUCTIONS: &str = "All tools accept optional `_jq`, a filter expression using jq CLI syntax applied to the response; one output is returned as-is, several as a JSON array. Response shapes differ per tool (some are a top-level array, some an object; most have no `data` wrapper) and most tool descriptions say what they return. If unsure, probe cheaply with keys (object) or .[0] | keys (array) rather than fetching the full response. Omit it for the full JSON response.";
 
@@ -19,8 +21,15 @@ pub(super) const INSTRUCTIONS: &str = "All tools accept optional `_jq`, a filter
 /// the server-level `instructions` (which many clients drop).
 const JQ_PROPERTY_DESCRIPTION: &str = "Optional jq filter applied to this tool's JSON response; it never changes the request, and several outputs come back as an array. For field names see the tool description, or probe with `keys` / `.[0] | keys`.";
 const MAX_RESULTS: usize = 10_000;
+/// Longest accepted `_jq`. jaq's parser recurses once per nesting level, so
+/// this bounds the recursion depth of the in-server validation compile (see
+/// [`validate`]); real filters are a few hundred characters.
+const MAX_CODE_CHARS: usize = 4096;
+/// Stack for the validation compile. A 1,000-deep `((((…))))` overflowed a
+/// 2 MiB tokio worker stack and aborted the server; within
+/// [`MAX_CODE_CHARS`] this leaves a wide margin (checked by tests).
+const VALIDATE_STACK_BYTES: usize = 64 * 1024 * 1024;
 const MAX_OUTPUT_BYTES: usize = 8 * 1024 * 1024;
-const FILTER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 /// Cap on the jaq error text echoed back. jaq embeds the offending value in
 /// its message (`cannot index [<whole response>] with "data"`), which can be
 /// tens of KB of upstream data the caller never asked to see.
@@ -29,6 +38,22 @@ const MAX_ERROR_CHARS: usize = 200;
 /// bytes even for large nested responses.
 const SHAPE_MAX_DEPTH: usize = 3;
 const SHAPE_MAX_KEYS: usize = 25;
+/// jq builtins (definitions and natives) that `_jq` filters must not reach.
+///
+/// - `env`: the server environment contains credentials.
+/// - `debug`/`stderr` and their `*_empty` natives: they write the filter input
+///   (upstream account data) into the server log at ERROR level.
+/// - `halt`/`halt_error`: jaq turns a halt into `std::process::exit`, so a
+///   single `_jq: "halt_error(1)"` terminated the whole server process.
+const BLOCKED_BUILTINS: &[&str] = &[
+    "env",
+    "debug",
+    "debug_empty",
+    "stderr",
+    "stderr_empty",
+    "halt",
+    "halt_error",
+];
 
 pub(super) fn describe(tool: &mut Tool) {
     let schema = std::sync::Arc::make_mut(&mut tool.input_schema);
@@ -62,7 +87,7 @@ fn compile(code: &str) -> Result<Filter, McpError> {
     // Loader::new rejects imports/includes; do not give filters filesystem access.
     let modules = Loader::new(
         jaq_core::defs()
-            .chain(jaq_std::defs().filter(|def| def.name != "debug"))
+            .chain(jaq_std::defs().filter(|def| !BLOCKED_BUILTINS.contains(&def.name)))
             .chain(jaq_json::defs()),
     )
     .load(&arena, File { code, path: () })
@@ -79,9 +104,7 @@ fn compile(code: &str) -> Result<Filter, McpError> {
     let funs = jaq_core::funs()
         .chain(jaq_std::funs())
         .chain(jaq_json::funs())
-        // Server environment contains credentials. Logging would also allow
-        // queries to write upstream account data into server logs.
-        .filter(|(name, _, _)| !matches!(*name, "env" | "debug" | "debug_empty" | "stderr"));
+        .filter(|(name, _, _)| !BLOCKED_BUILTINS.contains(name));
     jaq_core::Compiler::default()
         .with_funs(funs)
         .compile(modules)
@@ -89,13 +112,58 @@ fn compile(code: &str) -> Result<Filter, McpError> {
             let details: Vec<String> = errors
                 .iter()
                 .flat_map(|(_, undefined)| undefined)
-                .map(|(name, kind)| format!("undefined {} `{name}`", kind.as_str()))
+                .map(|(name, kind)| undefined_message(name, kind.as_str()))
                 .collect();
             McpError::invalid_params(
                 format!("Invalid _jq expression: {}", details.join("; ")),
                 None,
             )
         })
+}
+
+/// Check that `code` compiles, without running it. This is the only jaq code
+/// that runs inside the server process, so it is bounded: a length cap, then
+/// the compile on a thread whose stack fits the deepest nesting that length
+/// allows.
+fn validate(code: &str) -> Result<(), String> {
+    if code.chars().count() > MAX_CODE_CHARS {
+        return Err(format!(
+            "_jq is longer than {MAX_CODE_CHARS} characters; use a shorter expression"
+        ));
+    }
+    let code = code.to_owned();
+    std::thread::Builder::new()
+        .name("jq-validate".into())
+        .stack_size(VALIDATE_STACK_BYTES)
+        .spawn(move || {
+            compile(&code)
+                .map(|_| ())
+                .map_err(|error| error.message.into_owned())
+        })
+        .map_err(|error| format!("_jq validation failed: {error}"))?
+        .join()
+        .unwrap_or_else(|_| Err("_jq validation failed".into()))
+}
+
+/// Compile error text for an undefined name. A blocked builtin gets an
+/// explicit "disabled" message instead of the bare `undefined filter`, so an
+/// agent stops trying variants (`halt`, `halt_error(1)`, `stderr`, ...) of a
+/// capability that does not exist here.
+fn undefined_message(name: &str, kind: &str) -> String {
+    let bare = name.trim_start_matches('$');
+    if bare == "ENV" || bare == "__prog_args" {
+        return format!(
+            "`{name}` is disabled in _jq: the server environment is not exposed to filters"
+        );
+    }
+    if BLOCKED_BUILTINS.contains(&bare) {
+        return format!(
+            "`{name}` is disabled in _jq: filters may only transform the response, so env, \
+             debug, stderr and halt are not available; put what you need in the output, or \
+             use error(\"message\") to fail"
+        );
+    }
+    format!("undefined {kind} `{name}`")
 }
 
 /// 1-based character column of `part` within `code`, when `part` is a slice of
@@ -152,37 +220,37 @@ where
         }
     };
     // Compile before any tool execution, particularly before trade writes.
-    let filter = match compile(&code) {
-        Ok(filter) => filter,
-        Err(error) => {
-            record_failure(&request.name, "compile", &code, &error.message);
-            return Ok(syntax_error(&error.message));
-        }
-    };
+    // The worker compiles again; this pass only validates.
+    if let Err(message) = validate(&code) {
+        record_failure(&request.name, "compile", &code, &message);
+        return Ok(syntax_error(&message));
+    }
     let name = request.name.clone();
-    let result = invoke(request).await?;
+    let mut result = invoke(request).await?;
     if result.is_error == Some(true) || is_error_envelope(&result) {
         return Ok(result);
     }
-    // Bound the *caller-visible* latency: `MAX_RESULTS`/`MAX_OUTPUT_BYTES` only
-    // fire between output values, so a filter that spins without emitting (e.g.
-    // `while(true; .)`) or builds one huge/non-terminating aggregate (e.g.
-    // `[range(0;1e9)]`, `[repeat(1)]`) would otherwise hang the request. The
-    // timeout returns a bounded, actionable error instead. Caveat: a dropped
-    // `spawn_blocking` handle does not abort the blocking task, so a hostile
-    // aggregate keeps running (and can OOM) on a detached thread until it
-    // finishes -- jaq exposes no fuel/step limit to cap that from here. The
-    // input is the already-fetched (bounded) tool response, so the only
-    // unbounded vector is generative builtins, not caller-supplied data.
-    let worker = tokio::task::spawn_blocking(move || apply(filter, result));
-    let filtered = tokio::time::timeout(FILTER_TIMEOUT, worker).await;
-    let message = match filtered {
-        Ok(Ok(Ok(result))) => return Ok(result),
-        Ok(Ok(Err(message))) => message,
-        Ok(Err(_)) => "filter worker failed".to_string(),
-        Err(_) => "filter timed out after 5s; narrow the _jq expression (avoid unbounded ranges or repeats)".to_string(),
+    let input = take_input(&mut result);
+    let shape = shape_of(&input);
+    // The filter runs in a separate, resource-limited worker process. jaq has
+    // no step/memory/recursion limit, so in-process evaluation let a single
+    // `_jq` abort the server (`def f: 1 + f; f` overflows the stack,
+    // `[range(1e9)]` exhausts memory). See `jq_sandbox`.
+    let (stage, message) = match jq_sandbox::run(&code, input).await {
+        Ok(Reply::Values(values)) => return Ok(finish(result, values)),
+        Ok(Reply::FilterError(message)) => {
+            ("runtime", format!("{message}; response shape: {shape}"))
+        }
+        Ok(Reply::Error(message)) => ("runtime", message),
+        Err(error @ SandboxError::Timeout) => ("runtime", error.to_string()),
+        Err(error) => {
+            // Not a caller typo: the filter crashed or the sandbox is saturated
+            // (often deliberate probing), so make it stand out from INFO noise.
+            tracing::warn!(tool = %crate::tools::tool_label(&name), %error, "jq sandbox failure");
+            ("sandbox", error.to_string())
+        }
     };
-    record_failure(&name, "runtime", &code, &message);
+    record_failure(&name, stage, &code, &message);
     Ok(filter_error(&message))
 }
 
@@ -305,8 +373,10 @@ fn filter_error(message: &str) -> CallToolResult {
     }).to_string())])
 }
 
-fn apply(filter: Filter, mut result: CallToolResult) -> Result<CallToolResult, String> {
-    let input = result.structured_content.take().unwrap_or_else(|| {
+/// The JSON value a filter runs on: the structured content when present,
+/// otherwise the text content parsed as JSON (or kept as a string).
+fn take_input(result: &mut CallToolResult) -> Value {
+    result.structured_content.take().unwrap_or_else(|| {
         let mut values: Vec<Value> = result
             .content
             .iter()
@@ -320,42 +390,71 @@ fn apply(filter: Filter, mut result: CallToolResult) -> Result<CallToolResult, S
             })
             .collect();
         if values.len() == 1 {
-            values.pop().unwrap()
+            values.pop().expect("one value is present")
         } else {
             Value::Array(values)
         }
-    });
-    let shape = shape_of(&input);
-    let input: Val = serde_json::from_value(input).map_err(|error| error.to_string())?;
-    let ctx = Ctx::<data::JustLut<Val>>::new(&filter.lut, Vars::new([]));
-    let mut values = Vec::new();
-    let mut bytes = 0;
-    for value in filter.id.run((ctx, input)).map(jaq_core::unwrap_valr) {
-        let value = value
-            .map_err(|error| {
-                format!(
-                    "{}; response shape: {shape}",
-                    truncate(&error.to_string(), MAX_ERROR_CHARS)
-                )
-            })?
-            .to_string();
-        bytes += value.len();
-        if values.len() >= MAX_RESULTS || bytes > MAX_OUTPUT_BYTES {
-            return Err(
-                "output limit exceeded (10,000 results or 8 MiB); narrow the _jq expression".into(),
-            );
-        }
-        values.push(serde_json::from_str::<Value>(&value).map_err(|error| error.to_string())?);
-    }
+    })
+}
+
+/// Replace a tool result's content with the filter outputs: one output as-is,
+/// several (or none) as an array.
+fn finish(mut result: CallToolResult, mut values: Vec<Value>) -> CallToolResult {
     let value = if values.len() == 1 {
-        values.pop().unwrap()
+        values.pop().expect("one value is present")
     } else {
         Value::Array(values)
     };
     result.content = vec![Content::text(value.to_string())];
     result.structured_content = value.is_object().then_some(value);
-    Ok(result)
+    result
 }
+
+/// Compile and run `code` on `input`. Called inside the sandbox worker
+/// process; the server itself only compiles (to reject bad filters before the
+/// tool runs) and never evaluates.
+pub(super) fn evaluate(code: &str, input: Value) -> Reply {
+    match compile(code) {
+        Ok(filter) => run_filter(filter, input),
+        Err(error) => Reply::Error(error.message.to_string()),
+    }
+}
+
+fn run_filter(filter: Filter, input: Value) -> Reply {
+    let input: Val = match serde_json::from_value(input) {
+        Ok(input) => input,
+        Err(error) => return Reply::Error(error.to_string()),
+    };
+    let ctx = Ctx::<data::JustLut<Val>>::new(&filter.lut, Vars::new([]));
+    let mut values = Vec::new();
+    let mut bytes = 0;
+    for value in filter.id.run((ctx, input)) {
+        // Not `jaq_core::unwrap_valr`: it calls `std::process::exit` on a halt.
+        // `halt` is blocked at compile time; this keeps any other halt path
+        // from ending the worker without a reply.
+        let value = match value.map_err(|exn| exn.get_err()) {
+            Ok(value) => value.to_string(),
+            Err(Ok(error)) => {
+                return Reply::FilterError(
+                    truncate(&error.to_string(), MAX_ERROR_CHARS).into_owned(),
+                );
+            }
+            Err(Err(_)) => return Reply::Error("halt is not allowed in _jq".into()),
+        };
+        bytes += value.len();
+        if values.len() >= MAX_RESULTS || bytes > MAX_OUTPUT_BYTES {
+            return Reply::Error(
+                "output limit exceeded (10,000 results or 8 MiB); narrow the _jq expression".into(),
+            );
+        }
+        match serde_json::from_str::<Value>(&value) {
+            Ok(value) => values.push(value),
+            Err(error) => return Reply::Error(error.to_string()),
+        }
+    }
+    Reply::Values(values)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -438,6 +537,14 @@ mod tests {
             json!("$ENV"),
             json!("debug"),
             json!("debug_empty"),
+            json!("debug(\"x\")"),
+            json!("stderr"),
+            json!("stderr_empty"),
+            json!("halt"),
+            json!("halt(1)"),
+            json!("halt_error"),
+            json!("halt_error(1)"),
+            json!(". as $x | halt_error(1)"),
             json!("include \"/etc/passwd\"; ."),
         ] {
             let result = call(request(code.clone()), |_| async {
@@ -448,6 +555,229 @@ mod tests {
             assert_eq!(result.is_error, Some(true), "{code}");
             assert!(result.content[0].as_text().unwrap().text.contains("_jq"));
         }
+    }
+
+    #[test]
+    fn a_halt_that_reaches_runtime_is_an_error_not_a_process_exit() {
+        // Compile with the unrestricted builtins, bypassing BLOCKED_BUILTINS,
+        // to exercise the runtime guard in `run_filter`.
+        let arena = Arena::default();
+        let modules = Loader::new(
+            jaq_core::defs()
+                .chain(jaq_std::defs())
+                .chain(jaq_json::defs()),
+        )
+        .load(
+            &arena,
+            File {
+                code: "halt(1)",
+                path: (),
+            },
+        )
+        .expect("halt(1) must parse");
+        let filter = jaq_core::Compiler::default()
+            .with_funs(
+                jaq_core::funs()
+                    .chain(jaq_std::funs())
+                    .chain(jaq_json::funs()),
+            )
+            .compile(modules)
+            .expect("halt(1) must compile with unrestricted builtins");
+        assert_eq!(
+            run_filter(filter, json!({"a": 1})),
+            Reply::Error("halt is not allowed in _jq".into())
+        );
+    }
+
+    /// Deeply nested filters at the length cap, one per recursive construct of
+    /// the jq grammar. Run in-process, any stack overflow here aborts the test
+    /// binary, exactly as it aborted the server before `validate`.
+    #[test]
+    fn validation_survives_maximal_nesting() {
+        let n = MAX_CODE_CHARS / 2 - 2;
+        let cases = [
+            format!("{}.{}", "(".repeat(n), ")".repeat(n)),
+            format!("{}.{}", "[".repeat(n), "]".repeat(n)),
+            format!("{}1{}", "{a:".repeat(n / 3), "}".repeat(n / 3)),
+            format!("{}1", "-".repeat(MAX_CODE_CHARS - 1)),
+            format!("1{}", "+1".repeat(n - 1)),
+            format!(".{}", "|.".repeat(n - 1)),
+            format!(".{}", ".a".repeat(n - 1)),
+            format!(".{}", "[0]".repeat(n / 2)),
+            format!("{}1{}", "if 1 then ".repeat(n / 6), " end".repeat(n / 6)),
+            format!("{}1", "try ".repeat(n / 2)),
+            format!("{}1", "def f: ".repeat(n / 4)),
+            format!("{}.{}", "\"\\(".repeat(n / 4), ")\"".repeat(n / 4)),
+            format!(
+                "{}1{}",
+                "reduce .[] as $x (".repeat(n / 10),
+                "; .)".repeat(n / 10)
+            ),
+            format!("{}1", ". as $x | ".repeat(n / 5)),
+            format!("{}.{}", "not(".repeat(n / 3), ")".repeat(n / 3)),
+        ];
+        for code in cases {
+            // Cut to the cap: an unbalanced prefix still drives the parser
+            // as deep as it can go. Only surviving matters, not validity.
+            let code: String = code.chars().take(MAX_CODE_CHARS).collect();
+            let _ = validate(&code);
+        }
+        let too_long = ".".repeat(MAX_CODE_CHARS + 1);
+        assert!(validate(&too_long).unwrap_err().contains("longer than"));
+    }
+
+    #[tokio::test]
+    async fn blocked_builtins_explain_that_they_are_disabled() {
+        for (code, name) in [
+            ("halt_error(1)", "`halt_error`"),
+            ("stderr", "`stderr`"),
+            ("env", "`env`"),
+            ("debug(\"x\")", "`debug`"),
+            ("$ENV | keys", "`$ENV`"),
+        ] {
+            let result = call(request(json!(code)), |_| async {
+                panic!("tool must not execute for {code}")
+            })
+            .await
+            .unwrap();
+            let text = &result.content[0].as_text().unwrap().text;
+            assert!(text.contains(name), "{code}: {text}");
+            assert!(text.contains("disabled in _jq"), "{code}: {text}");
+            assert!(!text.contains("undefined"), "{code}: {text}");
+        }
+    }
+
+    /// Every native jaq function reachable from `_jq`, reviewed to be free of
+    /// side effects (no process exit, logging, environment, files or network).
+    /// A jaq upgrade that adds a native fails this test until it is reviewed
+    /// here or added to `BLOCKED_BUILTINS`.
+    const REVIEWED_NATIVES: &[&str] = &[
+        "acos",
+        "acosh",
+        "ascii_downcase",
+        "ascii_upcase",
+        "asin",
+        "asinh",
+        "atan",
+        "atan2",
+        "atanh",
+        "bsearch",
+        "cbrt",
+        "ceil",
+        "contains",
+        "copysign",
+        "cos",
+        "cosh",
+        "decode_base64",
+        "decode_uri",
+        "encode_base64",
+        "encode_uri",
+        "endswith",
+        "erf",
+        "erfc",
+        "error_empty",
+        "escape_html",
+        "escape_sh",
+        "exp",
+        "exp10",
+        "exp2",
+        "explode",
+        "expm1",
+        "fabs",
+        "fdim",
+        "first",
+        "floor",
+        "fma",
+        "fmax",
+        "fmin",
+        "fmod",
+        "frexp",
+        "fromdateiso8601",
+        "fromjson",
+        "gmtime",
+        "group_by",
+        "has",
+        "hypot",
+        "ilogb",
+        "implode",
+        "indices",
+        "j0",
+        "j1",
+        "jn",
+        "key_values",
+        "keys_unsorted",
+        "last",
+        "ldexp",
+        "length",
+        "lgamma",
+        "limit",
+        "localtime",
+        "log",
+        "log10",
+        "log1p",
+        "log2",
+        "ltrim",
+        "ltrimstr",
+        "matches",
+        "max_by_or_empty",
+        "min_by_or_empty",
+        "mktime",
+        "modf",
+        "nearbyint",
+        "nextafter",
+        "now",
+        "path",
+        "path_value",
+        "pow",
+        "range",
+        "remainder",
+        "reverse",
+        "rint",
+        "round",
+        "rtrim",
+        "rtrimstr",
+        "scalbln",
+        "sin",
+        "sinh",
+        "skip",
+        "sort",
+        "sort_by",
+        "split_",
+        "split_matches",
+        "sqrt",
+        "startswith",
+        "strflocaltime",
+        "strftime",
+        "strptime",
+        "tan",
+        "tanh",
+        "tgamma",
+        "tobytes",
+        "todateiso8601",
+        "tojson",
+        "trim",
+        "trunc",
+        "unescape_html",
+        "utf8bytelength",
+        "y0",
+        "y1",
+        "yn",
+    ];
+
+    #[test]
+    fn every_reachable_native_has_been_reviewed() {
+        let mut unreviewed: Vec<&str> = jaq_core::funs::<data::JustLut<Val>>()
+            .chain(jaq_std::funs())
+            .chain(jaq_json::funs())
+            .map(|(name, _, _)| name)
+            .filter(|name| !BLOCKED_BUILTINS.contains(name) && !REVIEWED_NATIVES.contains(name))
+            .collect();
+        unreviewed.sort_unstable();
+        unreviewed.dedup();
+        assert!(
+            unreviewed.is_empty(),
+            "review these jaq natives for side effects, then add them to REVIEWED_NATIVES or BLOCKED_BUILTINS: {unreviewed:?}"
+        );
     }
 
     #[tokio::test]
