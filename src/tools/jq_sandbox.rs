@@ -53,7 +53,9 @@ const MAX_WORKERS: usize = if cfg!(test) { 64 } else { 1 };
 /// and aborts the worker instead of growing until the pod is OOM-killed.
 const WORKER_ADDRESS_SPACE: u64 = 256 * 1024 * 1024;
 /// CPU-seconds backstop in case the parent dies before killing the worker.
-const WORKER_CPU_SECONDS: u64 = 3;
+/// Unoptimized test builds are ~10x slower (an 8 MiB filter takes ~0.15 s in
+/// release, 1-2 s in debug), so tests get more.
+const WORKER_CPU_SECONDS: u64 = if cfg!(test) { 30 } else { 3 };
 
 static WORKERS: Semaphore = Semaphore::const_new(MAX_WORKERS);
 
@@ -280,6 +282,19 @@ pub(crate) mod tests {
         run(acquire().await.unwrap(), code, input).await
     }
 
+    /// For filters that are heavy on purpose: a debug build on a loaded CI
+    /// runner can exceed the production [`FILTER_TIMEOUT`] where release
+    /// takes a fraction of it, and these tests check limits, not speed.
+    async fn run_heavy(code: &str, input: Value) -> Result<Reply, SandboxError> {
+        run_with_timeout(
+            acquire().await.unwrap(),
+            code,
+            input,
+            Duration::from_secs(30),
+        )
+        .await
+    }
+
     #[tokio::test]
     async fn a_filter_round_trips_through_the_worker() {
         let reply = run_as_test(".a, .b", json!({"a": 1, "b": [true]}))
@@ -314,7 +329,7 @@ pub(crate) mod tests {
     #[cfg(target_os = "linux")]
     #[tokio::test]
     async fn memory_exhaustion_aborts_the_worker_not_the_server() {
-        let error = run_as_test("[range(1e10)] | length", json!(null))
+        let error = run_heavy("[range(1e10)] | length", json!(null))
             .await
             .unwrap_err();
         assert!(matches!(error, SandboxError::Aborted(_)), "{error}");
@@ -336,7 +351,7 @@ pub(crate) mod tests {
             .collect();
         let input = json!({"data": rows});
         assert!(input.to_string().len() > 8 * 1024 * 1024);
-        let reply = run_as_test(
+        let reply = run_heavy(
             "([.data[] | select(.price > 100) | {symbol, price}] | length), (.data | sort_by(-.price) | .[0].symbol)",
             input,
         )
