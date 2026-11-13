@@ -812,12 +812,17 @@ mod authenticate;
 mod calendar;
 mod content;
 mod dca;
+pub(crate) use jq_sandbox::{
+    is_worker_invocation as is_jq_worker_invocation, worker_main as jq_worker_main,
+};
+
 mod fund;
 mod fundamental;
 mod fx;
 mod grid;
 mod ipo;
 mod jq;
+mod jq_sandbox;
 mod macrodata;
 mod market;
 mod output;
@@ -6743,7 +6748,7 @@ impl ServerHandler for Longbridge {
         // with the same client as the tool call it belongs to.
         let tool_name = request.name.to_string();
         let retryable = is_read_only_tool(request.name.as_ref());
-        let call = jq::call(request, |request| async move {
+        let call = jq::call(request, retryable, |request| async move {
             use rmcp::handler::server::tool::ToolCallContext;
             let name = request.name.clone();
             if !retryable {

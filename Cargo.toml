@@ -20,6 +20,8 @@ tokio = { version = "1", features = [
     "sync",
     "time",
     "signal",
+    "process",
+    "io-util",
 ] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
@@ -54,3 +56,8 @@ futures-util = "0.3"
 jaq-core = "3.1"
 jaq-std = "3.0"
 jaq-json = { version = "2.0", features = ["serde"] }
+
+# Resource limits for the `_jq` sandbox worker process (safe wrapper, so the
+# crate keeps `#![forbid(unsafe_code)]`).
+[target.'cfg(unix)'.dependencies]
+rlimit = "0.11"
