@@ -6748,7 +6748,12 @@ impl ServerHandler for Longbridge {
         // with the same client as the tool call it belongs to.
         let tool_name = request.name.to_string();
         let retryable = is_read_only_tool(request.name.as_ref());
-        let call = jq::call(request, |request| async move {
+        // Per-caller key for the `_jq` sandbox's worker limit; token-less
+        // calls (stdio, unauthenticated) share one bucket.
+        let caller = extract_context(&context)
+            .map(|mctx| jq_sandbox::caller_key(&mctx.token))
+            .unwrap_or_else(|_| "anonymous".to_owned());
+        let call = jq::call(request, &caller, retryable, |request| async move {
             use rmcp::handler::server::tool::ToolCallContext;
             let name = request.name.clone();
             if !retryable {

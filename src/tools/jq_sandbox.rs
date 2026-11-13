@@ -8,27 +8,39 @@
 //! this same executable started with [`WORKER_ARG`] — under an address-space
 //! and CPU rlimit, with an empty environment, and is killed at the deadline.
 //! A crash there only fails that one call.
+//!
+//! Worker slots are limited globally ([`MAX_WORKERS`]) and per caller
+//! ([`MAX_WORKERS_PER_CALLER`]), so one client looping hostile filters can
+//! slow only itself, not every other user of the server.
 
+use std::collections::HashMap;
 use std::process::{ExitStatus, Stdio};
-use std::sync::OnceLock;
+use std::sync::{Arc, LazyLock, Mutex, OnceLock, PoisonError};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
-use tokio::sync::Semaphore;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore, SemaphorePermit};
+use tokio::time::Instant;
 
 use crate::tools::jq;
 
 /// First command-line argument that turns the executable into a jq worker.
 pub(crate) const WORKER_ARG: &str = "__jq-worker";
-/// Wall-clock budget for one filter, including waiting for a worker slot.
+/// Wall-clock budget for running one filter.
 const FILTER_TIMEOUT: Duration = Duration::from_secs(5);
+/// How long a call waits for a free worker slot before giving up with
+/// [`SandboxError::Busy`].
+const SLOT_TIMEOUT: Duration = Duration::from_secs(5);
 /// Concurrent workers. Together with [`WORKER_ADDRESS_SPACE`] this caps the
 /// memory hostile filters can take at about 1 GiB, well inside the
 /// production pod's 2000Mi limit, which the workers share with the server.
 const MAX_WORKERS: usize = 4;
+/// Worker slots one caller (bearer token) may hold at once.
+const MAX_WORKERS_PER_CALLER: usize = 2;
 /// Address-space limit of a worker. Responses are at most a few MiB, so a
 /// legitimate filter stays far below it; a runaway aggregate fails allocation
 /// and aborts the worker instead of growing until the pod is OOM-killed.
@@ -37,6 +49,78 @@ const WORKER_ADDRESS_SPACE: u64 = 256 * 1024 * 1024;
 const WORKER_CPU_SECONDS: u64 = 10;
 
 static WORKERS: Semaphore = Semaphore::const_new(MAX_WORKERS);
+/// Per-caller slot semaphores, keyed by [`caller_key`]. An entry is removed
+/// when its last slot is released and nobody is waiting on it.
+static CALLERS: LazyLock<Mutex<HashMap<String, Arc<Semaphore>>>> = LazyLock::new(Default::default);
+
+/// Caller identity for per-caller limits: a short SHA-256 prefix of the
+/// bearer token, so the token itself is never kept.
+pub(crate) fn caller_key(token: &str) -> String {
+    Sha256::digest(token.as_bytes())[..8]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+/// A reserved worker slot. Held from reservation until the filter finishes.
+pub(crate) struct Slot {
+    _global: SemaphorePermit<'static>,
+    _caller: CallerPermit,
+}
+
+struct CallerPermit {
+    key: String,
+    permit: Option<OwnedSemaphorePermit>,
+}
+
+impl Drop for CallerPermit {
+    fn drop(&mut self) {
+        drop(self.permit.take());
+        let mut callers = CALLERS.lock().unwrap_or_else(PoisonError::into_inner);
+        // Waiters clone the Arc under this lock, so a count of 1 means only
+        // the map holds it: idle, and safe to forget.
+        if callers
+            .get(&self.key)
+            .is_some_and(|semaphore| Arc::strong_count(semaphore) == 1)
+        {
+            callers.remove(&self.key);
+        }
+    }
+}
+
+/// Reserve a worker slot for `caller`, waiting at most [`SLOT_TIMEOUT`].
+pub(crate) async fn acquire(caller: &str) -> Result<Slot, SandboxError> {
+    acquire_until(caller, Instant::now() + SLOT_TIMEOUT).await
+}
+
+async fn acquire_until(caller: &str, deadline: Instant) -> Result<Slot, SandboxError> {
+    let semaphore = CALLERS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .entry(caller.to_owned())
+        .or_insert_with(|| Arc::new(Semaphore::new(MAX_WORKERS_PER_CALLER)))
+        .clone();
+    // Created before waiting so the map entry is cleaned up on timeout too;
+    // `acquire_owned` consumes the clone, so the guard sees the true count.
+    let mut caller_permit = CallerPermit {
+        key: caller.to_owned(),
+        permit: None,
+    };
+    caller_permit.permit = Some(
+        tokio::time::timeout_at(deadline, semaphore.acquire_owned())
+            .await
+            .map_err(|_| SandboxError::Busy)?
+            .map_err(|_| SandboxError::Busy)?,
+    );
+    let global = tokio::time::timeout_at(deadline, WORKERS.acquire())
+        .await
+        .map_err(|_| SandboxError::Busy)?
+        .map_err(|_| SandboxError::Busy)?;
+    Ok(Slot {
+        _global: global,
+        _caller: caller_permit,
+    })
+}
 
 /// Request sent to a worker on stdin.
 #[derive(Serialize, Deserialize)]
@@ -66,8 +150,8 @@ pub(crate) enum SandboxError {
         "filter timed out after 5s; narrow the _jq expression (avoid unbounded ranges or repeats)"
     )]
     Timeout,
-    /// Every worker slot stayed busy until the deadline.
-    #[error("too many _jq filters are running on this server; retry shortly")]
+    /// No worker slot freed up in time (for this caller or globally).
+    #[error("too many _jq filters are running; retry shortly")]
     Busy,
     /// The worker died: stack overflow, allocation failure or CPU limit.
     #[error(
@@ -109,21 +193,19 @@ pub(crate) fn worker_main() -> ! {
     std::process::exit(if written.is_ok() { 0 } else { 1 })
 }
 
-/// Evaluate `code` on `input` in a sandboxed worker process.
-pub(crate) async fn run(code: &str, input: Value) -> Result<Reply, SandboxError> {
-    run_with_timeout(code, input, FILTER_TIMEOUT).await
+/// Evaluate `code` on `input` in a sandboxed worker process, in a slot
+/// reserved with [`acquire`]; the slot is released when this returns.
+pub(crate) async fn run(slot: Slot, code: &str, input: Value) -> Result<Reply, SandboxError> {
+    run_with_timeout(slot, code, input, FILTER_TIMEOUT).await
 }
 
 async fn run_with_timeout(
+    _slot: Slot,
     code: &str,
     input: Value,
     timeout: Duration,
 ) -> Result<Reply, SandboxError> {
-    let deadline = tokio::time::Instant::now() + timeout;
-    let _permit = tokio::time::timeout_at(deadline, WORKERS.acquire())
-        .await
-        .map_err(|_| SandboxError::Busy)?
-        .map_err(|_| SandboxError::Busy)?;
+    let deadline = Instant::now() + timeout;
     let request = serde_json::to_vec(&Request { code, input })
         .map_err(|error| SandboxError::Worker(error.to_string()))?;
     // Dropping `exchange` on timeout drops the child, and `kill_on_drop`
@@ -226,33 +308,89 @@ pub(crate) mod tests {
         }
     }
 
+    async fn run_as_test(code: &str, input: Value) -> Result<Reply, SandboxError> {
+        run(acquire("test").await.unwrap(), code, input).await
+    }
+
     #[tokio::test]
     async fn a_filter_round_trips_through_the_worker() {
-        let reply = run(".a, .b", json!({"a": 1, "b": [true]})).await.unwrap();
+        let reply = run_as_test(".a, .b", json!({"a": 1, "b": [true]}))
+            .await
+            .unwrap();
         assert_eq!(reply, Reply::Values(vec![json!(1), json!([true])]));
     }
 
     #[tokio::test]
     async fn unbounded_recursion_aborts_the_worker_not_the_server() {
         // In-process this overflowed the stack and SIGABRTed the server.
-        let error = run("def f: 1 + f; f", json!(null)).await.unwrap_err();
+        let error = run_as_test("def f: 1 + f; f", json!(null))
+            .await
+            .unwrap_err();
         assert!(matches!(error, SandboxError::Aborted(_)), "{error}");
     }
 
     #[tokio::test]
     async fn a_spinning_filter_is_killed_at_the_deadline() {
-        let error = run_with_timeout("last(repeat(1))", json!(null), Duration::from_millis(500))
-            .await
-            .unwrap_err();
+        let slot = acquire("test").await.unwrap();
+        let error = run_with_timeout(
+            slot,
+            "last(repeat(1))",
+            json!(null),
+            Duration::from_millis(500),
+        )
+        .await
+        .unwrap_err();
         assert!(matches!(error, SandboxError::Timeout), "{error}");
     }
 
     #[cfg(target_os = "linux")]
     #[tokio::test]
     async fn memory_exhaustion_aborts_the_worker_not_the_server() {
-        let error = run("[range(1e10)] | length", json!(null))
+        let error = run_as_test("[range(1e10)] | length", json!(null))
             .await
             .unwrap_err();
         assert!(matches!(error, SandboxError::Aborted(_)), "{error}");
+    }
+
+    /// The biggest responses are a few MiB; a filter over ~8 MiB of JSON must
+    /// fit the worker's address-space limit (enforced on Linux).
+    #[tokio::test]
+    async fn an_eight_mib_response_fits_the_worker_limits() {
+        let rows: Vec<Value> = (0..20_000)
+            .map(|i| {
+                json!({
+                    "symbol": format!("{i:05}.US"),
+                    "name": "x".repeat(400),
+                    "price": i as f64 / 7.0,
+                    "tags": ["a", "b", "c"],
+                })
+            })
+            .collect();
+        let input = json!({"data": rows});
+        assert!(input.to_string().len() > 8 * 1024 * 1024);
+        let reply = run_as_test(
+            "([.data[] | select(.price > 100) | {symbol, price}] | length), (.data | sort_by(-.price) | .[0].symbol)",
+            input,
+        )
+        .await
+        .unwrap();
+        assert_eq!(reply, Reply::Values(vec![json!(19_299), json!("19999.US")]));
+    }
+
+    #[tokio::test]
+    async fn one_caller_cannot_take_every_worker_slot() {
+        let caller = "per-caller-limit-test";
+        let first = acquire(caller).await.unwrap();
+        let second = acquire(caller).await.unwrap();
+        let third = acquire_until(caller, Instant::now() + Duration::from_millis(200)).await;
+        assert!(matches!(third, Err(SandboxError::Busy)));
+        // Another caller is unaffected.
+        let other = acquire("per-caller-limit-other").await.unwrap();
+        drop((first, second, other));
+        assert!(
+            !CALLERS.lock().unwrap().contains_key(caller),
+            "idle callers must not accumulate"
+        );
+        acquire(caller).await.unwrap();
     }
 }
