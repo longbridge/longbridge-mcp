@@ -200,13 +200,20 @@ fn load_error_details(code: &str, error: &jaq_core::load::Error<&str>) -> Vec<St
 
 /// Apply the request's `_jq` (if any) to the result of `invoke`.
 ///
-/// `caller` keys the per-caller worker limit (see [`jq_sandbox::caller_key`]).
-/// For a tool that is not `read_only`, the worker slot is reserved *before*
-/// the tool runs: a saturated sandbox then rejects the call up front instead
-/// of discarding the result of a write that already happened.
+/// `caller` keys the per-caller worker limit (see [`jq_sandbox::caller_key`]);
+/// `None` for a call without a bearer token.
+///
+/// A tool that is not `read_only` must never lose its result to `_jq`:
+/// - its worker slot is reserved *before* the tool runs, so a saturated
+///   sandbox rejects the call while nothing has happened yet;
+/// - if the filter then fails, the unfiltered result is returned with a
+///   warning, since the write has already executed.
+///
+/// A call without a token reserves nothing up front: the tool will fail
+/// authentication, and it should not queue on the shared anonymous bucket.
 pub(super) async fn call<F, Fut>(
     mut request: CallToolRequestParams,
-    caller: &str,
+    caller: Option<&str>,
     read_only: bool,
     invoke: F,
 ) -> Result<CallToolResult, McpError>
@@ -234,10 +241,11 @@ where
         return Ok(syntax_error(&message));
     }
     let name = request.name.clone();
-    let reserved = if read_only {
+    let bucket = caller.unwrap_or(jq_sandbox::ANONYMOUS_CALLER);
+    let reserved = if read_only || caller.is_none() {
         None
     } else {
-        match jq_sandbox::acquire(caller).await {
+        match jq_sandbox::acquire(bucket).await {
             Ok(slot) => Some(slot),
             Err(error) => {
                 record_failure(&name, "busy", &code, &error.to_string());
@@ -249,14 +257,19 @@ where
     if result.is_error == Some(true) || is_error_envelope(&result) {
         return Ok(result);
     }
+    // Kept for a write, whose result must survive a failed filter.
+    let unfiltered = (!read_only).then(|| result.clone());
     let slot = match reserved {
         Some(slot) => slot,
-        None => match jq_sandbox::acquire(caller).await {
+        None => match jq_sandbox::acquire(bucket).await {
             Ok(slot) => slot,
             Err(error) => {
-                // Only read-only tools get here, so retrying is safe.
-                record_failure(&name, "busy", &code, &error.to_string());
-                return Ok(sandbox_busy(true));
+                let message = error.to_string();
+                record_failure(&name, "busy", &code, &message);
+                return Ok(match unfiltered {
+                    Some(result) => with_jq_warning(result, &message),
+                    None => sandbox_busy(true),
+                });
             }
         },
     };
@@ -281,7 +294,21 @@ where
         }
     };
     record_failure(&name, stage, &code, &message);
-    Ok(filter_error(&message))
+    Ok(match unfiltered {
+        Some(result) => with_jq_warning(result, &message),
+        None => filter_error(&message),
+    })
+}
+
+/// A write's own result, unfiltered, plus a note that `_jq` was not applied.
+/// Returning an error instead would hide the outcome (e.g. the order id) of an
+/// operation that already happened, inviting a duplicate retry.
+fn with_jq_warning(mut result: CallToolResult, message: &str) -> CallToolResult {
+    result.content.push(Content::text(serde_json::json!({
+        "jq_warning": format!("_jq was not applied: {message}"),
+        "hint": "This tool is not read-only and has already executed; its full, unfiltered result is above. Do not call it again to retry the filter."
+    }).to_string()));
+    result
 }
 
 /// Count and log a failed `_jq` filter. These calls reach the client as
@@ -516,7 +543,7 @@ mod tests {
         F: FnOnce(CallToolRequestParams) -> Fut,
         Fut: std::future::Future<Output = Result<CallToolResult, McpError>>,
     {
-        super::call(request, "jq-test", true, invoke).await
+        super::call(request, Some("jq-test"), true, invoke).await
     }
 
     fn request(jq: serde_json::Value) -> CallToolRequestParams {
@@ -695,10 +722,10 @@ mod tests {
         );
         let ran = std::sync::atomic::AtomicBool::new(false);
         let (write, read) = tokio::join!(
-            super::call(request(json!(".")), caller, false, |_| async {
+            super::call(request(json!(".")), Some(caller), false, |_| async {
                 panic!("a write must not run when no worker slot is free")
             }),
-            super::call(request(json!(".")), caller, true, |_| async {
+            super::call(request(json!(".")), Some(caller), true, |_| async {
                 ran.store(true, std::sync::atomic::Ordering::SeqCst);
                 Ok(super::super::tool_result("{}".to_string()))
             }),
@@ -714,6 +741,60 @@ mod tests {
             assert!(text.contains(hint), "{text}");
         }
         assert!(ran.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn a_failed_filter_on_a_write_returns_the_unfiltered_result() {
+        let result = super::call(
+            request(json!(".a[]")),
+            Some("jq-write-test"),
+            false,
+            |_| async {
+                Ok(super::super::tool_result(
+                    json!({"a": 1, "order_id": "701"}).to_string(),
+                ))
+            },
+        )
+        .await
+        .unwrap();
+        assert_ne!(result.is_error, Some(true));
+        let texts: Vec<&str> = result
+            .content
+            .iter()
+            .map(|content| content.as_text().unwrap().text.as_str())
+            .collect();
+        assert_eq!(texts.len(), 2, "{texts:?}");
+        assert!(texts[0].contains("\"order_id\":\"701\""), "{texts:?}");
+        assert!(texts[1].contains("jq_warning"), "{texts:?}");
+        assert!(texts[1].contains("already executed"), "{texts:?}");
+    }
+
+    #[tokio::test]
+    async fn an_unauthenticated_write_does_not_queue_for_a_worker() {
+        // Saturate the shared anonymous bucket.
+        let _held = (
+            jq_sandbox::acquire(jq_sandbox::ANONYMOUS_CALLER)
+                .await
+                .unwrap(),
+            jq_sandbox::acquire(jq_sandbox::ANONYMOUS_CALLER)
+                .await
+                .unwrap(),
+        );
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            super::call(request(json!(".")), None, false, |_| async {
+                Ok(CallToolResult::error(vec![Content::text(
+                    "Not authenticated",
+                )]))
+            }),
+        )
+        .await
+        .expect("must not wait for a worker slot")
+        .unwrap();
+        assert_eq!(
+            result.content[0].as_text().unwrap().text,
+            "Not authenticated"
+        );
     }
 
     #[tokio::test]

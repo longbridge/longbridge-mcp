@@ -53,10 +53,28 @@ static WORKERS: Semaphore = Semaphore::const_new(MAX_WORKERS);
 /// when its last slot is released and nobody is waiting on it.
 static CALLERS: LazyLock<Mutex<HashMap<String, Arc<Semaphore>>>> = LazyLock::new(Default::default);
 
-/// Caller identity for per-caller limits: a short SHA-256 prefix of the
-/// bearer token, so the token itself is never kept.
+/// Bucket shared by calls without a bearer token (stdio, unauthenticated).
+pub(crate) const ANONYMOUS_CALLER: &str = "anonymous";
+
+/// Caller identity for per-caller limits: the account (`member_id` in the
+/// token's `sub` claim), so one user's many OAuth tokens share one limit;
+/// the token itself for an opaque token. Hashed either way, so neither the
+/// token nor the member id is kept.
+///
+/// The claim is read unverified (see `auth::jwt`). A forged token can only
+/// pick its bucket for the moment a write's reservation waits on the upstream
+/// call that rejects it; reads reserve only after the tool succeeded.
 pub(crate) fn caller_key(token: &str) -> String {
-    Sha256::digest(token.as_bytes())[..8]
+    let member = crate::auth::jwt::subject(token).and_then(|sub| match &sub["member_id"] {
+        Value::String(id) if !id.is_empty() => Some(id.clone()),
+        Value::Number(id) => Some(id.to_string()),
+        _ => None,
+    });
+    let identity = match member {
+        Some(id) => format!("member:{id}"),
+        None => format!("token:{token}"),
+    };
+    Sha256::digest(identity.as_bytes())[..8]
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect()
@@ -392,5 +410,18 @@ pub(crate) mod tests {
             "idle callers must not accumulate"
         );
         acquire(caller).await.unwrap();
+    }
+
+    #[test]
+    fn callers_are_keyed_by_account_not_by_token() {
+        use crate::auth::jwt::test_token;
+        let token = |member: &str, jti: &str| {
+            let sub = json!({"member_id": member, "account_no": "x"}).to_string();
+            test_token(&json!({"sub": sub, "jti": jti}).to_string())
+        };
+        assert_eq!(caller_key(&token("1", "a")), caller_key(&token("1", "b")));
+        assert_ne!(caller_key(&token("1", "a")), caller_key(&token("2", "a")));
+        assert_ne!(caller_key("opaque-a"), caller_key("opaque-b"));
+        assert_eq!(caller_key(&token("1", "a")).len(), 16);
     }
 }

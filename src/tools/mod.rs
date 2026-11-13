@@ -6748,40 +6748,45 @@ impl ServerHandler for Longbridge {
         // with the same client as the tool call it belongs to.
         let tool_name = request.name.to_string();
         let retryable = is_read_only_tool(request.name.as_ref());
-        // Per-caller key for the `_jq` sandbox's worker limit; token-less
-        // calls (stdio, unauthenticated) share one bucket.
+        // Per-account key for the `_jq` sandbox's worker limit; `None` for a
+        // token-less call (stdio, unauthenticated).
         let caller = extract_context(&context)
-            .map(|mctx| jq_sandbox::caller_key(&mctx.token))
-            .unwrap_or_else(|_| "anonymous".to_owned());
-        let call = jq::call(request, &caller, retryable, |request| async move {
-            use rmcp::handler::server::tool::ToolCallContext;
-            let name = request.name.clone();
-            if !retryable {
-                return cached_router()
+            .ok()
+            .map(|mctx| jq_sandbox::caller_key(&mctx.token));
+        let call = jq::call(
+            request,
+            caller.as_deref(),
+            retryable,
+            |request| async move {
+                use rmcp::handler::server::tool::ToolCallContext;
+                let name = request.name.clone();
+                if !retryable {
+                    return cached_router()
+                        .call(ToolCallContext::new(self, request, context))
+                        .await
+                        .map(|result| wrap_argument_error(&name, result));
+                }
+                // Read-only tools get one server-side retry on an upstream rate
+                // limit (429002/429003), which otherwise surfaces to the model as
+                // an error it has to retry itself. Writes are never retried.
+                let first = ToolCallContext::new(self, request.clone(), context.clone());
+                let (result, delay) = BACKOFF_RETRY
+                    .scope(std::cell::Cell::new(None), async {
+                        let result = cached_router().call(first).await;
+                        (result, BACKOFF_RETRY.with(std::cell::Cell::get))
+                    })
+                    .await;
+                let Some(delay) = delay else {
+                    return result.map(|result| wrap_argument_error(&name, result));
+                };
+                crate::metrics::record_backoff_retry(request.name.as_ref());
+                tokio::time::sleep(delay).await;
+                cached_router()
                     .call(ToolCallContext::new(self, request, context))
                     .await
-                    .map(|result| wrap_argument_error(&name, result));
-            }
-            // Read-only tools get one server-side retry on an upstream rate
-            // limit (429002/429003), which otherwise surfaces to the model as
-            // an error it has to retry itself. Writes are never retried.
-            let first = ToolCallContext::new(self, request.clone(), context.clone());
-            let (result, delay) = BACKOFF_RETRY
-                .scope(std::cell::Cell::new(None), async {
-                    let result = cached_router().call(first).await;
-                    (result, BACKOFF_RETRY.with(std::cell::Cell::get))
-                })
-                .await;
-            let Some(delay) = delay else {
-                return result.map(|result| wrap_argument_error(&name, result));
-            };
-            crate::metrics::record_backoff_retry(request.name.as_ref());
-            tokio::time::sleep(delay).await;
-            cached_router()
-                .call(ToolCallContext::new(self, request, context))
-                .await
-                .map(|result| wrap_argument_error(&name, result))
-        });
+                    .map(|result| wrap_argument_error(&name, result))
+            },
+        );
         crate::metrics::CURRENT_CLIENT
             .scope(client, async {
                 call.await.map(|result| finish_result(&tool_name, result))
