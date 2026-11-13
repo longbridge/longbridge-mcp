@@ -10,8 +10,13 @@
 //! A crash there only fails that one call.
 //!
 //! Worker slots are limited globally ([`MAX_WORKERS`]) and per caller
-//! ([`MAX_WORKERS_PER_CALLER`]), so one client looping hostile filters can
-//! slow only itself, not every other user of the server.
+//! ([`MAX_WORKERS_PER_CALLER`]). A caller is an account only when the tool's
+//! upstream call accepted its token in this very request; everything else —
+//! forged or opaque tokens on tools that never send the token upstream (`now`,
+//! `fx_rate`, `get_me`, ...), and token-less calls — shares the single
+//! [`UNVERIFIED_CALLER`] bucket. Forged tokens therefore hold at most one
+//! worker (one CPU core) no matter how many there are, and every verified
+//! account keeps a slot. No state outlives a request.
 
 use std::collections::HashMap;
 use std::process::{ExitStatus, Stdio};
@@ -30,40 +35,48 @@ use crate::tools::jq;
 
 /// First command-line argument that turns the executable into a jq worker.
 pub(crate) const WORKER_ARG: &str = "__jq-worker";
-/// Wall-clock budget for running one filter.
-const FILTER_TIMEOUT: Duration = Duration::from_secs(5);
+/// Wall-clock budget for running one filter. Real filters take milliseconds;
+/// a short budget limits how long a spinning one holds a core.
+const FILTER_TIMEOUT: Duration = Duration::from_secs(2);
 /// How long a call waits for a free worker slot before giving up with
 /// [`SandboxError::Busy`].
-const SLOT_TIMEOUT: Duration = Duration::from_secs(5);
-/// Concurrent workers. Together with [`WORKER_ADDRESS_SPACE`] this caps the
-/// memory hostile filters can take at about 1 GiB, well inside the
-/// production pod's 2000Mi limit, which the workers share with the server.
-const MAX_WORKERS: usize = 4;
-/// Worker slots one caller (bearer token) may hold at once.
-const MAX_WORKERS_PER_CALLER: usize = 2;
+const SLOT_TIMEOUT: Duration = Duration::from_secs(3);
+/// Concurrent workers. Each can spin one core until [`FILTER_TIMEOUT`], and
+/// workers share the server's cgroup quota (2 cores in production), so this
+/// is sized against CPU: the unverified bucket gets at most one of them,
+/// leaving the server at least a core under any forged-token flood. Memory
+/// worst case is 2 x [`WORKER_ADDRESS_SPACE`] = 512 MiB of the 2000Mi limit.
+///
+/// Unit tests run concurrently and some hold slots on purpose, so they get
+/// more global slots; the per-caller limits are what they exercise.
+const MAX_WORKERS: usize = if cfg!(test) { 64 } else { 2 };
+/// Worker slots one caller — one verified account, or the whole unverified
+/// bucket — may hold at once.
+const MAX_WORKERS_PER_CALLER: usize = 1;
 /// Address-space limit of a worker. Responses are at most a few MiB, so a
 /// legitimate filter stays far below it; a runaway aggregate fails allocation
 /// and aborts the worker instead of growing until the pod is OOM-killed.
 const WORKER_ADDRESS_SPACE: u64 = 256 * 1024 * 1024;
 /// CPU-seconds backstop in case the parent dies before killing the worker.
-const WORKER_CPU_SECONDS: u64 = 10;
+const WORKER_CPU_SECONDS: u64 = 3;
 
 static WORKERS: Semaphore = Semaphore::const_new(MAX_WORKERS);
 /// Per-caller slot semaphores, keyed by [`caller_key`]. An entry is removed
 /// when its last slot is released and nobody is waiting on it.
 static CALLERS: LazyLock<Mutex<HashMap<String, Arc<Semaphore>>>> = LazyLock::new(Default::default);
 
-/// Bucket shared by calls without a bearer token (stdio, unauthenticated).
-pub(crate) const ANONYMOUS_CALLER: &str = "anonymous";
+/// Bucket shared by every call whose account is not proven: no token, or a
+/// token that no upstream call accepted during the request.
+pub(crate) const UNVERIFIED_CALLER: &str = "unverified";
 
 /// Caller identity for per-caller limits: the account (`member_id` in the
 /// token's `sub` claim), so one user's many OAuth tokens share one limit;
 /// the token itself for an opaque token. Hashed either way, so neither the
 /// token nor the member id is kept.
 ///
-/// The claim is read unverified (see `auth::jwt`). That is enough here: a
-/// slot is taken only after the tool succeeded upstream, which a forged token
-/// never does.
+/// The claim is read unverified (see `auth::jwt`), so the key alone proves
+/// nothing: `jq::call` uses it only when the tool's upstream call succeeded
+/// with this token, and [`UNVERIFIED_CALLER`] otherwise.
 pub(crate) fn caller_key(token: &str) -> String {
     let member = crate::auth::jwt::subject(token).and_then(|sub| match &sub["member_id"] {
         Value::String(id) if !id.is_empty() => Some(id.clone()),
@@ -165,7 +178,8 @@ pub(crate) enum Reply {
 pub(crate) enum SandboxError {
     /// The deadline passed while the filter was running.
     #[error(
-        "filter timed out after 5s; narrow the _jq expression (avoid unbounded ranges or repeats)"
+        "filter timed out after {}s; narrow the _jq expression (avoid unbounded ranges or repeats)",
+        FILTER_TIMEOUT.as_secs()
     )]
     Timeout,
     /// No worker slot freed up in time (for this caller or globally).
@@ -399,12 +413,11 @@ pub(crate) mod tests {
     async fn one_caller_cannot_take_every_worker_slot() {
         let caller = "per-caller-limit-test";
         let first = acquire(caller).await.unwrap();
-        let second = acquire(caller).await.unwrap();
-        let third = acquire_until(caller, Instant::now() + Duration::from_millis(200)).await;
-        assert!(matches!(third, Err(SandboxError::Busy)));
+        let second = acquire_until(caller, Instant::now() + Duration::from_millis(200)).await;
+        assert!(matches!(second, Err(SandboxError::Busy)));
         // Another caller is unaffected.
         let other = acquire("per-caller-limit-other").await.unwrap();
-        drop((first, second, other));
+        drop((first, other));
         assert!(
             !CALLERS.lock().unwrap().contains_key(caller),
             "idle callers must not accumulate"

@@ -11,6 +11,9 @@ use rmcp::{
 };
 use serde_json::Value;
 
+use std::cell::Cell;
+
+use crate::tools::CREDENTIAL_SENT;
 use crate::tools::jq_sandbox::{self, Reply, SandboxError};
 
 type Filter = jaq_core::Filter<data::JustLut<Val>>;
@@ -200,8 +203,11 @@ fn load_error_details(code: &str, error: &jaq_core::load::Error<&str>) -> Vec<St
 
 /// Apply the request's `_jq` (if any) to the result of `invoke`.
 ///
-/// `caller` keys the per-caller worker limit (see [`jq_sandbox::caller_key`]);
-/// `None` for a call without a bearer token.
+/// `caller` is the account key the bearer token claims (see
+/// [`jq_sandbox::caller_key`]), `None` without a token. It is used for the
+/// per-caller worker limit only if the tool handed the token to an upstream
+/// client and still succeeded, i.e. upstream accepted the token in this very
+/// request; otherwise the call goes to the shared unverified bucket.
 ///
 /// The worker slot is taken only after the tool succeeded, so the sandbox
 /// never delays or blocks the tool itself. A tool that is not `read_only` has
@@ -238,7 +244,13 @@ where
         return Ok(syntax_error(&message));
     }
     let name = request.name.clone();
-    let mut result = invoke(request).await?;
+    let (result, credential_sent) = CREDENTIAL_SENT
+        .scope(Cell::new(false), async {
+            let result = invoke(request).await;
+            (result, CREDENTIAL_SENT.with(Cell::get))
+        })
+        .await;
+    let mut result = result?;
     if result.is_error == Some(true) || is_error_envelope(&result) {
         return Ok(result);
     }
@@ -246,34 +258,96 @@ where
     let shape = shape_of(&input);
     // A write has already executed: its result must survive a failed filter.
     let unfiltered = (!read_only).then(|| input.clone());
-    let bucket = caller.unwrap_or(jq_sandbox::ANONYMOUS_CALLER);
+    let bucket = match caller {
+        Some(account) if credential_sent => account,
+        _ => jq_sandbox::UNVERIFIED_CALLER,
+    };
     // The filter runs in a separate, resource-limited worker process. jaq has
     // no step/memory/recursion limit, so in-process evaluation let a single
     // `_jq` abort the server (`def f: 1 + f; f` overflows the stack,
     // `[range(1e9)]` exhausts memory). See `jq_sandbox`.
-    let (stage, message) = match jq_sandbox::acquire(bucket).await {
-        Err(error) => ("busy", error.to_string()),
+    let (stage, failure) = match jq_sandbox::acquire(bucket).await {
+        Err(error) => ("busy", Failure::Busy(error.to_string())),
         Ok(slot) => match jq_sandbox::run(slot, &code, input).await {
             Ok(Reply::Values(values)) => return Ok(finish(result, values)),
-            Ok(Reply::FilterError(message)) => {
-                ("runtime", format!("{message}; response shape: {shape}"))
+            Ok(Reply::FilterError(message)) => (
+                "runtime",
+                Failure::Filter(format!("{message}; response shape: {shape}")),
+            ),
+            Ok(Reply::Error(message)) => ("runtime", Failure::Filter(message)),
+            Err(error @ SandboxError::Timeout) => ("runtime", Failure::Filter(error.to_string())),
+            Err(error @ SandboxError::Worker(_)) => {
+                tracing::warn!(tool = %crate::tools::tool_label(&name), %error, "jq worker unavailable");
+                ("sandbox", Failure::Unavailable(error.to_string()))
             }
-            Ok(Reply::Error(message)) => ("runtime", message),
-            Err(error @ SandboxError::Timeout) => ("runtime", error.to_string()),
             Err(error) => {
                 // Not a caller typo: the filter crashed (often deliberate
                 // probing), so make it stand out from INFO noise.
                 tracing::warn!(tool = %crate::tools::tool_label(&name), %error, "jq sandbox failure");
-                ("sandbox", error.to_string())
+                ("sandbox", Failure::Filter(error.to_string()))
             }
         },
     };
-    record_failure(&name, stage, &code, &message);
+    record_failure(&name, stage, &code, failure.message());
     Ok(match unfiltered {
-        Some(unfiltered) => with_jq_warning(result, unfiltered, &message),
-        None if stage == "busy" => sandbox_busy(),
-        None => filter_error(&message),
+        Some(unfiltered) => with_jq_warning(result, unfiltered, failure.message()),
+        None => failure.into_read_only_error(),
     })
+}
+
+/// Why a filter produced no output. Decides what a read-only tool's caller is
+/// told to do; a write returns its unfiltered result whatever the reason.
+enum Failure {
+    /// The expression is at fault (runtime error, output limit, timeout,
+    /// crashed worker): fix it.
+    Filter(String),
+    /// No worker slot was free: the expression may be fine, retry later.
+    Busy(String),
+    /// The worker could not be started or answered garbage: retry later.
+    Unavailable(String),
+}
+
+impl Failure {
+    fn message(&self) -> &str {
+        match self {
+            Self::Filter(message) | Self::Busy(message) | Self::Unavailable(message) => message,
+        }
+    }
+
+    /// The error for a read-only tool. The tool succeeded and can be called
+    /// again safely, so none of these is terminal.
+    fn into_read_only_error(self) -> CallToolResult {
+        let (error_code, recoverable, message, hint) = match self {
+            Self::Filter(message) => (
+                "jq_filter_error",
+                "fix_params",
+                format!("_jq response filtering failed: {message}"),
+                "The tool is read-only and succeeded; fix the _jq expression and call again, or omit _jq to get the full response.",
+            ),
+            Self::Busy(message) => (
+                "jq_sandbox_busy",
+                "backoff",
+                format!("{message}; the _jq expression itself is fine"),
+                "The tool is read-only, so retrying is safe: retry shortly, or omit _jq.",
+            ),
+            Self::Unavailable(message) => (
+                "jq_sandbox_unavailable",
+                "backoff",
+                format!("{message}; the _jq expression may be fine"),
+                "The tool is read-only, so retrying is safe: retry shortly, or omit _jq.",
+            ),
+        };
+        CallToolResult::error(vec![Content::text(
+            serde_json::json!({
+                "error_code": error_code,
+                "message": message,
+                "recoverable": recoverable,
+                "hint": hint,
+                "data": null
+            })
+            .to_string(),
+        )])
+    }
 }
 
 /// A write's own result, unfiltered, wrapped with a note that `_jq` was not
@@ -406,29 +480,6 @@ fn syntax_error(message: &str) -> CallToolResult {
     }).to_string())])
 }
 
-/// No sandbox worker slot was free for a read-only tool. Not the filter's
-/// fault, so the caller should back off and retry rather than rewrite it.
-fn sandbox_busy() -> CallToolResult {
-    let hint = "This is a read-only tool, so retrying is safe: retry shortly, or omit _jq.";
-    CallToolResult::error(vec![Content::text(serde_json::json!({
-        "error_code": "jq_sandbox_busy",
-        "message": "Too many _jq filters are running right now; the _jq expression itself is fine.",
-        "recoverable": "backoff",
-        "hint": hint,
-        "data": null
-    }).to_string())])
-}
-
-fn filter_error(message: &str) -> CallToolResult {
-    CallToolResult::error(vec![Content::text(serde_json::json!({
-        "error_code": "jq_filter_error",
-        "message": format!("_jq response filtering failed: {message}. The tool has already executed."),
-        "recoverable": "none",
-        "hint": "Do not automatically retry a write operation; verify its outcome first. For read-only tools, correct _jq and retry.",
-        "data": null
-    }).to_string())])
-}
-
 /// The JSON value a filter runs on: the structured content when present,
 /// otherwise the text content parsed as JSON (or kept as a string).
 fn take_input(result: &mut CallToolResult) -> Value {
@@ -516,7 +567,9 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    /// `super::call` as a read-only tool of one test caller.
+    /// `super::call` as a read-only tool of a verified account (the tool
+    /// "sends the token upstream"), a fresh account per call so concurrent
+    /// tests never contend for a worker slot.
     async fn call<F, Fut>(
         request: CallToolRequestParams,
         invoke: F,
@@ -525,8 +578,25 @@ mod tests {
         F: FnOnce(CallToolRequestParams) -> Fut,
         Fut: std::future::Future<Output = Result<CallToolResult, McpError>>,
     {
-        super::call(request, Some("jq-test"), true, invoke).await
+        let account = unique_account();
+        super::call(request, Some(&account), true, |request| async move {
+            crate::tools::note_credential_sent();
+            invoke(request).await
+        })
+        .await
     }
+
+    fn unique_account() -> String {
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        format!(
+            "jq-test-{}",
+            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        )
+    }
+
+    /// Serializes the tests that occupy, or depend on, the one process-wide
+    /// unverified worker slot.
+    static UNVERIFIED_BUCKET_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
     fn request(jq: serde_json::Value) -> CallToolRequestParams {
         CallToolRequestParams::new("test").with_arguments(
@@ -695,23 +765,52 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_saturated_sandbox_returns_writes_unfiltered_and_lets_reads_back_off() {
-        // Exhaust this caller's worker slots.
-        let caller = "jq-busy-test";
-        let _held = (
-            jq_sandbox::acquire(caller).await.unwrap(),
-            jq_sandbox::acquire(caller).await.unwrap(),
+    async fn a_forged_token_flood_cannot_block_a_verified_account() {
+        let _lock = UNVERIFIED_BUCKET_LOCK.lock().await;
+        // A flood of forged tokens on credential-free tools all lands in the
+        // one unverified slot; hold it as such a flood would.
+        let _flood = jq_sandbox::acquire(jq_sandbox::UNVERIFIED_CALLER)
+            .await
+            .unwrap();
+        let ok =
+            |value: Value| move |_| async move { Ok(super::super::tool_result(value.to_string())) };
+        let verified_account = unique_account();
+        let (verified, forged_read, forged_write) = tokio::join!(
+            // Upstream accepted this token: its own account bucket, unaffected.
+            super::call(
+                request(json!(".n")),
+                Some(&verified_account),
+                true,
+                |_| async {
+                    crate::tools::note_credential_sent();
+                    Ok(super::super::tool_result(json!({"n": 1}).to_string()))
+                }
+            ),
+            // Claims an account, but the tool never sent the token upstream
+            // (like `now` or `fx_rate`): the claim is not trusted.
+            super::call(
+                request(json!(".")),
+                Some("forged-account"),
+                true,
+                ok(json!({}))
+            ),
+            super::call(
+                request(json!(".id")),
+                Some("forged-account"),
+                false,
+                ok(json!({"id": "701"}))
+            ),
         );
-        let (write, read) = tokio::join!(
-            super::call(request(json!(".id")), Some(caller), false, |_| async {
-                Ok(super::super::tool_result(json!({"id": "701"}).to_string()))
-            }),
-            super::call(request(json!(".")), Some(caller), true, |_| async {
-                Ok(super::super::tool_result("{}".to_string()))
-            }),
-        );
-        // The write already happened: its outcome comes back, unfiltered.
-        let write = write.unwrap();
+        let verified = verified.unwrap();
+        assert_eq!(verified.content[0].as_text().unwrap().text, "1");
+        // The unverified read backs off, with a retry-safe hint.
+        let read = forged_read.unwrap();
+        let text = &read.content[0].as_text().unwrap().text;
+        assert_eq!(read.is_error, Some(true), "{text}");
+        assert!(text.contains("jq_sandbox_busy"), "{text}");
+        assert!(text.contains("\"recoverable\":\"backoff\""), "{text}");
+        // A write already executed: its outcome comes back, unfiltered.
+        let write = forged_write.unwrap();
         assert_ne!(write.is_error, Some(true));
         let value: Value = serde_json::from_str(&write.content[0].as_text().unwrap().text).unwrap();
         assert_eq!(value["result"], json!({"id": "701"}));
@@ -719,26 +818,31 @@ mod tests {
             value["jq_warning"].as_str().unwrap().contains("too many"),
             "{value}"
         );
-        // A read is safe to retry.
-        let read = read.unwrap();
-        let text = &read.content[0].as_text().unwrap().text;
-        assert_eq!(read.is_error, Some(true), "{text}");
+    }
+
+    #[tokio::test]
+    async fn a_verified_account_is_limited_to_its_own_slot() {
+        let account = unique_account();
+        let _held = jq_sandbox::acquire(&account).await.unwrap();
+        let result = super::call(request(json!(".")), Some(&account), true, |_| async {
+            crate::tools::note_credential_sent();
+            Ok(super::super::tool_result("{}".to_string()))
+        })
+        .await
+        .unwrap();
+        let text = &result.content[0].as_text().unwrap().text;
         assert!(text.contains("jq_sandbox_busy"), "{text}");
-        assert!(text.contains("\"recoverable\":\"backoff\""), "{text}");
     }
 
     #[tokio::test]
     async fn a_failed_filter_on_a_write_returns_the_unfiltered_result() {
-        let result = super::call(
-            request(json!(".a[]")),
-            Some("jq-write-test"),
-            false,
-            |_| async {
-                Ok(super::super::tool_result(
-                    json!({"a": 1, "order_id": "701"}).to_string(),
-                ))
-            },
-        )
+        let account = unique_account();
+        let result = super::call(request(json!(".a[]")), Some(&account), false, |_| async {
+            crate::tools::note_credential_sent();
+            Ok(super::super::tool_result(
+                json!({"a": 1, "order_id": "701"}).to_string(),
+            ))
+        })
         .await
         .unwrap();
         assert_ne!(result.is_error, Some(true));
@@ -763,15 +867,10 @@ mod tests {
 
     #[tokio::test]
     async fn a_failed_tool_never_waits_for_a_worker() {
-        // Saturate the shared anonymous bucket.
-        let _held = (
-            jq_sandbox::acquire(jq_sandbox::ANONYMOUS_CALLER)
-                .await
-                .unwrap(),
-            jq_sandbox::acquire(jq_sandbox::ANONYMOUS_CALLER)
-                .await
-                .unwrap(),
-        );
+        let _lock = UNVERIFIED_BUCKET_LOCK.lock().await;
+        let _held = jq_sandbox::acquire(jq_sandbox::UNVERIFIED_CALLER)
+            .await
+            .unwrap();
         let result = tokio::time::timeout(
             std::time::Duration::from_secs(1),
             super::call(request(json!(".")), None, false, |_| async {
@@ -999,7 +1098,9 @@ mod tests {
         assert_eq!(result.is_error, Some(true));
         let text = &result.content[0].as_text().unwrap().text;
         assert!(text.contains("_jq"));
-        assert!(text.contains("already executed"));
+        // Read-only and succeeded: fix the filter and retry.
+        assert!(text.contains("\"recoverable\":\"fix_params\""), "{text}");
+        assert!(!text.contains("write operation"), "{text}");
         assert!(!text.contains("not requested"));
         assert!(result.structured_content.is_none());
     }
@@ -1062,6 +1163,8 @@ mod tests {
 
     #[tokio::test]
     async fn real_mcp_dispatch_filters_a_tool_without_business_arguments() {
+        // `now` never sends a token upstream, so it uses the unverified slot.
+        let _lock = UNVERIFIED_BUCKET_LOCK.lock().await;
         use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
         tokio::time::timeout(std::time::Duration::from_secs(10), async {
             let (client, server) = tokio::io::duplex(64 * 1024);
