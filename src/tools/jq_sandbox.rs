@@ -9,26 +9,24 @@
 //! and CPU rlimit, with an empty environment, and is killed at the deadline.
 //! A crash there only fails that one call.
 //!
-//! Worker slots are limited globally ([`MAX_WORKERS`]) and per caller
-//! ([`MAX_WORKERS_PER_CALLER`]). A caller is an account only when the tool's
-//! upstream call accepted its token in this very request; everything else —
-//! forged or opaque tokens on tools that never send the token upstream (`now`,
-//! `fx_rate`, `get_me`, ...), and token-less calls — shares the single
-//! [`UNVERIFIED_CALLER`] bucket. Forged tokens therefore hold at most one
-//! worker (one CPU core) no matter how many there are, and every verified
-//! account keeps a slot. No state outlives a request.
+//! Worker slots are limited by CPU, not by caller: at most [`MAX_WORKERS`]
+//! filters run at once, first come first served. The server does not verify
+//! bearer tokens and several tools succeed without upstream ever checking
+//! them, so a per-caller limit could be dodged by forging tokens; a global cap
+//! cannot. Under a flood of hostile filters `_jq` calls back off
+//! ([`SandboxError::Busy`]), but the workers can never take more than their
+//! share of the pod's CPU, so the server itself and calls without `_jq` are
+//! unaffected.
 
-use std::collections::HashMap;
 use std::process::{ExitStatus, Stdio};
-use std::sync::{Arc, LazyLock, Mutex, OnceLock, PoisonError};
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use sha2::{Digest, Sha256};
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
-use tokio::sync::{OwnedSemaphorePermit, Semaphore, SemaphorePermit};
+use tokio::sync::{Semaphore, SemaphorePermit};
 use tokio::time::Instant;
 
 use crate::tools::jq;
@@ -42,17 +40,14 @@ const FILTER_TIMEOUT: Duration = Duration::from_secs(2);
 /// [`SandboxError::Busy`].
 const SLOT_TIMEOUT: Duration = Duration::from_secs(3);
 /// Concurrent workers. Each can spin one core until [`FILTER_TIMEOUT`], and
-/// workers share the server's cgroup quota (2 cores in production), so this
-/// is sized against CPU: the unverified bucket gets at most one of them,
-/// leaving the server at least a core under any forged-token flood. Memory
-/// worst case is 2 x [`WORKER_ADDRESS_SPACE`] = 512 MiB of the 2000Mi limit.
+/// workers share the server's cgroup CPU quota (2 cores in production), so
+/// this is sized against CPU: hostile filters can take at most one core,
+/// whatever the request rate. Memory worst case is 1 x
+/// [`WORKER_ADDRESS_SPACE`] = 256 MiB of the 2000Mi limit.
 ///
-/// Unit tests run concurrently and some hold slots on purpose, so they get
-/// more global slots; the per-caller limits are what they exercise.
-const MAX_WORKERS: usize = if cfg!(test) { 64 } else { 2 };
-/// Worker slots one caller — one verified account, or the whole unverified
-/// bucket — may hold at once.
-const MAX_WORKERS_PER_CALLER: usize = 1;
+/// Unit tests run many filters concurrently, so they get more slots; tests of
+/// a saturated sandbox inject their own semaphore (see `tests::with_slots`).
+const MAX_WORKERS: usize = if cfg!(test) { 64 } else { 1 };
 /// Address-space limit of a worker. Responses are at most a few MiB, so a
 /// legitimate filter stays far below it; a runaway aggregate fails allocation
 /// and aborts the worker instead of growing until the pod is OOM-killed.
@@ -61,96 +56,37 @@ const WORKER_ADDRESS_SPACE: u64 = 256 * 1024 * 1024;
 const WORKER_CPU_SECONDS: u64 = 3;
 
 static WORKERS: Semaphore = Semaphore::const_new(MAX_WORKERS);
-/// Per-caller slot semaphores, keyed by [`caller_key`]. An entry is removed
-/// when its last slot is released and nobody is waiting on it.
-static CALLERS: LazyLock<Mutex<HashMap<String, Arc<Semaphore>>>> = LazyLock::new(Default::default);
 
-/// Bucket shared by every call whose account is not proven: no token, or a
-/// token that no upstream call accepted during the request.
-pub(crate) const UNVERIFIED_CALLER: &str = "unverified";
+#[cfg(test)]
+tokio::task_local! {
+    /// Replaces [`WORKERS`] within a test's scope.
+    static TEST_WORKERS: &'static Semaphore;
+}
 
-/// Caller identity for per-caller limits: the account (`member_id` in the
-/// token's `sub` claim), so one user's many OAuth tokens share one limit;
-/// the token itself for an opaque token. Hashed either way, so neither the
-/// token nor the member id is kept.
-///
-/// The claim is read unverified (see `auth::jwt`), so the key alone proves
-/// nothing: `jq::call` uses it only when the tool's upstream call succeeded
-/// with this token, and [`UNVERIFIED_CALLER`] otherwise.
-pub(crate) fn caller_key(token: &str) -> String {
-    let member = crate::auth::jwt::subject(token).and_then(|sub| match &sub["member_id"] {
-        Value::String(id) if !id.is_empty() => Some(id.clone()),
-        Value::Number(id) => Some(id.to_string()),
-        _ => None,
-    });
-    let identity = match member {
-        Some(id) => format!("member:{id}"),
-        None => format!("token:{token}"),
-    };
-    Sha256::digest(identity.as_bytes())[..8]
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
+fn workers() -> &'static Semaphore {
+    #[cfg(test)]
+    if let Ok(semaphore) = TEST_WORKERS.try_with(|semaphore| *semaphore) {
+        return semaphore;
+    }
+    &WORKERS
 }
 
 /// A reserved worker slot. Held from reservation until the filter finishes.
 pub(crate) struct Slot {
-    _global: SemaphorePermit<'static>,
-    _caller: CallerPermit,
+    _permit: SemaphorePermit<'static>,
 }
 
-struct CallerPermit {
-    key: String,
-    permit: Option<OwnedSemaphorePermit>,
+/// Reserve a worker slot, waiting at most [`SLOT_TIMEOUT`].
+pub(crate) async fn acquire() -> Result<Slot, SandboxError> {
+    acquire_until(Instant::now() + SLOT_TIMEOUT).await
 }
 
-impl Drop for CallerPermit {
-    fn drop(&mut self) {
-        drop(self.permit.take());
-        let mut callers = CALLERS.lock().unwrap_or_else(PoisonError::into_inner);
-        // Waiters clone the Arc under this lock, so a count of 1 means only
-        // the map holds it: idle, and safe to forget.
-        if callers
-            .get(&self.key)
-            .is_some_and(|semaphore| Arc::strong_count(semaphore) == 1)
-        {
-            callers.remove(&self.key);
-        }
-    }
-}
-
-/// Reserve a worker slot for `caller`, waiting at most [`SLOT_TIMEOUT`].
-pub(crate) async fn acquire(caller: &str) -> Result<Slot, SandboxError> {
-    acquire_until(caller, Instant::now() + SLOT_TIMEOUT).await
-}
-
-async fn acquire_until(caller: &str, deadline: Instant) -> Result<Slot, SandboxError> {
-    let semaphore = CALLERS
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .entry(caller.to_owned())
-        .or_insert_with(|| Arc::new(Semaphore::new(MAX_WORKERS_PER_CALLER)))
-        .clone();
-    // Created before waiting so the map entry is cleaned up on timeout too;
-    // `acquire_owned` consumes the clone, so the guard sees the true count.
-    let mut caller_permit = CallerPermit {
-        key: caller.to_owned(),
-        permit: None,
-    };
-    caller_permit.permit = Some(
-        tokio::time::timeout_at(deadline, semaphore.acquire_owned())
-            .await
-            .map_err(|_| SandboxError::Busy)?
-            .map_err(|_| SandboxError::Busy)?,
-    );
-    let global = tokio::time::timeout_at(deadline, WORKERS.acquire())
+async fn acquire_until(deadline: Instant) -> Result<Slot, SandboxError> {
+    let permit = tokio::time::timeout_at(deadline, workers().acquire())
         .await
         .map_err(|_| SandboxError::Busy)?
         .map_err(|_| SandboxError::Busy)?;
-    Ok(Slot {
-        _global: global,
-        _caller: caller_permit,
-    })
+    Ok(Slot { _permit: permit })
 }
 
 /// Request sent to a worker on stdin.
@@ -182,7 +118,7 @@ pub(crate) enum SandboxError {
         FILTER_TIMEOUT.as_secs()
     )]
     Timeout,
-    /// No worker slot freed up in time (for this caller or globally).
+    /// No worker slot freed up in time.
     #[error("too many _jq filters are running; retry shortly")]
     Busy,
     /// The worker died: stack overflow, allocation failure or CPU limit.
@@ -341,7 +277,7 @@ pub(crate) mod tests {
     }
 
     async fn run_as_test(code: &str, input: Value) -> Result<Reply, SandboxError> {
-        run(acquire("test").await.unwrap(), code, input).await
+        run(acquire().await.unwrap(), code, input).await
     }
 
     #[tokio::test]
@@ -363,7 +299,7 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn a_spinning_filter_is_killed_at_the_deadline() {
-        let slot = acquire("test").await.unwrap();
+        let slot = acquire().await.unwrap();
         let error = run_with_timeout(
             slot,
             "last(repeat(1))",
@@ -409,32 +345,23 @@ pub(crate) mod tests {
         assert_eq!(reply, Reply::Values(vec![json!(19_299), json!("19999.US")]));
     }
 
-    #[tokio::test]
-    async fn one_caller_cannot_take_every_worker_slot() {
-        let caller = "per-caller-limit-test";
-        let first = acquire(caller).await.unwrap();
-        let second = acquire_until(caller, Instant::now() + Duration::from_millis(200)).await;
-        assert!(matches!(second, Err(SandboxError::Busy)));
-        // Another caller is unaffected.
-        let other = acquire("per-caller-limit-other").await.unwrap();
-        drop((first, other));
-        assert!(
-            !CALLERS.lock().unwrap().contains_key(caller),
-            "idle callers must not accumulate"
-        );
-        acquire(caller).await.unwrap();
+    /// Run `future` with the sandbox limited to `slots` workers, as in
+    /// production, instead of the test-wide pool.
+    pub(crate) async fn with_slots<F: std::future::Future>(slots: usize, future: F) -> F::Output {
+        let semaphore: &'static Semaphore = Box::leak(Box::new(Semaphore::new(slots)));
+        TEST_WORKERS.scope(semaphore, future).await
     }
 
-    #[test]
-    fn callers_are_keyed_by_account_not_by_token() {
-        use crate::auth::jwt::test_token;
-        let token = |member: &str, jti: &str| {
-            let sub = json!({"member_id": member, "account_no": "x"}).to_string();
-            test_token(&json!({"sub": sub, "jti": jti}).to_string())
-        };
-        assert_eq!(caller_key(&token("1", "a")), caller_key(&token("1", "b")));
-        assert_ne!(caller_key(&token("1", "a")), caller_key(&token("2", "a")));
-        assert_ne!(caller_key("opaque-a"), caller_key("opaque-b"));
-        assert_eq!(caller_key(&token("1", "a")).len(), 16);
+    #[tokio::test]
+    async fn a_full_sandbox_reports_busy_and_frees_the_slot_afterwards() {
+        with_slots(1, async {
+            let held = acquire().await.unwrap();
+            let waiting = acquire_until(Instant::now() + Duration::from_millis(200)).await;
+            assert!(matches!(waiting, Err(SandboxError::Busy)));
+            drop(held);
+            let reply = run(acquire().await.unwrap(), ".", json!(1)).await.unwrap();
+            assert_eq!(reply, Reply::Values(vec![json!(1)]));
+        })
+        .await;
     }
 }

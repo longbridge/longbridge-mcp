@@ -41,20 +41,6 @@ tokio::task_local! {
     /// backoff-class error, [`measured_tool_call`] records the suggested delay
     /// here *instead of* counting the failure, and `call_tool` retries once.
     static BACKOFF_RETRY: std::cell::Cell<Option<std::time::Duration>>;
-
-    /// Set when the current tool call hands the bearer token to an upstream
-    /// client. Scoped by `jq::call` around the tool; a call that succeeded
-    /// with this set had its token accepted upstream, which is what lets the
-    /// `_jq` sandbox trust the token's account claim (see
-    /// `jq_sandbox::caller_key`). Every upstream use of the token must go
-    /// through [`McpContext::create_config`] or
-    /// [`McpContext::create_http_client`], which set it.
-    pub(crate) static CREDENTIAL_SENT: std::cell::Cell<bool>;
-}
-
-/// Record that the bearer token is being handed to an upstream client.
-fn note_credential_sent() {
-    let _ = CREDENTIAL_SENT.try_with(|sent| sent.set(true));
 }
 
 /// Delay before the single server-side retry when the upstream message gives
@@ -1066,7 +1052,6 @@ impl McpContext {
     /// Build an SDK `Config` for this request. See `pin_upstream` for
     /// when the three upstream URLs are pinned versus left to the SDK.
     pub fn create_config(&self) -> Arc<longbridge::Config> {
-        note_credential_sent();
         let mut config =
             longbridge::Config::from_oauth(longbridge::oauth::OAuth::from_token(&self.token))
                 .dont_print_quote_packages()
@@ -1107,7 +1092,6 @@ impl McpContext {
     /// the SDK, which resolves REST and each WS URL independently — so they only
     /// stay co-located if the deployment configures its upstreams consistently.
     pub fn create_http_client(&self) -> longbridge::httpclient::HttpClient {
-        note_credential_sent();
         let mut http_config = longbridge::httpclient::HttpClientConfig::from_oauth(
             longbridge::oauth::OAuth::from_token(&self.token),
         );
@@ -6764,52 +6748,35 @@ impl ServerHandler for Longbridge {
         // with the same client as the tool call it belongs to.
         let tool_name = request.name.to_string();
         let retryable = is_read_only_tool(request.name.as_ref());
-        // The account key the token *claims*, for the `_jq` sandbox's worker
-        // limit; `jq::call` trusts it only if the tool's upstream call
-        // succeeded with it. Computed only when a filter is present; `None`
-        // for a token-less call (stdio, unauthenticated).
-        let has_jq = request
-            .arguments
-            .as_ref()
-            .is_some_and(|args| args.get("_jq").is_some_and(|jq| !jq.is_null()));
-        let caller = has_jq
-            .then(|| extract_context(&context).ok())
-            .flatten()
-            .map(|mctx| jq_sandbox::caller_key(&mctx.token));
-        let call = jq::call(
-            request,
-            caller.as_deref(),
-            retryable,
-            |request| async move {
-                use rmcp::handler::server::tool::ToolCallContext;
-                let name = request.name.clone();
-                if !retryable {
-                    return cached_router()
-                        .call(ToolCallContext::new(self, request, context))
-                        .await
-                        .map(|result| wrap_argument_error(&name, result));
-                }
-                // Read-only tools get one server-side retry on an upstream rate
-                // limit (429002/429003), which otherwise surfaces to the model as
-                // an error it has to retry itself. Writes are never retried.
-                let first = ToolCallContext::new(self, request.clone(), context.clone());
-                let (result, delay) = BACKOFF_RETRY
-                    .scope(std::cell::Cell::new(None), async {
-                        let result = cached_router().call(first).await;
-                        (result, BACKOFF_RETRY.with(std::cell::Cell::get))
-                    })
-                    .await;
-                let Some(delay) = delay else {
-                    return result.map(|result| wrap_argument_error(&name, result));
-                };
-                crate::metrics::record_backoff_retry(request.name.as_ref());
-                tokio::time::sleep(delay).await;
-                cached_router()
+        let call = jq::call(request, retryable, |request| async move {
+            use rmcp::handler::server::tool::ToolCallContext;
+            let name = request.name.clone();
+            if !retryable {
+                return cached_router()
                     .call(ToolCallContext::new(self, request, context))
                     .await
-                    .map(|result| wrap_argument_error(&name, result))
-            },
-        );
+                    .map(|result| wrap_argument_error(&name, result));
+            }
+            // Read-only tools get one server-side retry on an upstream rate
+            // limit (429002/429003), which otherwise surfaces to the model as
+            // an error it has to retry itself. Writes are never retried.
+            let first = ToolCallContext::new(self, request.clone(), context.clone());
+            let (result, delay) = BACKOFF_RETRY
+                .scope(std::cell::Cell::new(None), async {
+                    let result = cached_router().call(first).await;
+                    (result, BACKOFF_RETRY.with(std::cell::Cell::get))
+                })
+                .await;
+            let Some(delay) = delay else {
+                return result.map(|result| wrap_argument_error(&name, result));
+            };
+            crate::metrics::record_backoff_retry(request.name.as_ref());
+            tokio::time::sleep(delay).await;
+            cached_router()
+                .call(ToolCallContext::new(self, request, context))
+                .await
+                .map(|result| wrap_argument_error(&name, result))
+        });
         crate::metrics::CURRENT_CLIENT
             .scope(client, async {
                 call.await.map(|result| finish_result(&tool_name, result))
@@ -9547,113 +9514,5 @@ mod jq_catalog_tests {
             assert_eq!(lookup.input_schema, tool.input_schema);
             assert!(lookup.output_schema.is_none());
         }
-    }
-}
-
-/// `jq::call` trusts a token's account claim only when the tool sent the
-/// token upstream (`CREDENTIAL_SENT`) *and* succeeded. That rests on a
-/// rejected token making the tool fail. These drive real tools, through both
-/// upstream paths, against a local upstream that rejects every token.
-#[cfg(test)]
-mod credential_sent_tests {
-    use std::cell::Cell;
-    use std::future::Future;
-
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
-    use super::{CREDENTIAL_SENT, McpContext};
-
-    /// Serve `401` with a Longbridge error body to every request.
-    async fn spawn_rejecting_upstream() -> u16 {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let port = listener.local_addr().unwrap().port();
-        tokio::spawn(async move {
-            while let Ok((mut socket, _)) = listener.accept().await {
-                tokio::spawn(async move {
-                    let mut buf = [0u8; 4096];
-                    let mut data = Vec::new();
-                    while !data.windows(4).any(|w| w == b"\r\n\r\n") {
-                        match socket.read(&mut buf).await {
-                            Ok(0) | Err(_) => return,
-                            Ok(n) => data.extend_from_slice(&buf[..n]),
-                        }
-                    }
-                    let body = r#"{"code":401003,"message":"token invalid"}"#;
-                    let response = format!(
-                        "HTTP/1.1 401 Unauthorized\r\nContent-Type: application/json\r\n\
-                         Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                        body.len()
-                    );
-                    let _ = socket.write_all(response.as_bytes()).await;
-                });
-            }
-        });
-        port
-    }
-
-    fn forged_context() -> McpContext {
-        McpContext {
-            // `us_` pins the upstream to `endpoints::http_url()`, which the
-            // override below points at the rejecting server.
-            token: "us_forged-token".to_string(),
-            language: None,
-            client_user_agent: None,
-            extra_headers: Vec::new(),
-        }
-    }
-
-    /// Run `tool` against the rejecting upstream; assert it sent the token
-    /// and did not succeed.
-    async fn assert_rejected<F, Fut>(name: &str, tool: F)
-    where
-        F: FnOnce(McpContext) -> Fut,
-        Fut: Future<Output = Result<rmcp::model::CallToolResult, rmcp::ErrorData>>,
-    {
-        if McpContext::http_url_override_configured() {
-            eprintln!("skipping {name}: an HTTP upstream override is set");
-            return;
-        }
-        let port = spawn_rejecting_upstream().await;
-        let (result, sent) = crate::endpoints::UPSTREAM_OVERRIDE
-            .scope(
-                format!("http://127.0.0.1:{port}"),
-                CREDENTIAL_SENT.scope(Cell::new(false), async {
-                    let result = tokio::time::timeout(
-                        std::time::Duration::from_secs(10),
-                        tool(forged_context()),
-                    )
-                    .await
-                    .unwrap_or_else(|_| panic!("{name} did not finish"));
-                    (result, CREDENTIAL_SENT.with(Cell::get))
-                }),
-            )
-            .await;
-        assert!(sent, "{name} must mark the token as sent upstream");
-        match result {
-            Err(_) => {}
-            Ok(result) => assert!(
-                result.is_error == Some(true)
-                    || result.content.iter().any(|content| content
-                        .as_text()
-                        .is_some_and(|text| text.text.contains("\"error_code\""))),
-                "{name} succeeded although upstream rejected its token: {result:?}"
-            ),
-        }
-    }
-
-    #[tokio::test]
-    async fn sdk_context_tool_fails_when_upstream_rejects_the_token() {
-        assert_rejected("fund_hot", |mctx| async move {
-            super::fund::fund_hot(&mctx).await
-        })
-        .await;
-    }
-
-    #[tokio::test]
-    async fn http_client_tool_fails_when_upstream_rejects_the_token() {
-        assert_rejected("alert_list", |mctx| async move {
-            super::alert::alert_list(&mctx).await
-        })
-        .await;
     }
 }
