@@ -300,14 +300,24 @@ where
     })
 }
 
-/// A write's own result, unfiltered, plus a note that `_jq` was not applied.
-/// Returning an error instead would hide the outcome (e.g. the order id) of an
-/// operation that already happened, inviting a duplicate retry.
+/// A write's own result, unfiltered, wrapped with a note that `_jq` was not
+/// applied. Returning an error instead would hide the outcome (e.g. the order
+/// id) of an operation that already happened, inviting a duplicate retry.
+///
+/// One content block, not the result plus a separate note: some clients show
+/// only the first block (so a trailing note could go unseen and the full
+/// result be mistaken for filter output, while a leading one would hide the
+/// result), and `response_limit` only trims single-block results.
 fn with_jq_warning(mut result: CallToolResult, message: &str) -> CallToolResult {
-    result.content.push(Content::text(serde_json::json!({
-        "jq_warning": format!("_jq was not applied: {message}"),
-        "hint": "This tool is not read-only and has already executed; its full, unfiltered result is above. Do not call it again to retry the filter."
-    }).to_string()));
+    let unfiltered = take_input(&mut result);
+    result.content = vec![Content::text(
+        serde_json::json!({
+            "jq_warning": format!("_jq was not applied: {message}"),
+            "hint": "This tool is not read-only and has already executed; `result` is its full, unfiltered output. Do not call it again to retry the filter.",
+            "result": unfiltered,
+        })
+        .to_string(),
+    )];
     result
 }
 
@@ -758,15 +768,23 @@ mod tests {
         .await
         .unwrap();
         assert_ne!(result.is_error, Some(true));
-        let texts: Vec<&str> = result
-            .content
-            .iter()
-            .map(|content| content.as_text().unwrap().text.as_str())
-            .collect();
-        assert_eq!(texts.len(), 2, "{texts:?}");
-        assert!(texts[0].contains("\"order_id\":\"701\""), "{texts:?}");
-        assert!(texts[1].contains("jq_warning"), "{texts:?}");
-        assert!(texts[1].contains("already executed"), "{texts:?}");
+        // One block, so clients that show only the first still see both the
+        // outcome and the warning, and `response_limit` still applies.
+        assert_eq!(result.content.len(), 1);
+        let value: Value =
+            serde_json::from_str(&result.content[0].as_text().unwrap().text).unwrap();
+        assert_eq!(value["result"], json!({"a": 1, "order_id": "701"}));
+        assert!(
+            value["jq_warning"]
+                .as_str()
+                .unwrap()
+                .contains("_jq was not applied"),
+            "{value}"
+        );
+        assert!(
+            value["hint"].as_str().unwrap().contains("already executed"),
+            "{value}"
+        );
     }
 
     #[tokio::test]
