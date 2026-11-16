@@ -146,8 +146,9 @@ static TOOL_JQ_ERRORS_TOTAL: LazyLock<IntCounterVec> = LazyLock::new(|| {
         Opts::new(
             "mcp_tool_jq_errors_total",
             "Tool calls whose `_jq` response filter failed (stage=compile|runtime|\
-             sandbox|busy; sandbox = the worker process crashed, busy = no worker \
-             slot was free). Returned to the client as isError:true (a write tool \
+             timeout|sandbox|busy; timeout = the filter held the worker until its \
+             deadline, sandbox = the worker process crashed or could not start, \
+             busy = no worker slot was free). Returned to the client as isError:true (a write tool \
              instead returns its unfiltered result with a `jq_warning`), but NOT \
              counted in mcp_tool_call_errors_total, because the filter runs \
              outside the measured tool body.",

@@ -118,6 +118,17 @@ fn filters_that_used_to_kill_the_server_fail_alone() {
     server.assert_alive();
 
     let deep = format!("{}.{}", "(".repeat(100_000), ")".repeat(100_000));
+    // Just under the 4096-character cap: passes the length check, so it goes
+    // through the big-stack validation compile and then the real worker
+    // (main-thread stack). Either outcome is fine as long as it is this
+    // call's own result and the server survives.
+    let near_cap = format!("{}.{}", "(".repeat(2040), ")".repeat(2040));
+    let (text, is_error) = server.now_with_jq(&near_cap);
+    assert!(
+        !is_error || text.contains("jq_filter_error"),
+        "near-cap nesting: {text}"
+    );
+    server.assert_alive();
     let cases = [
         // Stack overflow in the worker (was: SIGABRT of the server).
         ("def f: 1 + f; f", "jq_filter_error"),

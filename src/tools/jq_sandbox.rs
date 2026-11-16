@@ -33,9 +33,16 @@ use crate::tools::jq;
 
 /// First command-line argument that turns the executable into a jq worker.
 pub(crate) const WORKER_ARG: &str = "__jq-worker";
-/// Wall-clock budget for running one filter. Real filters take milliseconds;
-/// a short budget limits how long a spinning one holds a core.
-const FILTER_TIMEOUT: Duration = Duration::from_secs(2);
+/// Wall-clock budget for running one filter. Real filters take milliseconds
+/// (an 8 MiB response ~0.15 s in release); a short budget limits how long a
+/// spinning one holds the core. Unoptimized test builds on a loaded CI runner
+/// are ~10x slower and spawn a large test binary per filter, so tests get
+/// more; tests of the timeout itself pass their own budget.
+const FILTER_TIMEOUT: Duration = if cfg!(test) {
+    Duration::from_secs(30)
+} else {
+    Duration::from_secs(2)
+};
 /// How long a call waits for a free worker slot before giving up with
 /// [`SandboxError::Busy`].
 const SLOT_TIMEOUT: Duration = Duration::from_secs(3);
@@ -121,7 +128,7 @@ pub(crate) enum SandboxError {
     )]
     Timeout,
     /// No worker slot freed up in time.
-    #[error("too many _jq filters are running; retry shortly")]
+    #[error("too many _jq filters are running, so this one has not run yet; retry shortly")]
     Busy,
     /// The worker died: stack overflow, allocation failure or CPU limit.
     #[error(
@@ -209,7 +216,16 @@ async fn exchange(request: Vec<u8>) -> Result<Reply, SandboxError> {
         .rev()
         .find(|line| !line.trim().is_empty())
         .ok_or_else(|| SandboxError::Worker("no reply".into()))?;
-    serde_json::from_str(line).map_err(|error| SandboxError::Worker(error.to_string()))
+    match serde_json::from_str(line) {
+        Ok(reply) => Ok(reply),
+        // The worker accepts output up to serde_json's 128-level limit, but
+        // the reply wraps it in two more levels. Too-deep output is the
+        // filter's doing, not a worker fault: retrying cannot help.
+        Err(error) if error.to_string().contains("recursion limit") => Ok(Reply::Error(
+            "filter output is nested too deeply (over ~125 levels); return a flatter value".into(),
+        )),
+        Err(error) => Err(SandboxError::Worker(error.to_string())),
+    }
 }
 
 fn worker_command() -> Result<Command, SandboxError> {
@@ -258,6 +274,10 @@ fn limit_resources() {
     {
         use rlimit::{Resource, setrlimit};
         let _ = setrlimit(Resource::AS, WORKER_ADDRESS_SPACE, WORKER_ADDRESS_SPACE);
+        // Stack overflow and allocation failure end in abort(); a core file
+        // per crashed worker (up to the address-space limit) could fill the
+        // node's disk under a flood.
+        let _ = setrlimit(Resource::CORE, 0, 0);
         let _ = setrlimit(Resource::CPU, WORKER_CPU_SECONDS, WORKER_CPU_SECONDS + 1);
     }
 }
@@ -282,25 +302,31 @@ pub(crate) mod tests {
         run(acquire().await.unwrap(), code, input).await
     }
 
-    /// For filters that are heavy on purpose: a debug build on a loaded CI
-    /// runner can exceed the production [`FILTER_TIMEOUT`] where release
-    /// takes a fraction of it, and these tests check limits, not speed.
-    async fn run_heavy(code: &str, input: Value) -> Result<Reply, SandboxError> {
-        run_with_timeout(
-            acquire().await.unwrap(),
-            code,
-            input,
-            Duration::from_secs(30),
-        )
-        .await
-    }
-
     #[tokio::test]
     async fn a_filter_round_trips_through_the_worker() {
         let reply = run_as_test(".a, .b", json!({"a": 1, "b": [true]}))
             .await
             .unwrap();
         assert_eq!(reply, Reply::Values(vec![json!(1), json!([true])]));
+    }
+
+    #[tokio::test]
+    async fn too_deeply_nested_output_is_a_filter_error_not_a_worker_fault() {
+        // 126 and 127 levels pass the worker's own check but not the reply's
+        // two extra levels; deeper output already fails in the worker.
+        for depth in [126, 127, 130] {
+            let reply = run_as_test(
+                &format!("reduce range({depth}) as $i (0; [.])"),
+                json!(null),
+            )
+            .await
+            .unwrap();
+            assert!(matches!(reply, Reply::Error(_)), "{depth}: {reply:?}");
+        }
+        let reply = run_as_test("reduce range(100) as $i (0; [.])", json!(null))
+            .await
+            .unwrap();
+        assert!(matches!(reply, Reply::Values(_)), "{reply:?}");
     }
 
     #[tokio::test]
@@ -329,7 +355,7 @@ pub(crate) mod tests {
     #[cfg(target_os = "linux")]
     #[tokio::test]
     async fn memory_exhaustion_aborts_the_worker_not_the_server() {
-        let error = run_heavy("[range(1e10)] | length", json!(null))
+        let error = run_as_test("[range(1e10)] | length", json!(null))
             .await
             .unwrap_err();
         assert!(matches!(error, SandboxError::Aborted(_)), "{error}");
@@ -351,7 +377,7 @@ pub(crate) mod tests {
             .collect();
         let input = json!({"data": rows});
         assert!(input.to_string().len() > 8 * 1024 * 1024);
-        let reply = run_heavy(
+        let reply = run_as_test(
             "([.data[] | select(.price > 100) | {symbol, price}] | length), (.data | sort_by(-.price) | .[0].symbol)",
             input,
         )

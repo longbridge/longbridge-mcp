@@ -270,7 +270,9 @@ where
                 Failure::Filter(format!("{message}; response shape: {shape}")),
             ),
             Ok(Reply::Error(message)) => ("runtime", Failure::Filter(message)),
-            Err(error @ SandboxError::Timeout) => ("runtime", Failure::Filter(error.to_string())),
+            // Its own stage: a filter that holds the worker until the deadline
+            // is what starves everyone else, and alerts should see it.
+            Err(error @ SandboxError::Timeout) => ("timeout", Failure::Filter(error.to_string())),
             Err(error @ SandboxError::Worker(_)) => {
                 tracing::warn!(tool = %crate::tools::tool_label(&name), %error, "jq worker unavailable");
                 ("sandbox", Failure::Unavailable(error.to_string()))
@@ -322,7 +324,7 @@ impl Failure {
             Self::Busy(message) => (
                 "jq_sandbox_busy",
                 "backoff",
-                format!("{message}; the _jq expression itself is fine"),
+                message,
                 "The tool is read-only, so retrying is safe: retry shortly, or omit _jq.",
             ),
             Self::Unavailable(message) => (
@@ -829,6 +831,26 @@ mod tests {
             result.content[0].as_text().unwrap().text,
             "Not authenticated"
         );
+    }
+
+    #[tokio::test]
+    async fn too_deeply_nested_output_asks_for_a_fix_not_a_retry() {
+        // 126 levels used to surface as a worker fault with `backoff`, which
+        // can never succeed on retry.
+        for depth in [126, 127, 128] {
+            let result = filtered(
+                &format!("reduce range({depth}) as $i (0; [.])"),
+                json!(null),
+            )
+            .await;
+            let text = &result.content[0].as_text().unwrap().text;
+            assert_eq!(result.is_error, Some(true), "{depth}: {text}");
+            assert!(text.contains("jq_filter_error"), "{depth}: {text}");
+            assert!(
+                text.contains("\"recoverable\":\"fix_params\""),
+                "{depth}: {text}"
+            );
+        }
     }
 
     #[tokio::test]
