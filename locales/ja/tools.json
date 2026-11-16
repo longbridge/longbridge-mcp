@@ -68,6 +68,10 @@
         "symbol": "銘柄コード。例：`\"700.HK\"`。正規のコードを使用してください。ゼロ埋めしたコード（例：\"00700.HK\"）はエラーではなく空のレコードを返します"
       }
     },
+    "risk_assessment": {
+      "title": "リスク評価",
+      "description": "ログイン中の会員のリスク評価（適合性）プロファイル、すなわち最新のリスク評価アンケートの結果と関連する投資家資格を取得します。パラメータなし。{risk, pi, approvals, re_authentication, pi_end_at, deadlines, risk_assessment_at, score, strategy_risk_levels[]} を返します：risk は最新アンケートのリスクレベル（例：\"A5\"）、score はそのスコア、risk_assessment_at はその実施日（yyyy-mm-dd）です。pi はプロフェッショナル投資家（PI）ステータスコード、pi_end_at はその終了時刻（サーバーの返却値そのまま、未設定時は 0）です。approvals は資格項目ごとの状態（例：car、cka、risk_audit -> \"pass\"、is_corporate_client -> \"false\"）、deadlines は項目ごとの期限（サーバーの返却値そのまま）、re_authentication は再認証フラグ（未設定時は空）、strategy_risk_levels は会員が取引可能な戦略リスクレベルです。商品を推奨する前に、ユーザーのリスクレベルや資格（デリバティブ知識、PI ステータスなど）がその商品を許容するか確認する際に使用します"
+    },
     "profit_analysis": {
       "title": "損益分析",
       "description": "ポートフォリオの損益分析サマリーを取得します。start/end（yyyy-mm-dd）はペアで渡す必要があり、片方のみの場合は空の結果を返します",

@@ -176,6 +176,7 @@
         "profit_analysis",
         "profit_analysis_detail",
         "profit_analysis_realized",
+        "risk_assessment",
         "short_margin",
         "statement_export",
         "statement_list",

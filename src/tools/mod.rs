@@ -1925,6 +1925,7 @@ const TOOL_ENDPOINTS: &[(&str, u8)] = &[
     ("profit_analysis_realized", V2),
     ("quant_run", V2),
     ("rank_categories", V2),
+    ("risk_assessment", V2),
     ("screener_indicators", V2),
     ("screener_recommend_strategies", V2),
     ("screener_strategy", V2),
@@ -3031,6 +3032,24 @@ impl Longbridge {
         let mctx = extract_context(&ctx)?;
         measured_tool_call("margin_ratio", format!("{p:?}"), || {
             trade::margin_ratio(&mctx, p)
+        })
+        .await
+    }
+
+    /// Get the member's risk assessment (suitability) profile.
+    #[tool(
+        title = "Risk Assessment",
+        annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = true),
+        output_schema = schema_for::<output::RiskAssessmentResponse>(),
+        description = "Get the logged-in member's risk assessment (suitability) profile: the result of the latest risk questionnaire and related investor qualifications. No parameters. Returns {risk, pi, approvals, re_authentication, pi_end_at, deadlines, risk_assessment_at, score, strategy_risk_levels[]}: risk is the risk level of the latest questionnaire (e.g. \"A5\"), score its score and risk_assessment_at its date (yyyy-mm-dd); pi is the professional investor (PI) status code and pi_end_at its end time as the server returns it (0 when not set); approvals maps qualification items to their state (e.g. car, cka, risk_audit -> \"pass\"; is_corporate_client -> \"false\"); deadlines maps items to deadlines as the server returns them; re_authentication is the re-authentication flag (empty when not set); strategy_risk_levels lists the strategy risk levels the member may trade. Use it to check whether the user's risk profile or qualifications (e.g. derivatives knowledge, PI status) allow a product before recommending it."
+    )]
+    async fn risk_assessment(
+        &self,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("risk_assessment", String::new(), || {
+            trade::risk_assessment(&mctx)
         })
         .await
     }
@@ -7759,6 +7778,10 @@ mod tests {
             (
                 "order_detail",
                 include_str!("fixtures/ap/order_detail.expected.json"),
+            ),
+            (
+                "risk_assessment",
+                include_str!("fixtures/ap/risk_assessment.expected.json"),
             ),
         ] {
             let value: serde_json::Value =

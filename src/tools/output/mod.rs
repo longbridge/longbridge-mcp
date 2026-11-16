@@ -21,6 +21,8 @@ pub mod signal;
 pub mod social;
 pub mod us_market;
 
+use std::collections::BTreeMap;
+
 use rmcp::schemars::JsonSchema;
 use rmcp::serde::Serialize;
 
@@ -78,6 +80,32 @@ pub struct MarginRatioResponse {
     pub mm_factor: String,
     /// Forced close-out margin ratio (`fm_factor`).
     pub fm_factor: String,
+}
+
+/// Returned by `risk_assessment`: the member's risk assessment (suitability)
+/// profile, passed through verbatim from the SDK.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct RiskAssessmentResponse {
+    /// Risk level of the latest risk questionnaire, e.g. "A5".
+    pub risk: String,
+    /// Professional investor (PI) status code.
+    pub pi: i32,
+    /// Approval states keyed by item, e.g. `car`/`cka`/`risk_audit` -> "pass",
+    /// `is_corporate_client` -> "false".
+    pub approvals: BTreeMap<String, String>,
+    /// Re-authentication flag as returned by the server; empty when not set.
+    pub re_authentication: String,
+    /// Professional investor status end time, as returned by the server (not
+    /// converted); `0` when not set.
+    pub pi_end_at: i64,
+    /// Deadlines keyed by item, as returned by the server.
+    pub deadlines: BTreeMap<String, i64>,
+    /// Date of the latest risk assessment (`yyyy-mm-dd`), e.g. "2026-10-14".
+    pub risk_assessment_at: String,
+    /// Score of the latest risk questionnaire.
+    pub score: i32,
+    /// Strategy risk levels the member is allowed to trade.
+    pub strategy_risk_levels: Vec<String>,
 }
 
 /// Returned by `stock_positions`: a `list` array (one entry per linked
