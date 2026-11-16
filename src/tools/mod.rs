@@ -1414,7 +1414,14 @@ fn finish_result(name: &str, result: CallToolResult) -> CallToolResult {
         .filter_map(|c| c.as_text())
         .map(|t| t.text.len())
         .sum();
-    let (mut result, truncated) = support::response_limit::limit(result);
+    // A non-read-only tool has already run: the truncation note must not
+    // suggest calling it again (with `_jq`) to get the rest.
+    let hint = if is_read_only_tool(name) {
+        support::response_limit::RestHint::Response
+    } else {
+        support::response_limit::RestHint::None
+    };
+    let (mut result, truncated) = support::response_limit::limit_with(result, hint);
     crate::metrics::record_response_size(tool_label(name), bytes, truncated);
     if truncated {
         tracing::info!(
@@ -9514,5 +9521,46 @@ mod jq_catalog_tests {
             assert_eq!(lookup.input_schema, tool.input_schema);
             assert!(lookup.output_schema.is_none());
         }
+    }
+}
+
+#[cfg(test)]
+mod finish_result_tests {
+    use rmcp::model::{CallToolResult, Content};
+    use serde_json::json;
+
+    fn oversized() -> CallToolResult {
+        let rows: Vec<_> = (0..3000)
+            .map(|i| json!({"id": i, "name": "x".repeat(20)}))
+            .collect();
+        CallToolResult::success(vec![Content::text(json!({"list": rows}).to_string())])
+    }
+
+    fn note(result: &CallToolResult) -> &str {
+        result.content[0]
+            .as_text()
+            .map(|text| text.text.as_str())
+            .unwrap_or_default()
+    }
+
+    /// A trimmed write result must not suggest calling the tool again (with
+    /// `_jq`) to get the rest: the write already ran.
+    #[test]
+    fn a_trimmed_write_result_does_not_suggest_calling_again() {
+        let result = super::finish_result("submit_order", oversized());
+        assert!(note(&result).starts_with("[TRUNCATED"), "{}", note(&result));
+        assert!(
+            note(&result).contains("has already run"),
+            "{}",
+            note(&result)
+        );
+        assert!(!note(&result).contains("_jq `"), "{}", note(&result));
+    }
+
+    /// A read-only result keeps its `_jq` slice suggestion.
+    #[test]
+    fn a_trimmed_read_result_suggests_a_jq_slice() {
+        let result = super::finish_result("quote", oversized());
+        assert!(note(&result).contains("_jq `.list["), "{}", note(&result));
     }
 }

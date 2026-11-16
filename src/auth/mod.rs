@@ -21,19 +21,42 @@ use crate::tools::{self, Longbridge};
 /// body (1 MiB ≈ 350k CJK characters) and a 4096-char `_jq`.
 const MAX_MCP_REQUEST_BYTES: usize = 1024 * 1024;
 
-/// Enforce [`MAX_MCP_REQUEST_BYTES`] on an MCP request. A declared
-/// `Content-Length` over it gets 413 before anything is read. Any other body
-/// (chunked, or a lying length) is read here up to the limit — never past it —
-/// and gets 413 if it would exceed it; within the limit, the bytes read are
-/// passed on. Reading here rather than letting rmcp hit the limit keeps the
-/// status right: rmcp reports a failed body read as 500, a server fault.
+/// Overall deadline for reading one MCP request body. A real request is
+/// a few KB sent at once; this bounds how long a slow sender (a client
+/// dripping one byte at a time) can hold a body-read slot.
+const BODY_READ_TIMEOUT: std::time::Duration = if cfg!(test) {
+    std::time::Duration::from_secs(1)
+} else {
+    std::time::Duration::from_secs(10)
+};
+/// Request bodies being read at once. With [`MAX_MCP_REQUEST_BYTES`] this
+/// bounds the memory held by in-flight bodies at 256 MiB.
+const MAX_CONCURRENT_BODY_READS: usize = 256;
+
+/// Enforce [`MAX_MCP_REQUEST_BYTES`] on an MCP request.
+///
+/// - A declared `Content-Length` over the limit gets 413 before anything is
+///   read.
+/// - Any other body is read here, never past the limit (413 if it would
+///   exceed it), and passed on as one buffer. Each frame is copied out as it
+///   arrives: keeping hyper's frames would pin a whole read buffer (8 KiB or
+///   more) per frame, so a client sending 1-byte chunks could make ~12 KB of
+///   body cost ~90 MB of memory, whatever the byte limit.
+/// - The read must finish within [`BODY_READ_TIMEOUT`] (else 408), and at
+///   most [`MAX_CONCURRENT_BODY_READS`] run at once (else 503 once the same
+///   deadline passes).
+///
+/// Reading here rather than letting rmcp do it also keeps statuses right:
+/// rmcp reports a failed body read as 500, a server fault.
 async fn limit_request_body(
     request: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> Response {
     use axum::http::StatusCode;
     use axum::response::IntoResponse;
-    use http_body_util::{BodyExt, LengthLimitError, Limited};
+    use http_body_util::BodyExt;
+    static BODY_READS: tokio::sync::Semaphore =
+        tokio::sync::Semaphore::const_new(MAX_CONCURRENT_BODY_READS);
     let too_large = || {
         (
             StatusCode::PAYLOAD_TOO_LARGE,
@@ -49,21 +72,54 @@ async fn limit_request_body(
     if declared.is_some_and(|length| length > MAX_MCP_REQUEST_BYTES as u64) {
         return too_large();
     }
-    let (parts, body) = request.into_parts();
-    let bytes = match Limited::new(body, MAX_MCP_REQUEST_BYTES).collect().await {
-        Ok(collected) => collected.to_bytes(),
-        Err(error) if error.is::<LengthLimitError>() => return too_large(),
-        Err(error) => {
+    let deadline = tokio::time::Instant::now() + BODY_READ_TIMEOUT;
+    let Ok(Ok(_permit)) = tokio::time::timeout_at(deadline, BODY_READS.acquire()).await else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "too many requests are being received; retry shortly",
+        )
+            .into_response();
+    };
+    let (parts, mut body) = request.into_parts();
+    // Sized from the declared length when present (already checked against
+    // the limit), so a normal request is read without reallocating.
+    let mut buffer = Vec::with_capacity(declared.map_or(0, |length| length as usize));
+    let read = async {
+        while let Some(frame) = body.frame().await {
+            let frame = frame.map_err(|error| error.to_string())?;
+            if let Some(data) = frame.data_ref() {
+                if buffer.len() + data.len() > MAX_MCP_REQUEST_BYTES {
+                    return Ok(false);
+                }
+                buffer.extend_from_slice(data);
+            }
+        }
+        Ok::<bool, String>(true)
+    };
+    match tokio::time::timeout_at(deadline, read).await {
+        Ok(Ok(true)) => {}
+        Ok(Ok(false)) => return too_large(),
+        Ok(Err(error)) => {
             return (
                 StatusCode::BAD_REQUEST,
                 format!("failed to read request body: {error}"),
             )
                 .into_response();
         }
-    };
+        Err(_) => {
+            return (
+                StatusCode::REQUEST_TIMEOUT,
+                format!(
+                    "request body was not received within {}s",
+                    BODY_READ_TIMEOUT.as_secs()
+                ),
+            )
+                .into_response();
+        }
+    }
     next.run(axum::extract::Request::from_parts(
         parts,
-        axum::body::Body::from(bytes),
+        axum::body::Body::from(buffer),
     ))
     .await
 }
@@ -497,6 +553,47 @@ mod tests {
             (MAX_MCP_REQUEST_BYTES..=MAX_MCP_REQUEST_BYTES + 2 * CHUNK).contains(&read),
             "read {read} bytes of a {TOTAL}-byte body"
         );
+    }
+
+    /// A body that never finishes is given up on at the read deadline instead
+    /// of holding a body-read slot (and its buffer) indefinitely.
+    #[tokio::test]
+    async fn a_body_that_never_finishes_times_out() {
+        use futures_util::StreamExt;
+        let stream = futures_util::stream::once(async {
+            Ok::<_, std::io::Error>(axum::body::Bytes::from_static(b"{"))
+        })
+        .chain(futures_util::stream::pending());
+        let started = std::time::Instant::now();
+        let response = router()
+            .oneshot(mcp_post(Body::from_stream(stream)))
+            .await
+            .expect("router should respond");
+        assert_eq!(response.status(), StatusCode::REQUEST_TIMEOUT);
+        assert!(started.elapsed() < std::time::Duration::from_secs(5));
+    }
+
+    /// Many tiny frames are reassembled into the right bytes.
+    #[tokio::test]
+    async fn a_body_in_one_byte_frames_is_passed_on_intact() {
+        let initialize = serde_json::json!({
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {"protocolVersion": "2025-03-26", "capabilities": {},
+                       "clientInfo": {"name": "frames-test", "version": "1"}}
+        })
+        .to_string();
+        let frames: Vec<Result<axum::body::Bytes, std::io::Error>> = initialize
+            .into_bytes()
+            .into_iter()
+            .map(|byte| Ok(axum::body::Bytes::from(vec![byte])))
+            .collect();
+        let response = router()
+            .oneshot(mcp_post(Body::from_stream(futures_util::stream::iter(
+                frames,
+            ))))
+            .await
+            .expect("router should respond");
+        assert_eq!(response.status(), StatusCode::OK);
     }
 
     /// Ordinary MCP traffic is unaffected.

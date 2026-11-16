@@ -43,13 +43,16 @@ pub enum RestHint {
     None,
 }
 
-/// Trim `result` to [`MAX_RESPONSE_BYTES`] when it is a successful JSON result
-/// over the limit. Returns the result and whether it was trimmed.
+/// [`limit_with`] for a tool's own response ([`RestHint::Response`]); tests
+/// use it, callers pick the hint explicitly.
+#[cfg(test)]
 pub fn limit(result: CallToolResult) -> (CallToolResult, bool) {
     limit_with(result, RestHint::Response)
 }
 
-/// [`limit`] with the given way of pointing at the rest of a cut array.
+/// Trim `result` to [`MAX_RESPONSE_BYTES`] when it is a successful JSON result
+/// over the limit, pointing at the rest of a cut array as `hint` says.
+/// Returns the result and whether it was trimmed.
 pub fn limit_with(mut result: CallToolResult, hint: RestHint) -> (CallToolResult, bool) {
     if result.is_error == Some(true) || result.content.len() != 1 {
         return (result, false);

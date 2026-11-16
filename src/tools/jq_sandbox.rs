@@ -115,7 +115,7 @@ pub(crate) enum Reply {
     /// size limit.
     Values(Vec<Value>),
     /// Output over the response size limit, already trimmed in the worker by
-    /// `response_limit::limit`: the content blocks to return (a truncation
+    /// `response_limit::limit_with`: the content blocks to return (a truncation
     /// note, then the trimmed JSON). Trimming happens here, not in the
     /// server, because its cost is quadratic in the number of arrays and the
     /// filter chooses that shape; in the worker it is bounded by the

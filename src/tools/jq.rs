@@ -39,7 +39,7 @@ const MAX_VALIDATIONS: usize = 4;
 const MAX_OUTPUT_BYTES: usize = 8 * 1024 * 1024;
 /// What the server may receive back: output over the response size limit is
 /// trimmed in the worker (see [`Reply::Trimmed`]), so the server never runs
-/// `response_limit::limit`'s trimming — quadratic in the number of arrays,
+/// `response_limit::limit_with`'s trimming — quadratic in the number of arrays,
 /// which `_jq` lets a caller choose (a 47 KB output took 3 s of a tokio
 /// worker) — and never holds a multi-MiB output.
 const MAX_RESPONSE_BYTES: usize = crate::tools::support::response_limit::MAX_RESPONSE_BYTES;
