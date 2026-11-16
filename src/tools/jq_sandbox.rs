@@ -102,6 +102,9 @@ async fn acquire_until(deadline: Instant) -> Result<Slot, SandboxError> {
 struct Request<C> {
     code: C,
     input: Value,
+    /// Whether the tool is read-only, which decides how a truncation note
+    /// may point at the rest of trimmed output.
+    read_only: bool,
 }
 
 /// Outcome of evaluating a filter, written by the worker as one JSON line.
@@ -167,7 +170,7 @@ pub(crate) fn is_worker_invocation() -> bool {
 pub(crate) fn worker_main() -> ! {
     limit_resources();
     let reply = match serde_json::from_reader::<_, Request<String>>(std::io::stdin().lock()) {
-        Ok(request) => jq::evaluate(&request.code, request.input),
+        Ok(request) => jq::evaluate(&request.code, request.input, request.read_only),
         // In practice a tool response nested too deeply for serde_json's
         // default limit: not the expression's fault, so say how to get it.
         Err(error) => Reply::Error(format!(
@@ -184,19 +187,29 @@ pub(crate) fn worker_main() -> ! {
 
 /// Evaluate `code` on `input` in a sandboxed worker process, in a slot
 /// reserved with [`acquire`]; the slot is released when this returns.
-pub(crate) async fn run(slot: Slot, code: &str, input: Value) -> Result<Reply, SandboxError> {
-    run_with_timeout(slot, code, input, FILTER_TIMEOUT).await
+pub(crate) async fn run(
+    slot: Slot,
+    code: &str,
+    input: Value,
+    read_only: bool,
+) -> Result<Reply, SandboxError> {
+    run_with_timeout(slot, code, input, read_only, FILTER_TIMEOUT).await
 }
 
 async fn run_with_timeout(
     _slot: Slot,
     code: &str,
     input: Value,
+    read_only: bool,
     timeout: Duration,
 ) -> Result<Reply, SandboxError> {
     let deadline = Instant::now() + timeout;
-    let request = serde_json::to_vec(&Request { code, input })
-        .map_err(|error| SandboxError::Worker(error.to_string()))?;
+    let request = serde_json::to_vec(&Request {
+        code,
+        input,
+        read_only,
+    })
+    .map_err(|error| SandboxError::Worker(error.to_string()))?;
     // Dropping `exchange` on timeout drops the child, and `kill_on_drop`
     // SIGKILLs it, so a spinning filter does not outlive its deadline.
     tokio::time::timeout_at(deadline, exchange(request))
@@ -325,7 +338,7 @@ pub(crate) mod tests {
     }
 
     async fn run_as_test(code: &str, input: Value) -> Result<Reply, SandboxError> {
-        run(acquire().await.unwrap(), code, input).await
+        run(acquire().await.unwrap(), code, input, true).await
     }
 
     #[tokio::test]
@@ -362,7 +375,7 @@ pub(crate) mod tests {
         // trimming or is killed; the server never gets a big output to trim.
         let code = r#"[range(4000)] | map({key: "k\(.)", value: [1, 1]}) | from_entries"#;
         let slot = acquire().await.unwrap();
-        match run_with_timeout(slot, code, json!(null), Duration::from_secs(2)).await {
+        match run_with_timeout(slot, code, json!(null), true, Duration::from_secs(2)).await {
             Err(SandboxError::Timeout) => {}
             Ok(Reply::Trimmed(blocks)) => {
                 let bytes: usize = blocks.iter().map(String::len).sum();
@@ -388,6 +401,7 @@ pub(crate) mod tests {
             slot,
             "last(repeat(1))",
             json!(null),
+            true,
             Duration::from_millis(500),
         )
         .await
@@ -443,7 +457,9 @@ pub(crate) mod tests {
             let waiting = acquire_until(Instant::now() + Duration::from_millis(200)).await;
             assert!(matches!(waiting, Err(SandboxError::Busy)));
             drop(held);
-            let reply = run(acquire().await.unwrap(), ".", json!(1)).await.unwrap();
+            let reply = run(acquire().await.unwrap(), ".", json!(1), true)
+                .await
+                .unwrap();
             assert_eq!(reply, Reply::Values(vec![json!(1)]));
         })
         .await;

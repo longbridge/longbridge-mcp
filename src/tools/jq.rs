@@ -300,7 +300,7 @@ where
     // `[range(1e9)]` exhausts memory). See `jq_sandbox`.
     let (stage, failure) = match jq_sandbox::acquire().await {
         Err(error) => ("busy", Failure::Busy(error.to_string())),
-        Ok(slot) => match jq_sandbox::run(slot, &code, input).await {
+        Ok(slot) => match jq_sandbox::run(slot, &code, input, read_only).await {
             Ok(Reply::Values(values)) => return Ok(finish(result, values)),
             Ok(Reply::Trimmed(blocks)) => {
                 result.content = blocks.into_iter().map(Content::text).collect();
@@ -583,14 +583,14 @@ fn response_value(mut values: Vec<Value>) -> Value {
 /// Compile and run `code` on `input`. Called inside the sandbox worker
 /// process; the server itself only compiles (to reject bad filters before the
 /// tool runs) and never evaluates.
-pub(super) fn evaluate(code: &str, input: Value) -> Reply {
+pub(super) fn evaluate(code: &str, input: Value, read_only: bool) -> Reply {
     match compile(code) {
-        Ok(filter) => run_filter(filter, input),
+        Ok(filter) => run_filter(filter, input, read_only),
         Err(error) => Reply::Error(error.message.to_string()),
     }
 }
 
-fn run_filter(filter: Filter, input: Value) -> Reply {
+fn run_filter(filter: Filter, input: Value, read_only: bool) -> Reply {
     let input: Val = match serde_json::from_value(input) {
         Ok(input) => input,
         Err(error) => return Reply::Error(error.to_string()),
@@ -629,29 +629,39 @@ fn run_filter(filter: Filter, input: Value) -> Reply {
     if bytes <= MAX_RESPONSE_BYTES {
         return Reply::Values(values);
     }
-    trim(response_value(values))
+    trim(response_value(values), read_only)
 }
 
 /// Trim an over-limit response the way every tool result is trimmed, inside
-/// the worker (see [`Reply::Trimmed`]).
-fn trim(value: Value) -> Reply {
-    let text = value.to_string();
-    let (trimmed, _) =
-        crate::tools::support::response_limit::limit(CallToolResult::success(vec![Content::text(
-            text,
-        )]));
+/// the worker (see [`Reply::Trimmed`]). The note's pointer to the rest is
+/// relative to the filter output, so it says to append to the filter — or,
+/// for a tool that is not read-only, offers nothing that means calling again.
+fn trim(value: Value, read_only: bool) -> Reply {
+    use crate::tools::support::response_limit::{RestHint, limit_with};
+    let hint = if read_only {
+        RestHint::AppendToFilter
+    } else {
+        RestHint::None
+    };
+    let (trimmed, _) = limit_with(
+        CallToolResult::success(vec![Content::text(value.to_string())]),
+        hint,
+    );
     let blocks: Vec<String> = trimmed
         .content
         .iter()
         .filter_map(|content| content.as_text().map(|text| text.text.clone()))
         .collect();
-    // `limit` cannot shrink output without arrays (one huge string, say);
-    // such output must not go back to the server either. The allowance covers
-    // the truncation note.
-    if blocks.iter().map(String::len).sum::<usize>() > 2 * MAX_RESPONSE_BYTES {
+    // `limit` cannot shrink output without arrays to cut (one huge string,
+    // say) and then returns it whole under a "truncated" note that names no
+    // cut. Such output is refused instead: it would blow the client's budget
+    // and wrongly claim to be partial. The slack covers the `_truncated`
+    // marker `limit` adds to a properly trimmed object.
+    const MARKER_SLACK: usize = 4_096;
+    if blocks.last().map_or(0, String::len) > MAX_RESPONSE_BYTES + MARKER_SLACK {
         return Reply::Error(format!(
-            "output limit exceeded: over {MAX_RESPONSE_BYTES} bytes with nothing to trim; \
-             narrow the _jq expression"
+            "output limit exceeded: over {MAX_RESPONSE_BYTES} bytes and it cannot be trimmed \
+             (no array to cut); narrow the _jq expression"
         ));
     }
     Reply::Trimmed(blocks)
@@ -798,7 +808,7 @@ mod tests {
             .compile(modules)
             .expect("halt(1) must compile with unrestricted builtins");
         assert_eq!(
-            run_filter(filter, json!({"a": 1})),
+            run_filter(filter, json!({"a": 1}), true),
             Reply::Error("halt is not allowed in _jq".into())
         );
     }
@@ -946,6 +956,11 @@ mod tests {
             .collect();
         assert_eq!(texts.len(), 2, "{texts:?}");
         assert!(texts[0].starts_with("[TRUNCATED"), "{}", texts[0]);
+        // The slice to the rest is relative to the filter output, so it must
+        // be appended to the filter, not offered as a standalone `_jq` (which
+        // on the original response would select unrelated data).
+        assert!(texts[0].contains("append `| .["), "{}", texts[0]);
+        assert!(!texts[0].contains("_jq `"), "{}", texts[0]);
         let kept = serde_json::from_str::<Value>(texts[1]).unwrap();
         assert!(kept.as_array().unwrap().len() < 3000);
         assert!(texts[1].len() <= MAX_RESPONSE_BYTES, "{}", texts[1].len());
@@ -958,12 +973,36 @@ mod tests {
 
     #[tokio::test]
     async fn untrimmable_output_over_the_limit_is_refused() {
-        // No array to cut: it must not go back to the server whole.
-        let result = filtered(r#""x" * 100000"#, json!(null)).await;
-        let text = &result.content[0].as_text().unwrap().text;
-        assert_eq!(result.is_error, Some(true), "{text}");
-        assert!(text.contains("nothing to trim"), "{text}");
-        assert!(text.contains("\"recoverable\":\"fix_params\""), "{text}");
+        // No array to cut: it must not come back whole under a "truncated"
+        // note, neither just over the limit nor far over it.
+        for code in [r#""x" * 50000 | {s: .}"#, r#""x" * 100000"#] {
+            let result = filtered(code, json!(null)).await;
+            let text = &result.content[0].as_text().unwrap().text;
+            assert_eq!(result.is_error, Some(true), "{code}: {text}");
+            assert!(text.contains("cannot be trimmed"), "{code}: {text}");
+            assert!(
+                text.contains("\"recoverable\":\"fix_params\""),
+                "{code}: {text}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn trimmed_write_output_does_not_suggest_calling_again() {
+        let result = super::call(
+            request(json!(r#"[range(3000)] | map({id: ., name: ("x" * 20)})"#)),
+            false,
+            |_| async { Ok(super::super::tool_result("{}".to_string())) },
+        )
+        .await
+        .unwrap();
+        let note = &result.content[0].as_text().unwrap().text;
+        assert!(note.starts_with("[TRUNCATED"), "{note}");
+        assert!(note.contains("has already run"), "{note}");
+        assert!(
+            !note.contains("_jq `") && !note.contains("append"),
+            "{note}"
+        );
     }
 
     #[tokio::test]
