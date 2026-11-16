@@ -1,7 +1,9 @@
 /target
 .DS_Store
 docs/superpowers
-/tests
+# Local test scripts and reports stay private; Rust integration tests are tracked.
+/tests/*
+!/tests/*.rs
 /.agents
 skills-lock.json
 scripts/__pycache__

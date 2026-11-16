@@ -12,6 +12,118 @@ use rmcp::transport::streamable_http_server::{StreamableHttpServerConfig, Stream
 
 use crate::tools::{self, Longbridge};
 
+/// Largest MCP request body accepted. rmcp reads the whole body into memory
+/// before parsing it, and nothing else bounds it (axum's default limit only
+/// applies to axum's own extractors), so without this a few concurrent
+/// multi-hundred-MB POSTs — `/agent` needs no token — push the pod past its
+/// memory limit. Real requests are a JSON-RPC tool call: ~2.4 KB on average in
+/// production (Istio, 7 days); the largest legitimate arguments are a topic
+/// body (1 MiB ≈ 350k CJK characters) and a 4096-char `_jq`.
+const MAX_MCP_REQUEST_BYTES: usize = 1024 * 1024;
+
+/// Overall deadline for reading one MCP request body. A real request is
+/// a few KB sent at once; this bounds how long a slow sender (a client
+/// dripping one byte at a time) can hold a body-read slot.
+const BODY_READ_TIMEOUT: std::time::Duration = if cfg!(test) {
+    std::time::Duration::from_secs(1)
+} else {
+    std::time::Duration::from_secs(10)
+};
+/// Request bodies being read at once. With [`MAX_MCP_REQUEST_BYTES`] this
+/// bounds the memory held by in-flight bodies at 256 MiB.
+const MAX_CONCURRENT_BODY_READS: usize = 256;
+
+/// Enforce [`MAX_MCP_REQUEST_BYTES`] on an MCP request.
+///
+/// - A declared `Content-Length` over the limit gets 413 before anything is
+///   read.
+/// - Any other body is read here, never past the limit (413 if it would
+///   exceed it), and passed on as one buffer. Each frame is copied out as it
+///   arrives: keeping hyper's frames would pin a whole read buffer (8 KiB or
+///   more) per frame, so a client sending 1-byte chunks could make ~12 KB of
+///   body cost ~90 MB of memory, whatever the byte limit.
+/// - The read must finish within [`BODY_READ_TIMEOUT`] (else 408), and at
+///   most [`MAX_CONCURRENT_BODY_READS`] run at once (else 503 once the same
+///   deadline passes).
+///
+/// Reading here rather than letting rmcp do it also keeps statuses right:
+/// rmcp reports a failed body read as 500, a server fault.
+async fn limit_request_body(
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    use axum::http::StatusCode;
+    use axum::response::IntoResponse;
+    use http_body_util::BodyExt;
+    static BODY_READS: tokio::sync::Semaphore =
+        tokio::sync::Semaphore::const_new(MAX_CONCURRENT_BODY_READS);
+    let too_large = || {
+        (
+            StatusCode::PAYLOAD_TOO_LARGE,
+            format!("request body is larger than {MAX_MCP_REQUEST_BYTES} bytes"),
+        )
+            .into_response()
+    };
+    let declared = request
+        .headers()
+        .get(axum::http::header::CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok());
+    if declared.is_some_and(|length| length > MAX_MCP_REQUEST_BYTES as u64) {
+        return too_large();
+    }
+    let deadline = tokio::time::Instant::now() + BODY_READ_TIMEOUT;
+    let Ok(Ok(_permit)) = tokio::time::timeout_at(deadline, BODY_READS.acquire()).await else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "too many requests are being received; retry shortly",
+        )
+            .into_response();
+    };
+    let (parts, mut body) = request.into_parts();
+    // Sized from the declared length when present (already checked against
+    // the limit), so a normal request is read without reallocating.
+    let mut buffer = Vec::with_capacity(declared.map_or(0, |length| length as usize));
+    let read = async {
+        while let Some(frame) = body.frame().await {
+            let frame = frame.map_err(|error| error.to_string())?;
+            if let Some(data) = frame.data_ref() {
+                if buffer.len() + data.len() > MAX_MCP_REQUEST_BYTES {
+                    return Ok(false);
+                }
+                buffer.extend_from_slice(data);
+            }
+        }
+        Ok::<bool, String>(true)
+    };
+    match tokio::time::timeout_at(deadline, read).await {
+        Ok(Ok(true)) => {}
+        Ok(Ok(false)) => return too_large(),
+        Ok(Err(error)) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                format!("failed to read request body: {error}"),
+            )
+                .into_response();
+        }
+        Err(_) => {
+            return (
+                StatusCode::REQUEST_TIMEOUT,
+                format!(
+                    "request body was not received within {}s",
+                    BODY_READ_TIMEOUT.as_secs()
+                ),
+            )
+                .into_response();
+        }
+    }
+    next.run(axum::extract::Request::from_parts(
+        parts,
+        axum::body::Body::from(buffer),
+    ))
+    .await
+}
+
 /// Per-locale embedded translation files. Each entry is one
 /// `(language code, content of locales/<code>/<filename>)` pair.
 const TOOL_LOCALES: &[(&str, &str)] = &[
@@ -316,6 +428,9 @@ pub fn create_router(state: Arc<AppState>) -> Router {
                     .disable_allowed_hosts(),
             );
             tower::ServiceBuilder::new()
+                // Outermost, so oversized bodies are cut off before auth or
+                // rmcp read anything.
+                .layer(axum::middleware::from_fn(limit_request_body))
                 .layer(axum::middleware::from_fn(
                     move |req: axum::extract::Request, next: axum::middleware::Next| {
                         let base_url = base_url.clone();
@@ -380,7 +495,125 @@ mod tests {
     use axum::http::{Request, StatusCode, header};
     use tower::ServiceExt;
 
-    use super::{AppState, create_router};
+    use super::{AppState, MAX_MCP_REQUEST_BYTES, create_router};
+
+    fn mcp_post(body: Body) -> Request<Body> {
+        Request::post("/agent")
+            .header(header::HOST, "127.0.0.1:8000")
+            .header(header::CONTENT_TYPE, "application/json")
+            .header(header::ACCEPT, "application/json, text/event-stream")
+            .body(body)
+            .expect("request should build")
+    }
+
+    fn router() -> axum::Router {
+        create_router(Arc::new(AppState {
+            base_url: "http://127.0.0.1:8000".to_string(),
+        }))
+    }
+
+    /// A declared length over the limit is refused before anything is read.
+    #[tokio::test]
+    async fn oversized_mcp_request_with_content_length_gets_413() {
+        let body = vec![b' '; MAX_MCP_REQUEST_BYTES + 1];
+        let mut request = mcp_post(Body::from(body));
+        request
+            .headers_mut()
+            .insert(header::CONTENT_LENGTH, (MAX_MCP_REQUEST_BYTES + 1).into());
+        let response = router()
+            .oneshot(request)
+            .await
+            .expect("router should respond");
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    }
+
+    /// A chunked body with no length is read only up to the limit, not
+    /// buffered whole: `/agent` needs no token, so before this a few
+    /// concurrent multi-hundred-MB bodies could exhaust the pod's memory.
+    #[tokio::test]
+    async fn oversized_chunked_mcp_request_is_cut_off_at_the_limit() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        const CHUNK: usize = 64 * 1024;
+        const TOTAL: usize = 64 * 1024 * 1024;
+        let produced = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&produced);
+        let stream = futures_util::stream::iter((0..TOTAL / CHUNK).map(move |_| {
+            counter.fetch_add(CHUNK, Ordering::Relaxed);
+            Ok::<_, std::io::Error>(axum::body::Bytes::from(vec![b' '; CHUNK]))
+        }));
+        let response = router()
+            .oneshot(mcp_post(Body::from_stream(stream)))
+            .await
+            .expect("router should respond");
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+        // Read up to the limit (so it was the limit that stopped it, not an
+        // earlier rejection), and not much further.
+        let read = produced.load(Ordering::Relaxed);
+        assert!(
+            (MAX_MCP_REQUEST_BYTES..=MAX_MCP_REQUEST_BYTES + 2 * CHUNK).contains(&read),
+            "read {read} bytes of a {TOTAL}-byte body"
+        );
+    }
+
+    /// A body that never finishes is given up on at the read deadline instead
+    /// of holding a body-read slot (and its buffer) indefinitely.
+    #[tokio::test]
+    async fn a_body_that_never_finishes_times_out() {
+        use futures_util::StreamExt;
+        let stream = futures_util::stream::once(async {
+            Ok::<_, std::io::Error>(axum::body::Bytes::from_static(b"{"))
+        })
+        .chain(futures_util::stream::pending());
+        let started = std::time::Instant::now();
+        let response = router()
+            .oneshot(mcp_post(Body::from_stream(stream)))
+            .await
+            .expect("router should respond");
+        assert_eq!(response.status(), StatusCode::REQUEST_TIMEOUT);
+        assert!(started.elapsed() < std::time::Duration::from_secs(5));
+    }
+
+    /// Many tiny frames are reassembled into the right bytes.
+    #[tokio::test]
+    async fn a_body_in_one_byte_frames_is_passed_on_intact() {
+        let initialize = serde_json::json!({
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {"protocolVersion": "2025-03-26", "capabilities": {},
+                       "clientInfo": {"name": "frames-test", "version": "1"}}
+        })
+        .to_string();
+        let frames: Vec<Result<axum::body::Bytes, std::io::Error>> = initialize
+            .into_bytes()
+            .into_iter()
+            .map(|byte| Ok(axum::body::Bytes::from(vec![byte])))
+            .collect();
+        let response = router()
+            .oneshot(mcp_post(Body::from_stream(futures_util::stream::iter(
+                frames,
+            ))))
+            .await
+            .expect("router should respond");
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    /// Ordinary MCP traffic is unaffected.
+    #[tokio::test]
+    async fn small_mcp_request_passes_the_body_limit() {
+        let initialize = serde_json::json!({
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {"protocolVersion": "2025-03-26", "capabilities": {},
+                       "clientInfo": {"name": "limit-test", "version": "1"}}
+        });
+        let response = router()
+            .oneshot(mcp_post(Body::from(initialize.to_string())))
+            .await
+            .expect("router should respond");
+        let status = response.status();
+        let body = axum::body::to_bytes(response.into_body(), 64 * 1024)
+            .await
+            .expect("body");
+        assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
+    }
 
     /// `/oauth2/authorize` must be routed to the redirect handler, not swallowed
     /// by the Bearer-protected root MCP fallback, and the redirect must not be

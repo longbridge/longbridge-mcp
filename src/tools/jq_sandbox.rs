@@ -1,0 +1,467 @@
+//! Out-of-process evaluation of `_jq` filters.
+//!
+//! `_jq` is code written by an AI client, possibly under prompt injection, and
+//! jaq has no step, memory or recursion limit. Run in-process, one filter could
+//! abort the whole server: `def f: 1 + f; f` overflows the stack (SIGABRT),
+//! `[range(1e9)]` exhausts memory, and a timed-out `spawn_blocking` thread
+//! cannot be cancelled. So every filter runs in a short-lived child process —
+//! this same executable started with [`WORKER_ARG`] — under an address-space
+//! and CPU rlimit, with an empty environment, and is killed at the deadline.
+//! A crash there only fails that one call.
+//!
+//! Worker slots are limited by CPU, not by caller: at most [`MAX_WORKERS`]
+//! filters run at once, first come first served. The server does not verify
+//! bearer tokens and several tools succeed without upstream ever checking
+//! them, so a per-caller limit could be dodged by forging tokens; a global cap
+//! cannot. Under a flood of hostile filters `_jq` calls back off
+//! ([`SandboxError::Busy`]), but the workers can never take more than their
+//! share of the pod's CPU, so the server itself and calls without `_jq` are
+//! unaffected.
+
+use std::process::{ExitStatus, Stdio};
+use std::time::Duration;
+
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use tokio::io::AsyncWriteExt;
+use tokio::process::Command;
+use tokio::sync::{Semaphore, SemaphorePermit};
+use tokio::time::Instant;
+
+use crate::tools::jq;
+
+/// First command-line argument that turns the executable into a jq worker.
+pub(crate) const WORKER_ARG: &str = "__jq-worker";
+/// Wall-clock budget for running one filter. Real filters take milliseconds
+/// (an 8 MiB response ~0.15 s in release); a short budget limits how long a
+/// spinning one holds the core. Unoptimized test builds on a loaded CI runner
+/// are ~10x slower and spawn a large test binary per filter, so tests get
+/// more; tests of the timeout itself pass their own budget.
+const FILTER_TIMEOUT: Duration = if cfg!(test) {
+    Duration::from_secs(30)
+} else {
+    Duration::from_secs(2)
+};
+/// How long a call waits for a free worker slot before giving up with
+/// [`SandboxError::Busy`].
+const SLOT_TIMEOUT: Duration = Duration::from_secs(3);
+/// Concurrent workers. Each can spin one core until [`FILTER_TIMEOUT`], and
+/// workers share the server's cgroup CPU quota (2 cores in production), so
+/// this is sized against CPU: hostile filters can take at most one core,
+/// whatever the request rate. Memory worst case is 1 x
+/// [`WORKER_ADDRESS_SPACE`] = 256 MiB of the 2000Mi limit.
+///
+/// Unit tests run many filters concurrently, so they get more slots; tests of
+/// a saturated sandbox inject their own semaphore (see `tests::with_slots`).
+const MAX_WORKERS: usize = if cfg!(test) { 64 } else { 1 };
+/// Address-space limit of a worker. Responses are at most a few MiB, so a
+/// legitimate filter stays far below it; a runaway aggregate fails allocation
+/// and aborts the worker instead of growing until the pod is OOM-killed.
+const WORKER_ADDRESS_SPACE: u64 = 256 * 1024 * 1024;
+/// CPU-seconds backstop in case the parent dies before killing the worker.
+/// Unoptimized test builds are ~10x slower (an 8 MiB filter takes ~0.15 s in
+/// release, 1-2 s in debug), so tests get more.
+const WORKER_CPU_SECONDS: u64 = if cfg!(test) { 30 } else { 3 };
+
+static WORKERS: Semaphore = Semaphore::const_new(MAX_WORKERS);
+
+#[cfg(test)]
+tokio::task_local! {
+    /// Replaces [`WORKERS`] within a test's scope.
+    static TEST_WORKERS: &'static Semaphore;
+}
+
+fn workers() -> &'static Semaphore {
+    #[cfg(test)]
+    if let Ok(semaphore) = TEST_WORKERS.try_with(|semaphore| *semaphore) {
+        return semaphore;
+    }
+    &WORKERS
+}
+
+/// A reserved worker slot. Held from reservation until the filter finishes.
+pub(crate) struct Slot {
+    _permit: SemaphorePermit<'static>,
+}
+
+/// Reserve a worker slot, waiting at most [`SLOT_TIMEOUT`].
+pub(crate) async fn acquire() -> Result<Slot, SandboxError> {
+    acquire_until(Instant::now() + SLOT_TIMEOUT).await
+}
+
+async fn acquire_until(deadline: Instant) -> Result<Slot, SandboxError> {
+    let permit = tokio::time::timeout_at(deadline, workers().acquire())
+        .await
+        .map_err(|_| SandboxError::Busy)?
+        .map_err(|_| SandboxError::Busy)?;
+    Ok(Slot { _permit: permit })
+}
+
+/// Request sent to a worker on stdin.
+#[derive(Serialize, Deserialize)]
+struct Request<C> {
+    code: C,
+    input: Value,
+    /// Whether the tool is read-only, which decides how a truncation note
+    /// may point at the rest of trimmed output.
+    read_only: bool,
+}
+
+/// Outcome of evaluating a filter, written by the worker as one JSON line.
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum Reply {
+    /// All filter outputs, in order; their response text fits the response
+    /// size limit.
+    Values(Vec<Value>),
+    /// Output over the response size limit, already trimmed in the worker by
+    /// `response_limit::limit_with`: the content blocks to return (a truncation
+    /// note, then the trimmed JSON). Trimming happens here, not in the
+    /// server, because its cost is quadratic in the number of arrays and the
+    /// filter chooses that shape; in the worker it is bounded by the
+    /// deadline and the rlimits.
+    Trimmed(Vec<String>),
+    /// jq runtime error (e.g. `cannot index number with "a"`), already
+    /// truncated; the caller appends the response shape.
+    FilterError(String),
+    /// Any other failure (output limit, halt, malformed input).
+    Error(String),
+}
+
+/// Why a filter produced no [`Reply`].
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum SandboxError {
+    /// The deadline passed while the filter was running.
+    #[error(
+        "filter timed out after {}s; narrow the _jq expression (avoid unbounded ranges or repeats)",
+        FILTER_TIMEOUT.as_secs()
+    )]
+    Timeout,
+    /// No worker slot freed up in time.
+    #[error("too many _jq filters are running, so this one has not run yet; retry shortly")]
+    Busy,
+    /// The worker died: stack overflow, allocation failure or CPU limit.
+    #[error(
+        "filter aborted ({0}): it exceeded the sandbox's memory, CPU or recursion limits; \
+         narrow the _jq expression (avoid deep recursion and huge aggregates)"
+    )]
+    Aborted(String),
+    /// The worker could not be started or answered with garbage.
+    #[error("filter worker failed: {0}")]
+    Worker(String),
+}
+
+impl From<std::io::Error> for SandboxError {
+    fn from(error: std::io::Error) -> Self {
+        Self::Worker(error.to_string())
+    }
+}
+
+/// Whether this process was started as a jq worker.
+pub(crate) fn is_worker_invocation() -> bool {
+    std::env::args_os()
+        .nth(1)
+        .is_some_and(|arg| arg == WORKER_ARG)
+}
+
+/// Worker process entry point: read one request from stdin, evaluate it,
+/// write the reply to stdout and exit. Runs before any runtime, logger or
+/// network setup, so a filter has nothing else to reach.
+pub(crate) fn worker_main() -> ! {
+    limit_resources();
+    let reply = match serde_json::from_reader::<_, Request<String>>(std::io::stdin().lock()) {
+        Ok(request) => jq::evaluate(&request.code, request.input, request.read_only),
+        // In practice a tool response nested too deeply for serde_json's
+        // default limit: not the expression's fault, so say how to get it.
+        Err(error) => Reply::Error(format!(
+            "the tool response could not be passed to the filter ({error}); call again \
+             without _jq to get the full response"
+        )),
+    };
+    let line = serde_json::to_string(&reply).expect("a worker reply must serialize");
+    let mut stdout = std::io::stdout().lock();
+    let written = std::io::Write::write_all(&mut stdout, format!("{line}\n").as_bytes())
+        .and_then(|()| std::io::Write::flush(&mut stdout));
+    std::process::exit(if written.is_ok() { 0 } else { 1 })
+}
+
+/// Evaluate `code` on `input` in a sandboxed worker process, in a slot
+/// reserved with [`acquire`]; the slot is released when this returns.
+pub(crate) async fn run(
+    slot: Slot,
+    code: &str,
+    input: Value,
+    read_only: bool,
+) -> Result<Reply, SandboxError> {
+    run_with_timeout(slot, code, input, read_only, FILTER_TIMEOUT).await
+}
+
+async fn run_with_timeout(
+    _slot: Slot,
+    code: &str,
+    input: Value,
+    read_only: bool,
+    timeout: Duration,
+) -> Result<Reply, SandboxError> {
+    let deadline = Instant::now() + timeout;
+    let request = serde_json::to_vec(&Request {
+        code,
+        input,
+        read_only,
+    })
+    .map_err(|error| SandboxError::Worker(error.to_string()))?;
+    // Dropping `exchange` on timeout drops the child, and `kill_on_drop`
+    // SIGKILLs it, so a spinning filter does not outlive its deadline.
+    tokio::time::timeout_at(deadline, exchange(request))
+        .await
+        .map_err(|_| SandboxError::Timeout)?
+}
+
+async fn exchange(request: Vec<u8>) -> Result<Reply, SandboxError> {
+    let mut child = worker_command()?
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .kill_on_drop(true)
+        .spawn()?;
+    let mut stdin = child.stdin.take().expect("worker stdin is piped");
+    // A worker that dies early closes its stdin; its exit status says why, so
+    // a write error here is not the interesting failure.
+    let _ = stdin.write_all(&request).await;
+    drop(stdin);
+    let output = child.wait_with_output().await?;
+    if !output.status.success() {
+        return Err(SandboxError::Aborted(describe_exit(output.status)));
+    }
+    // The reply is the last line: in unit tests the worker runs inside the
+    // test harness, which prints its own banner first.
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let line = stdout
+        .lines()
+        .rev()
+        .find(|line| !line.trim().is_empty())
+        .ok_or_else(|| SandboxError::Worker("no reply".into()))?;
+    match serde_json::from_str(line) {
+        Ok(reply) => Ok(reply),
+        // The worker accepts output up to serde_json's 128-level limit, but
+        // the reply wraps it in two more levels. Too-deep output is the
+        // filter's doing, not a worker fault: retrying cannot help.
+        Err(error) if error.to_string().contains("recursion limit") => Ok(Reply::Error(
+            "filter output is nested too deeply (over ~125 levels); return a flatter value".into(),
+        )),
+        Err(error) => Err(SandboxError::Worker(error.to_string())),
+    }
+}
+
+fn worker_command() -> Result<Command, SandboxError> {
+    // Linux: always this process's own image, even after the file on disk was
+    // replaced or deleted (an upgrade under a running stdio server), where
+    // `current_exe()` would name a missing or newer binary.
+    #[cfg(target_os = "linux")]
+    let exe = std::path::PathBuf::from("/proc/self/exe");
+    #[cfg(not(target_os = "linux"))]
+    let exe = {
+        static EXE: std::sync::OnceLock<Result<std::path::PathBuf, String>> =
+            std::sync::OnceLock::new();
+        EXE.get_or_init(|| std::env::current_exe().map_err(|error| error.to_string()))
+            .clone()
+            .map_err(SandboxError::Worker)?
+    };
+    let mut command = Command::new(exe);
+    // The server environment holds credentials and upstream configuration;
+    // the worker needs none of it.
+    command.env_clear();
+    #[cfg(not(test))]
+    command.arg(WORKER_ARG);
+    // The unit-test binary is the libtest harness, not this crate's `main`:
+    // run the ignored `worker_entry` test, which calls `worker_main`.
+    #[cfg(test)]
+    command
+        .args([
+            "--exact",
+            "tools::jq_sandbox::tests::worker_entry",
+            "--include-ignored",
+            "--nocapture",
+            "--quiet",
+            "--test-threads=1",
+        ])
+        .env(tests::WORKER_ENV, "1");
+    Ok(command)
+}
+
+fn describe_exit(status: ExitStatus) -> String {
+    #[cfg(unix)]
+    if let Some(signal) = std::os::unix::process::ExitStatusExt::signal(&status) {
+        return format!("signal {signal}");
+    }
+    match status.code() {
+        Some(code) => format!("exit code {code}"),
+        None => "unknown exit status".into(),
+    }
+}
+
+/// Best effort: if a limit cannot be set (e.g. `RLIMIT_AS` on macOS), the
+/// timeout and the worker isolation still apply.
+fn limit_resources() {
+    #[cfg(unix)]
+    {
+        use rlimit::{Resource, setrlimit};
+        let _ = setrlimit(Resource::AS, WORKER_ADDRESS_SPACE, WORKER_ADDRESS_SPACE);
+        // Stack overflow and allocation failure end in abort(); a core file
+        // per crashed worker (up to the address-space limit) could fill the
+        // node's disk under a flood.
+        let _ = setrlimit(Resource::CORE, 0, 0);
+        let _ = setrlimit(Resource::CPU, WORKER_CPU_SECONDS, WORKER_CPU_SECONDS + 1);
+    }
+    // Workers share the server's memory cgroup. If a filter tips the pod over
+    // its limit, the kernel OOM killer must pick the worker, not the server
+    // (which, with the larger RSS, it would otherwise prefer). Raising one's
+    // own score needs no privilege.
+    #[cfg(target_os = "linux")]
+    let _ = std::fs::write("/proc/self/oom_score_adj", "1000");
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use super::*;
+    use serde_json::json;
+
+    /// Set on the child process so that `worker_entry` acts as the worker.
+    pub(crate) const WORKER_ENV: &str = "LONGBRIDGE_MCP_TEST_JQ_WORKER";
+
+    #[test]
+    #[ignore = "entry point of the jq worker process spawned by the sandbox tests"]
+    fn worker_entry() {
+        if std::env::var_os(WORKER_ENV).is_some() {
+            worker_main();
+        }
+    }
+
+    async fn run_as_test(code: &str, input: Value) -> Result<Reply, SandboxError> {
+        run(acquire().await.unwrap(), code, input, true).await
+    }
+
+    #[tokio::test]
+    async fn a_filter_round_trips_through_the_worker() {
+        let reply = run_as_test(".a, .b", json!({"a": 1, "b": [true]}))
+            .await
+            .unwrap();
+        assert_eq!(reply, Reply::Values(vec![json!(1), json!([true])]));
+    }
+
+    #[tokio::test]
+    async fn too_deeply_nested_output_is_a_filter_error_not_a_worker_fault() {
+        // 126 and 127 levels pass the worker's own check but not the reply's
+        // two extra levels; deeper output already fails in the worker.
+        for depth in [126, 127, 130] {
+            let reply = run_as_test(
+                &format!("reduce range({depth}) as $i (0; [.])"),
+                json!(null),
+            )
+            .await
+            .unwrap();
+            assert!(matches!(reply, Reply::Error(_)), "{depth}: {reply:?}");
+        }
+        let reply = run_as_test("reduce range(100) as $i (0; [.])", json!(null))
+            .await
+            .unwrap();
+        assert!(matches!(reply, Reply::Values(_)), "{reply:?}");
+    }
+
+    #[tokio::test]
+    async fn quadratic_trimming_stays_in_the_worker() {
+        // Thousands of two-element arrays make `response_limit` trimming
+        // quadratic. Under the production deadline the worker either finishes
+        // trimming or is killed; the server never gets a big output to trim.
+        let code = r#"[range(4000)] | map({key: "k\(.)", value: [1, 1]}) | from_entries"#;
+        let slot = acquire().await.unwrap();
+        match run_with_timeout(slot, code, json!(null), true, Duration::from_secs(2)).await {
+            Err(SandboxError::Timeout) => {}
+            Ok(Reply::Trimmed(blocks)) => {
+                let bytes: usize = blocks.iter().map(String::len).sum();
+                assert!(bytes <= 2 * 36_000, "{bytes}");
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn unbounded_recursion_aborts_the_worker_not_the_server() {
+        // In-process this overflowed the stack and SIGABRTed the server.
+        let error = run_as_test("def f: 1 + f; f", json!(null))
+            .await
+            .unwrap_err();
+        assert!(matches!(error, SandboxError::Aborted(_)), "{error}");
+    }
+
+    #[tokio::test]
+    async fn a_spinning_filter_is_killed_at_the_deadline() {
+        let slot = acquire().await.unwrap();
+        let error = run_with_timeout(
+            slot,
+            "last(repeat(1))",
+            json!(null),
+            true,
+            Duration::from_millis(500),
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(error, SandboxError::Timeout), "{error}");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn memory_exhaustion_aborts_the_worker_not_the_server() {
+        let error = run_as_test("[range(1e10)] | length", json!(null))
+            .await
+            .unwrap_err();
+        assert!(matches!(error, SandboxError::Aborted(_)), "{error}");
+    }
+
+    /// The biggest responses are a few MiB; a filter over ~8 MiB of JSON must
+    /// fit the worker's address-space limit (enforced on Linux).
+    #[tokio::test]
+    async fn an_eight_mib_response_fits_the_worker_limits() {
+        let rows: Vec<Value> = (0..20_000)
+            .map(|i| {
+                json!({
+                    "symbol": format!("{i:05}.US"),
+                    "name": "x".repeat(400),
+                    "price": i as f64 / 7.0,
+                    "tags": ["a", "b", "c"],
+                })
+            })
+            .collect();
+        let input = json!({"data": rows});
+        assert!(input.to_string().len() > 8 * 1024 * 1024);
+        let reply = run_as_test(
+            "([.data[] | select(.price > 100) | {symbol, price}] | length), (.data | sort_by(-.price) | .[0].symbol)",
+            input,
+        )
+        .await
+        .unwrap();
+        assert_eq!(reply, Reply::Values(vec![json!(19_299), json!("19999.US")]));
+    }
+
+    /// Run `future` with the sandbox limited to `slots` workers, as in
+    /// production, instead of the test-wide pool.
+    pub(crate) async fn with_slots<F: std::future::Future>(slots: usize, future: F) -> F::Output {
+        let semaphore: &'static Semaphore = Box::leak(Box::new(Semaphore::new(slots)));
+        TEST_WORKERS.scope(semaphore, future).await
+    }
+
+    #[tokio::test]
+    async fn a_full_sandbox_reports_busy_and_frees_the_slot_afterwards() {
+        with_slots(1, async {
+            let held = acquire().await.unwrap();
+            let waiting = acquire_until(Instant::now() + Duration::from_millis(200)).await;
+            assert!(matches!(waiting, Err(SandboxError::Busy)));
+            drop(held);
+            let reply = run(acquire().await.unwrap(), ".", json!(1), true)
+                .await
+                .unwrap();
+            assert_eq!(reply, Reply::Values(vec![json!(1)]));
+        })
+        .await;
+    }
+}

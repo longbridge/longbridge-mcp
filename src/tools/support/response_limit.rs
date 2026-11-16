@@ -28,9 +28,32 @@ struct Cut {
     kept_latest: bool,
 }
 
+/// How the truncation note tells the model to get the rest of a cut array.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RestHint {
+    /// The result is the tool's own response: suggest a `_jq` slice of it.
+    Response,
+    /// The result is the output of the caller's `_jq` filter: a slice path
+    /// is relative to that output, so suggest appending it to the filter.
+    /// Used as a standalone `_jq` on the original response, it would select
+    /// unrelated data.
+    AppendToFilter,
+    /// The tool is not read-only and has already run: suggest nothing that
+    /// means calling it again.
+    None,
+}
+
+/// [`limit_with`] for a tool's own response ([`RestHint::Response`]); tests
+/// use it, callers pick the hint explicitly.
+#[cfg(test)]
+pub fn limit(result: CallToolResult) -> (CallToolResult, bool) {
+    limit_with(result, RestHint::Response)
+}
+
 /// Trim `result` to [`MAX_RESPONSE_BYTES`] when it is a successful JSON result
-/// over the limit. Returns the result and whether it was trimmed.
-pub fn limit(mut result: CallToolResult) -> (CallToolResult, bool) {
+/// over the limit, pointing at the rest of a cut array as `hint` says.
+/// Returns the result and whether it was trimmed.
+pub fn limit_with(mut result: CallToolResult, hint: RestHint) -> (CallToolResult, bool) {
     if result.is_error == Some(true) || result.content.len() != 1 {
         return (result, false);
     }
@@ -124,22 +147,36 @@ pub fn limit(mut result: CallToolResult) -> (CallToolResult, bool) {
     }
     // Most tools that overflow take no range or count argument, so name the
     // concrete _jq slice that returns the rest of the first cut array.
-    let rest = cuts.first().map_or_else(String::new, |c| {
+    let slice = cuts.first().map(|c| {
         let slice = if c.kept_latest {
             format!("[:{}]", c.total - c.kept)
         } else {
             format!("[{}:]", c.kept)
         };
-        format!(
-            " (e.g. _jq `{}{slice}` returns the rest of {})",
-            jq_path(&c.pointer),
-            c.path
-        )
+        (format!("{}{slice}", jq_path(&c.pointer)), c.path.clone())
     });
+    let advice = match (hint, slice) {
+        (RestHint::Response, Some((slice, path))) => format!(
+            "If the tool takes a date range or count, narrow it; otherwise select fields or a \
+             slice with _jq (e.g. _jq `{slice}` returns the rest of {path})"
+        ),
+        (RestHint::Response, None) => "If the tool takes a date range or count, narrow it; \
+             otherwise select fields or a slice with _jq"
+            .to_string(),
+        (RestHint::AppendToFilter, Some((slice, path))) => format!(
+            "This is the output of your _jq filter: narrow the filter, or append a slice to it \
+             (e.g. append `| {slice}` to your _jq to get the rest of {path})"
+        ),
+        (RestHint::AppendToFilter, None) => {
+            "This is the output of your _jq filter: narrow the filter".to_string()
+        }
+        (RestHint::None, _) => "The tool is not read-only and has already run: do not call it \
+             again just to get the rest"
+            .to_string(),
+    };
     let note = format!(
         "[TRUNCATED — partial result, do not treat it as complete: {}. The full result was {} \
-         bytes, over the client's tool-result size limit. If the tool takes a date range or \
-         count, narrow it; otherwise select fields or a slice with _jq{rest}.]",
+         bytes, over the client's tool-result size limit. {advice}.]",
         summary.join("; "),
         text.len()
     );

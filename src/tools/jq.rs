@@ -11,6 +11,10 @@ use rmcp::{
 };
 use serde_json::Value;
 
+use tokio::sync::Semaphore;
+
+use crate::tools::jq_sandbox::{self, Reply, SandboxError};
+
 type Filter = jaq_core::Filter<data::JustLut<Val>>;
 pub(super) const INSTRUCTIONS: &str = "All tools accept optional `_jq`, a filter expression using jq CLI syntax applied to the response; one output is returned as-is, several as a JSON array. Response shapes differ per tool (some are a top-level array, some an object; most have no `data` wrapper) and most tool descriptions say what they return. If unsure, probe cheaply with keys (object) or .[0] | keys (array) rather than fetching the full response. Omit it for the full JSON response.";
 
@@ -19,8 +23,26 @@ pub(super) const INSTRUCTIONS: &str = "All tools accept optional `_jq`, a filter
 /// the server-level `instructions` (which many clients drop).
 const JQ_PROPERTY_DESCRIPTION: &str = "Optional jq filter applied to this tool's JSON response; it never changes the request, and several outputs come back as an array. For field names see the tool description, or probe with `keys` / `.[0] | keys`.";
 const MAX_RESULTS: usize = 10_000;
+/// Longest accepted `_jq`. jaq's parser recurses once per nesting level, so
+/// this bounds the recursion depth of the in-server validation compile (see
+/// [`validate`]); real filters are a few hundred characters.
+const MAX_CODE_CHARS: usize = 4096;
+/// Stack for the validation compile. A 1,000-deep `((((…))))` overflowed a
+/// 2 MiB tokio worker stack and aborted the server; within
+/// [`MAX_CODE_CHARS`] this leaves a wide margin (checked by tests).
+const VALIDATE_STACK_BYTES: usize = 64 * 1024 * 1024;
+/// Cap on the joined compile error details (see [`summarize`]).
+const MAX_COMPILE_ERROR_CHARS: usize = 1_000;
+/// Concurrent validation compiles. Each takes at most a few milliseconds.
+const MAX_VALIDATIONS: usize = 4;
+/// Largest raw filter output the worker will build, before trimming.
 const MAX_OUTPUT_BYTES: usize = 8 * 1024 * 1024;
-const FILTER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+/// What the server may receive back: output over the response size limit is
+/// trimmed in the worker (see [`Reply::Trimmed`]), so the server never runs
+/// `response_limit::limit_with`'s trimming — quadratic in the number of arrays,
+/// which `_jq` lets a caller choose (a 47 KB output took 3 s of a tokio
+/// worker) — and never holds a multi-MiB output.
+const MAX_RESPONSE_BYTES: usize = crate::tools::support::response_limit::MAX_RESPONSE_BYTES;
 /// Cap on the jaq error text echoed back. jaq embeds the offending value in
 /// its message (`cannot index [<whole response>] with "data"`), which can be
 /// tens of KB of upstream data the caller never asked to see.
@@ -29,6 +51,22 @@ const MAX_ERROR_CHARS: usize = 200;
 /// bytes even for large nested responses.
 const SHAPE_MAX_DEPTH: usize = 3;
 const SHAPE_MAX_KEYS: usize = 25;
+/// jq builtins (definitions and natives) that `_jq` filters must not reach.
+///
+/// - `env`: the server environment contains credentials.
+/// - `debug`/`stderr` and their `*_empty` natives: they write the filter input
+///   (upstream account data) into the server log at ERROR level.
+/// - `halt`/`halt_error`: jaq turns a halt into `std::process::exit`, so a
+///   single `_jq: "halt_error(1)"` terminated the whole server process.
+const BLOCKED_BUILTINS: &[&str] = &[
+    "env",
+    "debug",
+    "debug_empty",
+    "stderr",
+    "stderr_empty",
+    "halt",
+    "halt_error",
+];
 
 pub(super) fn describe(tool: &mut Tool) {
     let schema = std::sync::Arc::make_mut(&mut tool.input_schema);
@@ -62,7 +100,7 @@ fn compile(code: &str) -> Result<Filter, McpError> {
     // Loader::new rejects imports/includes; do not give filters filesystem access.
     let modules = Loader::new(
         jaq_core::defs()
-            .chain(jaq_std::defs().filter(|def| def.name != "debug"))
+            .chain(jaq_std::defs().filter(|def| !BLOCKED_BUILTINS.contains(&def.name)))
             .chain(jaq_json::defs()),
     )
     .load(&arena, File { code, path: () })
@@ -72,16 +110,14 @@ fn compile(code: &str) -> Result<Filter, McpError> {
             .flat_map(|(_, error)| load_error_details(code, error))
             .collect();
         McpError::invalid_params(
-            format!("Invalid _jq expression: {}", details.join("; ")),
+            format!("Invalid _jq expression: {}", summarize(details)),
             None,
         )
     })?;
     let funs = jaq_core::funs()
         .chain(jaq_std::funs())
         .chain(jaq_json::funs())
-        // Server environment contains credentials. Logging would also allow
-        // queries to write upstream account data into server logs.
-        .filter(|(name, _, _)| !matches!(*name, "env" | "debug" | "debug_empty" | "stderr"));
+        .filter(|(name, _, _)| !BLOCKED_BUILTINS.contains(name));
     jaq_core::Compiler::default()
         .with_funs(funs)
         .compile(modules)
@@ -89,13 +125,97 @@ fn compile(code: &str) -> Result<Filter, McpError> {
             let details: Vec<String> = errors
                 .iter()
                 .flat_map(|(_, undefined)| undefined)
-                .map(|(name, kind)| format!("undefined {} `{name}`", kind.as_str()))
+                .map(|(name, kind)| undefined_message(name, kind.as_str()))
                 .collect();
             McpError::invalid_params(
-                format!("Invalid _jq expression: {}", details.join("; ")),
+                format!("Invalid _jq expression: {}", summarize(details)),
                 None,
             )
         })
+}
+
+/// Join compile error details for the caller: duplicates once (a 4096-char
+/// `env,env,…` repeats the same complaint ~1000 times), and at most
+/// [`MAX_COMPILE_ERROR_CHARS`] of them. Error envelopes skip
+/// `response_limit`, so this is their only size bound.
+fn summarize(details: Vec<String>) -> String {
+    let mut unique: Vec<String> = Vec::new();
+    for detail in details {
+        if !unique.contains(&detail) {
+            unique.push(detail);
+        }
+    }
+    let mut out = String::new();
+    for (shown, detail) in unique.iter().enumerate() {
+        if out.len() + detail.len() > MAX_COMPILE_ERROR_CHARS {
+            out.push_str(&format!("; … and {} more", unique.len() - shown));
+            break;
+        }
+        if shown > 0 {
+            out.push_str("; ");
+        }
+        out.push_str(detail);
+    }
+    out
+}
+
+/// Check that `code` compiles, without running it. This is the only jaq code
+/// that runs inside the server process, so it is bounded: a length cap, then
+/// the compile on a thread whose stack fits the deepest nesting that length
+/// allows. The caller awaits that thread instead of joining it, so a slow
+/// compile never blocks a tokio worker, and at most [`MAX_VALIDATIONS`] run at
+/// once.
+async fn validate(code: &str) -> Result<(), String> {
+    static VALIDATIONS: Semaphore = Semaphore::const_new(MAX_VALIDATIONS);
+    if code.chars().count() > MAX_CODE_CHARS {
+        return Err(format!(
+            "_jq is longer than {MAX_CODE_CHARS} characters; use a shorter expression"
+        ));
+    }
+    // Moved into the thread, so the limit holds even when this request is
+    // cancelled while the compile is still running.
+    let permit = VALIDATIONS
+        .acquire()
+        .await
+        .map_err(|error| format!("_jq validation failed: {error}"))?;
+    let code = code.to_owned();
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    std::thread::Builder::new()
+        .name("jq-validate".into())
+        .stack_size(VALIDATE_STACK_BYTES)
+        .spawn(move || {
+            let _permit = permit;
+            let _ = sender.send(
+                compile(&code)
+                    .map(|_| ())
+                    .map_err(|error| error.message.into_owned()),
+            );
+        })
+        .map_err(|error| format!("_jq validation failed: {error}"))?;
+    receiver
+        .await
+        .unwrap_or_else(|_| Err("_jq validation failed".into()))
+}
+
+/// Compile error text for an undefined name. A blocked builtin gets an
+/// explicit "disabled" message instead of the bare `undefined filter`, so an
+/// agent stops trying variants (`halt`, `halt_error(1)`, `stderr`, ...) of a
+/// capability that does not exist here.
+fn undefined_message(name: &str, kind: &str) -> String {
+    let bare = name.trim_start_matches('$');
+    if bare == "ENV" || bare == "__prog_args" {
+        return format!(
+            "`{name}` is disabled in _jq: the server environment is not exposed to filters"
+        );
+    }
+    if BLOCKED_BUILTINS.contains(&bare) {
+        return format!(
+            "`{name}` is disabled in _jq: filters may only transform the response, so env, \
+             debug, stderr and halt are not available; put what you need in the output, or \
+             use error(\"message\") to fail"
+        );
+    }
+    format!("undefined {kind} `{name}`")
 }
 
 /// 1-based character column of `part` within `code`, when `part` is a slice of
@@ -130,8 +250,16 @@ fn load_error_details(code: &str, error: &jaq_core::load::Error<&str>) -> Vec<St
     }
 }
 
+/// Apply the request's `_jq` (if any) to the result of `invoke`.
+///
+/// The worker slot is taken only after the tool succeeded, so the sandbox
+/// never delays or blocks the tool itself. A tool that is not `read_only` has
+/// already executed by then, so if the filter cannot run or fails, its
+/// unfiltered result is returned with a warning (see [`with_jq_warning`])
+/// rather than an error.
 pub(super) async fn call<F, Fut>(
     mut request: CallToolRequestParams,
+    read_only: bool,
     invoke: F,
 ) -> Result<CallToolResult, McpError>
 where
@@ -152,38 +280,152 @@ where
         }
     };
     // Compile before any tool execution, particularly before trade writes.
-    let filter = match compile(&code) {
-        Ok(filter) => filter,
-        Err(error) => {
-            record_failure(&request.name, "compile", &code, &error.message);
-            return Ok(syntax_error(&error.message));
-        }
-    };
+    // The worker compiles again; this pass only validates.
+    if let Err(message) = validate(&code).await {
+        record_failure(&request.name, "compile", &code, &message);
+        return Ok(syntax_error(&message));
+    }
     let name = request.name.clone();
-    let result = invoke(request).await?;
+    let mut result = invoke(request).await?;
     if result.is_error == Some(true) || is_error_envelope(&result) {
         return Ok(result);
     }
-    // Bound the *caller-visible* latency: `MAX_RESULTS`/`MAX_OUTPUT_BYTES` only
-    // fire between output values, so a filter that spins without emitting (e.g.
-    // `while(true; .)`) or builds one huge/non-terminating aggregate (e.g.
-    // `[range(0;1e9)]`, `[repeat(1)]`) would otherwise hang the request. The
-    // timeout returns a bounded, actionable error instead. Caveat: a dropped
-    // `spawn_blocking` handle does not abort the blocking task, so a hostile
-    // aggregate keeps running (and can OOM) on a detached thread until it
-    // finishes -- jaq exposes no fuel/step limit to cap that from here. The
-    // input is the already-fetched (bounded) tool response, so the only
-    // unbounded vector is generative builtins, not caller-supplied data.
-    let worker = tokio::task::spawn_blocking(move || apply(filter, result));
-    let filtered = tokio::time::timeout(FILTER_TIMEOUT, worker).await;
-    let message = match filtered {
-        Ok(Ok(Ok(result))) => return Ok(result),
-        Ok(Ok(Err(message))) => message,
-        Ok(Err(_)) => "filter worker failed".to_string(),
-        Err(_) => "filter timed out after 5s; narrow the _jq expression (avoid unbounded ranges or repeats)".to_string(),
+    let input = take_input(&mut result);
+    let shape = shape_of(&input);
+    // A write has already executed: its result must survive a failed filter.
+    let unfiltered = (!read_only).then(|| input.clone());
+    // The filter runs in a separate, resource-limited worker process. jaq has
+    // no step/memory/recursion limit, so in-process evaluation let a single
+    // `_jq` abort the server (`def f: 1 + f; f` overflows the stack,
+    // `[range(1e9)]` exhausts memory). See `jq_sandbox`.
+    let (stage, failure) = match jq_sandbox::acquire().await {
+        Err(error) => ("busy", Failure::Busy(error.to_string())),
+        Ok(slot) => match jq_sandbox::run(slot, &code, input, read_only).await {
+            Ok(Reply::Values(values)) => return Ok(finish(result, values)),
+            Ok(Reply::Trimmed(blocks)) => {
+                result.content = blocks.into_iter().map(Content::text).collect();
+                result.structured_content = None;
+                return Ok(result);
+            }
+            Ok(Reply::FilterError(message)) => (
+                "runtime",
+                Failure::Filter(format!("{message}; response shape: {shape}")),
+            ),
+            Ok(Reply::Error(message)) => ("runtime", Failure::Filter(message)),
+            // Its own stage: a filter that holds the worker until the deadline
+            // is what starves everyone else, and alerts should see it.
+            Err(error @ SandboxError::Timeout) => ("timeout", Failure::Filter(error.to_string())),
+            Err(error @ SandboxError::Worker(_)) => {
+                tracing::warn!(tool = %crate::tools::tool_label(&name), %error, "jq worker unavailable");
+                ("sandbox", Failure::Unavailable(error.to_string()))
+            }
+            Err(error) => {
+                // Not a caller typo: the filter crashed (often deliberate
+                // probing), so make it stand out from INFO noise.
+                tracing::warn!(tool = %crate::tools::tool_label(&name), %error, "jq sandbox failure");
+                ("sandbox", Failure::Filter(error.to_string()))
+            }
+        },
     };
-    record_failure(&name, "runtime", &code, &message);
-    Ok(filter_error(&message))
+    record_failure(&name, stage, &code, failure.message());
+    Ok(match unfiltered {
+        Some(unfiltered) => with_jq_warning(result, unfiltered, &failure.write_warning()),
+        None => failure.into_read_only_error(),
+    })
+}
+
+/// Why a filter produced no output. Decides what a read-only tool's caller is
+/// told to do; a write returns its unfiltered result whatever the reason.
+enum Failure {
+    /// The expression is at fault (runtime error, output limit, timeout,
+    /// crashed worker): fix it.
+    Filter(String),
+    /// No worker slot was free: the expression may be fine, retry later.
+    Busy(String),
+    /// The worker could not be started or answered garbage: retry later.
+    Unavailable(String),
+}
+
+impl Failure {
+    /// Why `_jq` was not applied, for a non-read-only tool's unfiltered
+    /// result. It must not suggest retrying: the call already ran, and a
+    /// one-step write (`topic_create`, `alert_add`, ...) would run again.
+    fn write_warning(&self) -> String {
+        match self {
+            Self::Busy(_) => {
+                "_jq was skipped because the filter sandbox was busy; the tool call itself \
+                 completed"
+                    .to_string()
+            }
+            Self::Filter(message) | Self::Unavailable(message) => {
+                format!("_jq was not applied: {message}")
+            }
+        }
+    }
+
+    fn message(&self) -> &str {
+        match self {
+            Self::Filter(message) | Self::Busy(message) | Self::Unavailable(message) => message,
+        }
+    }
+
+    /// The error for a read-only tool. The tool succeeded and can be called
+    /// again safely, so none of these is terminal.
+    fn into_read_only_error(self) -> CallToolResult {
+        let (error_code, recoverable, message, hint) = match self {
+            Self::Filter(message) => (
+                "jq_filter_error",
+                "fix_params",
+                format!("_jq response filtering failed: {message}"),
+                "The tool is read-only and succeeded; fix the _jq expression and call again, or omit _jq to get the full response.",
+            ),
+            Self::Busy(message) => (
+                "jq_sandbox_busy",
+                "backoff",
+                message,
+                "The tool is read-only, so retrying is safe: retry shortly, or omit _jq.",
+            ),
+            Self::Unavailable(message) => (
+                "jq_sandbox_unavailable",
+                "backoff",
+                format!("{message}; the _jq expression may be fine"),
+                "The tool is read-only, so retrying is safe: retry shortly, or omit _jq.",
+            ),
+        };
+        CallToolResult::error(vec![Content::text(
+            serde_json::json!({
+                "error_code": error_code,
+                "message": message,
+                "recoverable": recoverable,
+                "hint": hint,
+                "data": null
+            })
+            .to_string(),
+        )])
+    }
+}
+
+/// A non-read-only tool's own result, unfiltered, wrapped with a note that
+/// `_jq` was not applied. Returning an error instead could hide the outcome
+/// (e.g. the order id) of an action that already happened, inviting a
+/// duplicate retry. The hint must not claim the action happened: two-step
+/// tools (`submit_order` etc. without `execute`) only return a preview.
+///
+/// One content block, not the result plus a separate note: some clients show
+/// only the first block (so a trailing note could go unseen and the full
+/// result be mistaken for filter output, while a leading one would hide the
+/// result), and `response_limit` only trims single-block results.
+fn with_jq_warning(mut result: CallToolResult, unfiltered: Value, message: &str) -> CallToolResult {
+    result.structured_content = None;
+    result.content = vec![Content::text(
+        serde_json::json!({
+            "jq_warning": message,
+            "hint": "`result` is the tool's full, unfiltered output; read it to see what happened. If the call performed an action, it has happened: do not repeat it just to retry the filter. If it only returned a preview or confirmation step, nothing was executed yet; continue the normal flow.",
+            "result": unfiltered,
+        })
+        .to_string(),
+    )];
+    result
 }
 
 /// Count and log a failed `_jq` filter. These calls reach the client as
@@ -295,18 +537,10 @@ fn syntax_error(message: &str) -> CallToolResult {
     }).to_string())])
 }
 
-fn filter_error(message: &str) -> CallToolResult {
-    CallToolResult::error(vec![Content::text(serde_json::json!({
-        "error_code": "jq_filter_error",
-        "message": format!("_jq response filtering failed: {message}. The tool has already executed."),
-        "recoverable": "none",
-        "hint": "Do not automatically retry a write operation; verify its outcome first. For read-only tools, correct _jq and retry.",
-        "data": null
-    }).to_string())])
-}
-
-fn apply(filter: Filter, mut result: CallToolResult) -> Result<CallToolResult, String> {
-    let input = result.structured_content.take().unwrap_or_else(|| {
+/// The JSON value a filter runs on: the structured content when present,
+/// otherwise the text content parsed as JSON (or kept as a string).
+fn take_input(result: &mut CallToolResult) -> Value {
+    result.structured_content.take().unwrap_or_else(|| {
         let mut values: Vec<Value> = result
             .content
             .iter()
@@ -320,46 +554,135 @@ fn apply(filter: Filter, mut result: CallToolResult) -> Result<CallToolResult, S
             })
             .collect();
         if values.len() == 1 {
-            values.pop().unwrap()
+            values.pop().expect("one value is present")
         } else {
             Value::Array(values)
         }
-    });
-    let shape = shape_of(&input);
-    let input: Val = serde_json::from_value(input).map_err(|error| error.to_string())?;
+    })
+}
+
+/// Replace a tool result's content with the filter outputs: one output as-is,
+/// several (or none) as an array.
+fn finish(mut result: CallToolResult, values: Vec<Value>) -> CallToolResult {
+    let value = response_value(values);
+    result.content = vec![Content::text(value.to_string())];
+    result.structured_content = value.is_object().then_some(value);
+    result
+}
+
+/// The response value for filter outputs: one as-is, several (or none) as an
+/// array.
+fn response_value(mut values: Vec<Value>) -> Value {
+    if values.len() == 1 {
+        values.pop().expect("one value is present")
+    } else {
+        Value::Array(values)
+    }
+}
+
+/// Compile and run `code` on `input`. Called inside the sandbox worker
+/// process; the server itself only compiles (to reject bad filters before the
+/// tool runs) and never evaluates.
+pub(super) fn evaluate(code: &str, input: Value, read_only: bool) -> Reply {
+    match compile(code) {
+        Ok(filter) => run_filter(filter, input, read_only),
+        Err(error) => Reply::Error(error.message.to_string()),
+    }
+}
+
+fn run_filter(filter: Filter, input: Value, read_only: bool) -> Reply {
+    let input: Val = match serde_json::from_value(input) {
+        Ok(input) => input,
+        Err(error) => return Reply::Error(error.to_string()),
+    };
     let ctx = Ctx::<data::JustLut<Val>>::new(&filter.lut, Vars::new([]));
     let mut values = Vec::new();
-    let mut bytes = 0;
-    for value in filter.id.run((ctx, input)).map(jaq_core::unwrap_valr) {
-        let value = value
-            .map_err(|error| {
-                format!(
-                    "{}; response shape: {shape}",
-                    truncate(&error.to_string(), MAX_ERROR_CHARS)
-                )
-            })?
-            .to_string();
-        bytes += value.len();
+    // Size of the response text `finish` will build: one value as-is, several
+    // as a JSON array (brackets plus a comma between values).
+    let mut bytes = 2;
+    for value in filter.id.run((ctx, input)) {
+        // Not `jaq_core::unwrap_valr`: it calls `std::process::exit` on a halt.
+        // `halt` is blocked at compile time; this keeps any other halt path
+        // from ending the worker without a reply.
+        let value = match value.map_err(|exn| exn.get_err()) {
+            Ok(value) => value.to_string(),
+            Err(Ok(error)) => {
+                return Reply::FilterError(
+                    truncate(&error.to_string(), MAX_ERROR_CHARS).into_owned(),
+                );
+            }
+            Err(Err(_)) => return Reply::Error("halt is not allowed in _jq".into()),
+        };
+        let value = match serde_json::from_str::<Value>(&value) {
+            Ok(value) => value,
+            Err(error) => return Reply::Error(error.to_string()),
+        };
+        // Measured as serde_json will write it in the response.
+        bytes += value.to_string().len() + 1;
         if values.len() >= MAX_RESULTS || bytes > MAX_OUTPUT_BYTES {
-            return Err(
+            return Reply::Error(
                 "output limit exceeded (10,000 results or 8 MiB); narrow the _jq expression".into(),
             );
         }
-        values.push(serde_json::from_str::<Value>(&value).map_err(|error| error.to_string())?);
+        values.push(value);
     }
-    let value = if values.len() == 1 {
-        values.pop().unwrap()
-    } else {
-        Value::Array(values)
-    };
-    result.content = vec![Content::text(value.to_string())];
-    result.structured_content = value.is_object().then_some(value);
-    Ok(result)
+    if bytes <= MAX_RESPONSE_BYTES {
+        return Reply::Values(values);
+    }
+    trim(response_value(values), read_only)
 }
+
+/// Trim an over-limit response the way every tool result is trimmed, inside
+/// the worker (see [`Reply::Trimmed`]). The note's pointer to the rest is
+/// relative to the filter output, so it says to append to the filter — or,
+/// for a tool that is not read-only, offers nothing that means calling again.
+fn trim(value: Value, read_only: bool) -> Reply {
+    use crate::tools::support::response_limit::{RestHint, limit_with};
+    let hint = if read_only {
+        RestHint::AppendToFilter
+    } else {
+        RestHint::None
+    };
+    let (trimmed, _) = limit_with(
+        CallToolResult::success(vec![Content::text(value.to_string())]),
+        hint,
+    );
+    let blocks: Vec<String> = trimmed
+        .content
+        .iter()
+        .filter_map(|content| content.as_text().map(|text| text.text.clone()))
+        .collect();
+    // `limit` cannot shrink output without arrays to cut (one huge string,
+    // say) and then returns it whole under a "truncated" note that names no
+    // cut. Such output is refused instead: it would blow the client's budget
+    // and wrongly claim to be partial. The slack covers the `_truncated`
+    // marker `limit` adds to a properly trimmed object.
+    const MARKER_SLACK: usize = 4_096;
+    if blocks.last().map_or(0, String::len) > MAX_RESPONSE_BYTES + MARKER_SLACK {
+        return Reply::Error(format!(
+            "output limit exceeded: over {MAX_RESPONSE_BYTES} bytes and it cannot be trimmed \
+             (no array to cut); narrow the _jq expression"
+        ));
+    }
+    Reply::Trimmed(blocks)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// `super::call` as a read-only tool.
+    async fn call<F, Fut>(
+        request: CallToolRequestParams,
+        invoke: F,
+    ) -> Result<CallToolResult, McpError>
+    where
+        F: FnOnce(CallToolRequestParams) -> Fut,
+        Fut: std::future::Future<Output = Result<CallToolResult, McpError>>,
+    {
+        super::call(request, true, invoke).await
+    }
 
     fn request(jq: serde_json::Value) -> CallToolRequestParams {
         CallToolRequestParams::new("test").with_arguments(
@@ -438,6 +761,14 @@ mod tests {
             json!("$ENV"),
             json!("debug"),
             json!("debug_empty"),
+            json!("debug(\"x\")"),
+            json!("stderr"),
+            json!("stderr_empty"),
+            json!("halt"),
+            json!("halt(1)"),
+            json!("halt_error"),
+            json!("halt_error(1)"),
+            json!(". as $x | halt_error(1)"),
             json!("include \"/etc/passwd\"; ."),
         ] {
             let result = call(request(code.clone()), |_| async {
@@ -448,6 +779,418 @@ mod tests {
             assert_eq!(result.is_error, Some(true), "{code}");
             assert!(result.content[0].as_text().unwrap().text.contains("_jq"));
         }
+    }
+
+    #[test]
+    fn a_halt_that_reaches_runtime_is_an_error_not_a_process_exit() {
+        // Compile with the unrestricted builtins, bypassing BLOCKED_BUILTINS,
+        // to exercise the runtime guard in `run_filter`.
+        let arena = Arena::default();
+        let modules = Loader::new(
+            jaq_core::defs()
+                .chain(jaq_std::defs())
+                .chain(jaq_json::defs()),
+        )
+        .load(
+            &arena,
+            File {
+                code: "halt(1)",
+                path: (),
+            },
+        )
+        .expect("halt(1) must parse");
+        let filter = jaq_core::Compiler::default()
+            .with_funs(
+                jaq_core::funs()
+                    .chain(jaq_std::funs())
+                    .chain(jaq_json::funs()),
+            )
+            .compile(modules)
+            .expect("halt(1) must compile with unrestricted builtins");
+        assert_eq!(
+            run_filter(filter, json!({"a": 1}), true),
+            Reply::Error("halt is not allowed in _jq".into())
+        );
+    }
+
+    /// Deeply nested filters at the length cap, one per recursive construct of
+    /// the jq grammar. Run in-process, any stack overflow here aborts the test
+    /// binary, exactly as it aborted the server before `validate`.
+    #[tokio::test]
+    async fn validation_survives_maximal_nesting() {
+        let n = MAX_CODE_CHARS / 2 - 2;
+        let cases = [
+            format!("{}.{}", "(".repeat(n), ")".repeat(n)),
+            format!("{}.{}", "[".repeat(n), "]".repeat(n)),
+            format!("{}1{}", "{a:".repeat(n / 3), "}".repeat(n / 3)),
+            format!("{}1", "-".repeat(MAX_CODE_CHARS - 1)),
+            format!("1{}", "+1".repeat(n - 1)),
+            format!(".{}", "|.".repeat(n - 1)),
+            format!(".{}", ".a".repeat(n - 1)),
+            format!(".{}", "[0]".repeat(n / 2)),
+            format!("{}1{}", "if 1 then ".repeat(n / 6), " end".repeat(n / 6)),
+            format!("{}1", "try ".repeat(n / 2)),
+            format!("{}1", "def f: ".repeat(n / 4)),
+            format!("{}.{}", "\"\\(".repeat(n / 4), ")\"".repeat(n / 4)),
+            format!(
+                "{}1{}",
+                "reduce .[] as $x (".repeat(n / 10),
+                "; .)".repeat(n / 10)
+            ),
+            format!("{}1", ". as $x | ".repeat(n / 5)),
+            format!("{}.{}", "not(".repeat(n / 3), ")".repeat(n / 3)),
+        ];
+        for code in cases {
+            // Cut to the cap: an unbalanced prefix still drives the parser
+            // as deep as it can go. Only surviving matters, not validity.
+            let code: String = code.chars().take(MAX_CODE_CHARS).collect();
+            let _ = validate(&code).await;
+        }
+        let too_long = ".".repeat(MAX_CODE_CHARS + 1);
+        assert!(
+            validate(&too_long)
+                .await
+                .unwrap_err()
+                .contains("longer than")
+        );
+    }
+
+    #[tokio::test]
+    async fn a_full_sandbox_lets_reads_back_off_and_returns_writes_unfiltered() {
+        // Production has a single worker; take it, as a flood of hostile
+        // filters would.
+        jq_sandbox::tests::with_slots(0, async {
+            let ok = |value: Value| {
+                move |_| async move { Ok(super::super::tool_result(value.to_string())) }
+            };
+            let (read, write) = tokio::join!(
+                super::call(request(json!(".")), true, ok(json!({}))),
+                super::call(request(json!(".id")), false, ok(json!({"id": "701"}))),
+            );
+            // A read backs off, with a retry-safe hint.
+            let read = read.unwrap();
+            let text = &read.content[0].as_text().unwrap().text;
+            assert_eq!(read.is_error, Some(true), "{text}");
+            assert!(text.contains("jq_sandbox_busy"), "{text}");
+            assert!(text.contains("\"recoverable\":\"backoff\""), "{text}");
+            // A non-read-only tool's outcome comes back, unfiltered.
+            let write = write.unwrap();
+            assert_ne!(write.is_error, Some(true));
+            let value: Value =
+                serde_json::from_str(&write.content[0].as_text().unwrap().text).unwrap();
+            assert_eq!(value["result"], json!({"id": "701"}));
+            // Never "retry": a one-step write already ran.
+            let warning = value["jq_warning"].as_str().unwrap();
+            assert!(warning.contains("skipped"), "{warning}");
+            assert!(!warning.contains("retry"), "{warning}");
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn a_failed_filter_on_a_write_returns_the_unfiltered_result() {
+        let result = super::call(request(json!(".a[]")), false, |_| async {
+            Ok(super::super::tool_result(
+                json!({"a": 1, "order_id": "701"}).to_string(),
+            ))
+        })
+        .await
+        .unwrap();
+        assert_ne!(result.is_error, Some(true));
+        // One block, so clients that show only the first still see both the
+        // outcome and the warning, and `response_limit` still applies.
+        assert_eq!(result.content.len(), 1);
+        let value: Value =
+            serde_json::from_str(&result.content[0].as_text().unwrap().text).unwrap();
+        assert_eq!(value["result"], json!({"a": 1, "order_id": "701"}));
+        assert!(
+            value["jq_warning"]
+                .as_str()
+                .unwrap()
+                .contains("_jq was not applied"),
+            "{value}"
+        );
+        // The hint must not claim an action happened: for a two-step tool the
+        // result may be only a preview.
+        let hint = value["hint"].as_str().unwrap();
+        assert!(hint.contains("do not repeat it"), "{hint}");
+        assert!(hint.contains("preview"), "{hint}");
+    }
+
+    #[tokio::test]
+    async fn a_failed_tool_never_waits_for_a_worker() {
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            jq_sandbox::tests::with_slots(
+                0,
+                super::call(request(json!(".")), false, |_| async {
+                    Ok(CallToolResult::error(vec![Content::text(
+                        "Not authenticated",
+                    )]))
+                }),
+            ),
+        )
+        .await
+        .expect("must not wait for a worker slot")
+        .unwrap();
+        assert_eq!(
+            result.content[0].as_text().unwrap().text,
+            "Not authenticated"
+        );
+    }
+
+    #[tokio::test]
+    async fn output_over_the_response_limit_comes_back_trimmed() {
+        // A large list filtered with `_jq` is trimmed like any tool result
+        // (in the worker), not refused: a note, then valid, shorter JSON.
+        let result = filtered(
+            r#"[range(3000)] | map({id: ., name: ("x" * 20)})"#,
+            json!(null),
+        )
+        .await;
+        assert_ne!(result.is_error, Some(true));
+        let texts: Vec<&str> = result
+            .content
+            .iter()
+            .map(|content| content.as_text().unwrap().text.as_str())
+            .collect();
+        assert_eq!(texts.len(), 2, "{texts:?}");
+        assert!(texts[0].starts_with("[TRUNCATED"), "{}", texts[0]);
+        // The slice to the rest is relative to the filter output, so it must
+        // be appended to the filter, not offered as a standalone `_jq` (which
+        // on the original response would select unrelated data).
+        assert!(texts[0].contains("append `| .["), "{}", texts[0]);
+        assert!(!texts[0].contains("_jq `"), "{}", texts[0]);
+        let kept = serde_json::from_str::<Value>(texts[1]).unwrap();
+        assert!(kept.as_array().unwrap().len() < 3000);
+        assert!(texts[1].len() <= MAX_RESPONSE_BYTES, "{}", texts[1].len());
+        // Just under the limit passes untouched.
+        let result = filtered(r#"[range(100)] | map("x" * 300)"#, json!(null)).await;
+        assert_eq!(result.content.len(), 1);
+        let text = &result.content[0].as_text().unwrap().text;
+        assert!(text.len() <= MAX_RESPONSE_BYTES, "{}", text.len());
+    }
+
+    #[tokio::test]
+    async fn untrimmable_output_over_the_limit_is_refused() {
+        // No array to cut: it must not come back whole under a "truncated"
+        // note, neither just over the limit nor far over it.
+        for code in [r#""x" * 50000 | {s: .}"#, r#""x" * 100000"#] {
+            let result = filtered(code, json!(null)).await;
+            let text = &result.content[0].as_text().unwrap().text;
+            assert_eq!(result.is_error, Some(true), "{code}: {text}");
+            assert!(text.contains("cannot be trimmed"), "{code}: {text}");
+            assert!(
+                text.contains("\"recoverable\":\"fix_params\""),
+                "{code}: {text}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn trimmed_write_output_does_not_suggest_calling_again() {
+        let result = super::call(
+            request(json!(r#"[range(3000)] | map({id: ., name: ("x" * 20)})"#)),
+            false,
+            |_| async { Ok(super::super::tool_result("{}".to_string())) },
+        )
+        .await
+        .unwrap();
+        let note = &result.content[0].as_text().unwrap().text;
+        assert!(note.starts_with("[TRUNCATED"), "{note}");
+        assert!(note.contains("has already run"), "{note}");
+        assert!(
+            !note.contains("_jq `") && !note.contains("append"),
+            "{note}"
+        );
+    }
+
+    #[tokio::test]
+    async fn repeated_compile_errors_are_summarized() {
+        let code = vec!["env"; 1000].join(",");
+        let result = call(request(json!(code)), |_| async {
+            panic!("tool must not execute")
+        })
+        .await
+        .unwrap();
+        let text = &result.content[0].as_text().unwrap().text;
+        assert!(text.contains("disabled in _jq"), "{text}");
+        assert_eq!(text.matches("disabled in _jq").count(), 1, "{text}");
+        assert!(text.len() < 2_000, "{} bytes", text.len());
+    }
+
+    #[tokio::test]
+    async fn too_deeply_nested_output_asks_for_a_fix_not_a_retry() {
+        // 126 levels used to surface as a worker fault with `backoff`, which
+        // can never succeed on retry.
+        for depth in [126, 127, 128] {
+            let result = filtered(
+                &format!("reduce range({depth}) as $i (0; [.])"),
+                json!(null),
+            )
+            .await;
+            let text = &result.content[0].as_text().unwrap().text;
+            assert_eq!(result.is_error, Some(true), "{depth}: {text}");
+            assert!(text.contains("jq_filter_error"), "{depth}: {text}");
+            assert!(
+                text.contains("\"recoverable\":\"fix_params\""),
+                "{depth}: {text}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn blocked_builtins_explain_that_they_are_disabled() {
+        for (code, name) in [
+            ("halt_error(1)", "`halt_error`"),
+            ("stderr", "`stderr`"),
+            ("env", "`env`"),
+            ("debug(\"x\")", "`debug`"),
+            ("$ENV | keys", "`$ENV`"),
+        ] {
+            let result = call(request(json!(code)), |_| async {
+                panic!("tool must not execute for {code}")
+            })
+            .await
+            .unwrap();
+            let text = &result.content[0].as_text().unwrap().text;
+            assert!(text.contains(name), "{code}: {text}");
+            assert!(text.contains("disabled in _jq"), "{code}: {text}");
+            assert!(!text.contains("undefined"), "{code}: {text}");
+        }
+    }
+
+    /// Every native jaq function reachable from `_jq`, reviewed to be free of
+    /// side effects (no process exit, logging, environment, files or network).
+    /// A jaq upgrade that adds a native fails this test until it is reviewed
+    /// here or added to `BLOCKED_BUILTINS`.
+    const REVIEWED_NATIVES: &[&str] = &[
+        "acos",
+        "acosh",
+        "ascii_downcase",
+        "ascii_upcase",
+        "asin",
+        "asinh",
+        "atan",
+        "atan2",
+        "atanh",
+        "bsearch",
+        "cbrt",
+        "ceil",
+        "contains",
+        "copysign",
+        "cos",
+        "cosh",
+        "decode_base64",
+        "decode_uri",
+        "encode_base64",
+        "encode_uri",
+        "endswith",
+        "erf",
+        "erfc",
+        "error_empty",
+        "escape_html",
+        "escape_sh",
+        "exp",
+        "exp10",
+        "exp2",
+        "explode",
+        "expm1",
+        "fabs",
+        "fdim",
+        "first",
+        "floor",
+        "fma",
+        "fmax",
+        "fmin",
+        "fmod",
+        "frexp",
+        "fromdateiso8601",
+        "fromjson",
+        "gmtime",
+        "group_by",
+        "has",
+        "hypot",
+        "ilogb",
+        "implode",
+        "indices",
+        "j0",
+        "j1",
+        "jn",
+        "key_values",
+        "keys_unsorted",
+        "last",
+        "ldexp",
+        "length",
+        "lgamma",
+        "limit",
+        "localtime",
+        "log",
+        "log10",
+        "log1p",
+        "log2",
+        "ltrim",
+        "ltrimstr",
+        "matches",
+        "max_by_or_empty",
+        "min_by_or_empty",
+        "mktime",
+        "modf",
+        "nearbyint",
+        "nextafter",
+        "now",
+        "path",
+        "path_value",
+        "pow",
+        "range",
+        "remainder",
+        "reverse",
+        "rint",
+        "round",
+        "rtrim",
+        "rtrimstr",
+        "scalbln",
+        "sin",
+        "sinh",
+        "skip",
+        "sort",
+        "sort_by",
+        "split_",
+        "split_matches",
+        "sqrt",
+        "startswith",
+        "strflocaltime",
+        "strftime",
+        "strptime",
+        "tan",
+        "tanh",
+        "tgamma",
+        "tobytes",
+        "todateiso8601",
+        "tojson",
+        "trim",
+        "trunc",
+        "unescape_html",
+        "utf8bytelength",
+        "y0",
+        "y1",
+        "yn",
+    ];
+
+    #[test]
+    fn every_reachable_native_has_been_reviewed() {
+        let mut unreviewed: Vec<&str> = jaq_core::funs::<data::JustLut<Val>>()
+            .chain(jaq_std::funs())
+            .chain(jaq_json::funs())
+            .map(|(name, _, _)| name)
+            .filter(|name| !BLOCKED_BUILTINS.contains(name) && !REVIEWED_NATIVES.contains(name))
+            .collect();
+        unreviewed.sort_unstable();
+        unreviewed.dedup();
+        assert!(
+            unreviewed.is_empty(),
+            "review these jaq natives for side effects, then add them to REVIEWED_NATIVES or BLOCKED_BUILTINS: {unreviewed:?}"
+        );
     }
 
     #[tokio::test]
@@ -506,7 +1249,9 @@ mod tests {
         assert_eq!(result.is_error, Some(true));
         let text = &result.content[0].as_text().unwrap().text;
         assert!(text.contains("_jq"));
-        assert!(text.contains("already executed"));
+        // Read-only and succeeded: fix the filter and retry.
+        assert!(text.contains("\"recoverable\":\"fix_params\""), "{text}");
+        assert!(!text.contains("write operation"), "{text}");
         assert!(!text.contains("not requested"));
         assert!(result.structured_content.is_none());
     }

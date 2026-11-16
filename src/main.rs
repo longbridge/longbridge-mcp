@@ -244,8 +244,19 @@ async fn shutdown_signal() {
     });
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+fn main() -> anyhow::Result<()> {
+    // A `_jq` sandbox worker (see `tools::jq_sandbox`): evaluate one filter
+    // and exit, before any runtime, logging, config or network setup.
+    if crate::tools::is_jq_worker_invocation() {
+        crate::tools::jq_worker_main();
+    }
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?
+        .block_on(serve())
+}
+
+async fn serve() -> anyhow::Result<()> {
     rustls::crypto::ring::default_provider()
         .install_default()
         .expect("failed to install rustls crypto provider");
