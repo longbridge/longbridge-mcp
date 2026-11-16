@@ -161,7 +161,12 @@ pub(crate) fn worker_main() -> ! {
     limit_resources();
     let reply = match serde_json::from_reader::<_, Request<String>>(std::io::stdin().lock()) {
         Ok(request) => jq::evaluate(&request.code, request.input),
-        Err(error) => Reply::Error(format!("invalid worker request: {error}")),
+        // In practice a tool response nested too deeply for serde_json's
+        // default limit: not the expression's fault, so say how to get it.
+        Err(error) => Reply::Error(format!(
+            "the tool response could not be passed to the filter ({error}); call again \
+             without _jq to get the full response"
+        )),
     };
     let line = serde_json::to_string(&reply).expect("a worker reply must serialize");
     let mut stdout = std::io::stdout().lock();

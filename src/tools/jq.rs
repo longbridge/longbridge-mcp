@@ -33,7 +33,13 @@ const MAX_CODE_CHARS: usize = 4096;
 const VALIDATE_STACK_BYTES: usize = 64 * 1024 * 1024;
 /// Concurrent validation compiles. Each takes at most a few milliseconds.
 const MAX_VALIDATIONS: usize = 4;
-const MAX_OUTPUT_BYTES: usize = 8 * 1024 * 1024;
+/// Largest filter output, as the final serialized response text: the response
+/// size limit. Bigger output would be trimmed anyway, and must not reach
+/// `response_limit::limit`: its trimming is quadratic in the number of arrays,
+/// which `_jq` lets a caller choose (a 47 KB output took 3 s of a tokio
+/// worker), and a multi-MiB output inflates the server's memory several times
+/// over while it is parsed and re-serialized.
+const MAX_OUTPUT_BYTES: usize = crate::tools::support::response_limit::MAX_RESPONSE_BYTES;
 /// Cap on the jaq error text echoed back. jaq embeds the offending value in
 /// its message (`cannot index [<whole response>] with "data"`), which can be
 /// tens of KB of upstream data the caller never asked to see.
@@ -138,7 +144,9 @@ async fn validate(code: &str) -> Result<(), String> {
             "_jq is longer than {MAX_CODE_CHARS} characters; use a shorter expression"
         ));
     }
-    let _permit = VALIDATIONS
+    // Moved into the thread, so the limit holds even when this request is
+    // cancelled while the compile is still running.
+    let permit = VALIDATIONS
         .acquire()
         .await
         .map_err(|error| format!("_jq validation failed: {error}"))?;
@@ -148,6 +156,7 @@ async fn validate(code: &str) -> Result<(), String> {
         .name("jq-validate".into())
         .stack_size(VALIDATE_STACK_BYTES)
         .spawn(move || {
+            let _permit = permit;
             let _ = sender.send(
                 compile(&code)
                     .map(|_| ())
@@ -533,7 +542,9 @@ fn run_filter(filter: Filter, input: Value) -> Reply {
     };
     let ctx = Ctx::<data::JustLut<Val>>::new(&filter.lut, Vars::new([]));
     let mut values = Vec::new();
-    let mut bytes = 0;
+    // Size of the response text `finish` will build: one value as-is, several
+    // as a JSON array (brackets plus a comma between values).
+    let mut bytes = 2;
     for value in filter.id.run((ctx, input)) {
         // Not `jaq_core::unwrap_valr`: it calls `std::process::exit` on a halt.
         // `halt` is blocked at compile time; this keeps any other halt path
@@ -547,16 +558,19 @@ fn run_filter(filter: Filter, input: Value) -> Reply {
             }
             Err(Err(_)) => return Reply::Error("halt is not allowed in _jq".into()),
         };
-        bytes += value.len();
-        if values.len() >= MAX_RESULTS || bytes > MAX_OUTPUT_BYTES {
-            return Reply::Error(
-                "output limit exceeded (10,000 results or 8 MiB); narrow the _jq expression".into(),
-            );
-        }
-        match serde_json::from_str::<Value>(&value) {
-            Ok(value) => values.push(value),
+        let value = match serde_json::from_str::<Value>(&value) {
+            Ok(value) => value,
             Err(error) => return Reply::Error(error.to_string()),
+        };
+        // Measured as serde_json will write it in the response.
+        bytes += value.to_string().len() + 1;
+        if values.len() >= MAX_RESULTS || bytes > MAX_OUTPUT_BYTES {
+            return Reply::Error(format!(
+                "output limit exceeded ({MAX_RESULTS} results or {MAX_OUTPUT_BYTES} bytes, the \
+                 response size limit); narrow the _jq expression"
+            ));
         }
+        values.push(value);
     }
     Reply::Values(values)
 }
@@ -830,6 +844,36 @@ mod tests {
         assert_eq!(
             result.content[0].as_text().unwrap().text,
             "Not authenticated"
+        );
+    }
+
+    #[tokio::test]
+    async fn output_over_the_response_limit_is_rejected_quickly() {
+        // Shaped to make response trimming quadratic (many small arrays): it
+        // must be refused in the worker, never reach `response_limit`.
+        let started = std::time::Instant::now();
+        let result = filtered(
+            r#"[range(4000)] | map({key: "k\(.)", value: [1, 1]}) | from_entries"#,
+            json!(null),
+        )
+        .await;
+        let text = &result.content[0].as_text().unwrap().text;
+        assert_eq!(result.is_error, Some(true), "{text}");
+        assert!(text.contains("output limit exceeded"), "{text}");
+        assert!(text.contains("\"recoverable\":\"fix_params\""), "{text}");
+        assert!(started.elapsed() < std::time::Duration::from_secs(10));
+        // Just under the limit still passes, untrimmed.
+        let result = filtered(r#"[range(100)] | map("x" * 300)"#, json!(null)).await;
+        let text = &result.content[0].as_text().unwrap().text;
+        assert_ne!(result.is_error, Some(true), "{text}");
+        assert!(text.len() <= MAX_OUTPUT_BYTES, "{}", text.len());
+        assert_eq!(
+            serde_json::from_str::<Value>(text)
+                .unwrap()
+                .as_array()
+                .unwrap()
+                .len(),
+            100
         );
     }
 
