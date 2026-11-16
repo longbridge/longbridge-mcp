@@ -12,6 +12,62 @@ use rmcp::transport::streamable_http_server::{StreamableHttpServerConfig, Stream
 
 use crate::tools::{self, Longbridge};
 
+/// Largest MCP request body accepted. rmcp reads the whole body into memory
+/// before parsing it, and nothing else bounds it (axum's default limit only
+/// applies to axum's own extractors), so without this a few concurrent
+/// multi-hundred-MB POSTs — `/agent` needs no token — push the pod past its
+/// memory limit. Real requests are a JSON-RPC tool call: ~2.4 KB on average in
+/// production (Istio, 7 days); the largest legitimate arguments are a topic
+/// body (1 MiB ≈ 350k CJK characters) and a 4096-char `_jq`.
+const MAX_MCP_REQUEST_BYTES: usize = 1024 * 1024;
+
+/// Enforce [`MAX_MCP_REQUEST_BYTES`] on an MCP request. A declared
+/// `Content-Length` over it gets 413 before anything is read. Any other body
+/// (chunked, or a lying length) is read here up to the limit — never past it —
+/// and gets 413 if it would exceed it; within the limit, the bytes read are
+/// passed on. Reading here rather than letting rmcp hit the limit keeps the
+/// status right: rmcp reports a failed body read as 500, a server fault.
+async fn limit_request_body(
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    use axum::http::StatusCode;
+    use axum::response::IntoResponse;
+    use http_body_util::{BodyExt, LengthLimitError, Limited};
+    let too_large = || {
+        (
+            StatusCode::PAYLOAD_TOO_LARGE,
+            format!("request body is larger than {MAX_MCP_REQUEST_BYTES} bytes"),
+        )
+            .into_response()
+    };
+    let declared = request
+        .headers()
+        .get(axum::http::header::CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok());
+    if declared.is_some_and(|length| length > MAX_MCP_REQUEST_BYTES as u64) {
+        return too_large();
+    }
+    let (parts, body) = request.into_parts();
+    let bytes = match Limited::new(body, MAX_MCP_REQUEST_BYTES).collect().await {
+        Ok(collected) => collected.to_bytes(),
+        Err(error) if error.is::<LengthLimitError>() => return too_large(),
+        Err(error) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                format!("failed to read request body: {error}"),
+            )
+                .into_response();
+        }
+    };
+    next.run(axum::extract::Request::from_parts(
+        parts,
+        axum::body::Body::from(bytes),
+    ))
+    .await
+}
+
 /// Per-locale embedded translation files. Each entry is one
 /// `(language code, content of locales/<code>/<filename>)` pair.
 const TOOL_LOCALES: &[(&str, &str)] = &[
@@ -316,6 +372,9 @@ pub fn create_router(state: Arc<AppState>) -> Router {
                     .disable_allowed_hosts(),
             );
             tower::ServiceBuilder::new()
+                // Outermost, so oversized bodies are cut off before auth or
+                // rmcp read anything.
+                .layer(axum::middleware::from_fn(limit_request_body))
                 .layer(axum::middleware::from_fn(
                     move |req: axum::extract::Request, next: axum::middleware::Next| {
                         let base_url = base_url.clone();
@@ -380,7 +439,84 @@ mod tests {
     use axum::http::{Request, StatusCode, header};
     use tower::ServiceExt;
 
-    use super::{AppState, create_router};
+    use super::{AppState, MAX_MCP_REQUEST_BYTES, create_router};
+
+    fn mcp_post(body: Body) -> Request<Body> {
+        Request::post("/agent")
+            .header(header::HOST, "127.0.0.1:8000")
+            .header(header::CONTENT_TYPE, "application/json")
+            .header(header::ACCEPT, "application/json, text/event-stream")
+            .body(body)
+            .expect("request should build")
+    }
+
+    fn router() -> axum::Router {
+        create_router(Arc::new(AppState {
+            base_url: "http://127.0.0.1:8000".to_string(),
+        }))
+    }
+
+    /// A declared length over the limit is refused before anything is read.
+    #[tokio::test]
+    async fn oversized_mcp_request_with_content_length_gets_413() {
+        let body = vec![b' '; MAX_MCP_REQUEST_BYTES + 1];
+        let mut request = mcp_post(Body::from(body));
+        request
+            .headers_mut()
+            .insert(header::CONTENT_LENGTH, (MAX_MCP_REQUEST_BYTES + 1).into());
+        let response = router()
+            .oneshot(request)
+            .await
+            .expect("router should respond");
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    }
+
+    /// A chunked body with no length is read only up to the limit, not
+    /// buffered whole: `/agent` needs no token, so before this a few
+    /// concurrent multi-hundred-MB bodies could exhaust the pod's memory.
+    #[tokio::test]
+    async fn oversized_chunked_mcp_request_is_cut_off_at_the_limit() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        const CHUNK: usize = 64 * 1024;
+        const TOTAL: usize = 64 * 1024 * 1024;
+        let produced = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&produced);
+        let stream = futures_util::stream::iter((0..TOTAL / CHUNK).map(move |_| {
+            counter.fetch_add(CHUNK, Ordering::Relaxed);
+            Ok::<_, std::io::Error>(axum::body::Bytes::from(vec![b' '; CHUNK]))
+        }));
+        let response = router()
+            .oneshot(mcp_post(Body::from_stream(stream)))
+            .await
+            .expect("router should respond");
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+        // Read up to the limit (so it was the limit that stopped it, not an
+        // earlier rejection), and not much further.
+        let read = produced.load(Ordering::Relaxed);
+        assert!(
+            (MAX_MCP_REQUEST_BYTES..=MAX_MCP_REQUEST_BYTES + 2 * CHUNK).contains(&read),
+            "read {read} bytes of a {TOTAL}-byte body"
+        );
+    }
+
+    /// Ordinary MCP traffic is unaffected.
+    #[tokio::test]
+    async fn small_mcp_request_passes_the_body_limit() {
+        let initialize = serde_json::json!({
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {"protocolVersion": "2025-03-26", "capabilities": {},
+                       "clientInfo": {"name": "limit-test", "version": "1"}}
+        });
+        let response = router()
+            .oneshot(mcp_post(Body::from(initialize.to_string())))
+            .await
+            .expect("router should respond");
+        let status = response.status();
+        let body = axum::body::to_bytes(response.into_body(), 64 * 1024)
+            .await
+            .expect("body");
+        assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
+    }
 
     /// `/oauth2/authorize` must be routed to the redirect handler, not swallowed
     /// by the Bearer-protected root MCP fallback, and the redirect must not be

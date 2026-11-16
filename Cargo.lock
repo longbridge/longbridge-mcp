@@ -1694,6 +1694,7 @@ dependencies = [
  "bs58",
  "clap",
  "futures-util",
+ "http-body-util",
  "jaq-core",
  "jaq-json",
  "jaq-std",
