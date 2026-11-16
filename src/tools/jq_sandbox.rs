@@ -19,7 +19,6 @@
 //! unaffected.
 
 use std::process::{ExitStatus, Stdio};
-use std::sync::OnceLock;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -109,8 +108,16 @@ struct Request<C> {
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum Reply {
-    /// All filter outputs, in order.
+    /// All filter outputs, in order; their response text fits the response
+    /// size limit.
     Values(Vec<Value>),
+    /// Output over the response size limit, already trimmed in the worker by
+    /// `response_limit::limit`: the content blocks to return (a truncation
+    /// note, then the trimmed JSON). Trimming happens here, not in the
+    /// server, because its cost is quadratic in the number of arrays and the
+    /// filter chooses that shape; in the worker it is bounded by the
+    /// deadline and the rlimits.
+    Trimmed(Vec<String>),
     /// jq runtime error (e.g. `cannot index number with "a"`), already
     /// truncated; the caller appends the response shape.
     FilterError(String),
@@ -234,11 +241,19 @@ async fn exchange(request: Vec<u8>) -> Result<Reply, SandboxError> {
 }
 
 fn worker_command() -> Result<Command, SandboxError> {
-    static EXE: OnceLock<Result<std::path::PathBuf, String>> = OnceLock::new();
-    let exe = EXE
-        .get_or_init(|| std::env::current_exe().map_err(|error| error.to_string()))
-        .clone()
-        .map_err(SandboxError::Worker)?;
+    // Linux: always this process's own image, even after the file on disk was
+    // replaced or deleted (an upgrade under a running stdio server), where
+    // `current_exe()` would name a missing or newer binary.
+    #[cfg(target_os = "linux")]
+    let exe = std::path::PathBuf::from("/proc/self/exe");
+    #[cfg(not(target_os = "linux"))]
+    let exe = {
+        static EXE: std::sync::OnceLock<Result<std::path::PathBuf, String>> =
+            std::sync::OnceLock::new();
+        EXE.get_or_init(|| std::env::current_exe().map_err(|error| error.to_string()))
+            .clone()
+            .map_err(SandboxError::Worker)?
+    };
     let mut command = Command::new(exe);
     // The server environment holds credentials and upstream configuration;
     // the worker needs none of it.
@@ -285,6 +300,12 @@ fn limit_resources() {
         let _ = setrlimit(Resource::CORE, 0, 0);
         let _ = setrlimit(Resource::CPU, WORKER_CPU_SECONDS, WORKER_CPU_SECONDS + 1);
     }
+    // Workers share the server's memory cgroup. If a filter tips the pod over
+    // its limit, the kernel OOM killer must pick the worker, not the server
+    // (which, with the larger RSS, it would otherwise prefer). Raising one's
+    // own score needs no privilege.
+    #[cfg(target_os = "linux")]
+    let _ = std::fs::write("/proc/self/oom_score_adj", "1000");
 }
 
 #[cfg(test)]
@@ -332,6 +353,23 @@ pub(crate) mod tests {
             .await
             .unwrap();
         assert!(matches!(reply, Reply::Values(_)), "{reply:?}");
+    }
+
+    #[tokio::test]
+    async fn quadratic_trimming_stays_in_the_worker() {
+        // Thousands of two-element arrays make `response_limit` trimming
+        // quadratic. Under the production deadline the worker either finishes
+        // trimming or is killed; the server never gets a big output to trim.
+        let code = r#"[range(4000)] | map({key: "k\(.)", value: [1, 1]}) | from_entries"#;
+        let slot = acquire().await.unwrap();
+        match run_with_timeout(slot, code, json!(null), Duration::from_secs(2)).await {
+            Err(SandboxError::Timeout) => {}
+            Ok(Reply::Trimmed(blocks)) => {
+                let bytes: usize = blocks.iter().map(String::len).sum();
+                assert!(bytes <= 2 * 36_000, "{bytes}");
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
     }
 
     #[tokio::test]

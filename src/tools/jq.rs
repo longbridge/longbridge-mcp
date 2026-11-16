@@ -31,15 +31,18 @@ const MAX_CODE_CHARS: usize = 4096;
 /// 2 MiB tokio worker stack and aborted the server; within
 /// [`MAX_CODE_CHARS`] this leaves a wide margin (checked by tests).
 const VALIDATE_STACK_BYTES: usize = 64 * 1024 * 1024;
+/// Cap on the joined compile error details (see [`summarize`]).
+const MAX_COMPILE_ERROR_CHARS: usize = 1_000;
 /// Concurrent validation compiles. Each takes at most a few milliseconds.
 const MAX_VALIDATIONS: usize = 4;
-/// Largest filter output, as the final serialized response text: the response
-/// size limit. Bigger output would be trimmed anyway, and must not reach
-/// `response_limit::limit`: its trimming is quadratic in the number of arrays,
+/// Largest raw filter output the worker will build, before trimming.
+const MAX_OUTPUT_BYTES: usize = 8 * 1024 * 1024;
+/// What the server may receive back: output over the response size limit is
+/// trimmed in the worker (see [`Reply::Trimmed`]), so the server never runs
+/// `response_limit::limit`'s trimming — quadratic in the number of arrays,
 /// which `_jq` lets a caller choose (a 47 KB output took 3 s of a tokio
-/// worker), and a multi-MiB output inflates the server's memory several times
-/// over while it is parsed and re-serialized.
-const MAX_OUTPUT_BYTES: usize = crate::tools::support::response_limit::MAX_RESPONSE_BYTES;
+/// worker) — and never holds a multi-MiB output.
+const MAX_RESPONSE_BYTES: usize = crate::tools::support::response_limit::MAX_RESPONSE_BYTES;
 /// Cap on the jaq error text echoed back. jaq embeds the offending value in
 /// its message (`cannot index [<whole response>] with "data"`), which can be
 /// tens of KB of upstream data the caller never asked to see.
@@ -107,7 +110,7 @@ fn compile(code: &str) -> Result<Filter, McpError> {
             .flat_map(|(_, error)| load_error_details(code, error))
             .collect();
         McpError::invalid_params(
-            format!("Invalid _jq expression: {}", details.join("; ")),
+            format!("Invalid _jq expression: {}", summarize(details)),
             None,
         )
     })?;
@@ -125,10 +128,35 @@ fn compile(code: &str) -> Result<Filter, McpError> {
                 .map(|(name, kind)| undefined_message(name, kind.as_str()))
                 .collect();
             McpError::invalid_params(
-                format!("Invalid _jq expression: {}", details.join("; ")),
+                format!("Invalid _jq expression: {}", summarize(details)),
                 None,
             )
         })
+}
+
+/// Join compile error details for the caller: duplicates once (a 4096-char
+/// `env,env,…` repeats the same complaint ~1000 times), and at most
+/// [`MAX_COMPILE_ERROR_CHARS`] of them. Error envelopes skip
+/// `response_limit`, so this is their only size bound.
+fn summarize(details: Vec<String>) -> String {
+    let mut unique: Vec<String> = Vec::new();
+    for detail in details {
+        if !unique.contains(&detail) {
+            unique.push(detail);
+        }
+    }
+    let mut out = String::new();
+    for (shown, detail) in unique.iter().enumerate() {
+        if out.len() + detail.len() > MAX_COMPILE_ERROR_CHARS {
+            out.push_str(&format!("; … and {} more", unique.len() - shown));
+            break;
+        }
+        if shown > 0 {
+            out.push_str("; ");
+        }
+        out.push_str(detail);
+    }
+    out
 }
 
 /// Check that `code` compiles, without running it. This is the only jaq code
@@ -274,6 +302,11 @@ where
         Err(error) => ("busy", Failure::Busy(error.to_string())),
         Ok(slot) => match jq_sandbox::run(slot, &code, input).await {
             Ok(Reply::Values(values)) => return Ok(finish(result, values)),
+            Ok(Reply::Trimmed(blocks)) => {
+                result.content = blocks.into_iter().map(Content::text).collect();
+                result.structured_content = None;
+                return Ok(result);
+            }
             Ok(Reply::FilterError(message)) => (
                 "runtime",
                 Failure::Filter(format!("{message}; response shape: {shape}")),
@@ -296,7 +329,7 @@ where
     };
     record_failure(&name, stage, &code, failure.message());
     Ok(match unfiltered {
-        Some(unfiltered) => with_jq_warning(result, unfiltered, failure.message()),
+        Some(unfiltered) => with_jq_warning(result, unfiltered, &failure.write_warning()),
         None => failure.into_read_only_error(),
     })
 }
@@ -314,6 +347,22 @@ enum Failure {
 }
 
 impl Failure {
+    /// Why `_jq` was not applied, for a non-read-only tool's unfiltered
+    /// result. It must not suggest retrying: the call already ran, and a
+    /// one-step write (`topic_create`, `alert_add`, ...) would run again.
+    fn write_warning(&self) -> String {
+        match self {
+            Self::Busy(_) => {
+                "_jq was skipped because the filter sandbox was busy; the tool call itself \
+                 completed"
+                    .to_string()
+            }
+            Self::Filter(message) | Self::Unavailable(message) => {
+                format!("_jq was not applied: {message}")
+            }
+        }
+    }
+
     fn message(&self) -> &str {
         match self {
             Self::Filter(message) | Self::Busy(message) | Self::Unavailable(message) => message,
@@ -370,7 +419,7 @@ fn with_jq_warning(mut result: CallToolResult, unfiltered: Value, message: &str)
     result.structured_content = None;
     result.content = vec![Content::text(
         serde_json::json!({
-            "jq_warning": format!("_jq was not applied: {message}"),
+            "jq_warning": message,
             "hint": "`result` is the tool's full, unfiltered output; read it to see what happened. If the call performed an action, it has happened: do not repeat it just to retry the filter. If it only returned a preview or confirmation step, nothing was executed yet; continue the normal flow.",
             "result": unfiltered,
         })
@@ -514,15 +563,21 @@ fn take_input(result: &mut CallToolResult) -> Value {
 
 /// Replace a tool result's content with the filter outputs: one output as-is,
 /// several (or none) as an array.
-fn finish(mut result: CallToolResult, mut values: Vec<Value>) -> CallToolResult {
-    let value = if values.len() == 1 {
-        values.pop().expect("one value is present")
-    } else {
-        Value::Array(values)
-    };
+fn finish(mut result: CallToolResult, values: Vec<Value>) -> CallToolResult {
+    let value = response_value(values);
     result.content = vec![Content::text(value.to_string())];
     result.structured_content = value.is_object().then_some(value);
     result
+}
+
+/// The response value for filter outputs: one as-is, several (or none) as an
+/// array.
+fn response_value(mut values: Vec<Value>) -> Value {
+    if values.len() == 1 {
+        values.pop().expect("one value is present")
+    } else {
+        Value::Array(values)
+    }
 }
 
 /// Compile and run `code` on `input`. Called inside the sandbox worker
@@ -565,14 +620,41 @@ fn run_filter(filter: Filter, input: Value) -> Reply {
         // Measured as serde_json will write it in the response.
         bytes += value.to_string().len() + 1;
         if values.len() >= MAX_RESULTS || bytes > MAX_OUTPUT_BYTES {
-            return Reply::Error(format!(
-                "output limit exceeded ({MAX_RESULTS} results or {MAX_OUTPUT_BYTES} bytes, the \
-                 response size limit); narrow the _jq expression"
-            ));
+            return Reply::Error(
+                "output limit exceeded (10,000 results or 8 MiB); narrow the _jq expression".into(),
+            );
         }
         values.push(value);
     }
-    Reply::Values(values)
+    if bytes <= MAX_RESPONSE_BYTES {
+        return Reply::Values(values);
+    }
+    trim(response_value(values))
+}
+
+/// Trim an over-limit response the way every tool result is trimmed, inside
+/// the worker (see [`Reply::Trimmed`]).
+fn trim(value: Value) -> Reply {
+    let text = value.to_string();
+    let (trimmed, _) =
+        crate::tools::support::response_limit::limit(CallToolResult::success(vec![Content::text(
+            text,
+        )]));
+    let blocks: Vec<String> = trimmed
+        .content
+        .iter()
+        .filter_map(|content| content.as_text().map(|text| text.text.clone()))
+        .collect();
+    // `limit` cannot shrink output without arrays (one huge string, say);
+    // such output must not go back to the server either. The allowance covers
+    // the truncation note.
+    if blocks.iter().map(String::len).sum::<usize>() > 2 * MAX_RESPONSE_BYTES {
+        return Reply::Error(format!(
+            "output limit exceeded: over {MAX_RESPONSE_BYTES} bytes with nothing to trim; \
+             narrow the _jq expression"
+        ));
+    }
+    Reply::Trimmed(blocks)
 }
 
 #[cfg(test)]
@@ -787,10 +869,10 @@ mod tests {
             let value: Value =
                 serde_json::from_str(&write.content[0].as_text().unwrap().text).unwrap();
             assert_eq!(value["result"], json!({"id": "701"}));
-            assert!(
-                value["jq_warning"].as_str().unwrap().contains("too many"),
-                "{value}"
-            );
+            // Never "retry": a one-step write already ran.
+            let warning = value["jq_warning"].as_str().unwrap();
+            assert!(warning.contains("skipped"), "{warning}");
+            assert!(!warning.contains("retry"), "{warning}");
         })
         .await;
     }
@@ -848,33 +930,54 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn output_over_the_response_limit_is_rejected_quickly() {
-        // Shaped to make response trimming quadratic (many small arrays): it
-        // must be refused in the worker, never reach `response_limit`.
-        let started = std::time::Instant::now();
+    async fn output_over_the_response_limit_comes_back_trimmed() {
+        // A large list filtered with `_jq` is trimmed like any tool result
+        // (in the worker), not refused: a note, then valid, shorter JSON.
         let result = filtered(
-            r#"[range(4000)] | map({key: "k\(.)", value: [1, 1]}) | from_entries"#,
+            r#"[range(3000)] | map({id: ., name: ("x" * 20)})"#,
             json!(null),
         )
         .await;
+        assert_ne!(result.is_error, Some(true));
+        let texts: Vec<&str> = result
+            .content
+            .iter()
+            .map(|content| content.as_text().unwrap().text.as_str())
+            .collect();
+        assert_eq!(texts.len(), 2, "{texts:?}");
+        assert!(texts[0].starts_with("[TRUNCATED"), "{}", texts[0]);
+        let kept = serde_json::from_str::<Value>(texts[1]).unwrap();
+        assert!(kept.as_array().unwrap().len() < 3000);
+        assert!(texts[1].len() <= MAX_RESPONSE_BYTES, "{}", texts[1].len());
+        // Just under the limit passes untouched.
+        let result = filtered(r#"[range(100)] | map("x" * 300)"#, json!(null)).await;
+        assert_eq!(result.content.len(), 1);
+        let text = &result.content[0].as_text().unwrap().text;
+        assert!(text.len() <= MAX_RESPONSE_BYTES, "{}", text.len());
+    }
+
+    #[tokio::test]
+    async fn untrimmable_output_over_the_limit_is_refused() {
+        // No array to cut: it must not go back to the server whole.
+        let result = filtered(r#""x" * 100000"#, json!(null)).await;
         let text = &result.content[0].as_text().unwrap().text;
         assert_eq!(result.is_error, Some(true), "{text}");
-        assert!(text.contains("output limit exceeded"), "{text}");
+        assert!(text.contains("nothing to trim"), "{text}");
         assert!(text.contains("\"recoverable\":\"fix_params\""), "{text}");
-        assert!(started.elapsed() < std::time::Duration::from_secs(10));
-        // Just under the limit still passes, untrimmed.
-        let result = filtered(r#"[range(100)] | map("x" * 300)"#, json!(null)).await;
+    }
+
+    #[tokio::test]
+    async fn repeated_compile_errors_are_summarized() {
+        let code = vec!["env"; 1000].join(",");
+        let result = call(request(json!(code)), |_| async {
+            panic!("tool must not execute")
+        })
+        .await
+        .unwrap();
         let text = &result.content[0].as_text().unwrap().text;
-        assert_ne!(result.is_error, Some(true), "{text}");
-        assert!(text.len() <= MAX_OUTPUT_BYTES, "{}", text.len());
-        assert_eq!(
-            serde_json::from_str::<Value>(text)
-                .unwrap()
-                .as_array()
-                .unwrap()
-                .len(),
-            100
-        );
+        assert!(text.contains("disabled in _jq"), "{text}");
+        assert_eq!(text.matches("disabled in _jq").count(), 1, "{text}");
+        assert!(text.len() < 2_000, "{} bytes", text.len());
     }
 
     #[tokio::test]
