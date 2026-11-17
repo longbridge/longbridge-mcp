@@ -70,7 +70,7 @@
     },
     "risk_assessment": {
       "title": "風險評估",
-      "description": "查詢當前登入會員的風險評估（適當性）檔案：最近一次風險測評問卷的結果及相關投資者資質。無參數。返回 {risk, pi, approvals, re_authentication, pi_end_at, deadlines, risk_assessment_at, score, strategy_risk_levels[]}：risk 為最近一次問卷的風險等級（如 \"A5\"），score 為問卷得分，risk_assessment_at 為測評日期（yyyy-mm-dd）；pi 為專業投資者（PI）狀態碼，pi_end_at 為其截止時間（按服務端原樣返回，未設置時為 0）；approvals 為各資質項的狀態（如 car、cka、risk_audit -> \"pass\"；is_corporate_client -> \"false\"）；deadlines 為各項的截止期限（按服務端原樣返回）；re_authentication 為重新認證標記（未設置時為空）；strategy_risk_levels 為會員可交易的策略風險等級。請按原樣呈現這些值：服務端未定義風險等級的量表，也未公開 PI 狀態碼的含義，因此不要推斷等級高低、也不要據此判斷產品適當性；approvals 的值是字串（如 \"pass\"、\"false\"）而非布林值，pi_end_at 與 deadlines 為服務端原樣返回且單位未定義"
+      "description": "查詢當前登入會員的風險評估（適當性）檔案：最近一次風險測評問卷的結果及相關投資者資質。無參數。返回 {risk, pi, approvals, re_authentication, pi_end_at, deadlines, risk_assessment_at, score, strategy_risk_levels[]}：risk 為最近一次問卷的風險等級（如 \"A5\"），score 為問卷得分，risk_assessment_at 為測評日期（yyyy-mm-dd）；pi 為專業投資者（PI）狀態碼，pi_end_at 為其截止時間（按服務端原樣返回，未設置時為 0）；approvals 為各資質項的狀態（如 car、cka、risk_audit -> \"pass\"；is_corporate_client -> \"false\"）；deadlines 為各項的截止期限（按服務端原樣返回）；re_authentication 為重新認證標記（未設置時為空）；strategy_risk_levels 為會員可交易的策略風險等級。請按原樣呈現這些值。伺服器既未定義風險等級的量表和 PI 狀態碼含義，也未說明各資格項目的口徑，以及 strategy_risk_levels 與具體產品的對應關係，因此不要推斷等級高低，也不要用 risk、pi、approvals 或 strategy_risk_levels 判斷產品適當性或購買資格；approvals 的值是字串（如 \"pass\"、\"false\"）而非布林值，pi_end_at 與 deadlines 為服務端原樣返回且單位未定義"
     },
     "profit_analysis": {
       "title": "盈虧分析",
