@@ -75,7 +75,7 @@ src/
     ├── mod.rs              McpContext, #[tool_router], forwarding layer, TOOL_ENDPOINTS
     ├── quote.rs            Quote tools (32)
     ├── fundamental.rs      Fundamental data tools (31)
-    ├── trade.rs            Trade tools (16)
+    ├── trade.rs            Trade tools (17)
     ├── market.rs           Market data tools (14)
     ├── dca.rs              Dollar-cost averaging tools (9)
     ├── sharelist.rs        Community sharelist tools (8)

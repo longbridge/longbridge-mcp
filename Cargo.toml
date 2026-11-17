@@ -63,9 +63,18 @@ jaq-json = { version = "2.0", features = ["serde"] }
 [target.'cfg(unix)'.dependencies]
 rlimit = "0.11"
 
-# TEMPORARY: `TradeContext::risk_assessment` is not on crates.io yet (it lands
-# in longbridge 5.4, longbridge/openapi#625). Remove this patch and bump the
-# `longbridge`/`longbridge-proto` requirements once the SDK is released.
+# TEMPORARY: `TradeContext::risk_assessment` is not on crates.io yet. It is in
+# longbridge/openapi#625, which is still unreleased — note that 5.4.0 is already
+# published and does NOT contain it, so the requirements above must be bumped to
+# whatever release ships it (not 5.4) when this patch is removed.
+#
+# Pinned by `rev`, not `branch`: once #625 merges its branch is deleted, and a
+# branch-pinned source stops resolving in a clean checkout (CI, release builds)
+# even though a warm ~/.cargo/git cache keeps working locally.
+#
+# NOTE: this patch is not only the new API — it also moves the SDK 5.3 -> 5.4
+# (oauth2 4.4 -> 5.0, reqwest 0.11 -> 0.12, typed `Error::OAuth`), which is where
+# most of the Cargo.lock churn comes from.
 [patch.crates-io]
-longbridge = { git = "https://github.com/longbridge/openapi", branch = "feat/risk-assessment" }
-longbridge-proto = { git = "https://github.com/longbridge/openapi", branch = "feat/risk-assessment" }
+longbridge = { git = "https://github.com/longbridge/openapi", rev = "0f94aa5d0" }
+longbridge-proto = { git = "https://github.com/longbridge/openapi", rev = "0f94aa5d0" }
