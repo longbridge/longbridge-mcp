@@ -104,7 +104,8 @@ pub struct RiskAssessmentResponse {
     pub risk_assessment_at: String,
     /// Score of the latest risk questionnaire.
     pub score: i32,
-    /// Strategy risk levels the member is allowed to trade.
+    /// Strategy risk levels of the member. The server does not document what
+    /// these levels permit, so do not read them as a trading entitlement.
     pub strategy_risk_levels: Vec<String>,
 }
 
