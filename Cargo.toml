@@ -68,13 +68,16 @@ rlimit = "0.11"
 # published and does NOT contain it, so the requirements above must be bumped to
 # whatever release ships it (not 5.4) when this patch is removed.
 #
-# Pinned by the full commit SHA, not `branch` and not an abbreviated rev: once #625 merges its branch is deleted, and a
-# branch-pinned source stops resolving in a clean checkout (CI, release builds)
-# even though a warm ~/.cargo/git cache keeps working locally.
+# Pinned by the full commit SHA, not `branch` and not an abbreviated rev. A
+# branch pin stops resolving once #625 merges and its branch is deleted (a warm
+# ~/.cargo/git cache hides this locally, CI and release builds do not). An
+# abbreviated rev still resolves, but only by asking api.github.com first, so it
+# breaks under API rate limits, with net.git-fetch-with-cli, and on mirrors; a
+# full SHA is fetched by raw want-by-SHA.
 #
 # NOTE: this patch is not only the new API — it also moves the SDK 5.3 -> 5.4
 # (oauth2 4.4 -> 5.0, reqwest 0.11 -> 0.12, typed `Error::OAuth`), which is where
 # most of the Cargo.lock churn comes from.
 [patch.crates-io]
-longbridge = { git = "https://github.com/longbridge/openapi", rev = "820c2f83bcc1385e331137cfff1f3c1180e513d6" }
-longbridge-proto = { git = "https://github.com/longbridge/openapi", rev = "820c2f83bcc1385e331137cfff1f3c1180e513d6" }
+longbridge = { git = "https://github.com/longbridge/openapi", rev = "9303d3f159cdab60ee9749ff8433815fc425954d" }
+longbridge-proto = { git = "https://github.com/longbridge/openapi", rev = "9303d3f159cdab60ee9749ff8433815fc425954d" }

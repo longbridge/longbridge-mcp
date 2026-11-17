@@ -1502,7 +1502,7 @@ checksum = "0ceec5bc11778974d1bcb055b18002eba7f4b3518b6a0081b3af5f21666da9ad"
 [[package]]
 name = "longbridge"
 version = "5.4.0"
-source = "git+https://github.com/longbridge/openapi?rev=820c2f83bcc1385e331137cfff1f3c1180e513d6#820c2f83bcc1385e331137cfff1f3c1180e513d6"
+source = "git+https://github.com/longbridge/openapi?rev=9303d3f159cdab60ee9749ff8433815fc425954d#9303d3f159cdab60ee9749ff8433815fc425954d"
 dependencies = [
  "anyhow",
  "bitflags 2.13.1",
@@ -1538,7 +1538,7 @@ dependencies = [
 [[package]]
 name = "longbridge-candlesticks"
 version = "5.4.0"
-source = "git+https://github.com/longbridge/openapi?rev=820c2f83bcc1385e331137cfff1f3c1180e513d6#820c2f83bcc1385e331137cfff1f3c1180e513d6"
+source = "git+https://github.com/longbridge/openapi?rev=9303d3f159cdab60ee9749ff8433815fc425954d#9303d3f159cdab60ee9749ff8433815fc425954d"
 dependencies = [
  "bitflags 2.13.1",
  "num-traits",
@@ -1550,7 +1550,7 @@ dependencies = [
 [[package]]
 name = "longbridge-geo"
 version = "5.4.0"
-source = "git+https://github.com/longbridge/openapi?rev=820c2f83bcc1385e331137cfff1f3c1180e513d6#820c2f83bcc1385e331137cfff1f3c1180e513d6"
+source = "git+https://github.com/longbridge/openapi?rev=9303d3f159cdab60ee9749ff8433815fc425954d#9303d3f159cdab60ee9749ff8433815fc425954d"
 dependencies = [
  "reqwest",
 ]
@@ -1558,7 +1558,7 @@ dependencies = [
 [[package]]
 name = "longbridge-httpcli"
 version = "5.4.0"
-source = "git+https://github.com/longbridge/openapi?rev=820c2f83bcc1385e331137cfff1f3c1180e513d6#820c2f83bcc1385e331137cfff1f3c1180e513d6"
+source = "git+https://github.com/longbridge/openapi?rev=9303d3f159cdab60ee9749ff8433815fc425954d#9303d3f159cdab60ee9749ff8433815fc425954d"
 dependencies = [
  "dotenv",
  "eventsource-stream",
@@ -1621,7 +1621,7 @@ dependencies = [
 [[package]]
 name = "longbridge-oauth"
 version = "5.4.0"
-source = "git+https://github.com/longbridge/openapi?rev=820c2f83bcc1385e331137cfff1f3c1180e513d6#820c2f83bcc1385e331137cfff1f3c1180e513d6"
+source = "git+https://github.com/longbridge/openapi?rev=9303d3f159cdab60ee9749ff8433815fc425954d#9303d3f159cdab60ee9749ff8433815fc425954d"
 dependencies = [
  "dirs",
  "futures-util",
@@ -1638,7 +1638,7 @@ dependencies = [
 [[package]]
 name = "longbridge-proto"
 version = "5.4.0"
-source = "git+https://github.com/longbridge/openapi?rev=820c2f83bcc1385e331137cfff1f3c1180e513d6#820c2f83bcc1385e331137cfff1f3c1180e513d6"
+source = "git+https://github.com/longbridge/openapi?rev=9303d3f159cdab60ee9749ff8433815fc425954d#9303d3f159cdab60ee9749ff8433815fc425954d"
 dependencies = [
  "prost",
  "serde",
@@ -1647,7 +1647,7 @@ dependencies = [
 [[package]]
 name = "longbridge-wscli"
 version = "5.4.0"
-source = "git+https://github.com/longbridge/openapi?rev=820c2f83bcc1385e331137cfff1f3c1180e513d6#820c2f83bcc1385e331137cfff1f3c1180e513d6"
+source = "git+https://github.com/longbridge/openapi?rev=9303d3f159cdab60ee9749ff8433815fc425954d#9303d3f159cdab60ee9749ff8433815fc425954d"
 dependencies = [
  "byteorder",
  "flate2",
