@@ -178,8 +178,7 @@ DESCRIPTION_UNOBSERVABLE = {
         "invest_day_of_week", "invest_day_of_month", "next_trd_date", "cum_amount",
         "cum_profit", "average_cost", "issue_number",
     },
-    # US-account kind=ALL variant; the probe account is AP.
-    "financial_statement": {"income_statement", "balance_sheet", "cash_flow", "empty_fields"},
+    "financial_statement": {"empty_fields"},
     "financial_report": {"is_list", "bs_list", "cf_list"},  # US-account overview variant
 }
 
