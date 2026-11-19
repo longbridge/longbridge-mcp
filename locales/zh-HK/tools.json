@@ -1059,14 +1059,14 @@
     },
     "valuation": {
       "title": "估值",
-      "description": "獲取 PE 估值概覽：歷史低位 / 中位數 / 高位及 PE 序列。返回 {range（年數）, metrics: {pe: {low, median, high, desc, list: [{timestamp, value}]}}}。美股賬戶查詢 `.US` 標的會得到美股專屬變體（ai_summary 加上子欄位不同的 metrics.pe 物件）。區域由賬戶自動識別時間戳為交易所當地時間（港股/A 股/新加坡 +08:00，美股為美東時區）。",
+      "description": "獲取 PE 估值概覽：合理區間、中位數及 PE 序列。返回 {range（年數）, metrics: {pe: {low, median, high, desc, list: [{timestamp, value}]}}}；low/high 是合理區間的下沿／上沿，不是區間內的最低／最高值（序列可能低於 low 或高於 high），極值請從 list 計算。美股賬戶查詢 `.US` 標的會得到美股專屬變體（ai_summary 加上子欄位不同的 metrics.pe 物件）。區域由賬戶自動識別時間戳為交易所當地時間（港股/A 股/新加坡 +08:00，美股為美東時區）。",
       "properties": {
         "symbol": "證券代碼，例如 `\"700.HK\"`。請用規範代碼，補零的代碼（如 \"00700.HK\"）會返回空記錄而非報錯"
       }
     },
     "valuation_history": {
       "title": "估值歷史",
-      "description": "獲取 PE 估值歷史，用於長期分位分析。返回 overview{indicator, metrics.pe{metric, desc, industry_median}, range, date, ccy_symbol}、history{range, metrics.pe{low, median, high, desc, list[]{timestamp, value}}}、peers.pe{industry_median, list[]{symbol, name, value}} 及 stocks（行業內股票，以 counter id 為鍵，如 \"ST/US/AMD\"，每項 {name, market_cap}）。僅 PE；不含 PB/PS 或股息率序列時間戳為交易所當地時間（港股/A 股/新加坡 +08:00，美股為美東時區）。",
+      "description": "獲取 PE 估值歷史，用於長期分位分析。返回 overview{indicator, metrics.pe{metric, desc, industry_median}, range, date, ccy_symbol}、history{range, metrics.pe{low, median, high, desc, list[]{timestamp, value}}}（low/high 是合理區間的下沿／上沿，不是區間內的最低／最高值，極值請從 list 計算）、peers.pe{industry_median, list[]{symbol, name, value}} 及 stocks（行業內股票，以 counter id 為鍵，如 \"ST/US/AMD\"，每項 {name, market_cap}）。僅 PE；不含 PB/PS 或股息率序列時間戳為交易所當地時間（港股/A 股/新加坡 +08:00，美股為美東時區）。",
       "properties": {
         "symbol": "證券代碼，例如 `\"700.HK\"`。請用規範代碼，補零的代碼（如 \"00700.HK\"）會返回空記錄而非報錯"
       }

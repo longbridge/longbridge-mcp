@@ -1059,14 +1059,14 @@
     },
     "valuation": {
       "title": "バリュエーション",
-      "description": "PE バリュエーションの概要（過去の安値圏/中央値/高値圏および PE 系列）を取得します。{range（年数）, metrics: {pe: {low, median, high, desc, list: [{timestamp, value}]}}} を返します。米国株口座で `.US` 銘柄を照会すると、米国株専用のバリアント（ai_summary に加え、サブフィールドの異なる metrics.pe オブジェクト）が返されます。リージョンは口座から自動判別されます",
+      "description": "PE バリュエーションの概要（適正レンジ、中央値および PE 系列）を取得します。{range（年数）, metrics: {pe: {low, median, high, desc, list: [{timestamp, value}]}}} を返します。low/high は適正レンジの下限/上限であり、期間中の最小値/最大値ではありません（系列が low を下回る、または high を上回ることがあります）。極値は list から算出してください。米国株口座で `.US` 銘柄を照会すると、米国株専用のバリアント（ai_summary に加え、サブフィールドの異なる metrics.pe オブジェクト）が返されます。リージョンは口座から自動判別されます",
       "properties": {
         "symbol": "銘柄コード。例：`\"700.HK\"`。正規のコードを使用してください。ゼロ埋めしたコード（例：\"00700.HK\"）はエラーではなく空のレコードを返します"
       }
     },
     "valuation_history": {
       "title": "バリュエーション履歴",
-      "description": "長期のパーセンタイル分析用に PE バリュエーション履歴を取得します。overview{indicator, metrics.pe{metric, desc, industry_median}, range, date, ccy_symbol}、history{range, metrics.pe{low, median, high, desc, list[]{timestamp, value}}}、peers.pe{industry_median, list[]{symbol, name, value}}、および stocks（counter id をキーとする業界銘柄。例：\"ST/US/AMD\"、各項目 {name, market_cap}）を返します。PE のみで、PB/PS や配当利回りの系列は含まれません",
+      "description": "長期のパーセンタイル分析用に PE バリュエーション履歴を取得します。overview{indicator, metrics.pe{metric, desc, industry_median}, range, date, ccy_symbol}、history{range, metrics.pe{low, median, high, desc, list[]{timestamp, value}}}（low/high は適正レンジの下限/上限で、期間中の最小値/最大値ではありません。極値は list から算出）、peers.pe{industry_median, list[]{symbol, name, value}}、および stocks（counter id をキーとする業界銘柄。例：\"ST/US/AMD\"、各項目 {name, market_cap}）を返します。PE のみで、PB/PS や配当利回りの系列は含まれません",
       "properties": {
         "symbol": "銘柄コード。例：`\"700.HK\"`。正規のコードを使用してください。ゼロ埋めしたコード（例：\"00700.HK\"）はエラーではなく空のレコードを返します"
       }
