@@ -9,7 +9,7 @@ use longbridge::trade::{
     AccountBalance, CancelOrderOptions, Execution, GetHistoryExecutionsOptions,
     GetOrderDetailOptions, GetTodayExecutionsOptions, GetTodayOrdersOptions, GetUSHistoryOrders,
     GetUSTransactionHistoryOptions, Order, OrderDetail, OrderSide, QueryUSOrdersResponse,
-    StockPositionsResponse, TradeContext,
+    RiskAssessment, StockPositionsResponse, TradeContext,
 };
 use reqwest::Method;
 use rmcp::ErrorData as McpError;
@@ -526,6 +526,25 @@ pub async fn margin_ratio(
         .await
         .map_err(Error::longbridge)?;
     tool_json(&result)
+}
+
+pub async fn risk_assessment(mctx: &crate::tools::McpContext) -> Result<CallToolResult, McpError> {
+    let (ctx, _) = TradeContext::new(mctx.create_config());
+    let result = ctx.risk_assessment().await.map_err(Error::longbridge)?;
+    Ok(tool_result(
+        risk_assessment_json(&result).map_err(Error::Serialize)?,
+    ))
+}
+
+/// The `risk_assessment` output: the SDK response verbatim.
+///
+/// It deliberately bypasses `tool_json`'s `_at` transform. `pi_end_at` is a raw
+/// server value whose unit is undocumented and whose "not set" value is `0`,
+/// which the transform would render as `1970-01-01T00:00:00Z`;
+/// `risk_assessment_at` is already a date string. Every other field is already
+/// snake_case and carries nothing the transform would rewrite.
+fn risk_assessment_json(result: &RiskAssessment) -> Result<String, serde_json::Error> {
+    serde_json::to_string(result)
 }
 
 pub async fn today_orders(
@@ -3286,12 +3305,15 @@ mod tests {
 /// run through the same post-processing and serializer the AP path uses.
 #[cfg(test)]
 mod ap_output_tests {
-    use longbridge::trade::{AccountBalance, CashFlow, Order, OrderDetail, StockPositionsResponse};
+    use longbridge::trade::{
+        AccountBalance, CashFlow, Order, OrderDetail, RiskAssessment, StockPositionsResponse,
+    };
     use serde::de::DeserializeOwned;
     use serde_json::Value;
 
     use super::{
         ap_account_balance_json, ap_order_detail_json, ap_orders_json, ap_stock_positions_json,
+        risk_assessment_json,
     };
     use crate::serialize::to_tool_json;
 
@@ -3374,5 +3396,35 @@ mod ap_output_tests {
             rendered(&value),
             include_str!("fixtures/ap/order_detail.expected.json"),
         );
+    }
+
+    #[test]
+    fn risk_assessment_output_is_unchanged() {
+        let result: RiskAssessment = fixture(include_str!("fixtures/ap/risk_assessment.json"));
+        let json = risk_assessment_json(&result).expect("risk assessment serializes");
+        assert_golden(
+            "risk_assessment",
+            serde_json::from_str(&json).expect("risk assessment JSON parses"),
+            include_str!("fixtures/ap/risk_assessment.expected.json"),
+        );
+    }
+
+    /// `pi_end_at` is passed through as the server sent it: neither the `0`
+    /// "not set" value nor a set value is reinterpreted as a unix timestamp.
+    #[test]
+    fn risk_assessment_keeps_pi_end_at_raw() {
+        for raw in [0_i64, 1_790_000_000] {
+            let result = RiskAssessment {
+                pi_end_at: raw,
+                ..RiskAssessment::default()
+            };
+            let json = risk_assessment_json(&result).expect("risk assessment serializes");
+            let value: Value = serde_json::from_str(&json).expect("risk assessment JSON parses");
+            assert_eq!(
+                value["pi_end_at"],
+                Value::from(raw),
+                "pi_end_at must stay the raw server number"
+            );
+        }
     }
 }

@@ -68,6 +68,10 @@
         "symbol": "证券代码，例如 `\"700.HK\"`。请用规范代码，补零的代码（如 \"00700.HK\"）会返回空记录而非报错"
       }
     },
+    "risk_assessment": {
+      "title": "风险评估",
+      "description": "查询当前登录会员的风险评估（适当性）档案：最近一次风险测评问卷的结果及相关投资者资质。无参数。返回 {risk, pi, approvals, re_authentication, pi_end_at, deadlines, risk_assessment_at, score, strategy_risk_levels[]}：risk 为最近一次问卷的风险等级（如 \"A5\"），score 为问卷得分，risk_assessment_at 为测评日期（yyyy-mm-dd）；pi 为专业投资者（PI）状态码，pi_end_at 为其截止时间（按服务端原样返回，未设置时为 0）；approvals 为各资质项的状态（如 car、cka、risk_audit -> \"pass\"；is_corporate_client -> \"false\"）；deadlines 为各项的截止期限（按服务端原样返回）；re_authentication 为重新认证标记（未设置时为空）；strategy_risk_levels 为会员的策略风险等级。请按原样呈现这些值。服务端未定义上述任何一套取值口径，因此不要推断等级高低，也不要用 risk、pi、approvals 或 strategy_risk_levels 判断产品适当性或购买资格；approvals 的值是字符串（如 \"pass\"、\"false\"）而非布尔值，pi_end_at 与 deadlines 为服务端原样返回且单位未定义"
+    },
     "profit_analysis": {
       "title": "盈亏分析",
       "description": "获取组合盈亏分析汇总。start/end（yyyy-mm-dd）须成对传入，只传其中之一会返回空结果",

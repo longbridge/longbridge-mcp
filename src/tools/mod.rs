@@ -1925,6 +1925,7 @@ const TOOL_ENDPOINTS: &[(&str, u8)] = &[
     ("profit_analysis_realized", V2),
     ("quant_run", V2),
     ("rank_categories", V2),
+    ("risk_assessment", V2),
     ("screener_indicators", V2),
     ("screener_recommend_strategies", V2),
     ("screener_strategy", V2),
@@ -3031,6 +3032,24 @@ impl Longbridge {
         let mctx = extract_context(&ctx)?;
         measured_tool_call("margin_ratio", format!("{p:?}"), || {
             trade::margin_ratio(&mctx, p)
+        })
+        .await
+    }
+
+    /// Get the member's risk assessment (suitability) profile.
+    #[tool(
+        title = "Risk Assessment",
+        annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = true),
+        output_schema = schema_for::<output::RiskAssessmentResponse>(),
+        description = "Get the logged-in member's risk assessment (suitability) profile: the latest risk questionnaire result and related investor qualifications. No parameters. Returns {risk, pi, approvals, re_authentication, pi_end_at, deadlines, risk_assessment_at, score, strategy_risk_levels[]}: risk is the questionnaire's risk level (e.g. \"A5\"), score its score, risk_assessment_at its date (yyyy-mm-dd); pi is the professional investor status code and pi_end_at its end time; approvals maps qualification items to their state (e.g. car, cka, risk_audit -> \"pass\"; is_corporate_client -> \"false\"); deadlines maps items to deadlines; re_authentication is the re-authentication flag; strategy_risk_levels lists the member's strategy risk levels. Report these values as returned: the server defines no vocabulary for risk, pi, approvals or strategy_risk_levels, so never infer an ordering between levels and never decide product eligibility or suitability from them. approvals values are strings (\"pass\", \"false\"), not booleans; pi_end_at and deadlines are raw server values with an undocumented unit (0 means not set)."
+    )]
+    async fn risk_assessment(
+        &self,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("risk_assessment", String::new(), || {
+            trade::risk_assessment(&mctx)
         })
         .await
     }
@@ -7759,6 +7778,10 @@ mod tests {
             (
                 "order_detail",
                 include_str!("fixtures/ap/order_detail.expected.json"),
+            ),
+            (
+                "risk_assessment",
+                include_str!("fixtures/ap/risk_assessment.expected.json"),
             ),
         ] {
             let value: serde_json::Value =
