@@ -6,6 +6,16 @@ on:
   pull_request:
     branches: [main]
 
+# Cancel a pull request's earlier runs when a new commit supersedes them.
+#
+# `head_ref` is set only for pull_request events, so a PR groups by its branch
+# and a new push cancels the run for the commit it replaced. A push to main
+# falls back to `run_id`, which is unique per run, so those get a group of
+# their own: never cancelled, and never queued behind each other.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
 env:
   CARGO_TERM_COLOR: always
 
