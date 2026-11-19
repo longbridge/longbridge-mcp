@@ -716,6 +716,63 @@ pub struct FinancialStatementParam {
     pub kind: String,
     /// Report period: "af" (annual), "saf" (semi-annual), "qf" (quarterly full), "q1"/"q2"/"q3"
     pub report: Option<String>,
+    /// Number of reporting periods to return, newest first. Defaults to 8;
+    /// the upstream returns up to ~32, too many to fit one tool result.
+    #[serde(default, deserialize_with = "tolerant_option_usize")]
+    #[schemars(extend("default" = 8))]
+    pub periods: Option<usize>,
+}
+
+/// Periods `financial_statement` returns when `periods` is omitted.
+const DEFAULT_STATEMENT_PERIODS: usize = 8;
+
+/// Sort key for one statement period: its fiscal period end (`fp_end`,
+/// `YYYY-MM-DD`), falling back to `ff_year`/`ff_period`.
+fn statement_period_key(period: &serde_json::Value) -> String {
+    if let Some(end) = period.get("fp_end").and_then(serde_json::Value::as_str) {
+        return end.to_string();
+    }
+    let year = period
+        .get("ff_year")
+        .map(|y| y.to_string().trim_matches('"').to_string())
+        .unwrap_or_default();
+    let part = period
+        .get("ff_period")
+        .map(|p| p.to_string().trim_matches('"').to_string())
+        .unwrap_or_default();
+    format!("{year:0>4}-{part}")
+}
+
+/// Fit a generic-path `financial_statement` response into one tool result.
+///
+/// `StatementDetailV3` returns every period since ~2018, oldest first
+/// (87–198 KB per statement), and the gateway does not forward `count`. Order
+/// the periods newest first and keep `periods` of them, then drop each line's
+/// `id` (a backend display id; `field` is the stable key) and round `value`
+/// to 2 dp (amounts arrive with ~6 sub-unit decimals).
+fn limit_statement_periods(value: &mut serde_json::Value, periods: usize) {
+    let Some(list) = value
+        .get_mut("list")
+        .and_then(serde_json::Value::as_array_mut)
+    else {
+        return;
+    };
+    list.sort_by_key(|period| std::cmp::Reverse(statement_period_key(period)));
+    list.truncate(periods.max(1));
+    for period in list.iter_mut() {
+        let rows = period
+            .get_mut("fields")
+            .and_then(serde_json::Value::as_array_mut);
+        for row in rows.into_iter().flatten() {
+            let Some(row) = row.as_object_mut() else {
+                continue;
+            };
+            row.remove("id");
+            if let Some(amount) = row.get_mut("value") {
+                crate::serialize::round_decimals(amount, 2);
+            }
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -803,6 +860,7 @@ pub async fn financial_statement(
     // Section-header rows (收入/成本/费用 …) and lines with no prior-year base
     // carry empty value/yoy/field strings; drop them.
     crate::serialize::strip_empty_strings(&mut value);
+    limit_statement_periods(&mut value, p.periods.unwrap_or(DEFAULT_STATEMENT_PERIODS));
     crate::tools::tool_json(&value)
 }
 
@@ -1404,8 +1462,8 @@ pub async fn valuation_comparison(
 #[cfg(test)]
 mod tests {
     use super::{
-        ShareholderDetailParam, limit_report_periods, limit_shareholder_periods, rating_part,
-        valuation_rank_range,
+        ShareholderDetailParam, limit_report_periods, limit_shareholder_periods,
+        limit_statement_periods, rating_part, valuation_rank_range,
     };
 
     #[test]
@@ -1423,6 +1481,55 @@ mod tests {
         assert!(
             valuation_rank_range(Some("last week"), None).is_err(),
             "free text is rejected"
+        );
+    }
+
+    #[test]
+    fn limit_statement_periods_keeps_the_newest_periods_first() {
+        let row = |value: &str| {
+            serde_json::json!({"name": "营收", "id": "7", "level": 2, "field": "total_rev",
+                               "value": value, "yoy": "0.117219"})
+        };
+        let mut v = serde_json::json!({"report": "qf", "list": [
+            {"ff_year": 2025, "ff_period": "4", "fp_end": "2025-12-31", "fields": [row("1.123456")]},
+            {"ff_year": 2026, "ff_period": "1", "fp_end": "2026-03-31", "fields": [row("2.5")]},
+            {"ff_year": 2026, "ff_period": "2", "fp_end": "2026-06-30", "fields": [row("3")]},
+        ]});
+        limit_statement_periods(&mut v, 2);
+        let list = v["list"].as_array().expect("list stays an array");
+        assert_eq!(
+            list.len(),
+            2,
+            "only the requested number of periods is kept"
+        );
+        assert_eq!(
+            list[0]["fp_end"], "2026-06-30",
+            "the newest period comes first"
+        );
+        assert_eq!(
+            list[1]["fp_end"], "2026-03-31",
+            "the oldest period is the one dropped"
+        );
+        let first = &list[0]["fields"][0];
+        assert!(first.get("id").is_none(), "the backend row id is dropped");
+        assert_eq!(first["field"], "total_rev", "the stable field key is kept");
+        assert_eq!(first["yoy"], "0.117219", "yoy keeps its precision");
+
+        let mut v = serde_json::json!({"list": [
+            {"ff_year": 2025, "ff_period": "4", "fields": [row("1.123456")]},
+            {"ff_year": 2026, "ff_period": "1", "fields": [row("1")]},
+        ]});
+        limit_statement_periods(&mut v, 1);
+        assert_eq!(
+            v["list"][0]["ff_year"], 2026,
+            "ff_year/ff_period order periods without fp_end"
+        );
+
+        let mut v = serde_json::json!({"list": [{"fields": [row("1234.567891")]}]});
+        limit_statement_periods(&mut v, 8);
+        assert_eq!(
+            v["list"][0]["fields"][0]["value"], "1234.57",
+            "amounts round to 2 dp"
         );
     }
 

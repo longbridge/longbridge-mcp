@@ -5787,7 +5787,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::us_market::FinancialStatementResponse>(),
-        description = "Get financial statements (income statement, balance sheet, or cash flow) for a security. kind (required): IS/BS/CF, one statement per call; call again for each statement you need. report: af (annual, default), saf (semi-annual), qf (quarterly full), q1/q2/q3. Returns {report, currency, empty_fields, list[]}: list[] holds the reporting periods, most recent first, each with its fields[] line items; it can be empty when no data is available. US accounts querying a .US symbol are routed to a US-specific statement endpoint (same report vocabulary and envelope); all other symbol/account combinations use the generic path."
+        description = "Get financial statements (income statement, balance sheet, or cash flow) for a security. kind (required): IS/BS/CF, one statement per call; call again for each statement you need. report: af (annual, default), saf (semi-annual), qf (quarterly full), q1/q2/q3. periods: how many reporting periods to return, newest first (default 8). Returns {report, currency, empty_fields, list[]}: list[] holds the reporting periods, most recent first, each with its fields[]{name, field, level, value, yoy} line items (yoy is year over year, as a ratio); it can be empty when no data is available. US accounts querying a .US symbol are routed to a US-specific statement endpoint (same report vocabulary and envelope); all other symbol/account combinations use the generic path."
     )]
     async fn financial_statement(
         &self,
