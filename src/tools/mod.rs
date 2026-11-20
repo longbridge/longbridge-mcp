@@ -3476,7 +3476,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::fundamental::ValuationResponse>(),
-        description = "Get the PE valuation overview: historical low/median/high and the PE series. Returns {range (years), metrics: {pe: {low, median, high, desc, list: [{timestamp, value}]}}}. US accounts querying a .US symbol get a US-specific variant (ai_summary plus a metrics.pe object with different sub-fields). The region is detected from the account automatically. Timestamps are in the exchange's local time (HK/CN/SG +08:00, US America/New_York)."
+        description = "Get the PE valuation overview: the fair-value band, its median and the PE series. Returns {range (years), metrics: {pe: {low, median, high, desc, list: [{timestamp, value}]}}}; low/high are the lower/upper bounds of the fair-value band, not the period's min/max (the series can fall below low or rise above high), so take the extremes from list. US accounts querying a .US symbol get a US-specific variant (ai_summary plus a metrics.pe object with different sub-fields). The region is detected from the account automatically. Timestamps are in the exchange's local time (HK/CN/SG +08:00, US America/New_York)."
     )]
     async fn valuation(
         &self,
@@ -3500,7 +3500,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::fundamental::ValuationHistoryResponse>(),
-        description = "Get PE valuation history for long-term percentile analysis. Returns overview{indicator, metrics.pe{metric, desc, industry_median}, range, date, ccy_symbol}, history{range, metrics.pe{low, median, high, desc, list[]{timestamp, value}}}, peers.pe{industry_median, list[]{symbol, name, value}}, and stocks (industry stocks keyed by counter id, e.g. \"ST/US/AMD\", each {name, market_cap}). PE only; no PB/PS or dividend-yield series. Timestamps are in the exchange's local time (HK/CN/SG +08:00, US America/New_York)."
+        description = "Get PE valuation history for long-term percentile analysis. Returns overview{indicator, metrics.pe{metric, desc, industry_median}, range, date, ccy_symbol}, history{range, metrics.pe{low, median, high, desc, list[]{timestamp, value}}} (low/high are the fair-value band's lower/upper bounds, not the period's min/max; take extremes from list), peers.pe{industry_median, list[]{symbol, name, value}}, and stocks (industry stocks keyed by counter id, e.g. \"ST/US/AMD\", each {name, market_cap}). PE only; no PB/PS or dividend-yield series. Timestamps are in the exchange's local time (HK/CN/SG +08:00, US America/New_York)."
     )]
     async fn valuation_history(
         &self,

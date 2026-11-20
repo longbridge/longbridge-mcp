@@ -1059,14 +1059,14 @@
     },
     "valuation": {
       "title": "估值",
-      "description": "获取 PE 估值概览：历史低位/中位/高位及 PE 序列。返回 {range（年数）, metrics: {pe: {low, median, high, desc, list: [{timestamp, value}]}}}。美股账户查询 `.US` 标的会得到美股专属变体（ai_summary 加上子字段不同的 metrics.pe 对象）。区域由账户自动识别时间戳为交易所当地时间（港股/A 股/新加坡 +08:00，美股为美东时区）。",
+      "description": "获取 PE 估值概览：合理区间、中位数及 PE 序列。返回 {range（年数）, metrics: {pe: {low, median, high, desc, list: [{timestamp, value}]}}}；low/high 是合理区间的下沿/上沿，不是区间内的最低/最高值（序列可能低于 low 或高于 high），极值请从 list 计算。美股账户查询 `.US` 标的会得到美股专属变体（ai_summary 加上子字段不同的 metrics.pe 对象）。区域由账户自动识别时间戳为交易所当地时间（港股/A 股/新加坡 +08:00，美股为美东时区）。",
       "properties": {
         "symbol": "证券代码，例如 `\"700.HK\"`。请用规范代码，补零的代码（如 \"00700.HK\"）会返回空记录而非报错"
       }
     },
     "valuation_history": {
       "title": "估值历史",
-      "description": "获取 PE 估值历史，用于长期分位分析。返回 overview{indicator, metrics.pe{metric, desc, industry_median}, range, date, ccy_symbol}、history{range, metrics.pe{low, median, high, desc, list[]{timestamp, value}}}、peers.pe{industry_median, list[]{symbol, name, value}}，以及 stocks（以 counter id 为键的行业股票，如 \"ST/US/AMD\"，每项 {name, market_cap}）。仅含 PE，不含 PB/PS 或股息率序列时间戳为交易所当地时间（港股/A 股/新加坡 +08:00，美股为美东时区）。",
+      "description": "获取 PE 估值历史，用于长期分位分析。返回 overview{indicator, metrics.pe{metric, desc, industry_median}, range, date, ccy_symbol}、history{range, metrics.pe{low, median, high, desc, list[]{timestamp, value}}}（low/high 是合理区间的下沿/上沿，不是区间内的最低/最高值，极值请从 list 计算）、peers.pe{industry_median, list[]{symbol, name, value}}，以及 stocks（以 counter id 为键的行业股票，如 \"ST/US/AMD\"，每项 {name, market_cap}）。仅含 PE，不含 PB/PS 或股息率序列时间戳为交易所当地时间（港股/A 股/新加坡 +08:00，美股为美东时区）。",
       "properties": {
         "symbol": "证券代码，例如 `\"700.HK\"`。请用规范代码，补零的代码（如 \"00700.HK\"）会返回空记录而非报错"
       }
