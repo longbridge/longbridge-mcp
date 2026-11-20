@@ -1126,10 +1126,10 @@
     },
     "financial_statement": {
       "title": "財務報表",
-      "description": "獲取證券財務報表（損益表、資產負債表或現金流量表）。kind：IS/BS/CF/ALL；report：af（年報，預設）、saf（半年報）、qf（季報全量）、q1/q2/q3。返回 {report, currency, empty_fields, list[]}：list[] 為各報告期（最新在前），每期含 fields[] 科目明細；無數據時可能為空。美股賬戶查詢 `.US` 標的會路由到美股專屬報表接口（report 詞彙與通用接口相同）：單一 kind 返回相同結構，kind=ALL/預設則拆成 IS+BS+CF 三次請求並返回 {income_statement, balance_sheet, cash_flow}，各自為上述結構，因為後端不支援合併請求；其餘證券 / 賬戶組合走通用接口",
+      "description": "獲取證券財務報表（損益表、資產負債表或現金流量表）。kind（必填）：IS/BS/CF，每次只取一張表，需要多張表請分別調用；report：af（年報，預設）、saf（半年報）、qf（季報全量）、q1/q2/q3。返回 {report, currency, empty_fields, list[]}：list[] 為各報告期（最新在前），每期含 fields[] 科目明細；無數據時可能為空。美股賬戶查詢 `.US` 標的會路由到美股專屬報表接口（report 詞彙與返回結構相同）；其餘證券 / 賬戶組合走通用接口",
       "properties": {
         "symbol": "證券代碼，例如 `\"AAPL.US\"`",
-        "kind": "報表類型：`IS`（損益表）、`BS`（資產負債表）、`CF`（現金流量表）、`ALL`（全部，預設）",
+        "kind": "報表類型（必填，每次一張）：`IS`（損益表）、`BS`（資產負債表）、`CF`（現金流量表）",
         "report": "報告期：`af`（年報）、`saf`（半年報）、`qf`（季報）、`q1`/`q2`/`q3`"
       }
     },

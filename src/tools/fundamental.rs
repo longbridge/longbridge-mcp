@@ -712,8 +712,8 @@ pub async fn operating(
 pub struct FinancialStatementParam {
     /// Security symbol, e.g. "AAPL.US"
     pub symbol: String,
-    /// Statement kind: "IS" (income statement), "BS" (balance sheet), "CF" (cash flow), "ALL" (default)
-    pub kind: Option<String>,
+    /// Statement kind (required, one per call): "IS" (income statement), "BS" (balance sheet), "CF" (cash flow)
+    pub kind: String,
     /// Report period: "af" (annual), "saf" (semi-annual), "qf" (quarterly full), "q1"/"q2"/"q3"
     pub report: Option<String>,
 }
@@ -743,58 +743,31 @@ pub async fn financial_statement(
     mctx: &crate::tools::McpContext,
     p: FinancialStatementParam,
 ) -> Result<CallToolResult, McpError> {
+    // Neither statement endpoint has a combined mode: `kind=ALL` (or any value
+    // other than IS/BS/CF) comes back as an empty list or a 500, so reject it
+    // instead of returning an empty result the model reads as "no data".
+    let kind = p.kind.trim().to_uppercase();
+    let kind_enum = match kind.as_str() {
+        "IS" => FinancialStatementKind::IncomeStatement,
+        "BS" => FinancialStatementKind::BalanceSheet,
+        "CF" => FinancialStatementKind::CashFlow,
+        other => {
+            return Err(McpError::invalid_params(
+                format!(
+                    "invalid kind `{other}`: expected IS, BS or CF (one statement per call; \
+                     call again for each statement you need)"
+                ),
+                None,
+            ));
+        }
+    };
     if crate::tools::support::us_market::is_us_fundamental(mctx, &p.symbol).await {
         let ctx = longbridge::fundamental::FundamentalContext::new(mctx.create_config());
-        let kind = p.kind.unwrap_or_else(|| "ALL".to_string()).to_uppercase();
-        // The SDK types `kind` as an enum; "ALL" has no variant and is fanned
-        // out below instead.
-        let kind_enum = match kind.as_str() {
-            "IS" => Some(FinancialStatementKind::IncomeStatement),
-            "BS" => Some(FinancialStatementKind::BalanceSheet),
-            "CF" => Some(FinancialStatementKind::CashFlow),
-            "ALL" => None,
-            other => {
-                return Err(McpError::invalid_params(
-                    format!("invalid kind `{other}`: expected IS, BS, CF, or ALL"),
-                    None,
-                ));
-            }
-        };
         // Despite the SDK's own doc comment claiming "annual"/"quarterly",
         // live staging testing confirmed the US endpoint actually uses the
         // same af/saf/qf/q1-q3 vocabulary as the generic path — "annual"
         // silently returns an empty list.
         let report = p.report.unwrap_or_else(|| "af".to_string()).to_lowercase();
-        // The backend does not support kind=ALL directly (confirmed via live
-        // staging testing: it returns an empty list, while IS/BS/CF each
-        // return full data individually) — fan out and merge so ALL still
-        // behaves as advertised instead of silently returning nothing.
-        let Some(kind_enum) = kind_enum else {
-            let (is, bs, cf) = tokio::try_join!(
-                ctx.us_financial_statement(
-                    p.symbol.clone(),
-                    FinancialStatementKind::IncomeStatement,
-                    report.clone()
-                ),
-                ctx.us_financial_statement(
-                    p.symbol.clone(),
-                    FinancialStatementKind::BalanceSheet,
-                    report.clone()
-                ),
-                ctx.us_financial_statement(
-                    p.symbol.clone(),
-                    FinancialStatementKind::CashFlow,
-                    report
-                ),
-            )
-            .map_err(crate::error::Error::longbridge)?;
-            let combined = serde_json::json!({
-                "income_statement": is,
-                "balance_sheet": bs,
-                "cash_flow": cf,
-            });
-            return crate::tools::tool_json(&combined);
-        };
         let result = ctx
             .us_financial_statement(p.symbol, kind_enum, report)
             .await
@@ -802,7 +775,6 @@ pub async fn financial_statement(
         return crate::tools::tool_json(&result);
     }
     let client = mctx.create_http_client();
-    let kind = p.kind.unwrap_or_else(|| "ALL".to_string()).to_uppercase();
     let report = p.report.unwrap_or_else(|| "af".to_string()).to_lowercase();
     let raw = http_get_tool(
         &client,

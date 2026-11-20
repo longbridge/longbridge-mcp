@@ -74,43 +74,13 @@ pub struct FinancialStatementPeriod {
     pub fields: Option<Vec<FinancialReportField>>,
 }
 
-/// One statement kind's data (income statement, balance sheet, or cash
-/// flow), as returned by `financial_statement` for a single `kind` and by
-/// `financial_report_key_metrics`.
-#[derive(Debug, Serialize, JsonSchema)]
-pub struct FinancialStatementKind {
-    /// Reporting currency, e.g. "USD".
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub currency: Option<String>,
-    /// Report period requested, e.g. "af", "qf".
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub report: Option<String>,
-    /// Field keys with no data across every period in `list`.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub empty_fields: Option<Vec<String>>,
-    /// Periods, most recent first.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub list: Option<Vec<FinancialStatementPeriod>>,
-}
-
 /// Returned by `financial_statement`.
 ///
-/// Generic path (every non-US-account call): `report`/`list`/`empty_fields`
-/// (plus `currency` when non-empty) at the root, for any `kind`. US accounts
-/// querying a `.US` symbol: a single `kind` (IS/BS/CF) returns the same root
-/// fields, while `kind=ALL` (default) is fanned out and returns
-/// `income_statement`/`balance_sheet`/`cash_flow` instead.
+/// `report`/`list`/`empty_fields` (plus `currency` when non-empty) at the
+/// root, for one `kind` (IS/BS/CF) per call, on both the generic path and the
+/// US-account `.US` path.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct FinancialStatementResponse {
-    /// US-account `.US` calls with `kind=ALL` (default) only.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub income_statement: Option<FinancialStatementKind>,
-    /// US-account `.US` calls with `kind=ALL` (default) only.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub balance_sheet: Option<FinancialStatementKind>,
-    /// US-account `.US` calls with `kind=ALL` (default) only.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cash_flow: Option<FinancialStatementKind>,
     /// Reporting currency, e.g. "USD". Omitted when empty.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub currency: Option<String>,
