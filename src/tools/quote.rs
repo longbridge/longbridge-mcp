@@ -1611,15 +1611,15 @@ pub async fn calc_indexes(
     tool_json(&value)
 }
 
-/// Keep only the requested index fields on each calc-index row and list the
-/// requested ones the backend left out under `unavailable`.
+/// Keep only the requested index fields on each calc-index row, with `null`
+/// for the requested ones the backend left out.
 ///
 /// The backend fills unrequested integer fields (`volume`, `outstanding_qty`,
 /// `open_interest`) with `"0"` rather than `""`, so they survive the
 /// empty-string strip and read as real zeros. It also returns nothing for
 /// indexes a security doesn't have — PE/PB/dividend yield for a market index
 /// such as 000300.SH or HSI.HK — and a missing key alone doesn't tell the
-/// model the value is unavailable rather than lost.
+/// model the value is unavailable rather than lost; an explicit `null` does.
 fn keep_requested_calc_fields(value: &mut serde_json::Value, fields: &[String]) {
     let Some(rows) = value.as_array_mut() else {
         return;
@@ -1629,13 +1629,8 @@ fn keep_requested_calc_fields(value: &mut serde_json::Value, fields: &[String]) 
             continue;
         };
         obj.retain(|key, _| key == "symbol" || fields.iter().any(|f| f == key));
-        let missing: Vec<serde_json::Value> = fields
-            .iter()
-            .filter(|f| !obj.contains_key(f.as_str()))
-            .map(|f| serde_json::Value::String(f.clone()))
-            .collect();
-        if !missing.is_empty() {
-            obj.insert("unavailable".to_string(), serde_json::Value::Array(missing));
+        for field in fields {
+            obj.entry(field.clone()).or_insert(serde_json::Value::Null);
         }
     }
 }
@@ -1915,7 +1910,7 @@ pub async fn option_volume_daily(
 #[cfg(test)]
 mod tests {
     #[test]
-    fn calc_rows_keep_requested_fields_and_name_the_missing_ones() {
+    fn calc_rows_keep_requested_fields_and_null_the_missing_ones() {
         let mut v = serde_json::json!([
             {"symbol": "000300.SH", "last_done": "3909.12", "volume": "0",
              "outstanding_qty": "0", "open_interest": "0"},
@@ -1927,10 +1922,10 @@ mod tests {
         assert_eq!(
             v,
             serde_json::json!([
-                {"symbol": "000300.SH", "last_done": "3909.12", "unavailable": ["pe_ttm_ratio"]},
+                {"symbol": "000300.SH", "last_done": "3909.12", "pe_ttm_ratio": null},
                 {"symbol": "600519.SH", "last_done": "1427.56", "pe_ttm_ratio": "21.72"},
             ]),
-            "unrequested zero fields are dropped and missing requested ones are listed"
+            "unrequested zero fields are dropped and missing requested ones are null"
         );
     }
 
