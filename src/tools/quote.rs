@@ -1603,7 +1603,36 @@ pub async fn calc_indexes(
     }
     crate::serialize::empty_str_to_null(&mut value);
     crate::serialize::strip_nulls(&mut value);
+    let fields: Vec<String> = indexes
+        .iter()
+        .filter_map(|i| parse::calc_index_field(*i))
+        .collect();
+    keep_requested_calc_fields(&mut value, &fields);
     tool_json(&value)
+}
+
+/// Keep only the requested index fields on each calc-index row, with `null`
+/// for the requested ones the backend left out.
+///
+/// The backend fills unrequested integer fields (`volume`, `outstanding_qty`,
+/// `open_interest`) with `"0"` rather than `""`, so they survive the
+/// empty-string strip and read as real zeros. It also returns nothing for
+/// indexes a security doesn't have — PE/PB/dividend yield for a market index
+/// such as 000300.SH or HSI.HK — and a missing key alone doesn't tell the
+/// model the value is unavailable rather than lost; an explicit `null` does.
+fn keep_requested_calc_fields(value: &mut serde_json::Value, fields: &[String]) {
+    let Some(rows) = value.as_array_mut() else {
+        return;
+    };
+    for row in rows.iter_mut() {
+        let Some(obj) = row.as_object_mut() else {
+            continue;
+        };
+        obj.retain(|key, _| key == "symbol" || fields.iter().any(|f| f == key));
+        for field in fields {
+            obj.entry(field.clone()).or_insert(serde_json::Value::Null);
+        }
+    }
 }
 
 /// Normalize the option Greeks on a calc-index row to the values the Longbridge
@@ -1880,6 +1909,46 @@ pub async fn option_volume_daily(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn calc_rows_keep_requested_fields_and_null_the_missing_ones() {
+        let mut v = serde_json::json!([
+            {"symbol": "000300.SH", "last_done": "3909.12", "volume": "0",
+             "outstanding_qty": "0", "open_interest": "0"},
+            {"symbol": "600519.SH", "last_done": "1427.56", "pe_ttm_ratio": "21.72",
+             "volume": "0", "open_interest": "0"},
+        ]);
+        let fields = vec!["last_done".to_string(), "pe_ttm_ratio".to_string()];
+        super::keep_requested_calc_fields(&mut v, &fields);
+        assert_eq!(
+            v,
+            serde_json::json!([
+                {"symbol": "000300.SH", "last_done": "3909.12", "pe_ttm_ratio": null},
+                {"symbol": "600519.SH", "last_done": "1427.56", "pe_ttm_ratio": "21.72"},
+            ]),
+            "unrequested zero fields are dropped and missing requested ones are null"
+        );
+    }
+
+    #[test]
+    fn calc_index_fields_are_snake_case_names() {
+        use crate::tools::support::parse::{calc_index_field, parse_calc_index};
+        let field = |s: &str| {
+            calc_index_field(parse_calc_index(s).expect("a known calc index"))
+                .expect("every known index has a field")
+        };
+        assert_eq!(field("PeTtmRatio"), "pe_ttm_ratio", "PE field name");
+        assert_eq!(
+            field("change_value"),
+            "change_value",
+            "renamed change field"
+        );
+        assert_eq!(
+            field("FiveMinutesChangeRate"),
+            "five_minutes_change_rate",
+            "multi-word name"
+        );
+        assert_eq!(field("Vega"), "vega", "single-word name");
+    }
 
     fn bar_timestamps(result: rmcp::model::CallToolResult) -> Vec<String> {
         let text = result
