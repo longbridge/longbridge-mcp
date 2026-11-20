@@ -421,7 +421,7 @@
     },
     "calc_indexes": {
       "title": "指標計算",
-      "description": "銘柄の相場・財務指標（PER、PBR、配当利回り、現在値、売買回転率など）を一括計算します。symbols と indexes のリストを渡すと、各銘柄の指標値を返します。グリークス指標（Delta、Gamma、Theta、Vega、Rho）を要求した場合、返り値は正規化されています：theta は 1 日あたりの値（1 日分の時間的価値の減少）、vega はインプライド・ボラティリティが 1% 変動したときの価格変化、rho は無リスク金利が 1% 変動したときの価格変化です。",
+      "description": "銘柄の相場・財務指標（PER、PBR、配当利回り、現在値、売買回転率など）を一括計算します。symbols と indexes のリストを渡すと、各銘柄の指標値を返します。銘柄ごとに 1 行で、要求した指標のみを含みます。値のない指標はその行の unavailable[] に列挙されます（000300.SH や HSI.HK などの市場指数には PeTtmRatio/PbRatio/DividendRatioTtm がないため、構成銘柄を照会してください）。グリークス指標（Delta、Gamma、Theta、Vega、Rho）を要求した場合、返り値は正規化されています：theta は 1 日あたりの値（1 日分の時間的価値の減少）、vega はインプライド・ボラティリティが 1% 変動したときの価格変化、rho は無リスク金利が 1% 変動したときの価格変化です。",
       "properties": {
         "symbols": "銘柄コード。例：`[\"700.HK\", \"AAPL.US\"]`",
         "indexes": "計算する指標：`LastDone`、`ChangeValue`、`ChangeRate`、`Volume`、`Turnover`、`YtdChangeRate`、`TurnoverRate`、`TotalMarketValue`、`CapitalFlow`、`Amplitude`、`VolumeRatio`、`PeTtmRatio`、`PbRatio`、`DividendRatioTtm`、`FiveDayChangeRate`、`TenDayChangeRate`、`HalfYearChangeRate`、`FiveMinutesChangeRate`、`ExpiryDate`、`StrikePrice`、`UpperStrikePrice`、`LowerStrikePrice`、`OutstandingQty`、`OutstandingRatio`、`Premium`、`ItmOtm`、`ImpliedVolatility`、`WarrantDelta`、`CallPrice`、`ToCallPrice`、`EffectiveLeverage`、`LeverageRatio`、`ConversionRatio`、`BalancePoint`、`OpenInterest`、`Delta`、`Gamma`、`Theta`、`Vega`、`Rho`"

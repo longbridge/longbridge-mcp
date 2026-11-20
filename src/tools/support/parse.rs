@@ -263,6 +263,20 @@ const CALC_INDEXES: &[(&str, CalcIndex)] = &[
 
 /// Parse a calc index name. Case, `_`, `-` and spaces are ignored, so
 /// "pe_ttm_ratio" and "peTtmRatio" both mean `PeTtmRatio`.
+/// The response field a calc index comes back under: its canonical name in
+/// snake_case (`PeTtmRatio` → `pe_ttm_ratio`).
+pub fn calc_index_field(index: CalcIndex) -> Option<String> {
+    let (name, _) = CALC_INDEXES.iter().find(|(_, i)| *i == index)?;
+    let mut field = String::with_capacity(name.len() + 4);
+    for (pos, c) in name.chars().enumerate() {
+        if c.is_ascii_uppercase() && pos > 0 {
+            field.push('_');
+        }
+        field.push(c.to_ascii_lowercase());
+    }
+    Some(field)
+}
+
 pub fn parse_calc_index(s: &str) -> Result<CalcIndex, McpError> {
     let wanted: String = s
         .chars()
