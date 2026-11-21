@@ -4,8 +4,8 @@ version = "0.16.5"
 edition = "2024"
 
 [dependencies]
-longbridge = "5.3"
-longbridge-proto = "5.3"
+longbridge = "5.5"
+longbridge-proto = "5.5"
 rust_decimal = "1"
 rmcp = { version = "1.4", features = [
     "server",
@@ -62,21 +62,3 @@ jaq-json = { version = "2.0", features = ["serde"] }
 # crate keeps `#![forbid(unsafe_code)]`).
 [target.'cfg(unix)'.dependencies]
 rlimit = "0.11"
-
-# TEMPORARY: `TradeContext::risk_assessment` is not on crates.io yet. It is in
-# longbridge/openapi#625, which is still unreleased — note that 5.4.0 is already
-# published and does NOT contain it, so the requirements above must be bumped to
-# whatever release ships it (not 5.4) when this patch is removed.
-#
-# Pinned by `rev`, not `branch`: a branch pin stops resolving once #625 merges
-# and its branch is deleted; a warm ~/.cargo/git cache hides that locally, CI
-# and release builds do not. The full 40-char SHA is preferred over an
-# abbreviation because cargo can then fetch it directly by SHA instead of
-# resolving the prefix first.
-#
-# NOTE: this patch is not only the new API — it also moves the SDK 5.3 -> 5.4
-# (oauth2 4.4 -> 5.0, reqwest 0.11 -> 0.12, typed `Error::OAuth`), which is where
-# most of the Cargo.lock churn comes from.
-[patch.crates-io]
-longbridge = { git = "https://github.com/longbridge/openapi", rev = "4fddc66752b47444a252582e99af0f022eea8467" }
-longbridge-proto = { git = "https://github.com/longbridge/openapi", rev = "4fddc66752b47444a252582e99af0f022eea8467" }
