@@ -6035,7 +6035,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::discovery::IpoSubscriptionsResponse>(),
-        description = "List IPO stocks in subscription/pre-filing stage (HK+US). Returns {hk, us}, each {list[]{symbol, code, name, issue_price, entrance_fee, min_sub_num, sub_end_date, remaining_day, share_planned, state, …}}."
+        description = "List IPO stocks in subscription/pre-filing stage (HK+US). Returns {hk, us}, each {list[]{symbol, code, name, issue_price, entrance_fee, min_sub_num, sub_end_date, remaining_day, share_planned, state, …}}. If one market's list cannot be fetched, the other is still returned, that market is null and unavailable{<market>: reason} says so; tell the user that market is temporarily unavailable, not that they need to re-authorize."
     )]
     async fn ipo_subscriptions(
         &self,
@@ -6078,7 +6078,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::discovery::IpoListedResponse>(),
-        description = "List recently listed IPO stocks (HK+US). Returns {hk, us}, each {total, list[]{symbol, code, name, description, ipo_date, listed_day, issue_price, prev_close, last_done, ipo_change, amount, …}}."
+        description = "List recently listed IPO stocks (HK+US). Returns {hk, us}, each {total, list[]{symbol, code, name, description, ipo_date, listed_day, issue_price, prev_close, last_done, ipo_change, amount, …}}. If one market's list cannot be fetched, the other is still returned, that market is null and unavailable{<market>: reason} says so; tell the user that market is temporarily unavailable, not that they need to re-authorize."
     )]
     async fn ipo_listed(
         &self,
@@ -6099,7 +6099,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::discovery::IpoDetailResponse>(),
-        description = "Show IPO detail for a symbol. Returns profile (business overview), timeline[]{event, date}, subscription eligibility, pricing_range, lot_size, allotment_rules."
+        description = "Show IPO detail for a symbol. Returns {symbol, market, profile{name, profile (business overview), industry, issue_price, offer_price_min, offer_price_max, issue_currency, trade_unit (lot size), ipo_date (listing date), mart_begin/mart_end (HK grey-market session), sponsor, underwriter, prospectus, …}, timeline{steps[]{event, time, reached}, pay_end_date, tags}}. Dates are in the exchange's local time (HK +08:00, US America/New_York); reached marks a step already passed. Whether an IPO is open for subscription now: use ipo_subscriptions."
     )]
     async fn ipo_detail(
         &self,
