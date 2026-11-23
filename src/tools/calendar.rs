@@ -54,17 +54,41 @@ fn next_date_of(raw: &serde_json::Value) -> Option<String> {
         .map(str::to_string)
 }
 
+/// Whether a `YYYY-MM-DD` bucket date lies inside the inclusive window.
+///
+/// The upstream treats `date_end` as a hint, not a bound: it returns date
+/// buckets past it (an HK window of 3 days came back with buckets two months
+/// later), so every bucket is checked here.
+fn in_window(date: &str, start: &str, end: &str) -> bool {
+    date >= start && date <= end
+}
+
 /// Merge list items from multiple raw API pages, deduplicating events by `id`
 /// within each date bucket (using `datetime+market` as fallback key for
-/// events without an id, e.g. market-close entries).
-fn merge_pages(pages: impl IntoIterator<Item = serde_json::Value>) -> serde_json::Value {
+/// events without an id, e.g. market-close entries). Buckets outside
+/// `start..=end` are dropped. Each bucket keeps the upstream `count` (the
+/// total number of events on that date for the query), so a caller can
+/// compare it with `infos.len()` to see whether the date is complete.
+fn merge_pages(
+    pages: impl IntoIterator<Item = serde_json::Value>,
+    start: &str,
+    end: &str,
+) -> serde_json::Value {
     let empty = vec![];
     // BTreeMap keeps date buckets sorted.
     let mut groups: BTreeMap<String, HashMap<String, serde_json::Value>> = BTreeMap::new();
+    let mut counts: HashMap<String, u64> = HashMap::new();
 
     for page in pages {
         for bucket in page["list"].as_array().unwrap_or(&empty) {
             let date = bucket["date"].as_str().unwrap_or("").to_string();
+            if !in_window(&date, start, end) {
+                continue;
+            }
+            if let Some(count) = bucket["count"].as_u64() {
+                let slot = counts.entry(date.clone()).or_default();
+                *slot = (*slot).max(count);
+            }
             let slot = groups.entry(date).or_default();
             for info in bucket["infos"].as_array().unwrap_or(&empty) {
                 let key = if let Some(id) = info["id"].as_str().filter(|s| !s.is_empty()) {
@@ -99,7 +123,11 @@ fn merge_pages(pages: impl IntoIterator<Item = serde_json::Value>) -> serde_json
                 };
                 key(a).cmp(&key(b))
             });
-            serde_json::json!({ "date": date, "infos": infos })
+            let mut bucket = serde_json::json!({ "date": date, "infos": infos });
+            if let Some(count) = counts.get(&date) {
+                bucket["count"] = serde_json::json!(count);
+            }
+            bucket
         })
         .collect();
 
@@ -239,6 +267,7 @@ pub async fn finance_calendar(
                 .is_some_and(|infos| infos.len() >= PAGE_SIZE)
         })
         .filter_map(|bucket| bucket["date"].as_str().map(str::to_string))
+        .filter(|date| in_window(date, &start, &end))
         .collect();
     'dates: for date in full_dates {
         let mut offset = PAGE_SIZE;
@@ -303,7 +332,7 @@ pub async fn finance_calendar(
         }
     }
 
-    let merged = merge_pages(pages);
+    let merged = merge_pages(pages, &start, &end);
     let transformed = transform_json(
         serde_json::to_string(&merged)
             .map_err(Error::Serialize)?
@@ -348,6 +377,55 @@ pub async fn finance_calendar(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn merge_pages_all(pages: impl IntoIterator<Item = serde_json::Value>) -> serde_json::Value {
+        merge_pages(pages, "0000-00-00", "9999-99-99")
+    }
+
+    #[test]
+    fn merge_pages_drops_buckets_outside_the_window() {
+        // The upstream ignores date_end: a 12-07..12-09 window came back with
+        // buckets up to 2027-02-05.
+        let page = serde_json::json!({
+            "list": [
+                {"date": "2026-12-06", "count": 1, "infos": [{"id": "0"}]},
+                {"date": "2026-12-07", "count": 1, "infos": [{"id": "1"}]},
+                {"date": "2026-12-09", "count": 1, "infos": [{"id": "2"}]},
+                {"date": "2026-12-11", "count": 7, "infos": [{"id": "3"}]},
+                {"date": "2027-02-05", "count": 11, "infos": [{"id": "4"}]}
+            ],
+            "next_date": "2026-12-15"
+        });
+        let merged = merge_pages([page], "2026-12-07", "2026-12-09");
+        let dates: Vec<&str> = merged["list"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|b| b["date"].as_str().unwrap())
+            .collect();
+        assert_eq!(dates, vec!["2026-12-07", "2026-12-09"]);
+    }
+
+    #[test]
+    fn merge_pages_keeps_the_per_date_count() {
+        // count=4 returned 4 of the 7 events on 2026-12-11; the bucket must
+        // still say 7 so a caller can tell the date is incomplete.
+        let page = serde_json::json!({
+            "list": [{"date": "2026-12-11", "count": 7, "infos": [
+                {"id": "1"}, {"id": "2"}, {"id": "3"}, {"id": "4"}
+            ]}]
+        });
+        let merged = merge_pages_all([page]);
+        assert_eq!(merged["list"][0]["count"], 7);
+        assert_eq!(merged["list"][0]["infos"].as_array().unwrap().len(), 4);
+
+        let no_count = serde_json::json!({"list": [{"date": "2026-12-11", "infos": []}]});
+        assert!(
+            merge_pages_all([no_count])["list"][0]
+                .get("count")
+                .is_none()
+        );
+    }
 
     #[test]
     fn category_accepts_the_names_models_try_first() {
@@ -405,7 +483,7 @@ mod tests {
                 {"date": "2026-05-28", "infos": [{"id": "3", "symbol": "PDD.US", "datetime": "", "market": "US"}]}
             ]
         });
-        let merged = merge_pages([page1, page2]);
+        let merged = merge_pages_all([page1, page2]);
         let list = merged["list"].as_array().unwrap();
         assert_eq!(list.len(), 3);
         assert_eq!(list[0]["date"], "2026-05-23");
@@ -423,7 +501,7 @@ mod tests {
         let page2 = serde_json::json!({
             "list": [{"date": "2026-05-27", "infos": [dup_event]}]
         });
-        let merged = merge_pages([page1, page2]);
+        let merged = merge_pages_all([page1, page2]);
         let infos = &merged["list"][0]["infos"];
         assert_eq!(
             infos.as_array().unwrap().len(),
@@ -437,20 +515,20 @@ mod tests {
         let event = serde_json::json!({"id": "", "symbol": "CLOSED", "datetime": "1748390400", "market": "US"});
         let page1 = serde_json::json!({"list": [{"date": "2026-05-27", "infos": [event.clone()]}]});
         let page2 = serde_json::json!({"list": [{"date": "2026-05-27", "infos": [event]}]});
-        let merged = merge_pages([page1, page2]);
+        let merged = merge_pages_all([page1, page2]);
         assert_eq!(merged["list"][0]["infos"].as_array().unwrap().len(), 1);
     }
 
     #[test]
     fn merge_pages_single_page() {
         let page = serde_json::json!({"list": [{"date": "2026-05-23", "infos": []}]});
-        let merged = merge_pages([page]);
+        let merged = merge_pages_all([page]);
         assert_eq!(merged["list"].as_array().unwrap().len(), 1);
     }
 
     #[test]
     fn merge_pages_empty() {
-        let merged = merge_pages([serde_json::json!({"list": []})]);
+        let merged = merge_pages_all([serde_json::json!({"list": []})]);
         assert_eq!(merged["list"].as_array().unwrap().len(), 0);
     }
 
@@ -458,7 +536,7 @@ mod tests {
     fn merge_pages_date_buckets_sorted() {
         let page1 = serde_json::json!({"list": [{"date": "2026-05-28", "infos": []}]});
         let page2 = serde_json::json!({"list": [{"date": "2026-05-23", "infos": []}]});
-        let merged = merge_pages([page1, page2]);
+        let merged = merge_pages_all([page1, page2]);
         let dates: Vec<&str> = merged["list"]
             .as_array()
             .unwrap()
