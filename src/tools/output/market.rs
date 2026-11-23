@@ -428,6 +428,10 @@ pub struct FinanceCalendarBucket {
     /// Bucket date (yyyy-mm-dd).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub date: Option<String>,
+    /// Total events on this date for the query, as reported upstream. When it
+    /// exceeds the length of `infos`, the date is incomplete.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub count: Option<i64>,
     /// Events occurring on this date.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub infos: Option<Vec<FinanceCalendarEvent>>,
