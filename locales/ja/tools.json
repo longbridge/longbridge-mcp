@@ -1194,7 +1194,7 @@
     },
     "ipo_subscriptions": {
       "title": "IPO 申込受付一覧",
-      "description": "香港株および米国株で現在申込受付中／事前申込段階にある IPO を一覧表示します。{hk, us} を返し、それぞれ {list[]{symbol, code, name, issue_price, entrance_fee, min_sub_num, sub_end_date, remaining_day, share_planned, state, …}} です"
+      "description": "香港株および米国株で現在申込受付中／事前申込段階にある IPO を一覧表示します。{hk, us} を返し、それぞれ {list[]{symbol, code, name, issue_price, entrance_fee, min_sub_num, sub_end_date, remaining_day, share_planned, state, …}} です。いずれかの市場の一覧を取得できない場合も、もう一方の市場は通常どおり返されます。取得できなかった市場は null となり、unavailable{<市場>: 理由} に記載されます。その市場が一時的に利用できないと伝え、再認証が必要とは説明しないでください"
     },
     "ipo_calendar": {
       "title": "IPO カレンダー",
@@ -1202,7 +1202,7 @@
     },
     "ipo_listed": {
       "title": "IPO 上場済み一覧",
-      "description": "香港株および米国株で直近に上場した IPO を一覧表示します。{hk, us} を返し、それぞれ {total, list[]{symbol, code, name, description, ipo_date, listed_day, issue_price, prev_close, last_done, ipo_change, amount, …}} です",
+      "description": "香港株および米国株で直近に上場した IPO を一覧表示します。{hk, us} を返し、それぞれ {total, list[]{symbol, code, name, description, ipo_date, listed_day, issue_price, prev_close, last_done, ipo_change, amount, …}} です。いずれかの市場の一覧を取得できない場合も、もう一方の市場は通常どおり返されます。取得できなかった市場は null となり、unavailable{<市場>: 理由} に記載されます。その市場が一時的に利用できないと伝え、再認証が必要とは説明しないでください",
       "properties": {
         "page": "ページ番号（デフォルト 1）",
         "size": "1 ページあたりの件数（デフォルト 20）"
@@ -1210,7 +1210,7 @@
     },
     "ipo_detail": {
       "title": "IPO 詳細",
-      "description": "IPO の詳細を表示します。profile（事業概要）、timeline[]{event, date}、申込資格（eligibility）、pricing_range、lot_size、割当ルールを返します",
+      "description": "IPO の詳細を表示します。{symbol, market, profile{name, profile（事業概要）, industry, issue_price, offer_price_min, offer_price_max, issue_currency, trade_unit（売買単位）, ipo_date（上場日）, mart_begin/mart_end（香港株のグレーマーケット時間帯）, sponsor, underwriter, prospectus, …}, timeline{steps[]{event, time, reached}, pay_end_date, tags}} を返します。日付は取引所の現地時間です（香港 +08:00、米国は米国東部時間）。reached はそのステップが既に過ぎたことを示します。現在申込可能かどうかは ipo_subscriptions で確認してください",
       "properties": {
         "symbol": "銘柄コード。例：`\"6871.HK\"` または `\"ARM.US\"`",
         "market": "市場：`HK` または `US`（デフォルトはコードの接尾辞から推定）"

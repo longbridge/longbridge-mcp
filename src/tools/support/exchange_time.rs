@@ -125,6 +125,8 @@ const SPECS: &[Spec] = &[
     for_symbol("ah_premium", &["klines.*.timestamp"]),
     for_symbol("ah_premium_intraday", &["klines.*.timestamp"]),
     for_symbol("valuation", &["metrics.pe.list.*.timestamp"]),
+    // The profile of the requested IPO (its own market only).
+    for_symbol("ipo_detail", &["ipo_date", "mart_begin", "mart_end"]),
     for_symbol(
         "valuation_history",
         &["history.metrics.pe.list.*.timestamp"],
@@ -720,6 +722,7 @@ mod tests {
             include_str!("../market.rs"),
             include_str!("../fundamental.rs"),
             include_str!("../calendar.rs"),
+            include_str!("../ipo.rs"),
         ];
         let mut wired = std::collections::BTreeSet::new();
         for source in sources {

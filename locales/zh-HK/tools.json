@@ -1194,7 +1194,7 @@
     },
     "ipo_subscriptions": {
       "title": "IPO 認購列表",
-      "description": "列出港股和美股當前處於認購/預申請階段的 IPO，返回 {hk, us}，各為 {list[]{symbol, code, name, issue_price, entrance_fee, min_sub_num, sub_end_date, remaining_day, share_planned, state, …}}"
+      "description": "列出港股和美股當前處於認購/預申請階段的 IPO，返回 {hk, us}，各為 {list[]{symbol, code, name, issue_price, entrance_fee, min_sub_num, sub_end_date, remaining_day, share_planned, state, …}}。若某個市場的列表獲取失敗，另一個市場照常返回，失敗的市場為 null，並在 unavailable{<市場>: 原因} 中說明；請告訴用戶該市場暫時不可用，不要說成需要重新授權"
     },
     "ipo_calendar": {
       "title": "IPO 日曆",
@@ -1202,7 +1202,7 @@
     },
     "ipo_listed": {
       "title": "IPO 已上市列表",
-      "description": "列出港股和美股近期已上市的 IPO，返回 {hk, us}，各為 {total, list[]{symbol, code, name, description, ipo_date, listed_day, issue_price, prev_close, last_done, ipo_change, amount, …}}",
+      "description": "列出港股和美股近期已上市的 IPO，返回 {hk, us}，各為 {total, list[]{symbol, code, name, description, ipo_date, listed_day, issue_price, prev_close, last_done, ipo_change, amount, …}}。若某個市場的列表獲取失敗，另一個市場照常返回，失敗的市場為 null，並在 unavailable{<市場>: 原因} 中說明；請告訴用戶該市場暫時不可用，不要說成需要重新授權",
       "properties": {
         "page": "頁碼（預設 1）",
         "size": "每頁條數（預設 20）"
@@ -1210,7 +1210,7 @@
     },
     "ipo_detail": {
       "title": "IPO 詳情",
-      "description": "查看 IPO 詳情，返回 profile（業務簡介）、timeline[]{event, date}、認購資格（eligibility）、pricing_range、lot_size、配股規則",
+      "description": "查看 IPO 詳情，返回 {symbol, market, profile{name, profile（業務簡介）, industry, issue_price, offer_price_min, offer_price_max, issue_currency, trade_unit（每手股數）, ipo_date（上市日期）, mart_begin/mart_end（港股暗盤時段）, sponsor, underwriter, prospectus, …}, timeline{steps[]{event, time, reached}, pay_end_date, tags}}。日期為交易所當地時間（港股 +08:00，美股為美東時區）；reached 表示該步驟已經過去。當前是否可認購請用 ipo_subscriptions 查詢",
       "properties": {
         "symbol": "證券代碼，例如 `\"6871.HK\"` 或 `\"ARM.US\"`",
         "market": "市場：`HK` 或 `US`（預設根據代碼後綴推斷）"

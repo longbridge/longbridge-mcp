@@ -1194,7 +1194,7 @@
     },
     "ipo_subscriptions": {
       "title": "IPO 认购列表",
-      "description": "列出港股和美股当前处于认购/预申请阶段的 IPO，返回 {hk, us}，各为 {list[]{symbol, code, name, issue_price, entrance_fee, min_sub_num, sub_end_date, remaining_day, share_planned, state, …}}"
+      "description": "列出港股和美股当前处于认购/预申请阶段的 IPO，返回 {hk, us}，各为 {list[]{symbol, code, name, issue_price, entrance_fee, min_sub_num, sub_end_date, remaining_day, share_planned, state, …}}。若某个市场的列表获取失败，另一个市场照常返回，失败的市场为 null，并在 unavailable{<市场>: 原因} 中说明；请告诉用户该市场暂时不可用，不要说成需要重新授权"
     },
     "ipo_calendar": {
       "title": "IPO 日历",
@@ -1202,7 +1202,7 @@
     },
     "ipo_listed": {
       "title": "IPO 已上市列表",
-      "description": "列出港股和美股近期已上市的 IPO，返回 {hk, us}，各为 {total, list[]{symbol, code, name, description, ipo_date, listed_day, issue_price, prev_close, last_done, ipo_change, amount, …}}",
+      "description": "列出港股和美股近期已上市的 IPO，返回 {hk, us}，各为 {total, list[]{symbol, code, name, description, ipo_date, listed_day, issue_price, prev_close, last_done, ipo_change, amount, …}}。若某个市场的列表获取失败，另一个市场照常返回，失败的市场为 null，并在 unavailable{<市场>: 原因} 中说明；请告诉用户该市场暂时不可用，不要说成需要重新授权",
       "properties": {
         "page": "页码（默认 1）",
         "size": "每页条数（默认 20）"
@@ -1210,7 +1210,7 @@
     },
     "ipo_detail": {
       "title": "IPO 详情",
-      "description": "查看 IPO 详情，返回 profile（业务简介）、timeline[]{event, date}、认购资格（eligibility）、pricing_range、lot_size、配股规则",
+      "description": "查看 IPO 详情，返回 {symbol, market, profile{name, profile（业务简介）, industry, issue_price, offer_price_min, offer_price_max, issue_currency, trade_unit（每手股数）, ipo_date（上市日期）, mart_begin/mart_end（港股暗盘时段）, sponsor, underwriter, prospectus, …}, timeline{steps[]{event, time, reached}, pay_end_date, tags}}。日期为交易所当地时间（港股 +08:00，美股为美东时区）；reached 表示该步骤已经过去。当前是否可认购请用 ipo_subscriptions 查询",
       "properties": {
         "symbol": "证券代码，例如 `\"6871.HK\"` 或 `\"ARM.US\"`",
         "market": "市场：`HK` 或 `US`（默认根据代码后缀推断）"
