@@ -1210,7 +1210,7 @@
     },
     "stock_transfers_in": {
       "title": "股票转入申请",
-      "description": "列出当前账户的股票转入申请（从其他券商转入本账户），按时间倒序。state 过滤 / state_code：0 已提交，1 已撤销，3 已完成（已入仓），5 处理中，7 部分完成，8 失败。start/end：yyyy-mm-dd 或 RFC3339，按创建时间筛选。返回 {records[]{id, order_id, market, broker, broker_en, account（在对方券商的账号）, state（状态文案）, state_code, state_label（submitted/cancelled/completed/processing/partially_completed/failed）, app_state, customer_notified_broker（客户已在 App 内点击「我已通知」转出券商；是客户自己的确认，不是长桥的操作）, stocks[]{code, name, amount, state}, created_at, updated_at, process_at, exec_at, days_in_process（自创建到执行的天数；已撤销或失败的算到结束时，未结束的算到今天）, remark, reason}, total}。失败或撤销原因在 remark/reason 里，回复时原样转述",
+      "description": "列出当前账户的股票转入申请（从其他券商转入本账户），按时间倒序。state 过滤 / state_code：0 已提交，1 已撤销，3 已完成（已入仓），5 处理中，7 部分完成，8 失败。start/end：yyyy-mm-dd 或 RFC3339，按创建时间筛选。返回 {records[]{id, order_id, market, broker, broker_en, account（客户在对方券商的账号，仅后 4 位）, state（状态文案）, state_code, state_label（submitted/cancelled/completed/processing/partially_completed/failed）, app_state, customer_notified_broker（客户已在 App 内点击「我已通知」转出券商；是客户自己的确认，不是长桥的操作）, stocks[]{code, name, amount, state}, created_at, updated_at, process_at, exec_at, days_in_process（自创建到执行的天数；已撤销或失败的算到结束时，未结束的算到今天）, remark, reason}, total}。失败或撤销原因在 remark/reason 里，回复时原样转述",
       "properties": {
         "market": "市场过滤：\"HK\"、\"US\"、\"CN\" 或 \"SG\"（默认全部）",
         "state": "状态码过滤（默认全部），取值见工具说明",
@@ -1222,7 +1222,7 @@
     },
     "stock_transfers_out": {
       "title": "股票转出申请",
-      "description": "列出当前账户的股票转出申请（从本账户转到其他券商），按时间倒序。state 过滤 / state_code：0 已提交，1 处理中，2 执行中，3 已完成，4 已撤销，5 部分完成，6 失败，7 已拒绝。start/end：yyyy-mm-dd 或 RFC3339，按创建时间筛选。返回 {records[]{id, broker, account（在对方券商的账号）, state（状态文案）, state_code, state_label（submitted/processing/executing/completed/cancelled/partially_completed/failed/rejected）, app_state, customer_notified_broker（同股票转入）, stocks[]{code, name, amount}, created_at, updated_at, agree_at, refuse_at, cancel_at, process_at, exec_at, days_in_process（算法同股票转入）, reason}}。拒绝或撤销原因在 reason 里，回复时原样转述",
+      "description": "列出当前账户的股票转出申请（从本账户转到其他券商），按时间倒序。state 过滤 / state_code：0 已提交，1 处理中，2 执行中，3 已完成，4 已撤销，5 部分完成，6 失败，7 已拒绝。start/end：yyyy-mm-dd 或 RFC3339，按创建时间筛选。返回 {records[]{id, broker, account（客户在对方券商的账号，仅后 4 位）, state（状态文案）, state_code, state_label（submitted/processing/executing/completed/cancelled/partially_completed/failed/rejected）, app_state, customer_notified_broker（同股票转入）, stocks[]{code, name, amount}, created_at, updated_at, agree_at, refuse_at, cancel_at, process_at, exec_at, days_in_process（算法同股票转入）, reason}}。拒绝或撤销原因在 reason 里，回复时原样转述",
       "properties": {
         "market": "市场过滤：\"HK\"、\"US\"、\"CN\" 或 \"SG\"（默认全部）",
         "state": "状态码过滤（默认全部），取值见工具说明",

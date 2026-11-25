@@ -1210,7 +1210,7 @@
     },
     "stock_transfers_in": {
       "title": "股票轉入申請",
-      "description": "列出當前賬戶的股票轉入申請（從其他券商轉入本賬戶），按時間倒序。state 過濾 / state_code：0 已提交，1 已撤銷，3 已完成（已入倉），5 處理中，7 部分完成，8 失敗。start/end：yyyy-mm-dd 或 RFC3339，按創建時間篩選。返回 {records[]{id, order_id, market, broker, broker_en, account（在對方券商的賬號）, state（狀態文案）, state_code, state_label（submitted/cancelled/completed/processing/partially_completed/failed）, app_state, customer_notified_broker（客戶已在 App 內點擊「我已通知」轉出券商；是客戶自己的確認，不是長橋的操作）, stocks[]{code, name, amount, state}, created_at, updated_at, process_at, exec_at, days_in_process（自創建到執行的天數；已撤銷或失敗的算到結束時，未結束的算到今天）, remark, reason}, total}。失敗或撤銷原因在 remark/reason 裡，回覆時原樣轉述",
+      "description": "列出當前賬戶的股票轉入申請（從其他券商轉入本賬戶），按時間倒序。state 過濾 / state_code：0 已提交，1 已撤銷，3 已完成（已入倉），5 處理中，7 部分完成，8 失敗。start/end：yyyy-mm-dd 或 RFC3339，按創建時間篩選。返回 {records[]{id, order_id, market, broker, broker_en, account（客戶在對方券商的賬號，僅後 4 位）, state（狀態文案）, state_code, state_label（submitted/cancelled/completed/processing/partially_completed/failed）, app_state, customer_notified_broker（客戶已在 App 內點擊「我已通知」轉出券商；是客戶自己的確認，不是長橋的操作）, stocks[]{code, name, amount, state}, created_at, updated_at, process_at, exec_at, days_in_process（自創建到執行的天數；已撤銷或失敗的算到結束時，未結束的算到今天）, remark, reason}, total}。失敗或撤銷原因在 remark/reason 裡，回覆時原樣轉述",
       "properties": {
         "market": "市場過濾：\"HK\"、\"US\"、\"CN\" 或 \"SG\"（默認全部）",
         "state": "狀態碼過濾（默認全部），取值見工具說明",
@@ -1222,7 +1222,7 @@
     },
     "stock_transfers_out": {
       "title": "股票轉出申請",
-      "description": "列出當前賬戶的股票轉出申請（從本賬戶轉到其他券商），按時間倒序。state 過濾 / state_code：0 已提交，1 處理中，2 執行中，3 已完成，4 已撤銷，5 部分完成，6 失敗，7 已拒絕。start/end：yyyy-mm-dd 或 RFC3339，按創建時間篩選。返回 {records[]{id, broker, account（在對方券商的賬號）, state（狀態文案）, state_code, state_label（submitted/processing/executing/completed/cancelled/partially_completed/failed/rejected）, app_state, customer_notified_broker（同股票轉入）, stocks[]{code, name, amount}, created_at, updated_at, agree_at, refuse_at, cancel_at, process_at, exec_at, days_in_process（算法同股票轉入）, reason}}。拒絕或撤銷原因在 reason 裡，回覆時原樣轉述",
+      "description": "列出當前賬戶的股票轉出申請（從本賬戶轉到其他券商），按時間倒序。state 過濾 / state_code：0 已提交，1 處理中，2 執行中，3 已完成，4 已撤銷，5 部分完成，6 失敗，7 已拒絕。start/end：yyyy-mm-dd 或 RFC3339，按創建時間篩選。返回 {records[]{id, broker, account（客戶在對方券商的賬號，僅後 4 位）, state（狀態文案）, state_code, state_label（submitted/processing/executing/completed/cancelled/partially_completed/failed/rejected）, app_state, customer_notified_broker（同股票轉入）, stocks[]{code, name, amount}, created_at, updated_at, agree_at, refuse_at, cancel_at, process_at, exec_at, days_in_process（算法同股票轉入）, reason}}。拒絕或撤銷原因在 reason 裡，回覆時原樣轉述",
       "properties": {
         "market": "市場過濾：\"HK\"、\"US\"、\"CN\" 或 \"SG\"（默認全部）",
         "state": "狀態碼過濾（默認全部），取值見工具說明",

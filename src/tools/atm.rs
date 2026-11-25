@@ -147,6 +147,27 @@ const TRANSFER_OUT: TransferKind = TransferKind {
     terminal: &[4, 6, 7],
 };
 
+/// Stock-transfer record fields with no use in a support answer: internal
+/// position bookkeeping and an empty cash list.
+const TRANSFER_RECORD_NOISE: &[&str] = &["cash", "market_symbol", "broker_id"];
+
+/// Per-stock fields of a transfer: internal bookkeeping, plus the storage
+/// keys of uploaded proof documents (`usi_attachments`).
+const TRANSFER_STOCK_NOISE: &[&str] = &[
+    "usi_attachments",
+    "is_reality",
+    "street_amount",
+    "nominee_amount",
+    "own_amount",
+    "tax_enable",
+    "effect_state",
+    "certificate_count",
+];
+
+/// Transfer timestamps upstream fills with a placeholder when unset (0, which
+/// becomes 1970, or a negative value): anything before this year is dropped.
+const TRANSFER_MIN_YEAR: &str = "2000";
+
 /// eDDA flows in a card's `auth_list`: bank-side and in-app eDDA.
 const EDDA_FLOWS: &[&str] = &["hk_edda", "hk_sdda"];
 
@@ -519,6 +540,31 @@ async fn transfer_records(
 fn shape_transfer(record: &mut Map<String, Value>, kind: &TransferKind) {
     record.remove("attachments");
     record.remove("name");
+    for key in TRANSFER_RECORD_NOISE {
+        record.remove(*key);
+    }
+    // The customer's account number at the other broker: last 4 digits only.
+    if let Some(account) = record
+        .remove("account")
+        .and_then(|a| a.as_str().filter(|a| !a.is_empty()).map(mask_account))
+    {
+        record.insert("account".into(), Value::String(account));
+    }
+    // Unset dates arrive as 1970 (0) or earlier (negative): drop them, or an
+    // open application would read as executed in 1970.
+    record.retain(|key, value| {
+        !(key.ends_with("_at")
+            && value
+                .as_str()
+                .is_some_and(|t| t.get(..4).is_some_and(|year| year < TRANSFER_MIN_YEAR)))
+    });
+    if let Some(stocks) = record.get_mut("stocks").and_then(Value::as_array_mut) {
+        for stock in stocks.iter_mut().filter_map(Value::as_object_mut) {
+            for key in TRANSFER_STOCK_NOISE {
+                stock.remove(*key);
+            }
+        }
+    }
     add_label(record, "state_code", "state_label", kind.states);
     // `noticed`: the customer tapped "I have notified the broker" in the app.
     // It is the customer's own confirmation, not a Longbridge action.
@@ -633,6 +679,8 @@ pub async fn withdrawals(
     let mut value = http_get_value(&client, "/v1/account/withdrawals", &params).await?;
     let page_size = p.size.unwrap_or(20) as usize;
     shape_money_records(&mut value, "list", "state", WITHDRAWAL_STATE, page_size);
+    strip_empty_strings(&mut value);
+    strip_nulls(&mut value);
     value_result(&value)
 }
 
@@ -796,6 +844,40 @@ mod tests {
             verified.get("review_days").is_none(),
             "only cards under review"
         );
+    }
+
+    #[test]
+    fn shape_transfer_cleans_a_real_record() {
+        // Shape of a real canary transfer-in record, 2026-11-25.
+        let mut record = json!({
+            "id": "7053", "market_symbol": "US", "broker_id": "9", "account": "11222333444555",
+            "created_at": "2026-11-25T09:59:06Z", "exec_at": "1970-01-01T00:00:00Z",
+            "cancel_at": "1906-06-07T18:35:44Z", "app_state": "default", "state_code": 0,
+            "cash": [], "stocks": [{"code": "AAPL", "name": "苹果", "amount": "100",
+                "usi_attachments": ["k"], "is_reality": 0, "street_amount": "0"}],
+        });
+        shape_transfer(record.as_object_mut().expect("object"), &TRANSFER_IN);
+        assert_eq!(record["account"], "****4555", "other-broker account masked");
+        assert!(record.get("exec_at").is_none(), "1970 placeholder dropped");
+        assert!(
+            record.get("cancel_at").is_none(),
+            "pre-1970 placeholder dropped"
+        );
+        assert!(
+            record["days_in_process"].as_i64().is_some_and(|d| d >= 0),
+            "open: counted"
+        );
+        assert_eq!(
+            record["customer_notified_broker"], false,
+            "default: not notified"
+        );
+        for key in ["cash", "market_symbol", "broker_id"] {
+            assert!(record.get(key).is_none(), "{key} dropped");
+        }
+        let stock = &record["stocks"][0];
+        assert!(stock.get("usi_attachments").is_none(), "proof keys dropped");
+        assert!(stock.get("street_amount").is_none(), "bookkeeping dropped");
+        assert_eq!(stock["name"], "苹果", "stock name kept");
     }
 
     #[test]

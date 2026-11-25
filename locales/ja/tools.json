@@ -1210,7 +1210,7 @@
     },
     "stock_transfers_in": {
       "title": "株式移管（入庫）申請",
-      "description": "現在のアカウントの株式移管（他社から本アカウントへの入庫）申請を新しい順に一覧表示します。state フィルター / state_code：0 提出済み、1 取消、3 完了（入庫済み）、5 処理中、7 一部完了、8 失敗。start/end：yyyy-mm-dd または RFC3339（作成日時で絞り込み）。{records[]{id, order_id, market, broker, broker_en, account（相手証券会社の口座番号）, state（状態テキスト）, state_code, state_label（submitted/cancelled/completed/processing/partially_completed/failed）, app_state, customer_notified_broker（顧客がアプリで「通知済み」をタップした。顧客自身の確認で、Longbridge の操作ではない）, stocks[]{code, name, amount, state}, created_at, updated_at, process_at, exec_at, days_in_process（作成から執行までの日数。取消・失敗は終了時まで、未完了は今日まで）, remark, reason}, total} を返します。失敗・取消の理由は remark/reason にあり、そのまま伝えてください",
+      "description": "現在のアカウントの株式移管（他社から本アカウントへの入庫）申請を新しい順に一覧表示します。state フィルター / state_code：0 提出済み、1 取消、3 完了（入庫済み）、5 処理中、7 一部完了、8 失敗。start/end：yyyy-mm-dd または RFC3339（作成日時で絞り込み）。{records[]{id, order_id, market, broker, broker_en, account（相手証券会社での顧客の口座番号。下 4 桁のみ）, state（状態テキスト）, state_code, state_label（submitted/cancelled/completed/processing/partially_completed/failed）, app_state, customer_notified_broker（顧客がアプリで「通知済み」をタップした。顧客自身の確認で、Longbridge の操作ではない）, stocks[]{code, name, amount, state}, created_at, updated_at, process_at, exec_at, days_in_process（作成から執行までの日数。取消・失敗は終了時まで、未完了は今日まで）, remark, reason}, total} を返します。失敗・取消の理由は remark/reason にあり、そのまま伝えてください",
       "properties": {
         "market": "市場フィルター：\"HK\"、\"US\"、\"CN\"、\"SG\"（既定：すべて）",
         "state": "状態コードフィルター（既定：すべて）。値はツール説明を参照",
@@ -1222,7 +1222,7 @@
     },
     "stock_transfers_out": {
       "title": "株式移管（出庫）申請",
-      "description": "現在のアカウントの株式移管（本アカウントから他社への出庫）申請を新しい順に一覧表示します。state フィルター / state_code：0 提出済み、1 処理中、2 執行中、3 完了、4 取消、5 一部完了、6 失敗、7 却下。start/end：yyyy-mm-dd または RFC3339（作成日時で絞り込み）。{records[]{id, broker, account（相手証券会社の口座番号）, state（状態テキスト）, state_code, state_label（submitted/processing/executing/completed/cancelled/partially_completed/failed/rejected）, app_state, customer_notified_broker（入庫と同じ）, stocks[]{code, name, amount}, created_at, updated_at, agree_at, refuse_at, cancel_at, process_at, exec_at, days_in_process（入庫と同じ算出方法）, reason}} を返します。却下・取消の理由は reason にあり、そのまま伝えてください",
+      "description": "現在のアカウントの株式移管（本アカウントから他社への出庫）申請を新しい順に一覧表示します。state フィルター / state_code：0 提出済み、1 処理中、2 執行中、3 完了、4 取消、5 一部完了、6 失敗、7 却下。start/end：yyyy-mm-dd または RFC3339（作成日時で絞り込み）。{records[]{id, broker, account（相手証券会社での顧客の口座番号。下 4 桁のみ）, state（状態テキスト）, state_code, state_label（submitted/processing/executing/completed/cancelled/partially_completed/failed/rejected）, app_state, customer_notified_broker（入庫と同じ）, stocks[]{code, name, amount}, created_at, updated_at, agree_at, refuse_at, cancel_at, process_at, exec_at, days_in_process（入庫と同じ算出方法）, reason}} を返します。却下・取消の理由は reason にあり、そのまま伝えてください",
       "properties": {
         "market": "市場フィルター：\"HK\"、\"US\"、\"CN\"、\"SG\"（既定：すべて）",
         "state": "状態コードフィルター（既定：すべて）。値はツール説明を参照",
