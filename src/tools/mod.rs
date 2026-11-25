@@ -830,6 +830,7 @@ mod portfolio;
 mod profile;
 mod quant;
 mod quote;
+mod reward;
 mod screener;
 mod search;
 mod sharelist;
@@ -1296,6 +1297,15 @@ const AP_ONLY_TOOLS: &[&str] = &[
     "dca_history",
     "dca_stats",
     "dca_check",
+    // AI customer-service account tools: lb-portfolio-atm / lb-reward-center
+    // routes exist only in the AP data center.
+    "edda_authorizations",
+    "edda_status",
+    "stock_transfers_in",
+    "stock_transfers_out",
+    "reward_records",
+    "coupons",
+    "coupon_orders",
 ];
 
 /// Guidance appended to the rejection of an [`AP_ONLY_TOOLS`] tool called by a
@@ -1972,6 +1982,8 @@ const TOOL_ENDPOINTS: &[(&str, u8)] = &[
     // IPO order management, money movement / PCI.
     ("bank_cards", 0),
     ("cancel_order", 0),
+    ("coupon_orders", 0),
+    ("coupons", 0),
     ("dca_check", 0),
     ("dca_create", 0),
     ("dca_history", 0),
@@ -1982,6 +1994,8 @@ const TOOL_ENDPOINTS: &[(&str, u8)] = &[
     ("dca_stop", 0),
     ("dca_update", 0),
     ("deposits", 0),
+    ("edda_authorizations", 0),
+    ("edda_status", 0),
     ("fund_cancel_order", 0),
     ("fund_submit_order", 0),
     ("grid_cancel", 0),
@@ -1998,6 +2012,9 @@ const TOOL_ENDPOINTS: &[(&str, u8)] = &[
     ("ipo_orders", 0),
     ("ipo_profit_loss", 0),
     ("replace_order", 0),
+    ("reward_records", 0),
+    ("stock_transfers_in", 0),
+    ("stock_transfers_out", 0),
     ("submit_multileg_order", 0),
     ("submit_order", 0),
     ("withdrawals", 0),
@@ -5972,7 +5989,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "List linked withdrawal bank cards for the current account. Returns cards[]{id, bank_name, account_number (masked), currency, status}."
+        description = "List the current account's linked bank cards and their review state. Returns cards[]{id, bank, bank_en, bank_code, account (last 4 digits only), account_type, region, region_name, country, verification (unverified/under_review/verified: withdrawal verification of the card), witness (not_required/pending/witnessed: a deposit from this card witnessed), binding (binding/bound/failed), bind_tip (review note shown to the user), remark, created_at, auth_list[]{flow_id (hk_edda/hk_sdda: eDDA, hk_bank_sec: bank-securities transfer, hk_fps: FPS), name, currency, authorization (unauthorized/authorized/authorizing/failed), message (failure reason), max_amount, max_amount_unlimited, daily_max_count, daily_max_count_unlimited, expiry_date, long_term_valid}}. A card under_review is being reviewed manually after binding; for eDDA alone use edda_authorizations."
     )]
     async fn bank_cards(
         &self,
@@ -6023,6 +6040,163 @@ impl Longbridge {
     ) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
         measured_tool_call("deposits", format!("{p:?}"), || atm::deposits(&mctx, p)).await
+    }
+
+    /// List eDDA authorizations across linked bank cards.
+    #[tool(
+        title = "eDDA Authorizations",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = true
+        ),
+        description = "List the current account's eDDA (electronic direct debit) authorizations across its linked bank cards. Returns authorizations[]{card_id, bank, bank_en, account (last 4 digits only), card_binding (binding/bound/failed), flow (hk_edda: authorized at the bank, hk_sdda: authorized in the app), name, currency, authorization (unauthorized/authorized/authorizing/failed), failure_reason (the bank's message), max_amount (deposit limit), max_amount_unlimited, daily_max_count, daily_max_count_unlimited, expiry_date, long_term_valid}. An empty list means no card has an eDDA authorization. To refresh one card's status use edda_status."
+    )]
+    async fn edda_authorizations(
+        &self,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("edda_authorizations", String::new(), || {
+            atm::edda_authorizations(&mctx)
+        })
+        .await
+    }
+
+    /// Get one bank card's eDDA authorization status.
+    #[tool(
+        title = "eDDA Status",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = true
+        ),
+        description = "Get the latest eDDA authorization status of one linked bank card in one currency. card_id: cards[].id from bank_cards (or authorizations[].card_id from edda_authorizations). Returns {applications[]{id, status, authorization (unauthorized/authorized/authorizing/failed), failure_reason, …}}: the eDDA authorization applications filed for that card. An empty list means no application was filed (an eDDA pushed by the bank, or one never applied for); the card's current eDDA state is then in edda_authorizations."
+    )]
+    async fn edda_status(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<atm::EddaStatusParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("edda_status", format!("{p:?}"), || {
+            atm::edda_status(&mctx, p)
+        })
+        .await
+    }
+
+    /// List stock transfer-in applications.
+    #[tool(
+        title = "Stock Transfers In",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = true
+        ),
+        description = "List the current account's stock transfer-in applications (moving shares from another broker into this account), newest first. state filter / state_code: 0 submitted, 1 cancelled, 3 completed (shares received), 5 processing, 7 partially completed, 8 failed. start/end: yyyy-mm-dd or RFC3339, on the creation time. Returns {records[]{id, order_id, market, broker, broker_en, account (the account at the other broker), state (status text), state_code, app_state, broker_notified (whether the other broker has been notified), stocks[]{code, name, amount, state}, created_at, updated_at, process_at, exec_at, days_in_process (days since creation, or until execution once executed), remark, reason}, total}. A failure or cancellation reason, when there is one, is in remark/reason; quote it as written."
+    )]
+    async fn stock_transfers_in(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<atm::StockTransferParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("stock_transfers_in", format!("{p:?}"), || {
+            atm::stock_transfers_in(&mctx, p)
+        })
+        .await
+    }
+
+    /// List stock transfer-out applications.
+    #[tool(
+        title = "Stock Transfers Out",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = true
+        ),
+        description = "List the current account's stock transfer-out applications (moving shares from this account to another broker), newest first. state filter / state_code: 0 submitted, 1 processing, 2 executing, 3 completed, 4 cancelled, 5 partially completed, 6 partially failed, 7 rejected. start/end: yyyy-mm-dd or RFC3339, on the creation time. Returns {records[]{id, broker, account (the account at the other broker), state (status text), state_code, app_state, broker_notified, stocks[]{code, name, amount}, created_at, updated_at, agree_at, refuse_at, cancel_at, process_at, exec_at, days_in_process, reason}}. A rejection or cancellation reason, when there is one, is in reason; quote it as written."
+    )]
+    async fn stock_transfers_out(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<atm::StockTransferParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("stock_transfers_out", format!("{p:?}"), || {
+            atm::stock_transfers_out(&mctx, p)
+        })
+        .await
+    }
+
+    /// List activity reward records.
+    #[tool(
+        title = "Reward Records",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = true
+        ),
+        description = "List the current account's activity reward records (campaign rewards: cash, coupon cards, prizes such as shares or gifts), newest first. Returns {rewards[]{kind (cash/card/prize), reward_type, record_id, activity_title, title, description, card_type, card_status, prize_type, amount, currency, status, deliver_status, send_time, start_time, end_time, effective_time, receive_deadline}, total}. Use it for \"my reward has not arrived\" questions: match the campaign by activity_title and the date by send_time. Coupon cards a reward granted are listed by coupons."
+    )]
+    async fn reward_records(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<reward::RewardRecordsParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("reward_records", format!("{p:?}"), || {
+            reward::reward_records(&mctx, p)
+        })
+        .await
+    }
+
+    /// List coupon cards.
+    #[tool(
+        title = "Coupons",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = true
+        ),
+        description = "List the current account's coupon cards (commission-free cards, platform-fee deduction cards, stock cards, quote/fundamental data cards, cash cards, IPO cards, …). status: \"valid\" (default, not expired: unused, in use or used) or \"expired\". Returns {cards[]{card_id, card_type, title, title_sec, description, detail, card_status (0 unused, 1 used, 2 expired, 3 locked, 4 in use, 5 processing), start_time, end_time (validity; absent with no_expiry: true for a card that never expires), activate_time, amount, currency, available_trade_session, trade_sessions (sessions the card can be used in), commission{markets, rebate_rate, bz_types, commission_balance, commission_expired_time}, quote{markets, quote_market, current_end_time}, stock{…}, platform_fee_deduct{…}, …}, total, expired_count}. Which orders a card was applied to: coupon_orders."
+    )]
+    async fn coupons(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<reward::CouponsParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("coupons", format!("{p:?}"), || reward::coupons(&mctx, p)).await
+    }
+
+    /// List the orders a coupon card was applied to.
+    #[tool(
+        title = "Coupon Orders",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = true
+        ),
+        description = "List the orders a coupon card (e.g. a commission-free or platform-fee deduction card) was applied to. card_id: cards[].card_id from coupons. Returns {card_id, locked[] (orders holding the card, rebate not settled yet), settled[] (rebate settled)}, each {order_id, state, state_val, executed_price, executed_quantity, currency, rebate, rebate_dt, settlement_currency}."
+    )]
+    async fn coupon_orders(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(p): Parameters<reward::CouponOrdersParam>,
+    ) -> Result<CallToolResult, McpError> {
+        let mctx = extract_context(&ctx)?;
+        measured_tool_call("coupon_orders", format!("{p:?}"), || {
+            reward::coupon_orders(&mctx, p)
+        })
+        .await
     }
 
     /// List IPO stocks currently in subscription stage (HK and US).
@@ -7265,6 +7439,13 @@ mod tests {
             "deposits",
             "withdrawals",
             "bank_cards",
+            "edda_authorizations",
+            "edda_status",
+            "stock_transfers_in",
+            "stock_transfers_out",
+            "reward_records",
+            "coupons",
+            "coupon_orders",
         ];
         for tool in hard_excluded {
             assert!(

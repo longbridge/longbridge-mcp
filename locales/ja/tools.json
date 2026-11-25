@@ -1172,7 +1172,7 @@
     },
     "bank_cards": {
       "title": "登録銀行口座",
-      "description": "現在の口座に登録されている出金用銀行カードを一覧表示します。cards[]{id, bank_name, account_number（マスキング済み）, currency, status} を返します"
+      "description": "現在のアカウントに登録された銀行口座と審査状況を一覧表示します。cards[]{id, bank, bank_en, bank_code, account（下 4 桁のみ）, account_type, region, region_name, country, verification（unverified/under_review/verified：出金用口座の認証）, witness（not_required/pending/witnessed：この口座からの入金確認）, binding（binding/bound/failed）, bind_tip（ユーザーに表示される審査メッセージ）, remark, created_at, auth_list[]{flow_id（hk_edda/hk_sdda：eDDA、hk_bank_sec：銀行・証券振替、hk_fps：FPS）, name, currency, authorization（unauthorized/authorized/authorizing/failed）, message（失敗理由）, max_amount, max_amount_unlimited, daily_max_count, daily_max_count_unlimited, expiry_date, long_term_valid}} を返します。under_review は登録後の手動審査中を意味します。eDDA だけなら edda_authorizations を使用"
     },
     "withdrawals": {
       "title": "出金履歴",
@@ -1190,6 +1190,68 @@
         "size": "1 ページあたりの件数（デフォルト 20）",
         "states": "入金ステータスによるフィルター（カンマ区切り）",
         "currencies": "通貨コードによるフィルター（カンマ区切り）。例：`\"USD,HKD\"`"
+      }
+    },
+    "edda_authorizations": {
+      "title": "eDDA 承認",
+      "description": "現在のアカウントの登録銀行口座ごとの eDDA（電子口座振替）承認を一覧表示します。authorizations[]{card_id, bank, bank_en, account（下 4 桁のみ）, card_binding（binding/bound/failed）, flow（hk_edda：銀行で承認、hk_sdda：アプリで承認）, name, currency, authorization（unauthorized/authorized/authorizing/failed）, failure_reason（銀行からのメッセージ）, max_amount（入金上限）, max_amount_unlimited, daily_max_count, daily_max_count_unlimited, expiry_date, long_term_valid} を返します。空のリストは eDDA 承認済みの口座がないことを意味します。1 口座の状態を更新するには edda_status"
+    },
+    "edda_status": {
+      "title": "eDDA 承認状況",
+      "description": "登録銀行口座 1 件の、指定通貨における最新の eDDA 承認状況を取得します。card_id は bank_cards の cards[].id（または edda_authorizations の authorizations[].card_id）。{applications[]{id, status, authorization（unauthorized/authorized/authorizing/failed）, failure_reason, …}}（この口座で提出された eDDA 承認申請）を返します。空のリストは申請がないこと（銀行側から登録された eDDA、または未申請）を意味し、その場合の現在の eDDA 状態は edda_authorizations で確認",
+      "properties": {
+        "card_id": "銀行口座 id（bank_cards の cards[].id）",
+        "currency": "承認通貨（例：\"HKD\"、\"USD\"）"
+      }
+    },
+    "stock_transfers_in": {
+      "title": "株式移管（入庫）申請",
+      "description": "現在のアカウントの株式移管（他社から本アカウントへの入庫）申請を新しい順に一覧表示します。state フィルター / state_code：0 提出済み、1 取消、3 完了（入庫済み）、5 処理中、7 一部完了、8 失敗。start/end：yyyy-mm-dd または RFC3339（作成日時で絞り込み）。{records[]{id, order_id, market, broker, broker_en, account（相手証券会社の口座番号）, state（状態テキスト）, state_code, app_state, broker_notified（相手証券会社への通知済みか）, stocks[]{code, name, amount, state}, created_at, updated_at, process_at, exec_at, days_in_process（作成からの日数、執行済みなら執行まで）, remark, reason}, total} を返します。失敗・取消の理由は remark/reason にあり、そのまま伝えてください",
+      "properties": {
+        "market": "市場フィルター：\"HK\"、\"US\"、\"CN\"、\"SG\"（既定：すべて）",
+        "state": "状態コードフィルター（既定：すべて）。値はツール説明を参照",
+        "start": "作成日時の開始（yyyy-mm-dd または RFC3339）",
+        "end": "作成日時の終了（yyyy-mm-dd または RFC3339）",
+        "page": "ページ番号（既定 1）",
+        "size": "1 ページあたりの件数（既定 20、最大 50）"
+      }
+    },
+    "stock_transfers_out": {
+      "title": "株式移管（出庫）申請",
+      "description": "現在のアカウントの株式移管（本アカウントから他社への出庫）申請を新しい順に一覧表示します。state フィルター / state_code：0 提出済み、1 処理中、2 執行中、3 完了、4 取消、5 一部完了、6 一部失敗、7 却下。start/end：yyyy-mm-dd または RFC3339（作成日時で絞り込み）。{records[]{id, broker, account（相手証券会社の口座番号）, state（状態テキスト）, state_code, app_state, broker_notified, stocks[]{code, name, amount}, created_at, updated_at, agree_at, refuse_at, cancel_at, process_at, exec_at, days_in_process, reason}} を返します。却下・取消の理由は reason にあり、そのまま伝えてください",
+      "properties": {
+        "market": "市場フィルター：\"HK\"、\"US\"、\"CN\"、\"SG\"（既定：すべて）",
+        "state": "状態コードフィルター（既定：すべて）。値はツール説明を参照",
+        "start": "作成日時の開始（yyyy-mm-dd または RFC3339）",
+        "end": "作成日時の終了（yyyy-mm-dd または RFC3339）",
+        "page": "ページ番号（既定 1）",
+        "size": "1 ページあたりの件数（既定 20、最大 50）"
+      }
+    },
+    "reward_records": {
+      "title": "特典付与履歴",
+      "description": "現在のアカウントのキャンペーン特典の付与履歴（現金、クーポン、株式や景品など）を新しい順に一覧表示します。{rewards[]{kind（cash/card/prize）, reward_type, record_id, activity_title, title, description, card_type, card_status, prize_type, amount, currency, status, deliver_status, send_time, start_time, end_time, effective_time, receive_deadline}, total} を返します。「特典が届かない」という問い合わせでは activity_title でキャンペーンを、send_time で日付を照合します。特典で付与されたクーポンは coupons で確認",
+      "properties": {
+        "reward_type": "特典種別フィルター（上流の数値コード、既定：すべて）",
+        "page": "ページ番号（既定 1）",
+        "size": "1 ページあたりの件数（既定 20、最大 50）"
+      }
+    },
+    "coupons": {
+      "title": "クーポン",
+      "description": "現在のアカウントのクーポン（手数料無料カード、プラットフォーム手数料控除カード、株式カード、相場・ファンダメンタルズカード、現金カード、IPO カードなど）を一覧表示します。status：\"valid\"（既定、未失効：未使用・使用中・使用済み）または \"expired\"。{cards[]{card_id, card_type, title, title_sec, description, detail, card_status（0 未使用、1 使用済み、2 失効、3 ロック、4 使用中、5 処理中）, start_time, end_time（有効期間。無期限のカードはこの項目がなく no_expiry: true）, activate_time, amount, currency, available_trade_session, trade_sessions（利用可能な取引時間帯）, commission{markets, rebate_rate, bz_types, commission_balance, commission_expired_time}, quote{markets, quote_market, current_end_time}, stock{…}, platform_fee_deduct{…}, …}, total, expired_count} を返します。クーポンが使われた注文：coupon_orders",
+      "properties": {
+        "status": "\"valid\"（未失効、既定）または \"expired\"",
+        "card_type": "クーポン種別フィルター（例：\"commission\"、\"platform_fee_deduct\"、\"stock\"、\"quote\"、\"cash\"、既定：すべて）",
+        "page": "ページ番号（既定 1）",
+        "size": "1 ページあたりの件数（既定 20、最大 50）"
+      }
+    },
+    "coupon_orders": {
+      "title": "クーポン利用注文",
+      "description": "クーポン（手数料無料カード、プラットフォーム手数料控除カードなど）が使われた注文を一覧表示します。card_id は coupons の cards[].card_id。{card_id, locked[]（クーポンを使用中で還元未精算の注文）, settled[]（還元精算済み）} を返し、各要素は {order_id, state, state_val, executed_price, executed_quantity, currency, rebate, rebate_dt, settlement_currency}",
+      "properties": {
+        "card_id": "クーポン id（coupons の cards[].card_id）"
       }
     },
     "ipo_subscriptions": {

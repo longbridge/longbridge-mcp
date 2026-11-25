@@ -51,6 +51,32 @@ fn result_from_raw_json_with_unix_paths(
     Ok(success_with_structured(json))
 }
 
+/// GET `path` and return the response as a transformed JSON `Value` (snake_case
+/// keys, `*_at` timestamps as RFC3339), for tools that reshape the payload
+/// before returning it. Pair with [`value_result`].
+pub async fn http_get_value(
+    client: &HttpClient,
+    path: &str,
+    params: &[(&str, &str)],
+) -> Result<serde_json::Value, McpError> {
+    let params: Vec<(&str, &str)> = params.to_vec();
+    let resp: String = client
+        .request(Method::GET, path)
+        .query_params(params)
+        .response::<String>()
+        .send()
+        .await
+        .map_err(|e| Error::longbridge(e.into()))?;
+    let transformed = transform_json(resp.as_bytes()).map_err(Error::Serialize)?;
+    Ok(serde_json::from_str(&transformed).map_err(Error::Serialize)?)
+}
+
+/// Build a tool result from an already reshaped JSON `Value`.
+pub fn value_result(value: &serde_json::Value) -> Result<CallToolResult, McpError> {
+    let json = serde_json::to_string(value).map_err(Error::Serialize)?;
+    Ok(success_with_structured(json))
+}
+
 pub async fn http_get_tool(
     client: &HttpClient,
     path: &str,
