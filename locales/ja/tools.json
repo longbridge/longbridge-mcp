@@ -1172,24 +1172,28 @@
     },
     "bank_cards": {
       "title": "登録銀行口座",
-      "description": "現在のアカウントに登録された銀行口座と審査状況を一覧表示します。cards[]{id, bank, bank_en, bank_code, account（下 4 桁のみ）, account_type, region, region_name, country, verification（unverified/under_review/verified：出金用口座の認証）, witness（not_required/pending/witnessed：この口座からの入金確認）, binding（binding/bound/failed）, review_days（口座追加からの日数。under_review の間のみ。約 14 日以上なら審査遅延）, bind_tip（ユーザーに表示される審査メッセージ）, remark, created_at, auth_list[]{flow_id（hk_edda/hk_sdda：eDDA、hk_bank_sec：銀行・証券振替、hk_fps：FPS）, name, currency, authorization（unauthorized/authorized/authorizing/failed）, message（失敗理由）, max_amount, max_amount_unlimited, daily_max_count, daily_max_count_unlimited, expiry_date, long_term_valid}} を返します。under_review は登録後の手動審査中を意味します。eDDA だけなら edda_authorizations を使用"
+      "description": "現在のアカウントに登録された銀行口座と審査状況を一覧表示します。cards[]{id, bank, bank_en, bank_code, account（下 4 桁のみ）, account_type, region, region_name, country, verification（unverified/under_review/verified：出金用口座の認証）, witness（not_required/pending/witnessed：この口座からの入金確認）, binding（binding/bound/failed）, review_days（口座追加からの日数。under_review の間のみ。約 14 日以上なら審査遅延）, bind_tip（ユーザーに表示される審査メッセージ）, remark, created_at, auth_list[]{flow_id（hk_edda/hk_sdda：eDDA、hk_bank_sec：銀行・証券振替、hk_fps：FPS）, name, currency, authorization（unauthorized/authorized/authorizing/failed）, failure_reason（失敗理由）, max_amount, max_amount_unlimited, daily_max_count, daily_max_count_unlimited, expiry_date, long_term_valid}} を返します。under_review は登録後の手動審査中を意味します。eDDA だけなら edda_authorizations を使用"
     },
     "withdrawals": {
       "title": "出金履歴",
-      "description": "現在のアカウントの出金履歴を新しい順に取得します。{list[]{id, order_id, created_at, currency, amount（申請金額）, fee（出金手数料。古い記録では空）, settlement_amount（実際の出金額）, state, raw_state, state_description（状態テキスト）, bank_account（下 4 桁のみ）, display_bank_account, user_bank_swift_code}, total} を返します。処理予定時刻とバックオフィスの備考は含みません",
+      "description": "現在のアカウントの出金履歴を新しい順に取得します。{list[]{id, order_id, created_at, currency, amount（申請金額）, fee（出金手数料。古い記録では空）, settlement_amount（実際の出金額）, state, state_label（submitted/processing/rejected/cancelled/remitted/failed）, raw_state, state_description（状態テキスト）, bank_account（下 4 桁のみ）, display_bank_account, user_bank_swift_code}, total} を返します。start/end：yyyy-mm-dd または RFC3339（申請日時で絞り込み）。処理予定時刻とバックオフィスの備考は含みません",
       "properties": {
         "page": "ページ番号（デフォルト 1）",
-        "size": "1 ページあたりの件数（デフォルト 20）"
+        "size": "1 ページあたりの件数（デフォルト 20）",
+        "start": "申請日時の開始（yyyy-mm-dd または RFC3339）",
+        "end": "申請日時の終了（yyyy-mm-dd または RFC3339）"
       }
     },
     "deposits": {
       "title": "入金履歴",
-      "description": "現在のアカウントの入金履歴を新しい順に取得します。{items[]{id, created_at, updated_at, currency, amount（顧客が通知・申請した金額）, receivable_amount（Longbridge の銀行で実際に受領した金額。0 は未着金）, state（状態テキスト）, state_code（0 処理中、1 入金済み、2 失敗、3 取消、5 却下）, sub_state_code, bank_operation_type_name（入金方法：eDDA、FPS、銀行振込など）, reference_no, can_cancel, voucher_count（アップロードされた証憑の枚数）}, total} を返します。states：カンマ区切りの状態（Pending/Finished/Failed）。currencies：カンマ区切りの通貨コード。バックオフィスの備考は含みません",
+      "description": "現在のアカウントの入金履歴を新しい順に取得します。{items[]{id, created_at, updated_at, currency, amount（顧客が通知・申請した金額）, receivable_amount（Longbridge の銀行で実際に受領した金額。0 は未着金）, state（状態テキスト）, state_code, state_label（processing/credited/failed/cancelled/invalidated/rejected）, sub_state_code, bank_operation_type_name（入金方法：eDDA、FPS、銀行振込など）, reference_no, can_cancel, voucher_count（アップロードされた証憑の枚数）}, total} を返します。states：カンマ区切りの状態コード（0 処理中、1 入金済み、2 失敗、3 取消、4 無効、5 却下）。currencies：カンマ区切りの通貨コード。start/end：yyyy-mm-dd または RFC3339（申請日時で絞り込み）。バックオフィスの備考は含みません",
       "properties": {
         "page": "ページ番号（デフォルト 1）",
         "size": "1 ページあたりの件数（デフォルト 20）",
-        "states": "入金ステータスによるフィルター（カンマ区切り）",
-        "currencies": "通貨コードによるフィルター（カンマ区切り）。例：`\"USD,HKD\"`"
+        "states": "状態コードフィルター（カンマ区切り、例 \"0,2\"）：0 処理中、1 入金済み、2 失敗、3 取消、4 無効、5 却下",
+        "currencies": "通貨コードによるフィルター（カンマ区切り）。例：`\"USD,HKD\"`",
+        "start": "申請日時の開始（yyyy-mm-dd または RFC3339）",
+        "end": "申請日時の終了（yyyy-mm-dd または RFC3339）"
       }
     },
     "edda_authorizations": {
@@ -1198,7 +1202,7 @@
     },
     "edda_status": {
       "title": "eDDA 承認状況",
-      "description": "登録銀行口座 1 件の、指定通貨における最新の eDDA 承認状況を取得します。card_id は bank_cards の cards[].id（または edda_authorizations の authorizations[].card_id）。{applications[]{id, status, authorization（unauthorized/authorized/authorizing/failed）, failure_reason, …}}（この口座で提出された eDDA 承認申請）を返します。空のリストは申請がないこと（銀行側から登録された eDDA、または未申請）を意味し、その場合の現在の eDDA 状態は edda_authorizations で確認",
+      "description": "登録銀行口座 1 件について、指定通貨で提出された eDDA 承認申請を一覧表示します。多くの eDDA 承認（銀行側からの登録など）には申請がないため通常は空です。eDDA の質問にはまず edda_authorizations を使い、申請を確認する場合のみ本ツールを使用してください。card_id は bank_cards の cards[].id（または edda_authorizations の authorizations[].card_id）。{applications[]{id, status, authorization（unauthorized/authorized/authorizing/failed）, failure_reason, …}}（この口座で提出された eDDA 承認申請）を返します。空のリストは申請がないこと（銀行側から登録された eDDA、または未申請）を意味し、その場合の現在の eDDA 状態は edda_authorizations で確認",
       "properties": {
         "card_id": "銀行口座 id（bank_cards の cards[].id）",
         "currency": "承認通貨（例：\"HKD\"、\"USD\"）"
@@ -1206,7 +1210,7 @@
     },
     "stock_transfers_in": {
       "title": "株式移管（入庫）申請",
-      "description": "現在のアカウントの株式移管（他社から本アカウントへの入庫）申請を新しい順に一覧表示します。state フィルター / state_code：0 提出済み、1 取消、3 完了（入庫済み）、5 処理中、7 一部完了、8 失敗。start/end：yyyy-mm-dd または RFC3339（作成日時で絞り込み）。{records[]{id, order_id, market, broker, broker_en, account（相手証券会社の口座番号）, state（状態テキスト）, state_code, app_state, broker_notified（相手証券会社への通知済みか）, stocks[]{code, name, amount, state}, created_at, updated_at, process_at, exec_at, days_in_process（作成からの日数、執行済みなら執行まで）, remark, reason}, total} を返します。失敗・取消の理由は remark/reason にあり、そのまま伝えてください",
+      "description": "現在のアカウントの株式移管（他社から本アカウントへの入庫）申請を新しい順に一覧表示します。state フィルター / state_code：0 提出済み、1 取消、3 完了（入庫済み）、5 処理中、7 一部完了、8 失敗。start/end：yyyy-mm-dd または RFC3339（作成日時で絞り込み）。{records[]{id, order_id, market, broker, broker_en, account（相手証券会社の口座番号）, state（状態テキスト）, state_code, state_label（submitted/cancelled/completed/processing/partially_completed/failed）, app_state, broker_notified（相手証券会社への通知済みか）, stocks[]{code, name, amount, state}, created_at, updated_at, process_at, exec_at, days_in_process（作成から執行までの日数。取消・失敗は終了時まで、未完了は今日まで）, remark, reason}, total} を返します。失敗・取消の理由は remark/reason にあり、そのまま伝えてください",
       "properties": {
         "market": "市場フィルター：\"HK\"、\"US\"、\"CN\"、\"SG\"（既定：すべて）",
         "state": "状態コードフィルター（既定：すべて）。値はツール説明を参照",
@@ -1218,7 +1222,7 @@
     },
     "stock_transfers_out": {
       "title": "株式移管（出庫）申請",
-      "description": "現在のアカウントの株式移管（本アカウントから他社への出庫）申請を新しい順に一覧表示します。state フィルター / state_code：0 提出済み、1 処理中、2 執行中、3 完了、4 取消、5 一部完了、6 一部失敗、7 却下。start/end：yyyy-mm-dd または RFC3339（作成日時で絞り込み）。{records[]{id, broker, account（相手証券会社の口座番号）, state（状態テキスト）, state_code, app_state, broker_notified, stocks[]{code, name, amount}, created_at, updated_at, agree_at, refuse_at, cancel_at, process_at, exec_at, days_in_process, reason}} を返します。却下・取消の理由は reason にあり、そのまま伝えてください",
+      "description": "現在のアカウントの株式移管（本アカウントから他社への出庫）申請を新しい順に一覧表示します。state フィルター / state_code：0 提出済み、1 処理中、2 執行中、3 完了、4 取消、5 一部完了、6 一部失敗、7 却下。start/end：yyyy-mm-dd または RFC3339（作成日時で絞り込み）。{records[]{id, broker, account（相手証券会社の口座番号）, state（状態テキスト）, state_code, state_label（submitted/processing/executing/completed/cancelled/partially_completed/partially_failed/rejected）, app_state, broker_notified, stocks[]{code, name, amount}, created_at, updated_at, agree_at, refuse_at, cancel_at, process_at, exec_at, days_in_process（入庫と同じ算出方法）, reason}} を返します。却下・取消の理由は reason にあり、そのまま伝えてください",
       "properties": {
         "market": "市場フィルター：\"HK\"、\"US\"、\"CN\"、\"SG\"（既定：すべて）",
         "state": "状態コードフィルター（既定：すべて）。値はツール説明を参照",
@@ -1230,26 +1234,29 @@
     },
     "reward_records": {
       "title": "特典付与履歴",
-      "description": "現在のアカウントのキャンペーン特典の付与履歴（現金、クーポン、株式や景品など）を新しい順に一覧表示します。{rewards[]{kind（cash/card/prize）, reward_type, record_id, activity_title, title, description, card_type, card_status, prize_type, amount, currency, status, status_label（upcoming/cancelled/exited_activity/unclaimed/issuing/issued/failed/exchanged/expired/refunded）, deliver_status, deliver_status_label（付与後の受け渡し状態：not_activated/activated_or_shipping/consumed/address_missing/address_filled/shipping/…）, send_time, start_time, end_time, effective_time, receive_deadline}, total} を返します。「特典が届かない」という問い合わせでは activity_title でキャンペーンを、send_time で日付を照合します。特典で付与されたクーポンは coupons で確認",
+      "description": "現在のアカウントのキャンペーン特典の付与履歴（現金、クーポン、株式や景品など）を新しい順に一覧表示します。kind で種別を絞り込み（cash/gift/coupon/task）。start/end（yyyy-mm-dd または RFC3339）で send_time を絞り込み、指定時はツールが自動でページを進めます（最大 500 件）。顧客が日付を挙げたら前後数日広げてください。{rewards[]{kind（cash/card/prize：記録が持つ明細の種類）, reward_type, reward_type_label（cash/gift/coupon/task）, record_id, activity_title, title, description, card_type, card_status, prize_type, amount, currency, status, status_label（upcoming/cancelled/exited_activity/unclaimed/issuing/issued/failed/exchanged/expired/refunded）, deliver_status, deliver_status_label（付与後の受け渡し状態：not_activated/activated_or_shipping/consumed/address_missing/address_filled/shipping/…）, send_time, start_time, end_time, effective_time, receive_deadline}, total} を返します。「特典が届かない」という問い合わせでは activity_title でキャンペーンを、send_time で日付を照合します。特典で付与されたクーポンは coupons で確認",
       "properties": {
-        "reward_type": "特典種別フィルター（上流の数値コード、既定：すべて）",
-        "page": "ページ番号（既定 1）",
-        "size": "1 ページあたりの件数（既定 20、最大 50）"
+        "page": "ページ番号（既定 1。start または end 指定時は無視）",
+        "size": "1 ページあたりの件数（既定 20、最大 50）",
+        "kind": "特典種別フィルター：\"cash\"、\"gift\"、\"coupon\"、\"task\"（既定：すべて）",
+        "start": "付与日時の開始（yyyy-mm-dd または RFC3339）。start/end 指定時はツールが自動でページを進めます",
+        "end": "付与日時の終了（yyyy-mm-dd または RFC3339）"
       }
     },
     "coupons": {
       "title": "クーポン",
-      "description": "現在のアカウントのクーポン（手数料無料カード、プラットフォーム手数料控除カード、株式カード、相場・ファンダメンタルズカード、現金カード、IPO カードなど）を一覧表示します。status：\"valid\"（既定、未失効：未使用・使用中・使用済み）または \"expired\"。{cards[]{card_id, card_type, title, title_sec, description, detail, card_status（0 未使用、1 使用済み、2 失効、3 ロック、4 使用中、5 処理中）, start_time, end_time（有効期間。無期限のカードはこの項目がなく no_expiry: true）, activate_time, amount, currency, available_trade_session, trade_sessions（利用可能な取引時間帯）, commission{markets, targets（対象商品：stocks/options/warrants/ETF/LOF）, rebate_rate, bz_types, commission_balance, commission_expired_time}, quote{markets, quote_market, current_end_time}, stock{…}, platform_fee_deduct{…}, …}, total, expired_count} を返します。クーポンが使われた注文：coupon_orders",
+      "description": "現在のアカウントのクーポン（手数料無料カード、プラットフォーム手数料控除カード、株式カード、相場・ファンダメンタルズカード、現金カード、IPO カードなど）を一覧表示します。status：\"valid\"（既定、未失効：未使用・使用中・使用済み）または \"expired\"。既定では description を短縮し detail を返しません。with_terms が true なら利用規約全文を返します（利用方法を聞かれたとき）。{cards[]{card_id, card_type, title, title_sec, description, detail, card_status, card_status_label（unused/used/expired/locked/in_use/processing）, start_time, end_time（有効期間。無期限のカードはこの項目がなく no_expiry: true）, activate_time, amount, currency, available_trade_session, trade_sessions（利用可能な取引時間帯）, commission{markets, targets（対象商品：stocks/options/warrants/ETF/LOF）, rebate_rate, bz_types, commission_balance, commission_expired_time}, quote{markets, quote_market, current_end_time}, stock{…}, platform_fee_deduct{…}, …}, total, expired_count} を返します。クーポンが使われた注文：coupon_orders",
       "properties": {
         "status": "\"valid\"（未失効、既定）または \"expired\"",
         "card_type": "クーポン種別フィルター（例：\"commission\"、\"platform_fee_deduct\"、\"stock\"、\"quote\"、\"cash\"、既定：すべて）",
         "page": "ページ番号（既定 1）",
-        "size": "1 ページあたりの件数（既定 20、最大 50）"
+        "size": "1 ページあたりの件数（既定 20、最大 50）",
+        "with_terms": "各クーポンの利用規約全文（description、detail）を含めるか。既定 false は短い説明のみ"
       }
     },
     "coupon_orders": {
       "title": "クーポン利用注文",
-      "description": "クーポン（手数料無料カード、プラットフォーム手数料控除カードなど）が使われた注文を一覧表示します。card_id は coupons の cards[].card_id。{card_id, locked[]（クーポンを使用中で還元未精算の注文）, settled[]（還元精算済み）} を返し、各要素は {order_id, state, state_val, executed_price, executed_quantity, currency, rebate, rebate_dt, settlement_currency}",
+      "description": "クーポン（手数料無料カード、プラットフォーム手数料控除カードなど）が使われた注文を一覧表示します。card_id は coupons の cards[].card_id（32 桁の 16 進数。数字のみの id は銀行口座で、クーポンではありません）。{card_id, locked[]（クーポンを使用中で還元未精算の注文）, settled[]（還元精算済み）} を返し、各要素は {order_id, state, state_val, executed_price, executed_quantity, currency, rebate, rebate_dt, settlement_currency}",
       "properties": {
         "card_id": "クーポン id（coupons の cards[].card_id）"
       }

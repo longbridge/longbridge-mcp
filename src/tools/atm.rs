@@ -81,6 +81,61 @@ const TRANSFER_TIME_PATHS: &[&str] = &[
     "records.*.agree_at",
 ];
 
+const TRANSFER_IN_STATE: &[(i64, &str)] = &[
+    (0, "submitted"),
+    (1, "cancelled"),
+    (3, "completed"),
+    (5, "processing"),
+    (7, "partially_completed"),
+    (8, "failed"),
+];
+const TRANSFER_OUT_STATE: &[(i64, &str)] = &[
+    (0, "submitted"),
+    (1, "processing"),
+    (2, "executing"),
+    (3, "completed"),
+    (4, "cancelled"),
+    (5, "partially_completed"),
+    (6, "partially_failed"),
+    (7, "rejected"),
+];
+const DEPOSIT_STATE: &[(i64, &str)] = &[
+    (0, "processing"),
+    (1, "credited"),
+    (2, "failed"),
+    (3, "cancelled"),
+    (4, "invalidated"),
+    (5, "rejected"),
+];
+const WITHDRAWAL_STATE: &[(i64, &str)] = &[
+    (0, "submitted"),
+    (1, "processing"),
+    (2, "rejected"),
+    (3, "cancelled"),
+    (4, "remitted"),
+    (5, "failed"),
+];
+
+/// How a stock-transfer list labels its codes and which codes are final.
+struct TransferKind {
+    path: &'static str,
+    states: &'static [(i64, &'static str)],
+    /// Cancelled / rejected / failed: no execution date, so the elapsed days
+    /// stop at the last update instead of running on to today.
+    terminal: &'static [i64],
+}
+
+const TRANSFER_IN: TransferKind = TransferKind {
+    path: "/v1/account/stock-transfers/in",
+    states: TRANSFER_IN_STATE,
+    terminal: &[1, 8],
+};
+const TRANSFER_OUT: TransferKind = TransferKind {
+    path: "/v1/account/stock-transfers/out",
+    states: TRANSFER_OUT_STATE,
+    terminal: &[4, 6, 7],
+};
+
 /// eDDA flows in a card's `auth_list`: bank-side and in-app eDDA.
 const EDDA_FLOWS: &[&str] = &["hk_edda", "hk_sdda"];
 
@@ -90,6 +145,10 @@ pub struct WithdrawalParam {
     pub page: Option<u32>,
     /// Page size (default: 20)
     pub size: Option<u32>,
+    /// Applied on or after this date (yyyy-mm-dd or RFC3339)
+    pub start: Option<String>,
+    /// Applied on or before this date (yyyy-mm-dd or RFC3339)
+    pub end: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -98,10 +157,14 @@ pub struct DepositParam {
     pub page: Option<u32>,
     /// Page size (default: 20)
     pub size: Option<u32>,
-    /// Filter by deposit states (comma-separated)
+    /// Filter by state codes, comma-separated (e.g. "0,2"): 0 processing, 1 credited, 2 failed, 3 cancelled, 4 invalidated, 5 rejected
     pub states: Option<String>,
     /// Filter by currencies (comma-separated, e.g. "USD,HKD")
     pub currencies: Option<String>,
+    /// Applied on or after this date (yyyy-mm-dd or RFC3339)
+    pub start: Option<String>,
+    /// Applied on or before this date (yyyy-mm-dd or RFC3339)
+    pub end: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -216,6 +279,9 @@ fn shape_card(card: &mut Value) {
                 *auth = converted;
             }
             add_label(auth, "status", "authorization", AUTH_STATUS);
+            if let Some(message) = auth.remove("message") {
+                auth.insert("failure_reason".into(), message);
+            }
         }
     }
 }
@@ -264,7 +330,7 @@ fn edda_row(card: &Value, auth: &Value) -> Value {
         "currency": auth.get("currency"),
         "status": auth.get("status"),
         "authorization": auth.get("authorization"),
-        "failure_reason": auth.get("message"),
+        "failure_reason": auth.get("failure_reason"),
         "max_amount": auth.get("max_amount"),
         "max_amount_unlimited": auth.get("max_amount_unlimited"),
         "daily_max_count": auth.get("daily_max_count"),
@@ -386,6 +452,20 @@ fn transfer_params(
     Ok(params)
 }
 
+/// Unix-second bounds for an optional `start` / `end` date filter.
+fn date_range(
+    start: Option<&str>,
+    end: Option<&str>,
+) -> Result<(Option<String>, Option<String>), McpError> {
+    let start = start
+        .map(|s| parse::parse_rfc3339(s).map(|t| t.unix_timestamp().to_string()))
+        .transpose()?;
+    let end = end
+        .map(|e| parse::parse_rfc3339_end(e).map(|t| t.unix_timestamp().to_string()))
+        .transpose()?;
+    Ok((start, end))
+}
+
 /// Whole days between two RFC3339 timestamps (`to` defaults to now).
 fn days_between(from: &str, to: Option<&str>) -> Option<i64> {
     let from = parse::parse_rfc3339(from).ok()?;
@@ -401,31 +481,61 @@ fn days_between(from: &str, to: Option<&str>) -> Option<i64> {
 /// the days the application has been (or was) in progress.
 async fn transfer_records(
     mctx: &crate::tools::McpContext,
-    path: &str,
+    kind: &TransferKind,
     p: StockTransferParam,
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
     let params = transfer_params(&p, mctx.account_channel())?;
     let params: Vec<(&str, &str)> = params.iter().map(|(k, v)| (*k, v.as_str())).collect();
-    let mut value = http_get_value(&client, path, &params).await?;
+    let mut value = http_get_value(&client, kind.path, &params).await?;
     drop_keys(&mut value, TRANSFER_CONTACT_KEYS);
     convert_unix_paths(&mut value, TRANSFER_TIME_PATHS);
     if let Some(records) = value.get_mut("records").and_then(Value::as_array_mut) {
-        for record in records.iter_mut().filter_map(Value::as_object_mut) {
-            if let Some(state) = record.get("app_state").and_then(Value::as_str) {
-                let noticed = state == "noticed";
-                record.insert("broker_notified".into(), Value::Bool(noticed));
-            }
-            let created = record.get("created_at").and_then(Value::as_str);
-            let finished = record.get("exec_at").and_then(Value::as_str);
-            if let Some(days) = created.and_then(|c| days_between(c, finished)) {
-                record.insert("days_in_process".into(), Value::from(days));
-            }
-        }
+        records
+            .iter_mut()
+            .filter_map(Value::as_object_mut)
+            .for_each(|record| shape_transfer(record, kind));
     }
     strip_empty_strings(&mut value);
     strip_nulls(&mut value);
     value_result(&value)
+}
+
+/// Add `state_label`, `broker_notified` and `days_in_process` to one record.
+fn shape_transfer(record: &mut Map<String, Value>, kind: &TransferKind) {
+    add_label(record, "state_code", "state_label", kind.states);
+    if let Some(state) = record.get("app_state").and_then(Value::as_str) {
+        let noticed = state == "noticed";
+        record.insert("broker_notified".into(), Value::Bool(noticed));
+    }
+    let text = |key: &str| {
+        record
+            .get(key)
+            .and_then(Value::as_str)
+            .filter(|t| !t.is_empty())
+            .map(str::to_owned)
+    };
+    let terminal = record
+        .get("state_code")
+        .and_then(Value::as_i64)
+        .is_some_and(|code| kind.terminal.contains(&code));
+    // Executed: until execution. Ended without execution: until it ended.
+    // Still open: until now.
+    let until = text("exec_at").or_else(|| {
+        if terminal {
+            ["cancel_at", "refuse_at", "updated_at"]
+                .iter()
+                .find_map(|key| text(key))
+        } else {
+            None
+        }
+    });
+    if terminal && until.is_none() {
+        return;
+    }
+    if let Some(days) = text("created_at").and_then(|c| days_between(&c, until.as_deref())) {
+        record.insert("days_in_process".into(), Value::from(days));
+    }
 }
 
 /// List stock transfer-in applications (another broker → this account).
@@ -433,7 +543,7 @@ pub async fn stock_transfers_in(
     mctx: &crate::tools::McpContext,
     p: StockTransferParam,
 ) -> Result<CallToolResult, McpError> {
-    transfer_records(mctx, "/v1/account/stock-transfers/in", p).await
+    transfer_records(mctx, &TRANSFER_IN, p).await
 }
 
 /// List stock transfer-out applications (this account → another broker).
@@ -441,17 +551,23 @@ pub async fn stock_transfers_out(
     mctx: &crate::tools::McpContext,
     p: StockTransferParam,
 ) -> Result<CallToolResult, McpError> {
-    transfer_records(mctx, "/v1/account/stock-transfers/out", p).await
+    transfer_records(mctx, &TRANSFER_OUT, p).await
 }
 
 /// Mask `bank_account` and summarize `vouchers` in deposit / withdrawal
 /// records: the full account number and the uploaded receipt images are not
 /// for a support answer.
-fn shape_money_records(value: &mut Value, list_key: &str) {
+fn shape_money_records(
+    value: &mut Value,
+    list_key: &str,
+    state_key: &str,
+    states: &[(i64, &'static str)],
+) {
     let Some(items) = value.get_mut(list_key).and_then(Value::as_array_mut) else {
         return;
     };
     for item in items.iter_mut().filter_map(Value::as_object_mut) {
+        add_label(item, state_key, "state_label", states);
         if let Some(account) = item
             .remove("bank_account")
             .and_then(|a| a.as_str().filter(|a| !a.is_empty()).map(mask_account))
@@ -474,17 +590,20 @@ pub async fn withdrawals(
     let page_str = p.page.unwrap_or(1).to_string();
     let size_str = p.size.unwrap_or(20).to_string();
     let channel = mctx.account_channel();
-    let mut value = http_get_value(
-        &client,
-        "/v1/account/withdrawals",
-        &[
-            ("page", page_str.as_str()),
-            ("size", size_str.as_str()),
-            ("account_channel", channel.as_str()),
-        ],
-    )
-    .await?;
-    shape_money_records(&mut value, "list");
+    let (begin, end) = date_range(p.start.as_deref(), p.end.as_deref())?;
+    let mut params: Vec<(&str, &str)> = vec![
+        ("page", page_str.as_str()),
+        ("size", size_str.as_str()),
+        ("account_channel", channel.as_str()),
+    ];
+    if let Some(ref b) = begin {
+        params.push(("begin", b.as_str()));
+    }
+    if let Some(ref e) = end {
+        params.push(("end", e.as_str()));
+    }
+    let mut value = http_get_value(&client, "/v1/account/withdrawals", &params).await?;
+    shape_money_records(&mut value, "list", "state", WITHDRAWAL_STATE);
     value_result(&value)
 }
 
@@ -508,8 +627,15 @@ pub async fn deposits(
     if let Some(ref c) = p.currencies {
         params.push(("currencies", c.as_str()));
     }
+    let (from_date, to_date) = date_range(p.start.as_deref(), p.end.as_deref())?;
+    if let Some(ref f) = from_date {
+        params.push(("from_date", f.as_str()));
+    }
+    if let Some(ref t) = to_date {
+        params.push(("to_date", t.as_str()));
+    }
     let mut value = http_get_value(&client, "/v1/account/deposits", &params).await?;
-    shape_money_records(&mut value, "items");
+    shape_money_records(&mut value, "items", "state_code", DEPOSIT_STATE);
     value_result(&value)
 }
 
@@ -560,6 +686,7 @@ mod tests {
         }
         let auth = &card["auth_list"][0];
         assert_eq!(auth["authorization"], "failed", "auth status label");
+        assert_eq!(auth["failure_reason"], "bank rejected", "message renamed");
         assert_eq!(auth["name"], "eDDA", "auth name is kept");
         for key in ["custom", "id", "created_at", "need_sms", "daily_max_count"] {
             assert!(auth.get(key).is_none(), "auth field {key} must be dropped");
@@ -608,14 +735,15 @@ mod tests {
 
     #[test]
     fn shape_money_records_masks_and_counts() {
-        let mut value = json!({"list": [{"id": 1, "bank_account": "012345678901", "fee": "5",
+        let mut value = json!({"list": [{"id": 1, "state": 4, "bank_account": "012345678901", "fee": "5",
             "vouchers": [{"key": "k", "img_url": "https://x/y.png"}]}]});
-        shape_money_records(&mut value, "list");
+        shape_money_records(&mut value, "list", "state", WITHDRAWAL_STATE);
         let item = &value["list"][0];
         assert_eq!(item["bank_account"], "****8901", "account masked");
         assert_eq!(item["voucher_count"], 1, "vouchers summarized");
         assert!(item.get("vouchers").is_none(), "voucher urls dropped");
         assert_eq!(item["fee"], "5", "other fields untouched");
+        assert_eq!(item["state_label"], "remitted", "state labelled");
     }
 
     #[test]
@@ -631,6 +759,49 @@ mod tests {
         assert!(
             verified.get("review_days").is_none(),
             "only cards under review"
+        );
+    }
+
+    #[test]
+    fn shape_transfer_stops_the_clock_at_the_end() {
+        let mut cancelled = json!({"state_code": 1, "created_at": "2024-01-01T00:00:00Z",
+            "updated_at": "2024-01-11T00:00:00Z"});
+        shape_transfer(cancelled.as_object_mut().expect("object"), &TRANSFER_IN);
+        assert_eq!(
+            cancelled["days_in_process"], 10,
+            "cancelled: until the last update"
+        );
+        assert_eq!(cancelled["state_label"], "cancelled", "state labelled");
+
+        let mut done = json!({"state_code": 3, "created_at": "2024-01-01T00:00:00Z",
+            "exec_at": "2024-01-04T00:00:00Z", "app_state": "noticed"});
+        shape_transfer(done.as_object_mut().expect("object"), &TRANSFER_IN);
+        assert_eq!(done["days_in_process"], 3, "executed: until execution");
+        assert_eq!(done["broker_notified"], true, "notified flag");
+
+        let mut rejected = json!({"state_code": 7, "created_at": "2024-01-01T00:00:00Z"});
+        shape_transfer(rejected.as_object_mut().expect("object"), &TRANSFER_OUT);
+        assert!(
+            rejected.get("days_in_process").is_none(),
+            "no end date: no count"
+        );
+
+        let mut open = json!({"state_code": 1, "created_at": "2024-01-01T00:00:00Z"});
+        shape_transfer(open.as_object_mut().expect("object"), &TRANSFER_OUT);
+        assert!(
+            open["days_in_process"].as_i64().is_some_and(|d| d > 300),
+            "open: until now"
+        );
+    }
+
+    #[test]
+    fn date_range_converts_and_rejects() {
+        let (s, e) = date_range(Some("2026-01-01"), Some("2026-01-01")).expect("valid dates");
+        assert_eq!(s.as_deref(), Some("1767225600"), "start of day");
+        assert_eq!(e.as_deref(), Some("1767311999"), "end of day");
+        assert!(
+            date_range(Some("yesterday"), None).is_err(),
+            "bad date rejected"
         );
     }
 

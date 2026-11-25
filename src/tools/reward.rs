@@ -62,6 +62,25 @@ const DELIVER_STATUS: &[(i64, &str)] = &[
     (11, "address_filled"),
 ];
 
+/// Reward-center `reward_type` codes, which the `kind` filter maps onto.
+const REWARD_TYPES: &[(i64, &str)] = &[(0, "cash"), (1, "gift"), (2, "coupon"), (3, "task")];
+
+/// Coupon `card_status` codes (from the app's coupon list).
+const CARD_STATUS: &[(i64, &str)] = &[
+    (0, "unused"),
+    (1, "used"),
+    (2, "expired"),
+    (3, "locked"),
+    (4, "in_use"),
+    (5, "processing"),
+];
+
+/// Longest `description` kept for a coupon when its terms are not requested.
+const SHORT_DESCRIPTION_CHARS: usize = 120;
+
+/// Most upstream pages read when filtering rewards by date.
+const MAX_REWARD_PAGES: u32 = 10;
+
 /// Commission-card `bz_types`: the instruments the card applies to.
 const TARGET_TYPES: &[(i64, &str)] = &[
     (0, "stocks"),
@@ -151,7 +170,16 @@ fn drop_zero_placeholders(value: &mut Value, keys: &[&str]) {
 /// Clean one coupon card: drop deprecated duplicates and `"0"` placeholders,
 /// and replace a never-expiring card's far-future `end_time` (left as raw
 /// unix seconds because it is past 2100) with `no_expiry: true`.
-fn shape_coupon(card: &mut Value) {
+fn shape_coupon(card: &mut Value, with_terms: bool) {
+    if !with_terms && let Some(obj) = card.as_object_mut() {
+        obj.remove("detail");
+        if let Some(Value::String(text)) = obj.get_mut("description")
+            && text.chars().count() > SHORT_DESCRIPTION_CHARS
+        {
+            let short: String = text.chars().take(SHORT_DESCRIPTION_CHARS).collect();
+            *text = format!("{short}…");
+        }
+    }
     let Some(obj) = card.as_object_mut() else {
         return;
     };
@@ -167,6 +195,11 @@ fn shape_coupon(card: &mut Value) {
         obj.insert("no_expiry".into(), Value::Bool(true));
     }
     drop_zero_placeholders(card, CARD_ZERO_UNSET);
+    if let Some(obj) = card.as_object_mut()
+        && let Some(name) = code_name(obj.get("card_status"), CARD_STATUS)
+    {
+        obj.insert("card_status_label".into(), Value::String(name.to_string()));
+    }
     // Name the instruments a commission card applies to. (IPO cards reuse
     // `bz_types` with other meanings, so only `commission` is labelled.)
     if let Some(commission) = card.get_mut("commission").and_then(Value::as_object_mut) {
@@ -186,9 +219,13 @@ fn shape_coupon(card: &mut Value) {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct RewardRecordsParam {
-    /// Reward type filter, as the upstream numeric code (default: all)
-    pub reward_type: Option<u32>,
-    /// Page number (default: 1)
+    /// Reward type filter: "cash", "gift", "coupon" or "task" (default: all)
+    pub kind: Option<String>,
+    /// Issued on or after this date (yyyy-mm-dd or RFC3339); with start/end the tool pages through the history itself
+    pub start: Option<String>,
+    /// Issued on or before this date (yyyy-mm-dd or RFC3339)
+    pub end: Option<String>,
+    /// Page number (default: 1; ignored when start or end is given)
     pub page: Option<u32>,
     /// Page size (default: 20, max 50)
     pub size: Option<u32>,
@@ -200,6 +237,8 @@ pub struct CouponsParam {
     pub status: Option<String>,
     /// Card type filter, e.g. "commission", "platform_fee_deduct", "stock", "quote", "cash" (default: all)
     pub card_type: Option<String>,
+    /// Include each card's full terms of use (`description`, `detail`); default false returns a short description only
+    pub with_terms: Option<bool>,
     /// Page number (default: 1)
     pub page: Option<u32>,
     /// Page size (default: 20, max 50)
@@ -221,18 +260,29 @@ fn page_params(page: Option<u32>, size: Option<u32>) -> (String, String) {
 
 /// Flatten one reward-list item into `{kind, reward_type, …allowlisted fields}`.
 fn shape_reward(item: &Value) -> Option<Value> {
-    let (kind, detail) = ["cash", "card", "prize"]
+    let found = ["cash", "card", "prize"]
         .iter()
-        .find_map(|kind| item.get(*kind).map(|detail| (*kind, detail)))?;
+        .find_map(|kind| item.get(*kind).map(|detail| (*kind, detail)));
     let mut row = serde_json::Map::new();
-    row.insert("kind".into(), Value::String(kind.to_string()));
     if let Some(reward_type) = item.get("reward_type") {
         row.insert("reward_type".into(), reward_type.clone());
-    }
-    for key in REWARD_FIELDS {
-        if let Some(v) = detail.get(*key) {
-            row.insert((*key).to_string(), v.clone());
+        if let Some(name) = code_name(Some(reward_type), REWARD_TYPES) {
+            row.insert("reward_type_label".into(), Value::String(name.to_string()));
         }
+    }
+    match found {
+        Some((kind, detail)) => {
+            row.insert("kind".into(), Value::String(kind.to_string()));
+            for key in REWARD_FIELDS {
+                if let Some(v) = detail.get(*key) {
+                    row.insert((*key).to_string(), v.clone());
+                }
+            }
+        }
+        // A record without a known detail object (e.g. task coins): keep the
+        // type so the record is not silently lost.
+        None if row.contains_key("reward_type") => {}
+        None => return None,
     }
     if let Some(name) = code_name(row.get("status"), REWARD_STATUS) {
         row.insert("status_label".into(), Value::String(name.to_string()));
@@ -248,30 +298,98 @@ fn shape_reward(item: &Value) -> Option<Value> {
     Some(row)
 }
 
+/// Map the `kind` parameter to the upstream `reward_type` code.
+fn reward_type_code(kind: Option<&str>) -> Result<Option<&'static str>, McpError> {
+    match kind.map(|k| k.trim().to_ascii_lowercase()).as_deref() {
+        None | Some("") | Some("all") => Ok(None),
+        Some("cash") => Ok(Some("0")),
+        Some("gift") | Some("prize") => Ok(Some("1")),
+        Some("coupon") | Some("card") => Ok(Some("2")),
+        Some("task") => Ok(Some("3")),
+        Some(other) => Err(McpError::invalid_params(
+            format!("invalid kind '{other}': expected cash, gift, coupon or task"),
+            None,
+        )),
+    }
+}
+
+/// Whether a shaped reward's `send_time` falls inside `[start, end]`.
+/// A record without a send time is kept: it has not been issued yet.
+fn in_range(
+    row: &Value,
+    start: Option<&time::OffsetDateTime>,
+    end: Option<&time::OffsetDateTime>,
+) -> bool {
+    let Some(sent) = row
+        .get("send_time")
+        .and_then(Value::as_str)
+        .and_then(|t| crate::tools::support::parse::parse_rfc3339(t).ok())
+    else {
+        return true;
+    };
+    start.is_none_or(|s| sent >= *s) && end.is_none_or(|e| sent <= *e)
+}
+
 /// List the user's activity reward records, newest first.
 pub async fn reward_records(
     mctx: &crate::tools::McpContext,
     p: RewardRecordsParam,
 ) -> Result<CallToolResult, McpError> {
+    use crate::tools::support::parse;
+
     let client = mctx.create_http_client();
     let channel = mctx.account_channel();
-    let (current, page_size) = page_params(p.page, p.size);
-    let reward_type = p.reward_type.map(|t| t.to_string());
-    let mut params = vec![
-        ("current", current.as_str()),
-        ("page_size", page_size.as_str()),
-        ("account_channel", channel.as_str()),
-    ];
-    if let Some(t) = &reward_type {
-        params.push(("reward_type", t.as_str()));
+    let reward_type = reward_type_code(p.kind.as_deref())?;
+    let start = p.start.as_deref().map(parse::parse_rfc3339).transpose()?;
+    let end = p.end.as_deref().map(parse::parse_rfc3339_end).transpose()?;
+    let dated = start.is_some() || end.is_some();
+    let (first_page, page_size) = if dated {
+        (1, "50".to_string())
+    } else {
+        let (page, size) = page_params(p.page, p.size);
+        (page.parse().unwrap_or(1), size)
+    };
+
+    let mut rewards = Vec::new();
+    let mut total;
+    let mut page = first_page;
+    loop {
+        let current = page.to_string();
+        let mut params = vec![
+            ("current", current.as_str()),
+            ("page_size", page_size.as_str()),
+            ("account_channel", channel.as_str()),
+        ];
+        if let Some(t) = reward_type {
+            params.push(("reward_type", t));
+        }
+        let raw = http_get_value(&client, "/v1/account/rewards", &params).await?;
+        total = raw.get("total").cloned().unwrap_or(Value::Null);
+        let items = raw
+            .get("list")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let fetched = items.len();
+        let rows: Vec<Value> = items.iter().filter_map(shape_reward).collect();
+        if !dated {
+            rewards = rows;
+            break;
+        }
+        // Newest first: once a page ends before `start`, older pages cannot match.
+        let past_start = rows
+            .last()
+            .is_some_and(|last| start.is_some() && !in_range(last, start.as_ref(), None));
+        rewards.extend(
+            rows.into_iter()
+                .filter(|r| in_range(r, start.as_ref(), end.as_ref())),
+        );
+        if past_start || fetched < 50 || page >= MAX_REWARD_PAGES {
+            break;
+        }
+        page += 1;
     }
-    let raw = http_get_value(&client, "/v1/account/rewards", &params).await?;
-    let rewards: Vec<Value> = raw
-        .get("list")
-        .and_then(Value::as_array)
-        .map(|items| items.iter().filter_map(shape_reward).collect())
-        .unwrap_or_default();
-    let mut value = json!({ "rewards": rewards, "total": raw.get("total") });
+    let mut value = json!({ "rewards": rewards, "total": total });
     strip_empty_strings(&mut value);
     strip_nulls(&mut value);
     value_result(&value)
@@ -332,11 +450,19 @@ pub async fn coupons(
     drop_keys(&mut value, CARD_UI_KEYS);
     convert_unix_paths(&mut value, CARD_TIME_PATHS);
     if let Some(cards) = value.get_mut("cards").and_then(Value::as_array_mut) {
-        cards.iter_mut().for_each(shape_coupon);
+        let with_terms = p.with_terms.unwrap_or(false);
+        cards
+            .iter_mut()
+            .for_each(|card| shape_coupon(card, with_terms));
     }
     strip_empty_strings(&mut value);
     strip_nulls(&mut value);
     value_result(&value)
+}
+
+/// Whether `id` has the shape of a coupon card id (32 hex characters).
+fn is_coupon_id(id: &str) -> bool {
+    id.len() == 32 && id.chars().all(|c| c.is_ascii_hexdigit())
 }
 
 /// List the orders a coupon card was applied to: `locked` (in progress) and
@@ -346,9 +472,16 @@ pub async fn coupon_orders(
     p: CouponOrdersParam,
 ) -> Result<CallToolResult, McpError> {
     let card_id = p.card_id.trim();
-    if card_id.is_empty() {
+    if !is_coupon_id(card_id) {
+        let hint = if !card_id.is_empty() && card_id.chars().all(|c| c.is_ascii_digit()) {
+            " — this looks like a bank card id from bank_cards"
+        } else {
+            ""
+        };
         return Err(McpError::invalid_params(
-            "card_id is required: pass cards[].card_id from coupons",
+            format!(
+                "invalid card_id '{card_id}': expected the 32-character coupon id from coupons (cards[].card_id){hint}"
+            ),
             None,
         ));
     }
@@ -426,9 +559,11 @@ mod tests {
 
     #[test]
     fn shape_reward_skips_unknown_items() {
+        let task = shape_reward(&json!({"reward_type": 3})).expect("typed record kept");
+        assert_eq!(task["reward_type_label"], "task", "type labelled");
         assert!(
-            shape_reward(&json!({"reward_type": 1})).is_none(),
-            "no sub-object"
+            shape_reward(&json!({"other": 1})).is_none(),
+            "nothing to show"
         );
     }
 
@@ -443,7 +578,7 @@ mod tests {
             "available_trade_session": "夜盘、盘中+盘前盘后",
         }]});
         convert_unix_paths(&mut value, CARD_TIME_PATHS);
-        shape_coupon(&mut value["cards"][0]);
+        shape_coupon(&mut value["cards"][0], false);
         let card = &value["cards"][0];
         assert_eq!(
             card["no_expiry"], true,
@@ -472,6 +607,55 @@ mod tests {
             card["available_trade_session"], "夜盘、盘中+盘前盘后",
             "session kept"
         );
+    }
+
+    #[test]
+    fn shape_coupon_labels_and_trims_terms() {
+        let long = "x".repeat(300);
+        let mut card = json!({"card_status": 4, "description": long, "detail": "terms"});
+        shape_coupon(&mut card, false);
+        assert_eq!(card["card_status_label"], "in_use", "status labelled");
+        assert!(card.get("detail").is_none(), "detail dropped by default");
+        assert_eq!(
+            card["description"].as_str().map(|d| d.chars().count()),
+            Some(SHORT_DESCRIPTION_CHARS + 1),
+            "description shortened"
+        );
+        let mut full = json!({"description": "x".repeat(300), "detail": "terms"});
+        shape_coupon(&mut full, true);
+        assert_eq!(full["detail"], "terms", "with_terms keeps detail");
+    }
+
+    #[test]
+    fn reward_type_code_maps_kinds() {
+        assert_eq!(
+            reward_type_code(Some("coupon")).ok(),
+            Some(Some("2")),
+            "coupon"
+        );
+        assert_eq!(reward_type_code(None).ok(), Some(None), "all");
+        assert!(reward_type_code(Some("stock")).is_err(), "unknown kind");
+    }
+
+    #[test]
+    fn in_range_uses_send_time() {
+        use crate::tools::support::parse::{parse_rfc3339, parse_rfc3339_end};
+        let start = parse_rfc3339("2026-08-01").expect("date");
+        let end = parse_rfc3339_end("2026-08-31").expect("date");
+        let inside = json!({"send_time": "2026-08-05T08:18:16Z"});
+        let before = json!({"send_time": "2026-07-07T14:37:25Z"});
+        assert!(in_range(&inside, Some(&start), Some(&end)), "inside");
+        assert!(!in_range(&before, Some(&start), Some(&end)), "before start");
+        assert!(in_range(&json!({}), Some(&start), None), "unsent kept");
+    }
+
+    #[test]
+    fn coupon_id_shape() {
+        assert!(
+            is_coupon_id("bd6b40914cd411f08becae6ae6fae931"),
+            "real coupon id"
+        );
+        assert!(!is_coupon_id("493082"), "bank card id");
     }
 
     #[test]
