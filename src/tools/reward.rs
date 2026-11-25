@@ -34,6 +34,51 @@ const REWARD_FIELDS: &[&str] = &[
     "receive_deadline",
 ];
 
+/// Reward-center `status` codes (from the app's reward page).
+const REWARD_STATUS: &[(i64, &str)] = &[
+    (0, "upcoming"),
+    (1, "cancelled"),
+    (2, "exited_activity"),
+    (8, "unclaimed"),
+    (10, "issuing"),
+    (12, "issued"),
+    (13, "failed"),
+    (16, "exchanged"),
+    (17, "expired"),
+    (18, "refunded"),
+];
+
+/// Reward-center `deliver_status` codes: what happened after `issued`.
+const DELIVER_STATUS: &[(i64, &str)] = &[
+    (0, "not_activated"),
+    (1, "activated_or_shipping"),
+    (2, "consumed"),
+    (5, "e_voucher_activating"),
+    (6, "e_voucher_expired_before_activation"),
+    (7, "e_voucher_invalid"),
+    (8, "address_missing"),
+    (9, "address_filled"),
+    (10, "shipping"),
+    (11, "address_filled"),
+];
+
+/// Commission-card `bz_types`: the instruments the card applies to.
+const TARGET_TYPES: &[(i64, &str)] = &[
+    (0, "stocks"),
+    (1, "options"),
+    (2, "warrants"),
+    (3, "ETF"),
+    (4, "LOF"),
+];
+
+/// Name for an integer code, or `None` for an unknown code.
+fn code_name(value: Option<&Value>, names: &[(i64, &'static str)]) -> Option<&'static str> {
+    let code = value?.as_i64()?;
+    names
+        .iter()
+        .find_map(|(c, name)| (*c == code).then_some(*name))
+}
+
 /// Reward fields that are unix seconds.
 const REWARD_TIME_KEYS: &[&str] = &[
     "send_time",
@@ -122,6 +167,21 @@ fn shape_coupon(card: &mut Value) {
         obj.insert("no_expiry".into(), Value::Bool(true));
     }
     drop_zero_placeholders(card, CARD_ZERO_UNSET);
+    // Name the instruments a commission card applies to. (IPO cards reuse
+    // `bz_types` with other meanings, so only `commission` is labelled.)
+    if let Some(commission) = card.get_mut("commission").and_then(Value::as_object_mut) {
+        let targets: Vec<Value> = commission
+            .get("bz_types")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|t| code_name(Some(t), TARGET_TYPES))
+            .map(|name| Value::String(name.to_string()))
+            .collect();
+        if !targets.is_empty() {
+            commission.insert("targets".into(), Value::Array(targets));
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -173,6 +233,15 @@ fn shape_reward(item: &Value) -> Option<Value> {
         if let Some(v) = detail.get(*key) {
             row.insert((*key).to_string(), v.clone());
         }
+    }
+    if let Some(name) = code_name(row.get("status"), REWARD_STATUS) {
+        row.insert("status_label".into(), Value::String(name.to_string()));
+    }
+    if let Some(name) = code_name(row.get("deliver_status"), DELIVER_STATUS) {
+        row.insert(
+            "deliver_status_label".into(),
+            Value::String(name.to_string()),
+        );
     }
     let mut row = Value::Object(row);
     convert_unix_paths(&mut row, REWARD_TIME_KEYS);
@@ -338,6 +407,24 @@ mod tests {
     }
 
     #[test]
+    fn shape_reward_labels_status() {
+        let item = json!({"reward_type": 0, "cash": {"status": 12, "amount": 38}});
+        let row = shape_reward(&item).expect("a cash item must shape");
+        assert_eq!(row["status_label"], "issued", "12 is issued");
+        let item = json!({"reward_type": 3, "prize": {"status": 12, "deliver_status": 8}});
+        let row = shape_reward(&item).expect("a prize item must shape");
+        assert_eq!(
+            row["deliver_status_label"], "address_missing",
+            "deliver label"
+        );
+        let unknown = shape_reward(&json!({"cash": {"status": 99}})).expect("shapes");
+        assert!(
+            unknown.get("status_label").is_none(),
+            "unknown code has no label"
+        );
+    }
+
+    #[test]
     fn shape_reward_skips_unknown_items() {
         assert!(
             shape_reward(&json!({"reward_type": 1})).is_none(),
@@ -351,7 +438,7 @@ mod tests {
         let mut value = json!({"cards": [{
             "card_id": "bd6b", "card_type": "commission", "start_time": 1_750_313_704,
             "end_time": "8061747303", "card_status": 4, "activate_time": "0",
-            "commission": {"markets": ["US"], "commission_expired_time": "0"},
+            "commission": {"markets": ["US"], "bz_types": [0, 2, 3], "commission_expired_time": "0"},
             "markets": ["US"], "rebate_rate": "1", "quote_duration": "0",
             "available_trade_session": "夜盘、盘中+盘前盘后",
         }]});

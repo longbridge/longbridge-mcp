@@ -115,7 +115,7 @@
     },
     "stock_positions": {
       "title": "股票持倉",
-      "description": "查詢所有渠道下的當前股票持倉，返回 list[].stock_info[]{symbol, symbol_name, quantity, available_quantity, currency, cost_price, market}。美股賬戶返回同樣的 list[].stock_info[]（無 available_quantity，另含 last_done、market_price、prev_close、today_pl、position_side）；現金、期權、加密貨幣（symbol 如 BTCUSD.BKKT）及購買力在 us{cash_list, option_list, crypto_list, cash_buy_power, …} 下"
+      "description": "查詢所有渠道下的當前股票持倉，返回 list[].stock_info[]{symbol, symbol_name, quantity, available_quantity, init_quantity, currency, cost_price, market}。quantity 為當前持倉，available_quantity 為當前可賣數量，quantity − available_quantity 即凍結或在途數量（如掛單中的賣單）；init_quantity 為當日開盤時持倉。不含市值：用 quantity 乘以 quote 的 last_done。美股賬戶返回同樣的 list[].stock_info[]（無 available_quantity，另含 last_done、market_price、prev_close、today_pl、position_side）；現金、期權、加密貨幣（symbol 如 BTCUSD.BKKT）及購買力在 us{cash_list, option_list, crypto_list, cash_buy_power, …} 下"
     },
     "dca_history": {
       "title": "定投執行歷史",
@@ -1172,11 +1172,11 @@
     },
     "bank_cards": {
       "title": "綁定銀行卡",
-      "description": "列出當前賬戶綁定的銀行卡及審核狀態，返回 cards[]{id, bank, bank_en, bank_code, account（僅後 4 位）, account_type, region, region_name, country, verification（unverified/under_review/verified：銀行卡出金認證）, witness（not_required/pending/witnessed：是否已有該卡入金見證）, binding（binding/bound/failed）, bind_tip（展示給用戶的審核提示）, remark, created_at, auth_list[]{flow_id（hk_edda/hk_sdda：eDDA，hk_bank_sec：銀證轉賬，hk_fps：FPS）, name, currency, authorization（unauthorized/authorized/authorizing/failed）, message（失敗原因）, max_amount, max_amount_unlimited, daily_max_count, daily_max_count_unlimited, expiry_date, long_term_valid}}。under_review 表示綁卡後正在人工審核；只查 eDDA 用 edda_authorizations"
+      "description": "列出當前賬戶綁定的銀行卡及審核狀態，返回 cards[]{id, bank, bank_en, bank_code, account（僅後 4 位）, account_type, region, region_name, country, verification（unverified/under_review/verified：銀行卡出金認證）, witness（not_required/pending/witnessed：是否已有該卡入金見證）, binding（binding/bound/failed）, review_days（卡片添加至今的天數，僅 under_review 時返回；約 14 天以上表示審核超時）, bind_tip（展示給用戶的審核提示）, remark, created_at, auth_list[]{flow_id（hk_edda/hk_sdda：eDDA，hk_bank_sec：銀證轉賬，hk_fps：FPS）, name, currency, authorization（unauthorized/authorized/authorizing/failed）, message（失敗原因）, max_amount, max_amount_unlimited, daily_max_count, daily_max_count_unlimited, expiry_date, long_term_valid}}。under_review 表示綁卡後正在人工審核；只查 eDDA 用 edda_authorizations"
     },
     "withdrawals": {
       "title": "提款記錄",
-      "description": "獲取當前帳戶提款歷史，返回 items[]{id, amount, currency, status, created_at, bank_name, account_number（脫敏）}",
+      "description": "獲取當前賬戶提款歷史，按時間倒序。返回 {list[]{id, order_id, created_at, currency, amount（申請金額）, fee（手續費，舊記錄為空）, settlement_amount（實際出賬金額）, state, raw_state, state_description（狀態文案）, bank_account（僅後 4 位）, display_bank_account, user_bank_swift_code}, total}。不含預計處理時間和後台備註",
       "properties": {
         "page": "頁碼（預設 1）",
         "size": "每頁條數（預設 20）"
@@ -1184,7 +1184,7 @@
     },
     "deposits": {
       "title": "入款記錄",
-      "description": "獲取當前帳戶入款歷史，返回 items[]{id, amount, currency, status, created_at, updated_at}。states：逗號分隔的狀態（Pending/Finished/Failed）；currencies：逗號分隔的貨幣代碼",
+      "description": "獲取當前賬戶入款歷史，按時間倒序。返回 {items[]{id, created_at, updated_at, currency, amount（客戶通知/申請的金額）, receivable_amount（長橋銀行實際到賬金額，0 表示尚未收到）, state（狀態文案）, state_code（0 處理中，1 已入賬，2 失敗，3 已撤銷，5 已駁回）, sub_state_code, bank_operation_type_name（入金方式，如 eDDA、FPS、銀行轉賬）, reference_no, can_cancel, voucher_count（已上傳憑證張數）}, total}。states：逗號分隔的狀態（Pending/Finished/Failed）；currencies：逗號分隔的貨幣代碼。不含後台備註",
       "properties": {
         "page": "頁碼（預設 1）",
         "size": "每頁條數（預設 20）",
@@ -1230,7 +1230,7 @@
     },
     "reward_records": {
       "title": "獎勵發放記錄",
-      "description": "列出當前賬戶的活動獎勵發放記錄（現金、卡券、股票或禮品等獎品），按時間倒序。返回 {rewards[]{kind（cash/card/prize）, reward_type, record_id, activity_title, title, description, card_type, card_status, prize_type, amount, currency, status, deliver_status, send_time, start_time, end_time, effective_time, receive_deadline}, total}。用於「獎勵沒到賬」類問題：按 activity_title 對活動、按 send_time 對日期。獎勵發放的卡券用 coupons 查看",
+      "description": "列出當前賬戶的活動獎勵發放記錄（現金、卡券、股票或禮品等獎品），按時間倒序。返回 {rewards[]{kind（cash/card/prize）, reward_type, record_id, activity_title, title, description, card_type, card_status, prize_type, amount, currency, status, status_label（upcoming/cancelled/exited_activity/unclaimed/issuing/issued/failed/exchanged/expired/refunded）, deliver_status, deliver_status_label（已發放後的交付狀態：not_activated/activated_or_shipping/consumed/address_missing/address_filled/shipping/…）, send_time, start_time, end_time, effective_time, receive_deadline}, total}。用於「獎勵沒到賬」類問題：按 activity_title 對活動、按 send_time 對日期。獎勵發放的卡券用 coupons 查看",
       "properties": {
         "reward_type": "獎勵類型過濾，上游數字代碼（默認全部）",
         "page": "頁碼（默認 1）",
@@ -1239,7 +1239,7 @@
     },
     "coupons": {
       "title": "我的卡券",
-      "description": "列出當前賬戶的卡券（免佣卡、平台費抵扣卡、股票卡、行情/基本面卡、現金卡、打新卡等）。status：\"valid\"（默認，未過期：未使用、使用中或已使用）或 \"expired\"。返回 {cards[]{card_id, card_type, title, title_sec, description, detail, card_status（0 未使用，1 已使用，2 已過期，3 鎖定，4 使用中，5 處理中）, start_time, end_time（有效期；永久有效的卡無此字段，返回 no_expiry: true）, activate_time, amount, currency, available_trade_session, trade_sessions（可用時段）, commission{markets, rebate_rate, bz_types, commission_balance, commission_expired_time}, quote{markets, quote_market, current_end_time}, stock{…}, platform_fee_deduct{…}, …}, total, expired_count}。卡券用在了哪些訂單：coupon_orders",
+      "description": "列出當前賬戶的卡券（免佣卡、平台費抵扣卡、股票卡、行情/基本面卡、現金卡、打新卡等）。status：\"valid\"（默認，未過期：未使用、使用中或已使用）或 \"expired\"。返回 {cards[]{card_id, card_type, title, title_sec, description, detail, card_status（0 未使用，1 已使用，2 已過期，3 鎖定，4 使用中，5 處理中）, start_time, end_time（有效期；永久有效的卡無此字段，返回 no_expiry: true）, activate_time, amount, currency, available_trade_session, trade_sessions（可用時段）, commission{markets, targets（適用標的：stocks/options/warrants/ETF/LOF）, rebate_rate, bz_types, commission_balance, commission_expired_time}, quote{markets, quote_market, current_end_time}, stock{…}, platform_fee_deduct{…}, …}, total, expired_count}。卡券用在了哪些訂單：coupon_orders",
       "properties": {
         "status": "\"valid\"（未過期，默認）或 \"expired\"",
         "card_type": "卡券類型過濾，如 \"commission\"、\"platform_fee_deduct\"、\"stock\"、\"quote\"、\"cash\"（默認全部）",

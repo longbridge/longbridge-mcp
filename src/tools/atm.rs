@@ -8,7 +8,7 @@ use rmcp::serde::Deserialize;
 use serde_json::{Map, Value, json};
 
 use crate::serialize::{convert_unix_paths, drop_keys, strip_empty_strings, strip_nulls};
-use crate::tools::support::http_client::{http_get_tool, http_get_value, value_result};
+use crate::tools::support::http_client::{http_get_value, value_result};
 use crate::tools::support::parse;
 
 /// Bank-card fields passed through. This is an allowlist: the upstream card
@@ -189,6 +189,16 @@ fn shape_card(card: &mut Value) {
         obj.insert("account".into(), Value::String(account));
     }
     add_label(obj, "status", "verification", CARD_STATUS);
+    // Days a card has been waiting for manual review since it was added, for
+    // the "still under review after about two weeks" check.
+    if obj.get("status").and_then(Value::as_i64) == Some(1)
+        && let Some(days) = obj
+            .get("created_at")
+            .and_then(Value::as_str)
+            .and_then(|c| days_between(c, None))
+    {
+        obj.insert("review_days".into(), Value::from(days));
+    }
     add_label(obj, "witness_state", "witness", WITNESS_STATE);
     add_label(obj, "bind_state", "binding", BIND_STATE);
     if let Some(auths) = obj.get_mut("auth_list").and_then(Value::as_array_mut) {
@@ -434,6 +444,27 @@ pub async fn stock_transfers_out(
     transfer_records(mctx, "/v1/account/stock-transfers/out", p).await
 }
 
+/// Mask `bank_account` and summarize `vouchers` in deposit / withdrawal
+/// records: the full account number and the uploaded receipt images are not
+/// for a support answer.
+fn shape_money_records(value: &mut Value, list_key: &str) {
+    let Some(items) = value.get_mut(list_key).and_then(Value::as_array_mut) else {
+        return;
+    };
+    for item in items.iter_mut().filter_map(Value::as_object_mut) {
+        if let Some(account) = item
+            .remove("bank_account")
+            .and_then(|a| a.as_str().filter(|a| !a.is_empty()).map(mask_account))
+        {
+            item.insert("bank_account".into(), Value::String(account));
+        }
+        if let Some(vouchers) = item.remove("vouchers") {
+            let count = vouchers.as_array().map_or(0, Vec::len);
+            item.insert("voucher_count".into(), Value::from(count));
+        }
+    }
+}
+
 /// List withdrawal history for the current account.
 pub async fn withdrawals(
     mctx: &crate::tools::McpContext,
@@ -443,7 +474,7 @@ pub async fn withdrawals(
     let page_str = p.page.unwrap_or(1).to_string();
     let size_str = p.size.unwrap_or(20).to_string();
     let channel = mctx.account_channel();
-    http_get_tool(
+    let mut value = http_get_value(
         &client,
         "/v1/account/withdrawals",
         &[
@@ -452,7 +483,9 @@ pub async fn withdrawals(
             ("account_channel", channel.as_str()),
         ],
     )
-    .await
+    .await?;
+    shape_money_records(&mut value, "list");
+    value_result(&value)
 }
 
 /// List deposit history for the current account.
@@ -475,7 +508,9 @@ pub async fn deposits(
     if let Some(ref c) = p.currencies {
         params.push(("currencies", c.as_str()));
     }
-    http_get_tool(&client, "/v1/account/deposits", &params).await
+    let mut value = http_get_value(&client, "/v1/account/deposits", &params).await?;
+    shape_money_records(&mut value, "items");
+    value_result(&value)
 }
 
 #[cfg(test)]
@@ -568,6 +603,34 @@ mod tests {
             shape_edda_status(json!({"list": []}))["applications"],
             json!([]),
             "empty stays empty"
+        );
+    }
+
+    #[test]
+    fn shape_money_records_masks_and_counts() {
+        let mut value = json!({"list": [{"id": 1, "bank_account": "012345678901", "fee": "5",
+            "vouchers": [{"key": "k", "img_url": "https://x/y.png"}]}]});
+        shape_money_records(&mut value, "list");
+        let item = &value["list"][0];
+        assert_eq!(item["bank_account"], "****8901", "account masked");
+        assert_eq!(item["voucher_count"], 1, "vouchers summarized");
+        assert!(item.get("vouchers").is_none(), "voucher urls dropped");
+        assert_eq!(item["fee"], "5", "other fields untouched");
+    }
+
+    #[test]
+    fn shape_card_counts_review_days() {
+        let mut card = json!({"id": 1, "status": 1, "created_at": "2020-01-01T00:00:00Z"});
+        shape_card(&mut card);
+        assert!(
+            card["review_days"].as_i64().is_some_and(|d| d > 14),
+            "review days computed"
+        );
+        let mut verified = json!({"id": 2, "status": 2, "created_at": "2020-01-01T00:00:00Z"});
+        shape_card(&mut verified);
+        assert!(
+            verified.get("review_days").is_none(),
+            "only cards under review"
         );
     }
 

@@ -115,7 +115,7 @@
     },
     "stock_positions": {
       "title": "保有株式",
-      "description": "すべてのチャネルにおける現在の保有株式を照会し、list[].stock_info[]{symbol, symbol_name, quantity, available_quantity, currency, cost_price, market} を返します。米国株口座も同じ list[].stock_info[] を返します（available_quantity はなく、さらに last_done、market_price、prev_close、today_pl、position_side を含みます）。現金、オプション、暗号資産（symbol は BTCUSD.BKKT など）および買付余力は us{cash_list, option_list, crypto_list, cash_buy_power, …} の下にあります"
+      "description": "全チャネルの現在の株式ポジションを取得します。list[].stock_info[]{symbol, symbol_name, quantity, available_quantity, init_quantity, currency, cost_price, market} を返します。quantity は現在の保有数、available_quantity は今売却できる数量で、quantity − available_quantity が凍結・処理中の数量（未約定の売り注文など）です。init_quantity は当日開始時点の保有数。時価は含まないため、quantity に quote の last_done を掛けて求めます。米国アカウントでは同じ list[].stock_info[]（available_quantity なし、last_done、market_price、prev_close、today_pl、position_side を追加）が返り、現金・オプション・暗号資産（symbol 例：BTCUSD.BKKT）・購買力は us{cash_list, option_list, crypto_list, cash_buy_power, …} にあります"
     },
     "dca_history": {
       "title": "積立実行履歴",
@@ -1172,11 +1172,11 @@
     },
     "bank_cards": {
       "title": "登録銀行口座",
-      "description": "現在のアカウントに登録された銀行口座と審査状況を一覧表示します。cards[]{id, bank, bank_en, bank_code, account（下 4 桁のみ）, account_type, region, region_name, country, verification（unverified/under_review/verified：出金用口座の認証）, witness（not_required/pending/witnessed：この口座からの入金確認）, binding（binding/bound/failed）, bind_tip（ユーザーに表示される審査メッセージ）, remark, created_at, auth_list[]{flow_id（hk_edda/hk_sdda：eDDA、hk_bank_sec：銀行・証券振替、hk_fps：FPS）, name, currency, authorization（unauthorized/authorized/authorizing/failed）, message（失敗理由）, max_amount, max_amount_unlimited, daily_max_count, daily_max_count_unlimited, expiry_date, long_term_valid}} を返します。under_review は登録後の手動審査中を意味します。eDDA だけなら edda_authorizations を使用"
+      "description": "現在のアカウントに登録された銀行口座と審査状況を一覧表示します。cards[]{id, bank, bank_en, bank_code, account（下 4 桁のみ）, account_type, region, region_name, country, verification（unverified/under_review/verified：出金用口座の認証）, witness（not_required/pending/witnessed：この口座からの入金確認）, binding（binding/bound/failed）, review_days（口座追加からの日数。under_review の間のみ。約 14 日以上なら審査遅延）, bind_tip（ユーザーに表示される審査メッセージ）, remark, created_at, auth_list[]{flow_id（hk_edda/hk_sdda：eDDA、hk_bank_sec：銀行・証券振替、hk_fps：FPS）, name, currency, authorization（unauthorized/authorized/authorizing/failed）, message（失敗理由）, max_amount, max_amount_unlimited, daily_max_count, daily_max_count_unlimited, expiry_date, long_term_valid}} を返します。under_review は登録後の手動審査中を意味します。eDDA だけなら edda_authorizations を使用"
     },
     "withdrawals": {
       "title": "出金履歴",
-      "description": "現在の口座の出金履歴を取得します。items[]{id, amount, currency, status, created_at, bank_name, account_number（マスキング済み）} を返します",
+      "description": "現在のアカウントの出金履歴を新しい順に取得します。{list[]{id, order_id, created_at, currency, amount（申請金額）, fee（出金手数料。古い記録では空）, settlement_amount（実際の出金額）, state, raw_state, state_description（状態テキスト）, bank_account（下 4 桁のみ）, display_bank_account, user_bank_swift_code}, total} を返します。処理予定時刻とバックオフィスの備考は含みません",
       "properties": {
         "page": "ページ番号（デフォルト 1）",
         "size": "1 ページあたりの件数（デフォルト 20）"
@@ -1184,7 +1184,7 @@
     },
     "deposits": {
       "title": "入金履歴",
-      "description": "現在の口座の入金履歴を取得します。items[]{id, amount, currency, status, created_at, updated_at} を返します。states：カンマ区切りのステータス（Pending/Finished/Failed）、currencies：カンマ区切りの通貨コード",
+      "description": "現在のアカウントの入金履歴を新しい順に取得します。{items[]{id, created_at, updated_at, currency, amount（顧客が通知・申請した金額）, receivable_amount（Longbridge の銀行で実際に受領した金額。0 は未着金）, state（状態テキスト）, state_code（0 処理中、1 入金済み、2 失敗、3 取消、5 却下）, sub_state_code, bank_operation_type_name（入金方法：eDDA、FPS、銀行振込など）, reference_no, can_cancel, voucher_count（アップロードされた証憑の枚数）}, total} を返します。states：カンマ区切りの状態（Pending/Finished/Failed）。currencies：カンマ区切りの通貨コード。バックオフィスの備考は含みません",
       "properties": {
         "page": "ページ番号（デフォルト 1）",
         "size": "1 ページあたりの件数（デフォルト 20）",
@@ -1230,7 +1230,7 @@
     },
     "reward_records": {
       "title": "特典付与履歴",
-      "description": "現在のアカウントのキャンペーン特典の付与履歴（現金、クーポン、株式や景品など）を新しい順に一覧表示します。{rewards[]{kind（cash/card/prize）, reward_type, record_id, activity_title, title, description, card_type, card_status, prize_type, amount, currency, status, deliver_status, send_time, start_time, end_time, effective_time, receive_deadline}, total} を返します。「特典が届かない」という問い合わせでは activity_title でキャンペーンを、send_time で日付を照合します。特典で付与されたクーポンは coupons で確認",
+      "description": "現在のアカウントのキャンペーン特典の付与履歴（現金、クーポン、株式や景品など）を新しい順に一覧表示します。{rewards[]{kind（cash/card/prize）, reward_type, record_id, activity_title, title, description, card_type, card_status, prize_type, amount, currency, status, status_label（upcoming/cancelled/exited_activity/unclaimed/issuing/issued/failed/exchanged/expired/refunded）, deliver_status, deliver_status_label（付与後の受け渡し状態：not_activated/activated_or_shipping/consumed/address_missing/address_filled/shipping/…）, send_time, start_time, end_time, effective_time, receive_deadline}, total} を返します。「特典が届かない」という問い合わせでは activity_title でキャンペーンを、send_time で日付を照合します。特典で付与されたクーポンは coupons で確認",
       "properties": {
         "reward_type": "特典種別フィルター（上流の数値コード、既定：すべて）",
         "page": "ページ番号（既定 1）",
@@ -1239,7 +1239,7 @@
     },
     "coupons": {
       "title": "クーポン",
-      "description": "現在のアカウントのクーポン（手数料無料カード、プラットフォーム手数料控除カード、株式カード、相場・ファンダメンタルズカード、現金カード、IPO カードなど）を一覧表示します。status：\"valid\"（既定、未失効：未使用・使用中・使用済み）または \"expired\"。{cards[]{card_id, card_type, title, title_sec, description, detail, card_status（0 未使用、1 使用済み、2 失効、3 ロック、4 使用中、5 処理中）, start_time, end_time（有効期間。無期限のカードはこの項目がなく no_expiry: true）, activate_time, amount, currency, available_trade_session, trade_sessions（利用可能な取引時間帯）, commission{markets, rebate_rate, bz_types, commission_balance, commission_expired_time}, quote{markets, quote_market, current_end_time}, stock{…}, platform_fee_deduct{…}, …}, total, expired_count} を返します。クーポンが使われた注文：coupon_orders",
+      "description": "現在のアカウントのクーポン（手数料無料カード、プラットフォーム手数料控除カード、株式カード、相場・ファンダメンタルズカード、現金カード、IPO カードなど）を一覧表示します。status：\"valid\"（既定、未失効：未使用・使用中・使用済み）または \"expired\"。{cards[]{card_id, card_type, title, title_sec, description, detail, card_status（0 未使用、1 使用済み、2 失効、3 ロック、4 使用中、5 処理中）, start_time, end_time（有効期間。無期限のカードはこの項目がなく no_expiry: true）, activate_time, amount, currency, available_trade_session, trade_sessions（利用可能な取引時間帯）, commission{markets, targets（対象商品：stocks/options/warrants/ETF/LOF）, rebate_rate, bz_types, commission_balance, commission_expired_time}, quote{markets, quote_market, current_end_time}, stock{…}, platform_fee_deduct{…}, …}, total, expired_count} を返します。クーポンが使われた注文：coupon_orders",
       "properties": {
         "status": "\"valid\"（未失効、既定）または \"expired\"",
         "card_type": "クーポン種別フィルター（例：\"commission\"、\"platform_fee_deduct\"、\"stock\"、\"quote\"、\"cash\"、既定：すべて）",
