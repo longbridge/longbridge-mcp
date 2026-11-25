@@ -19,6 +19,7 @@ use rmcp::serde::Deserialize;
 
 use crate::error::Error;
 use crate::serialize::{strip_nulls, strip_trailing_zeros};
+use crate::tools::support::confirm::{Confirmer, Decision};
 use crate::tools::support::dry_run;
 use crate::tools::support::http_client::http_get_tool;
 use crate::tools::support::parse;
@@ -737,6 +738,7 @@ pub async fn order_detail(
 
 pub async fn cancel_order(
     mctx: &crate::tools::McpContext,
+    confirm: &Confirmer,
     p: CancelOrderParam,
 ) -> Result<CallToolResult, McpError> {
     let (ctx, _) = TradeContext::new(mctx.create_config());
@@ -752,20 +754,25 @@ pub async fn cancel_order(
         },
         &p.order_id,
     );
-    // Two-step by design: without a confirmation code this cancels nothing.
-    let Some(code) = p.execute.clone() else {
+    // Two-step by design: nothing is cancelled until the user (through the
+    // client) or a quoted confirmation code approves it.
+    let preview = if confirm.needs_preview(p.execute.is_some()) {
         let existing = preview_existing_order(mctx, &ctx, &p.order_id, is_attached).await;
-        return dry_run::result(
-            &scope,
-            serde_json::json!({
-                "action": "cancel_order",
-                "order_id": p.order_id,
-                "is_attached": is_attached,
-                "order": existing,
-            }),
-        );
+        serde_json::json!({
+            "action": "cancel_order",
+            "order_id": p.order_id,
+            "is_attached": is_attached,
+            "order": existing,
+        })
+    } else {
+        serde_json::Value::Null
     };
-    scope.verify(&code)?;
+    if let Decision::Respond(r) = confirm
+        .confirm(&scope, p.execute.as_deref(), preview)
+        .await?
+    {
+        return Ok(r);
+    }
     let mut opts = CancelOrderOptions::new(p.order_id);
     if is_attached {
         opts = opts.is_attached();
@@ -1708,6 +1715,7 @@ fn missing_order_fields(p: &SubmitOrderParam) -> Vec<&'static str> {
 
 pub async fn submit_order(
     mctx: &crate::tools::McpContext,
+    confirm: &Confirmer,
     p: SubmitOrderParam,
 ) -> Result<CallToolResult, McpError> {
     use longbridge::Decimal;
@@ -1802,31 +1810,32 @@ pub async fn submit_order(
     }
 
     let scope = submit_scope(&p);
-    // Two-step by design: without a confirmation code this places nothing.
-    let Some(code) = p.execute.clone() else {
-        return dry_run::result(
-            &scope,
-            serde_json::json!({
-                "action": "submit_order",
-                "symbol": p.symbol,
-                "side": p.side,
-                "order_type": p.order_type,
-                "quantity": p.submitted_quantity,
-                "time_in_force": p.time_in_force,
-                "price": p.submitted_price,
-                "trigger_price": p.trigger_price,
-                "limit_offset": p.limit_offset,
-                "trailing_amount": p.trailing_amount,
-                "trailing_percent": p.trailing_percent,
-                "expire_date": p.expire_date,
-                "outside_rth": p.outside_rth,
-                "remark": p.remark,
-                "client_request_id": p.client_request_id,
-                "attached": attached_submit_preview(&p),
-            }),
-        );
-    };
-    scope.verify(&code)?;
+    // Two-step by design: nothing is placed until the user (through the
+    // client) or a quoted confirmation code approves this exact order.
+    let preview = serde_json::json!({
+        "action": "submit_order",
+        "symbol": p.symbol,
+        "side": p.side,
+        "order_type": p.order_type,
+        "quantity": p.submitted_quantity,
+        "time_in_force": p.time_in_force,
+        "price": p.submitted_price,
+        "trigger_price": p.trigger_price,
+        "limit_offset": p.limit_offset,
+        "trailing_amount": p.trailing_amount,
+        "trailing_percent": p.trailing_percent,
+        "expire_date": p.expire_date,
+        "outside_rth": p.outside_rth,
+        "remark": p.remark,
+        "client_request_id": p.client_request_id,
+        "attached": attached_submit_preview(&p),
+    });
+    if let Decision::Respond(r) = confirm
+        .confirm(&scope, p.execute.as_deref(), preview)
+        .await?
+    {
+        return Ok(r);
+    }
 
     let (ctx, _) = TradeContext::new(mctx.create_config());
     let result = ctx.submit_order(opts).await.map_err(Error::longbridge)?;
@@ -1916,6 +1925,7 @@ pub async fn submit_multileg_order(
 
 pub async fn replace_order(
     mctx: &crate::tools::McpContext,
+    confirm: &Confirmer,
     p: ReplaceOrderParam,
 ) -> Result<CallToolResult, McpError> {
     use longbridge::Decimal;
@@ -1958,12 +1968,11 @@ pub async fn replace_order(
     }
     let (ctx, _) = TradeContext::new(mctx.create_config());
     let scope = replace_scope(&p);
-    // Two-step by design: without a confirmation code this changes nothing.
-    let Some(code) = p.execute.clone() else {
+    // Two-step by design: nothing changes until the user (through the
+    // client) or a quoted confirmation code approves it.
+    let preview = if confirm.needs_preview(p.execute.is_some()) {
         let existing = preview_existing_order(mctx, &ctx, &p.order_id, false).await;
-        return dry_run::result(
-            &scope,
-            serde_json::json!({
+        serde_json::json!({
                 "action": "replace_order",
                 "order_id": p.order_id,
                 "current_order": existing,
@@ -1974,10 +1983,16 @@ pub async fn replace_order(
                 "new_trailing_amount": p.trailing_amount,
                 "new_trailing_percent": p.trailing_percent,
                 "attached": attached_replace_preview(&p),
-            }),
-        );
+        })
+    } else {
+        serde_json::Value::Null
     };
-    scope.verify(&code)?;
+    if let Decision::Respond(r) = confirm
+        .confirm(&scope, p.execute.as_deref(), preview)
+        .await?
+    {
+        return Ok(r);
+    }
     ctx.replace_order(opts).await.map_err(Error::longbridge)?;
     Ok(tool_result("order replaced".to_string()))
 }

@@ -1,8 +1,10 @@
 use std::sync::Arc;
 
+use crate::tools::support::confirm::Confirmer;
 use rmcp::ErrorData as McpError;
 use rmcp::RoleServer;
 use rmcp::ServerHandler;
+use rmcp::handler::server::tool::{InputResponses, RequestState};
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{
     CallToolResponse, CallToolResult, ContentBlock, ErrorData as McpErrorData, ListResourcesResult,
@@ -1470,8 +1472,9 @@ fn skill_catalog() -> Option<&'static rmcp::handler::server::skill_catalog::Skil
         .as_ref()
 }
 
-/// Unwraps a router response. This server runs every tool synchronously, so
-/// the router only ever returns a completed result.
+/// Unwraps a router response. This server runs every tool synchronously; the
+/// only other outcome, `input_required` from a confirmation-gated write, is
+/// taken out before this is called.
 fn complete_result(response: CallToolResponse) -> CallToolResult {
     match response {
         CallToolResponse::Complete(result) => result,
@@ -3140,12 +3143,19 @@ impl Longbridge {
         &self,
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<trade::CancelOrderParam>,
-    ) -> Result<CallToolResult, McpError> {
+        InputResponses(input_responses): InputResponses,
+        RequestState(request_state): RequestState,
+    ) -> Result<CallToolResponse, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("cancel_order", format!("{p:?}"), || {
-            trade::cancel_order(&mctx, p)
+        let confirm = Confirmer::new(&ctx, input_responses, request_state);
+        let result = measured_tool_call("cancel_order", format!("{p:?}"), || {
+            trade::cancel_order(&mctx, &confirm, p)
         })
-        .await
+        .await?;
+        Ok(match confirm.take_input_required() {
+            Some(input_required) => input_required.into(),
+            None => result.into(),
+        })
     }
 
     /// Get today's trade executions.
@@ -3253,12 +3263,19 @@ impl Longbridge {
         &self,
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<SubmitOrderParam>,
-    ) -> Result<CallToolResult, McpError> {
+        InputResponses(input_responses): InputResponses,
+        RequestState(request_state): RequestState,
+    ) -> Result<CallToolResponse, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("submit_order", format!("{p:?}"), || {
-            trade::submit_order(&mctx, p)
+        let confirm = Confirmer::new(&ctx, input_responses, request_state);
+        let result = measured_tool_call("submit_order", format!("{p:?}"), || {
+            trade::submit_order(&mctx, &confirm, p)
         })
-        .await
+        .await?;
+        Ok(match confirm.take_input_required() {
+            Some(input_required) => input_required.into(),
+            None => result.into(),
+        })
     }
 
     /// Submit a multi-leg option combination order.
@@ -3300,12 +3317,19 @@ impl Longbridge {
         &self,
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<ReplaceOrderParam>,
-    ) -> Result<CallToolResult, McpError> {
+        InputResponses(input_responses): InputResponses,
+        RequestState(request_state): RequestState,
+    ) -> Result<CallToolResponse, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("replace_order", format!("{p:?}"), || {
-            trade::replace_order(&mctx, p)
+        let confirm = Confirmer::new(&ctx, input_responses, request_state);
+        let result = measured_tool_call("replace_order", format!("{p:?}"), || {
+            trade::replace_order(&mctx, &confirm, p)
         })
-        .await
+        .await?;
+        Ok(match confirm.take_input_required() {
+            Some(input_required) => input_required.into(),
+            None => result.into(),
+        })
     }
 
     /// Estimate max purchase quantity.
@@ -6816,6 +6840,11 @@ impl ServerHandler for Longbridge {
         // with the same client as the tool call it belongs to.
         let tool_name = request.name.to_string();
         let retryable = is_read_only_tool(request.name.as_ref());
+        // A write gated on the user's confirmation ends with `input_required`
+        // instead of a tool result (see `support::confirm`). It bypasses `_jq`
+        // and the result post-processing, which only apply to tool results.
+        let input_required = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let pending = input_required.clone();
         let call = jq::call(request, retryable, |request| async move {
             use rmcp::handler::server::tool::ToolCallContext;
             let name = request.name.clone();
@@ -6823,7 +6852,13 @@ impl ServerHandler for Longbridge {
                 return cached_router()
                     .call(ToolCallContext::new(self, request, context))
                     .await
-                    .map(|result| wrap_argument_error(&name, complete_result(result)));
+                    .map(|result| match result {
+                        CallToolResponse::InputRequired(ir) => {
+                            *pending.lock().unwrap_or_else(|e| e.into_inner()) = Some(ir);
+                            CallToolResult::success(vec![])
+                        }
+                        other => wrap_argument_error(&name, complete_result(other)),
+                    });
             }
             // Read-only tools get one server-side retry on an upstream rate
             // limit (429002/429003), which otherwise surfaces to the model as
@@ -6847,8 +6882,15 @@ impl ServerHandler for Longbridge {
         });
         crate::metrics::CURRENT_CLIENT
             .scope(client, async {
-                call.await
-                    .map(|result| CallToolResponse::from(finish_result(&tool_name, result)))
+                let result = call.await?;
+                if let Some(ir) = input_required
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .take()
+                {
+                    return Ok(CallToolResponse::from(ir));
+                }
+                Ok(CallToolResponse::from(finish_result(&tool_name, result)))
             })
             .await
     }

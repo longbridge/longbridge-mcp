@@ -4,6 +4,7 @@
 //! (HTTP client, serde deserializers, parsing helpers) used by the tool
 //! modules alongside this one.
 
+pub mod confirm;
 pub mod dry_run;
 pub mod exchange_time;
 pub mod http_client;
