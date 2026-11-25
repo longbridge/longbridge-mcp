@@ -71,6 +71,31 @@ pub async fn http_get_value(
     Ok(serde_json::from_str(&transformed).map_err(Error::Serialize)?)
 }
 
+/// Attempts [`http_get_value_paced`] makes before giving up on a rate limit.
+const PACED_ATTEMPTS: usize = 3;
+
+/// [`http_get_value`] for a tool that sends several requests to the same
+/// route in one call (paging, or one request per filter value). The gateway
+/// rate-limits these routes to about one call a second per member, so a
+/// rate-limited request waits the delay the upstream suggests and is retried
+/// here, instead of failing the whole tool call.
+pub async fn http_get_value_paced(
+    client: &HttpClient,
+    path: &str,
+    params: &[(&str, &str)],
+) -> Result<serde_json::Value, McpError> {
+    let mut attempt = 1;
+    loop {
+        match http_get_value(client, path, params).await {
+            Err(err) if attempt < PACED_ATTEMPTS && crate::tools::is_backoff(&err) => {
+                tokio::time::sleep(crate::tools::rate_limit_delay(&err)).await;
+                attempt += 1;
+            }
+            result => return result,
+        }
+    }
+}
+
 /// Build a tool result from an already reshaped JSON `Value`.
 pub fn value_result(value: &serde_json::Value) -> Result<CallToolResult, McpError> {
     let json = serde_json::to_string(value).map_err(Error::Serialize)?;

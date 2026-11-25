@@ -1172,11 +1172,11 @@
     },
     "bank_cards": {
       "title": "绑定银行卡",
-      "description": "列出当前账户绑定的银行卡及审核状态，返回 cards[]{id, bank, bank_en, bank_code, account（仅后 4 位）, account_type, region, region_name, country, verification（unverified/under_review/verified：银行卡出金认证）, witness（not_required/pending/witnessed：是否已有该卡入金见证）, binding（binding/bound/failed）, review_days（卡片添加至今的天数，仅 under_review 时返回；约 14 天以上表示审核超时）, bind_tip（展示给用户的审核提示）, remark, created_at, auth_list[]{flow_id（hk_edda/hk_sdda：eDDA，hk_bank_sec：银证转账，hk_fps：FPS）, name, currency, authorization（unauthorized/authorized/authorizing/failed）, failure_reason（失败原因）, max_amount, max_amount_unlimited, daily_max_count, daily_max_count_unlimited, expiry_date, long_term_valid}}。under_review 表示绑卡后正在人工审核；只查 eDDA 用 edda_authorizations"
+      "description": "列出当前账户绑定的银行卡及审核状态，返回 cards[]{id, bank, bank_en, bank_code, account（仅后 4 位）, account_type, region, region_name, country, verification（unverified/under_review/verified：银行卡出金认证）, witness（not_required/pending/witnessed：是否已有该卡入金见证）, binding（binding/bound/failed）, review_days（卡片添加至今的天数，仅 under_review 时返回；约 14 天以上表示审核超时）, bind_tip（展示给用户的审核提示）, remark, created_at, auth_list[]{flow_id（hk_edda/hk_sdda：eDDA，hk_bank_sec：银证转账，hk_fps：FPS）, name, currency, authorization（unauthorized/authorized/authorizing/failed）, failure_reason（失败原因）, max_amount, max_amount_unlimited, daily_max_count, daily_max_count_unlimited, expiry_date, long_term_valid}}。under_review 表示绑卡后正在人工审核；只查 eDDA 改用 edda_authorizations（两者调用同一上游接口，同一轮不要都调）"
     },
     "withdrawals": {
       "title": "提款记录",
-      "description": "获取当前账户提款历史，按时间倒序。返回 {list[]{id, order_id, created_at, currency, amount（申请金额）, fee（手续费，旧记录为空）, settlement_amount（实际出账金额）, state, state_label（submitted/processing/rejected/cancelled/remitted/failed）, raw_state, state_description（状态文案）, bank_account（仅后 4 位）, display_bank_account, user_bank_swift_code}, total}。start/end：yyyy-mm-dd 或 RFC3339，按申请时间筛选。不含预计处理时间和后台备注",
+      "description": "获取当前账户提款历史，按时间倒序。返回 {list[]{id, order_id, created_at, currency, amount（申请金额）, fee（手续费，旧记录为空）, settlement_amount（实际出账金额）, state, state_label（submitted/processing/rejected/cancelled/remitted/failed）, raw_state, state_description（状态文案）, bank_account（仅后 4 位）, display_bank_account, user_bank_swift_code}, total, has_more（返回了满页，可取下一页）}。start/end：yyyy-mm-dd 或 RFC3339，按申请时间筛选。不含预计处理时间和后台备注",
       "properties": {
         "page": "页码（默认 1）",
         "size": "每页条数（默认 20）",
@@ -1186,7 +1186,7 @@
     },
     "deposits": {
       "title": "入款记录",
-      "description": "获取当前账户入款历史，按时间倒序。返回 {items[]{id, created_at, updated_at, currency, amount（客户通知/申请的金额）, receivable_amount（长桥银行实际到账金额，0 表示尚未收到）, state（状态文案）, state_code, state_label（processing/credited/failed/cancelled/invalidated/rejected）, sub_state_code, bank_operation_type_name（入金方式，如 eDDA、FPS、银行转账）, reference_no, can_cancel, voucher_count（已上传凭证张数）}, total}。states：逗号分隔的状态码（0 处理中，1 已入账，2 失败，3 已撤销，4 已失效，5 已驳回）；currencies：逗号分隔的货币代码；start/end：yyyy-mm-dd 或 RFC3339，按申请时间筛选。不含后台备注",
+      "description": "获取当前账户入款历史，按时间倒序。返回 {items[]{id, created_at, updated_at, currency, amount（客户通知/申请的金额）, receivable_amount（长桥银行实际到账金额，0 表示尚未收到）, state（状态文案）, state_code, state_label（processing/credited/failed/cancelled/invalidated/rejected）, sub_state_code, bank_operation_type_name（入金方式，如 eDDA、FPS、银行转账）, reference_no, can_cancel, voucher_count（已上传凭证张数）}, has_more（返回了满页，可取下一页）}。没有可靠的总条数。states：逗号分隔的状态码（0 处理中，1 已入账，2 失败，3 已撤销，4 已失效，5 已驳回）；currencies：逗号分隔的货币代码；start/end：yyyy-mm-dd 或 RFC3339，按申请时间筛选。不含后台备注",
       "properties": {
         "page": "页码（默认 1）",
         "size": "每页条数（默认 20）",
@@ -1234,7 +1234,7 @@
     },
     "reward_records": {
       "title": "奖励发放记录",
-      "description": "列出当前账户的活动奖励发放记录（现金、卡券、股票或礼品等奖品），按时间倒序。kind 按类型筛选（cash/gift/coupon/task）。start/end（yyyy-mm-dd 或 RFC3339）按 send_time 筛选，带上后工具会自动翻页（最多 500 条），客户给出日期时前后各放宽几天。返回 {rewards[]{kind（cash/card/prize：记录携带的明细类型）, reward_type, reward_type_label（cash/gift/coupon/task）, record_id, activity_title, title, description, card_type, card_status, prize_type, amount, currency, status, status_label（upcoming/cancelled/exited_activity/unclaimed/issuing/issued/failed/exchanged/expired/refunded）, deliver_status, deliver_status_label（已发放后的交付状态：not_activated/activated_or_shipping/consumed/address_missing/address_filled/shipping/…）, send_time, start_time, end_time, effective_time, receive_deadline}, total}。用于「奖励没到账」类问题：按 activity_title 对活动、按 send_time 对日期。奖励发放的卡券用 coupons 查看",
+      "description": "列出当前账户的活动奖励发放记录（现金、卡券、股票或礼品等奖品），按时间倒序。kind 按类型筛选（cash/gift/coupon/task）。start/end（yyyy-mm-dd 或 RFC3339）按 send_time 筛选，带上后工具会自动翻页（最多 500 条），客户给出日期时前后各放宽几天。返回 {rewards[]{reward_type, reward_type_label（cash/gift/coupon/task，与 kind 筛选的取值一致）, record_id, activity_title, title, description, card_type, card_status, prize_type, amount, currency, status, status_label（upcoming/cancelled/exited_activity/unclaimed/issuing/issued/failed/exchanged/expired/refunded）, deliver_status, deliver_status_label（已发放后的交付状态：not_activated/activated_or_shipping/consumed/address_missing/address_filled/shipping/…）, send_time, start_time, end_time, effective_time, receive_deadline}, total}。用于「奖励没到账」类问题：按 activity_title 对活动、按 send_time 对日期。奖励发放的卡券用 coupons 查看",
       "properties": {
         "page": "页码（默认 1；带 start 或 end 时忽略）",
         "size": "每页条数（默认 20，最大 50）",

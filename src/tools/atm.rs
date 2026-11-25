@@ -562,7 +562,17 @@ fn shape_money_records(
     list_key: &str,
     state_key: &str,
     states: &[(i64, &'static str)],
+    page_size: usize,
 ) {
+    // A full page means there may be more; this is the reliable signal, since
+    // the deposit list's `total` follows the page size, not the record count.
+    let full_page = value
+        .get(list_key)
+        .and_then(Value::as_array)
+        .is_some_and(|items| items.len() >= page_size);
+    if let Some(obj) = value.as_object_mut() {
+        obj.insert("has_more".into(), Value::Bool(full_page));
+    }
     let Some(items) = value.get_mut(list_key).and_then(Value::as_array_mut) else {
         return;
     };
@@ -603,7 +613,8 @@ pub async fn withdrawals(
         params.push(("end", e.as_str()));
     }
     let mut value = http_get_value(&client, "/v1/account/withdrawals", &params).await?;
-    shape_money_records(&mut value, "list", "state", WITHDRAWAL_STATE);
+    let page_size = p.size.unwrap_or(20) as usize;
+    shape_money_records(&mut value, "list", "state", WITHDRAWAL_STATE, page_size);
     value_result(&value)
 }
 
@@ -635,7 +646,13 @@ pub async fn deposits(
         params.push(("to_date", t.as_str()));
     }
     let mut value = http_get_value(&client, "/v1/account/deposits", &params).await?;
-    shape_money_records(&mut value, "items", "state_code", DEPOSIT_STATE);
+    let page_size = p.size.unwrap_or(20) as usize;
+    shape_money_records(&mut value, "items", "state_code", DEPOSIT_STATE, page_size);
+    // Upstream `total` is capped at the page size, so it reads as a wrong
+    // record count; `has_more` replaces it.
+    if let Some(obj) = value.as_object_mut() {
+        obj.remove("total");
+    }
     value_result(&value)
 }
 
@@ -737,13 +754,14 @@ mod tests {
     fn shape_money_records_masks_and_counts() {
         let mut value = json!({"list": [{"id": 1, "state": 4, "bank_account": "012345678901", "fee": "5",
             "vouchers": [{"key": "k", "img_url": "https://x/y.png"}]}]});
-        shape_money_records(&mut value, "list", "state", WITHDRAWAL_STATE);
+        shape_money_records(&mut value, "list", "state", WITHDRAWAL_STATE, 20);
         let item = &value["list"][0];
         assert_eq!(item["bank_account"], "****8901", "account masked");
         assert_eq!(item["voucher_count"], 1, "vouchers summarized");
         assert!(item.get("vouchers").is_none(), "voucher urls dropped");
         assert_eq!(item["fee"], "5", "other fields untouched");
         assert_eq!(item["state_label"], "remitted", "state labelled");
+        assert_eq!(value["has_more"], false, "short page: no more");
     }
 
     #[test]

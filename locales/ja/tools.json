@@ -1172,11 +1172,11 @@
     },
     "bank_cards": {
       "title": "登録銀行口座",
-      "description": "現在のアカウントに登録された銀行口座と審査状況を一覧表示します。cards[]{id, bank, bank_en, bank_code, account（下 4 桁のみ）, account_type, region, region_name, country, verification（unverified/under_review/verified：出金用口座の認証）, witness（not_required/pending/witnessed：この口座からの入金確認）, binding（binding/bound/failed）, review_days（口座追加からの日数。under_review の間のみ。約 14 日以上なら審査遅延）, bind_tip（ユーザーに表示される審査メッセージ）, remark, created_at, auth_list[]{flow_id（hk_edda/hk_sdda：eDDA、hk_bank_sec：銀行・証券振替、hk_fps：FPS）, name, currency, authorization（unauthorized/authorized/authorizing/failed）, failure_reason（失敗理由）, max_amount, max_amount_unlimited, daily_max_count, daily_max_count_unlimited, expiry_date, long_term_valid}} を返します。under_review は登録後の手動審査中を意味します。eDDA だけなら edda_authorizations を使用"
+      "description": "現在のアカウントに登録された銀行口座と審査状況を一覧表示します。cards[]{id, bank, bank_en, bank_code, account（下 4 桁のみ）, account_type, region, region_name, country, verification（unverified/under_review/verified：出金用口座の認証）, witness（not_required/pending/witnessed：この口座からの入金確認）, binding（binding/bound/failed）, review_days（口座追加からの日数。under_review の間のみ。約 14 日以上なら審査遅延）, bind_tip（ユーザーに表示される審査メッセージ）, remark, created_at, auth_list[]{flow_id（hk_edda/hk_sdda：eDDA、hk_bank_sec：銀行・証券振替、hk_fps：FPS）, name, currency, authorization（unauthorized/authorized/authorizing/failed）, failure_reason（失敗理由）, max_amount, max_amount_unlimited, daily_max_count, daily_max_count_unlimited, expiry_date, long_term_valid}} を返します。under_review は登録後の手動審査中を意味します。eDDA だけなら代わりに edda_authorizations を使用（同じ上流を呼ぶため、同じターンで両方を呼ばない）"
     },
     "withdrawals": {
       "title": "出金履歴",
-      "description": "現在のアカウントの出金履歴を新しい順に取得します。{list[]{id, order_id, created_at, currency, amount（申請金額）, fee（出金手数料。古い記録では空）, settlement_amount（実際の出金額）, state, state_label（submitted/processing/rejected/cancelled/remitted/failed）, raw_state, state_description（状態テキスト）, bank_account（下 4 桁のみ）, display_bank_account, user_bank_swift_code}, total} を返します。start/end：yyyy-mm-dd または RFC3339（申請日時で絞り込み）。処理予定時刻とバックオフィスの備考は含みません",
+      "description": "現在のアカウントの出金履歴を新しい順に取得します。{list[]{id, order_id, created_at, currency, amount（申請金額）, fee（出金手数料。古い記録では空）, settlement_amount（実際の出金額）, state, state_label（submitted/processing/rejected/cancelled/remitted/failed）, raw_state, state_description（状態テキスト）, bank_account（下 4 桁のみ）, display_bank_account, user_bank_swift_code}, total, has_more（満ページが返った。次ページを取得可能）} を返します。start/end：yyyy-mm-dd または RFC3339（申請日時で絞り込み）。処理予定時刻とバックオフィスの備考は含みません",
       "properties": {
         "page": "ページ番号（デフォルト 1）",
         "size": "1 ページあたりの件数（デフォルト 20）",
@@ -1186,7 +1186,7 @@
     },
     "deposits": {
       "title": "入金履歴",
-      "description": "現在のアカウントの入金履歴を新しい順に取得します。{items[]{id, created_at, updated_at, currency, amount（顧客が通知・申請した金額）, receivable_amount（Longbridge の銀行で実際に受領した金額。0 は未着金）, state（状態テキスト）, state_code, state_label（processing/credited/failed/cancelled/invalidated/rejected）, sub_state_code, bank_operation_type_name（入金方法：eDDA、FPS、銀行振込など）, reference_no, can_cancel, voucher_count（アップロードされた証憑の枚数）}, total} を返します。states：カンマ区切りの状態コード（0 処理中、1 入金済み、2 失敗、3 取消、4 無効、5 却下）。currencies：カンマ区切りの通貨コード。start/end：yyyy-mm-dd または RFC3339（申請日時で絞り込み）。バックオフィスの備考は含みません",
+      "description": "現在のアカウントの入金履歴を新しい順に取得します。{items[]{id, created_at, updated_at, currency, amount（顧客が通知・申請した金額）, receivable_amount（Longbridge の銀行で実際に受領した金額。0 は未着金）, state（状態テキスト）, state_code, state_label（processing/credited/failed/cancelled/invalidated/rejected）, sub_state_code, bank_operation_type_name（入金方法：eDDA、FPS、銀行振込など）, reference_no, can_cancel, voucher_count（アップロードされた証憑の枚数）}, has_more（満ページが返った。次ページを取得可能）} を返します。信頼できる総件数はありません。states：カンマ区切りの状態コード（0 処理中、1 入金済み、2 失敗、3 取消、4 無効、5 却下）。currencies：カンマ区切りの通貨コード。start/end：yyyy-mm-dd または RFC3339（申請日時で絞り込み）。バックオフィスの備考は含みません",
       "properties": {
         "page": "ページ番号（デフォルト 1）",
         "size": "1 ページあたりの件数（デフォルト 20）",
@@ -1234,7 +1234,7 @@
     },
     "reward_records": {
       "title": "特典付与履歴",
-      "description": "現在のアカウントのキャンペーン特典の付与履歴（現金、クーポン、株式や景品など）を新しい順に一覧表示します。kind で種別を絞り込み（cash/gift/coupon/task）。start/end（yyyy-mm-dd または RFC3339）で send_time を絞り込み、指定時はツールが自動でページを進めます（最大 500 件）。顧客が日付を挙げたら前後数日広げてください。{rewards[]{kind（cash/card/prize：記録が持つ明細の種類）, reward_type, reward_type_label（cash/gift/coupon/task）, record_id, activity_title, title, description, card_type, card_status, prize_type, amount, currency, status, status_label（upcoming/cancelled/exited_activity/unclaimed/issuing/issued/failed/exchanged/expired/refunded）, deliver_status, deliver_status_label（付与後の受け渡し状態：not_activated/activated_or_shipping/consumed/address_missing/address_filled/shipping/…）, send_time, start_time, end_time, effective_time, receive_deadline}, total} を返します。「特典が届かない」という問い合わせでは activity_title でキャンペーンを、send_time で日付を照合します。特典で付与されたクーポンは coupons で確認",
+      "description": "現在のアカウントのキャンペーン特典の付与履歴（現金、クーポン、株式や景品など）を新しい順に一覧表示します。kind で種別を絞り込み（cash/gift/coupon/task）。start/end（yyyy-mm-dd または RFC3339）で send_time を絞り込み、指定時はツールが自動でページを進めます（最大 500 件）。顧客が日付を挙げたら前後数日広げてください。{rewards[]{reward_type, reward_type_label（cash/gift/coupon/task。kind フィルターと同じ値）, record_id, activity_title, title, description, card_type, card_status, prize_type, amount, currency, status, status_label（upcoming/cancelled/exited_activity/unclaimed/issuing/issued/failed/exchanged/expired/refunded）, deliver_status, deliver_status_label（付与後の受け渡し状態：not_activated/activated_or_shipping/consumed/address_missing/address_filled/shipping/…）, send_time, start_time, end_time, effective_time, receive_deadline}, total} を返します。「特典が届かない」という問い合わせでは activity_title でキャンペーンを、send_time で日付を照合します。特典で付与されたクーポンは coupons で確認",
       "properties": {
         "page": "ページ番号（既定 1。start または end 指定時は無視）",
         "size": "1 ページあたりの件数（既定 20、最大 50）",

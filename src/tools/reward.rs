@@ -8,7 +8,7 @@ use rmcp::serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::serialize::{convert_unix_paths, drop_keys, strip_empty_strings, strip_nulls};
-use crate::tools::support::http_client::{http_get_value, value_result};
+use crate::tools::support::http_client::{http_get_value, http_get_value_paced, value_result};
 
 /// Fields kept from each reward sub-object (`card` / `cash` / `prize`). This is
 /// an allowlist: prize rewards also carry redemption secrets (`coupon_secret`)
@@ -272,7 +272,16 @@ fn shape_reward(item: &Value) -> Option<Value> {
     }
     match found {
         Some((kind, detail)) => {
-            row.insert("kind".into(), Value::String(kind.to_string()));
+            // No reward_type upstream: name the type after the detail object,
+            // in the same words as the `kind` filter.
+            if !row.contains_key("reward_type_label") {
+                let label = match kind {
+                    "card" => "coupon",
+                    "prize" => "gift",
+                    other => other,
+                };
+                row.insert("reward_type_label".into(), Value::String(label.to_string()));
+            }
             for key in REWARD_FIELDS {
                 if let Some(v) = detail.get(*key) {
                     row.insert((*key).to_string(), v.clone());
@@ -363,7 +372,7 @@ pub async fn reward_records(
         if let Some(t) = reward_type {
             params.push(("reward_type", t));
         }
-        let raw = http_get_value(&client, "/v1/account/rewards", &params).await?;
+        let raw = http_get_value_paced(&client, "/v1/account/rewards", &params).await?;
         total = raw.get("total").cloned().unwrap_or(Value::Null);
         let items = raw
             .get("list")
@@ -491,8 +500,8 @@ pub async fn coupon_orders(
     let settled_params = [("card_id", card_id), ("order_type", "settled")];
     // Sequential on purpose: the gateway rate-limits this route per member
     // tightly, and two concurrent calls draw 429s.
-    let locked = http_get_value(&client, path, &locked_params).await?;
-    let settled = http_get_value(&client, path, &settled_params).await?;
+    let locked = http_get_value_paced(&client, path, &locked_params).await?;
+    let settled = http_get_value_paced(&client, path, &settled_params).await?;
     let orders = |v: Value| v.get("orders").cloned().unwrap_or_else(|| json!([]));
     let mut value = json!({
         "card_id": card_id,
@@ -523,7 +532,10 @@ mod tests {
             }
         });
         let row = shape_reward(&item).expect("a prize item must shape");
-        assert_eq!(row["kind"], "prize", "kind comes from the sub-object");
+        assert!(
+            row.get("kind").is_none(),
+            "no output kind: it clashed with the filter"
+        );
         assert_eq!(row["reward_type"], 3, "reward_type carried over");
         assert!(
             row.get("coupon_secret").is_none(),
@@ -537,6 +549,17 @@ mod tests {
                 .is_some_and(|t| t.starts_with("2026-")),
             "send_time must be RFC3339"
         );
+    }
+
+    #[test]
+    fn shape_reward_labels_type_like_the_filter() {
+        let row = shape_reward(&json!({"card": {"title": "t"}})).expect("shapes");
+        assert_eq!(
+            row["reward_type_label"], "coupon",
+            "card detail reads as coupon"
+        );
+        let row = shape_reward(&json!({"reward_type": 1, "prize": {}})).expect("shapes");
+        assert_eq!(row["reward_type_label"], "gift", "code wins");
     }
 
     #[test]
