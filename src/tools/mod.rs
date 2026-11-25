@@ -510,6 +510,22 @@ fn error_hint(err: &McpError) -> Option<&'static str> {
         );
     }
 
+    // A paper-trading request refused for a real-money token. Checked first:
+    // its message mentions the token, which the auth needles below would
+    // otherwise read as "reconnect and re-authorize" — advice that cannot
+    // help, since the token is valid; it is the wrong account for the mode.
+    if err
+        .data
+        .as_ref()
+        .is_some_and(|d| d.get("papertrading_real_money_token").is_some())
+    {
+        return Some(
+            "Hint: paper trading is on, but the signed-in account trades real money, so this \
+             order was not sent. Do not retry. Tell the user: to practise, sign in with their \
+             paper-trading account; to trade for real, turn paper trading off first.",
+        );
+    }
+
     // Checked before the rate-limit class below: `openapi_error_code()` and
     // `dc_region_restricted()` are mutually exclusive on any given
     // `longbridge::Error`, so a DC-region-restricted error always has
@@ -1140,6 +1156,22 @@ impl McpContext {
         crate::auth::jwt::account_channel(&self.token).unwrap_or_else(|| "lb".to_string())
     }
 
+    /// Whether this request runs in paper-trading mode: an `x-papertrading`
+    /// header, or `LONGBRIDGE_PAPERTRADING` / `LONGPORT_PAPERTRADING=true` for
+    /// the whole deployment (the variables the SDK itself reads).
+    pub fn papertrading_enabled(&self) -> bool {
+        Self::papertrading_requested(&self.extra_headers)
+            || ["LONGBRIDGE_PAPERTRADING", "LONGPORT_PAPERTRADING"]
+                .iter()
+                .any(|key| std::env::var(key).as_deref() == Ok("true"))
+    }
+
+    /// Whether paper trading was asked for while the token belongs to a
+    /// real-money account (its `account_channel` is not a paper-trading one).
+    pub fn papertrading_with_real_money_token(&self) -> bool {
+        self.papertrading_enabled() && !self.account_channel().contains("papertrading")
+    }
+
     /// The DC region (`Us` or `Ap`) this session's credentials resolve to,
     /// derived from the bearer token — no network round-trip for token-based
     /// sessions (see `longbridge_httpcli::DcRegion::from_credential`).
@@ -1325,6 +1357,45 @@ fn us_alternative_for_ap_only_tool(name: &str) -> &'static str {
 /// names the region and, for a US account calling an AP-only tool, the US
 /// alternative (or that there is none). [`tool_error`] also delivers that
 /// alternative as the envelope's `hint`.
+/// Tools that place, change or cancel orders, or set up or change recurring
+/// investments: the calls a paper-trading request must never send to a
+/// real-money account.
+const MONEY_WRITE_TOOLS: &[&str] = &[
+    "submit_order",
+    "submit_multileg_order",
+    "replace_order",
+    "cancel_order",
+    "grid_submit",
+    "grid_replace",
+    "grid_cancel",
+    "grid_suspend",
+    "grid_restart",
+    "fund_submit_order",
+    "fund_cancel_order",
+    "dca_create",
+    "dca_update",
+    "dca_pause",
+    "dca_resume",
+    "dca_stop",
+];
+
+/// The rejection for a money-moving tool called in paper-trading mode with a
+/// real-money token. Upstream does not refuse such a request for OAuth
+/// tokens — it runs it against the real-money account — so this server
+/// refuses it instead.
+fn papertrading_rejection(name: &str, account_channel: &str) -> (String, serde_json::Value) {
+    let message = format!(
+        "Tool `{name}` was not run: paper trading was requested, but this token belongs to a \
+         real-money account ({account_channel}), so the order would have moved real money. \
+         Sign in with the paper-trading account, or turn paper trading off to trade for real."
+    );
+    let data = serde_json::json!({
+        "error_code": "papertrading_real_money_token",
+        "papertrading_real_money_token": { "account_channel": account_channel },
+    });
+    (message, data)
+}
+
 fn dc_region_rejection(name: &str, region: longbridge::DcRegion) -> (String, serde_json::Value) {
     let mut message =
         format!("Tool `{name}` is not available for accounts in the {region} data center.");
@@ -6761,6 +6832,17 @@ impl ServerHandler for Longbridge {
                 let (message, data) = dc_region_rejection(request.name.as_ref(), region);
                 return Ok(rejected_call(&request.name, client, message, data));
             }
+            // Paper-trading gate: upstream runs a paper-trading request made
+            // with a real-money OAuth token against the real-money account,
+            // so a money-moving call is refused here before it is routed.
+            // Reads stay allowed; they move nothing.
+            if MONEY_WRITE_TOOLS.contains(&request.name.as_ref())
+                && mctx.papertrading_with_real_money_token()
+            {
+                let channel = mctx.account_channel();
+                let (message, data) = papertrading_rejection(request.name.as_ref(), &channel);
+                return Ok(rejected_call(&request.name, client, message, data));
+            }
         }
         // Classify the originating client here — NOT in the HTTP middleware. In
         // stateless mode rmcp runs the service (and therefore every `#[tool]`
@@ -6966,6 +7048,90 @@ mod tests {
             client_user_agent: ua.map(str::to_owned),
             extra_headers: Vec::new(),
         }
+    }
+
+    fn ctx_for(channel: &str, papertrading_header: bool) -> super::McpContext {
+        let sub = format!(r#"{{"sub":"{{\"account_channel\":\"{channel}\"}}"}}"#);
+        super::McpContext {
+            token: crate::auth::jwt::test_token(&sub),
+            language: None,
+            client_user_agent: None,
+            extra_headers: if papertrading_header {
+                vec![("x-papertrading".to_string(), "true".to_string())]
+            } else {
+                Vec::new()
+            },
+        }
+    }
+
+    #[test]
+    fn papertrading_with_a_real_money_token_is_detected() {
+        assert!(
+            ctx_for("lb", true).papertrading_with_real_money_token(),
+            "paper trading requested on a real-money (lb) token"
+        );
+        assert!(
+            !ctx_for("lb_papertrading", true).papertrading_with_real_money_token(),
+            "paper trading on a paper-trading token is fine"
+        );
+        // Only meaningful while the deployment does not force paper trading.
+        if std::env::var("LONGBRIDGE_PAPERTRADING").as_deref() != Ok("true")
+            && std::env::var("LONGPORT_PAPERTRADING").as_deref() != Ok("true")
+        {
+            assert!(
+                !ctx_for("lb", false).papertrading_with_real_money_token(),
+                "no paper trading requested: nothing to refuse"
+            );
+        }
+    }
+
+    #[test]
+    fn money_write_tools_are_live_writes() {
+        let live = super::list_tools();
+        for name in super::MONEY_WRITE_TOOLS {
+            assert!(
+                live.iter().any(|tool| tool.name == *name),
+                "MONEY_WRITE_TOOLS lists `{name}`, which is not a live tool"
+            );
+            assert!(
+                !super::is_read_only_tool(name),
+                "`{name}` is guarded as a money write but marked read-only"
+            );
+        }
+    }
+
+    #[test]
+    fn papertrading_rejection_names_the_real_money_account() {
+        let (message, data) = super::papertrading_rejection("submit_order", "lb");
+        assert!(
+            message.contains("real-money account (lb)"),
+            "message names the account"
+        );
+        assert_eq!(
+            data["error_code"], "papertrading_real_money_token",
+            "error code"
+        );
+    }
+
+    #[test]
+    fn papertrading_rejection_gets_its_own_hint_and_no_retry() {
+        let (message, data) = super::papertrading_rejection("submit_order", "lb");
+        let err = super::McpError::invalid_request(message, Some(data));
+        assert_eq!(
+            super::recoverable_of(&err),
+            "none",
+            "not retryable, not reauth"
+        );
+        let envelope = super::tool_error("submit_order", &err);
+        let text = format!("{envelope:?}");
+        assert!(
+            text.contains("paper trading is on"),
+            "specific hint: {text}"
+        );
+        assert!(
+            !text.contains("reconnect this MCP server"),
+            "no re-auth advice"
+        );
     }
 
     #[test]
