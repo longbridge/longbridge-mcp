@@ -7,7 +7,8 @@ edition = "2024"
 longbridge = "5.5"
 longbridge-proto = "5.5"
 rust_decimal = "1"
-rmcp = { version = "1.4", features = [
+rmcp = { version = "3.11", features = [
+    "skills-fs",
     "server",
     "transport-streamable-http-server",
     "transport-io",

@@ -424,7 +424,7 @@ pub fn create_router(state: Arc<AppState>) -> Router {
                 move || Ok(Longbridge),
                 Arc::new(NeverSessionManager::default()),
                 StreamableHttpServerConfig::default()
-                    .with_stateful_mode(false)
+                    .with_legacy_session_mode(false)
                     .disable_allowed_hosts(),
             );
             tower::ServiceBuilder::new()

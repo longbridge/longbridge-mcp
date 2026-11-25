@@ -450,7 +450,7 @@ pub async fn industry_rank(
     crate::serialize::strip_empty_strings(&mut data);
     let out = serde_json::to_string(&data).map_err(crate::error::Error::Serialize)?;
     let structured = serde_json::from_str::<serde_json::Value>(&out).ok();
-    let mut res = rmcp::model::CallToolResult::success(vec![rmcp::model::Content::text(out)]);
+    let mut res = rmcp::model::CallToolResult::success(vec![rmcp::model::ContentBlock::text(out)]);
     res.structured_content = structured;
     Ok(res)
 }

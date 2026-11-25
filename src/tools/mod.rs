@@ -5,8 +5,9 @@ use rmcp::RoleServer;
 use rmcp::ServerHandler;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{
-    CallToolResult, Content, ErrorData as McpErrorData, ListResourcesResult, RawResource,
-    ReadResourceRequestParams, ReadResourceResult, Resource, ResourceContents,
+    CallToolResponse, CallToolResult, ContentBlock, ErrorData as McpErrorData, ListResourcesResult,
+    ReadResourceRequestParams, ReadResourceResponse, ReadResourceResult, Resource,
+    ResourceContents,
 };
 use rmcp::service::RequestContext;
 use rmcp::tool;
@@ -256,7 +257,7 @@ fn tool_error(name: &str, err: &McpError) -> CallToolResult {
             "hint": terminal_hint(name, err),
             "note": terminal_note(name, err),
         });
-        let mut result = CallToolResult::success(vec![Content::text(envelope.to_string())]);
+        let mut result = CallToolResult::success(vec![ContentBlock::text(envelope.to_string())]);
         if TERMINAL_OBJECT_ROOTED.contains(&name)
             && let Some(schema) = output_schema_map().get(name)
         {
@@ -286,7 +287,7 @@ fn tool_error(name: &str, err: &McpError) -> CallToolResult {
         "hint": hint,
         "data": serde_json::Value::Null,
     });
-    CallToolResult::error(vec![Content::text(envelope.to_string())])
+    CallToolResult::error(vec![ContentBlock::text(envelope.to_string())])
 }
 
 /// Hint for a write tool whose request got no response.
@@ -801,7 +802,7 @@ pub(crate) fn terminal_none_ok(name: &str, err: &McpError) -> Option<CallToolRes
         "hint": terminal_hint(name, err),
         "note": terminal_note(name, err),
     });
-    Some(CallToolResult::success(vec![Content::text(
+    Some(CallToolResult::success(vec![ContentBlock::text(
         envelope.to_string(),
     )]))
 }
@@ -845,7 +846,6 @@ where
     T: rmcp::schemars::JsonSchema + 'static,
 {
     rmcp::handler::server::common::schema_for_output::<T>()
-        .expect("output schema must be a valid JSON Schema with root type \"object\"")
 }
 
 /// A JSON value that satisfies `schema` by filling every `required` property
@@ -942,7 +942,7 @@ pub(crate) fn tool_result(json: String) -> CallToolResult {
     let structured = serde_json::from_str::<serde_json::Value>(&json)
         .ok()
         .filter(serde_json::Value::is_object);
-    let mut result = CallToolResult::success(vec![Content::text(json)]);
+    let mut result = CallToolResult::success(vec![ContentBlock::text(json)]);
     result.structured_content = structured;
     result
 }
@@ -1450,6 +1450,35 @@ pub(crate) fn tool_label(name: &str) -> &str {
 /// returns as a plain-text `isError` result before our tool code runs.
 const ARGUMENT_ERROR_PREFIX: &str = "failed to deserialize parameters:";
 
+/// Skills served over MCP (SEP-2640), loaded once from the directory named by
+/// `LONGBRIDGE_MCP_SKILLS_DIR`. Unset means the server does not offer skills.
+fn skill_catalog() -> Option<&'static rmcp::handler::server::skill_catalog::SkillCatalog> {
+    static CATALOG: std::sync::OnceLock<
+        Option<rmcp::handler::server::skill_catalog::SkillCatalog>,
+    > = std::sync::OnceLock::new();
+    CATALOG
+        .get_or_init(|| {
+            let dir = std::env::var_os("LONGBRIDGE_MCP_SKILLS_DIR")?;
+            match rmcp::handler::server::skill_catalog::SkillCatalog::from_dir(&dir) {
+                Ok(catalog) => Some(catalog),
+                Err(error) => {
+                    tracing::error!(?dir, %error, "failed to load MCP skills");
+                    None
+                }
+            }
+        })
+        .as_ref()
+}
+
+/// Unwraps a router response. This server runs every tool synchronously, so
+/// the router only ever returns a completed result.
+fn complete_result(response: CallToolResponse) -> CallToolResult {
+    match response {
+        CallToolResponse::Complete(result) => result,
+        other => unreachable!("tools in this server always complete synchronously: {other:?}"),
+    }
+}
+
 /// Replace rmcp's plain-text argument-deserialization error with the standard
 /// envelope (so `recoverable` is present), naming the tool's parameters. It
 /// never reaches `measured_tool_call`, so count and log it here.
@@ -1485,7 +1514,7 @@ fn wrap_argument_error(name: &str, result: CallToolResult) -> CallToolResult {
         ),
         "data": serde_json::Value::Null,
     });
-    CallToolResult::error(vec![Content::text(envelope.to_string())])
+    CallToolResult::error(vec![ContentBlock::text(envelope.to_string())])
 }
 
 /// `name*: type, …` for a tool's input parameters (excluding `_jq`), so a
@@ -2190,7 +2219,7 @@ fn output_schema_resources() -> Vec<Resource> {
                 .ok()
                 .and_then(|bytes| u32::try_from(bytes.len()).ok());
             let title = tool.title.clone().unwrap_or_else(|| tool.name.to_string());
-            let mut raw = RawResource::new(uri, format!("{}.output_schema", tool.name))
+            let mut raw = Resource::new(uri, format!("{}.output_schema", tool.name))
                 .with_title(format!("{title} Output Schema"))
                 .with_description(format!(
                     "Full JSON Schema for the `{}` tool before optional jq filtering.",
@@ -2198,9 +2227,9 @@ fn output_schema_resources() -> Vec<Resource> {
                 ))
                 .with_mime_type(OUTPUT_SCHEMA_RESOURCE_MIME);
             if let Some(size) = size {
-                raw = raw.with_size(size);
+                raw = raw.with_size(u64::from(size));
             }
-            Some(rmcp::model::Annotated::new(raw, None))
+            Some(raw)
         })
         .collect()
 }
@@ -6621,12 +6650,20 @@ impl ServerHandler for Longbridge {
     // `Authorization` header, which re-initializes the session and re-fetches
     // the full tool list.
 
-    fn get_info(&self) -> rmcp::model::ServerInfo {
-        rmcp::model::ServerInfo::new(
-            rmcp::model::ServerCapabilities::builder()
-                .enable_tools()
-                .enable_resources()
-                .build(),
+    fn get_info(&self) -> rmcp::model::ServerConfig {
+        rmcp::model::ServerConfig::new(
+            if skill_catalog().is_some() {
+                rmcp::model::ServerCapabilities::builder()
+                    .enable_tools()
+                    .enable_resources()
+                    .enable_skills_with_directory_read()
+                    .build()
+            } else {
+                rmcp::model::ServerCapabilities::builder()
+                    .enable_tools()
+                    .enable_resources()
+                    .build()
+            },
         )
         .with_server_info(rmcp::model::Implementation::new(
             "longbridge-mcp",
@@ -6721,7 +6758,7 @@ impl ServerHandler for Longbridge {
         &self,
         mut request: rmcp::model::CallToolRequestParams,
         context: rmcp::service::RequestContext<rmcp::RoleServer>,
-    ) -> Result<rmcp::model::CallToolResult, rmcp::ErrorData> {
+    ) -> Result<CallToolResponse, rmcp::ErrorData> {
         let client = client_bucket_from_context(&context);
         // Rewrite non-canonical US index spellings (`SPX.US`, `^GSPC.US`, …) to
         // the dotted form upstream accepts, so they don't fail as invalid symbols.
@@ -6737,7 +6774,7 @@ impl ServerHandler for Longbridge {
         if let Some(version) = restricted_version(&context)
             && !is_restricted_tool_allowed(version, request.name.as_ref())
         {
-            return Ok(rejected_call(
+            return Ok(CallToolResponse::from(rejected_call(
                 &request.name,
                 client,
                 format!(
@@ -6747,7 +6784,7 @@ impl ServerHandler for Longbridge {
                     request.name
                 ),
                 serde_json::json!({ "error_code": "tool_not_on_endpoint" }),
-            ));
+            )));
         }
         // DC-region execution gate, independent of the /v1/v2 restricted-endpoint
         // check above: on every authenticated endpoint — main (`/mcp`), `/agent`,
@@ -6759,7 +6796,12 @@ impl ServerHandler for Longbridge {
             let region = mctx.dc_region().await;
             if is_hidden_for_dc_region(request.name.as_ref(), region) {
                 let (message, data) = dc_region_rejection(request.name.as_ref(), region);
-                return Ok(rejected_call(&request.name, client, message, data));
+                return Ok(CallToolResponse::from(rejected_call(
+                    &request.name,
+                    client,
+                    message,
+                    data,
+                )));
             }
         }
         // Classify the originating client here — NOT in the HTTP middleware. In
@@ -6781,7 +6823,7 @@ impl ServerHandler for Longbridge {
                 return cached_router()
                     .call(ToolCallContext::new(self, request, context))
                     .await
-                    .map(|result| wrap_argument_error(&name, result));
+                    .map(|result| wrap_argument_error(&name, complete_result(result)));
             }
             // Read-only tools get one server-side retry on an upstream rate
             // limit (429002/429003), which otherwise surfaces to the model as
@@ -6794,18 +6836,19 @@ impl ServerHandler for Longbridge {
                 })
                 .await;
             let Some(delay) = delay else {
-                return result.map(|result| wrap_argument_error(&name, result));
+                return result.map(|result| wrap_argument_error(&name, complete_result(result)));
             };
             crate::metrics::record_backoff_retry(request.name.as_ref());
             tokio::time::sleep(delay).await;
             cached_router()
                 .call(ToolCallContext::new(self, request, context))
                 .await
-                .map(|result| wrap_argument_error(&name, result))
+                .map(|result| wrap_argument_error(&name, complete_result(result)))
         });
         crate::metrics::CURRENT_CLIENT
             .scope(client, async {
-                call.await.map(|result| finish_result(&tool_name, result))
+                call.await
+                    .map(|result| CallToolResponse::from(finish_result(&tool_name, result)))
             })
             .await
     }
@@ -6845,17 +6888,62 @@ impl ServerHandler for Longbridge {
         _request: Option<rmcp::model::PaginatedRequestParams>,
         _context: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> Result<ListResourcesResult, rmcp::ErrorData> {
-        Ok(ListResourcesResult::with_all_items(
-            output_schema_resources(),
-        ))
+        let mut resources = output_schema_resources();
+        if let Some(skills) = skill_catalog() {
+            resources.extend(skills.resources());
+        }
+        Ok(ListResourcesResult::with_all_items(resources))
     }
 
     async fn read_resource(
         &self,
         request: ReadResourceRequestParams,
         _context: rmcp::service::RequestContext<rmcp::RoleServer>,
-    ) -> Result<ReadResourceResult, rmcp::ErrorData> {
-        read_output_schema_resource(&request.uri)
+    ) -> Result<ReadResourceResponse, rmcp::ErrorData> {
+        if let Some(result) = skill_catalog().and_then(|skills| skills.read_resource(&request.uri))
+        {
+            return Ok(result.into());
+        }
+        read_output_schema_resource(&request.uri).map(ReadResourceResponse::from)
+    }
+
+    async fn list_skills(
+        &self,
+        _request: Option<rmcp::model::PaginatedRequestParams>,
+        _context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> Result<rmcp::model::ListSkillsResult, rmcp::ErrorData> {
+        match skill_catalog() {
+            Some(skills) => Ok(skills.list_skills()),
+            None => Err(rmcp::ErrorData::method_not_found::<
+                rmcp::model::ListSkillsRequestMethod,
+            >()),
+        }
+    }
+
+    async fn get_skill(
+        &self,
+        request: rmcp::model::GetSkillRequestParams,
+        _context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> Result<rmcp::model::GetSkillResult, rmcp::ErrorData> {
+        match skill_catalog() {
+            Some(skills) => skills.get_skill(&request.uri),
+            None => Err(rmcp::ErrorData::method_not_found::<
+                rmcp::model::GetSkillRequestMethod,
+            >()),
+        }
+    }
+
+    async fn read_resource_directory(
+        &self,
+        request: rmcp::model::ReadResourceDirectoryRequestParams,
+        _context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> Result<rmcp::model::ReadResourceDirectoryResult, rmcp::ErrorData> {
+        match skill_catalog() {
+            Some(skills) => skills.read_resource_directory(&request.uri),
+            None => Err(rmcp::ErrorData::method_not_found::<
+                rmcp::model::ReadResourceDirectoryRequestMethod,
+            >()),
+        }
     }
 }
 
@@ -8119,12 +8207,12 @@ mod quote_cmd_tests {
         let resources = super::output_schema_resources();
         let depth_resource = resources
             .iter()
-            .find(|resource| resource.raw.uri == "lb://tools/depth/output-schema")
+            .find(|resource| resource.uri == "lb://tools/depth/output-schema")
             .expect("depth output schema resource must be listed");
 
-        assert_eq!(depth_resource.raw.name, "depth.output_schema");
+        assert_eq!(depth_resource.name, "depth.output_schema");
         assert_eq!(
-            depth_resource.raw.mime_type.as_deref(),
+            depth_resource.mime_type.as_deref(),
             Some("application/schema+json")
         );
 
@@ -8895,7 +8983,7 @@ mod tool_error_tests {
         // Logs through `tracing`; serialize with the log-capturing tests so this
         // callsite's registration cannot race their interest-cache rebuild.
         let _lock = crate::test_support::LOG_CAPTURE_LOCK.blocking_lock();
-        let raw = CallToolResult::error(vec![rmcp::model::Content::text(
+        let raw = CallToolResult::error(vec![rmcp::model::ContentBlock::text(
             "failed to deserialize parameters: missing field `symbol`",
         )]);
         let wrapped = super::wrap_argument_error("candlesticks", raw);
@@ -8915,7 +9003,8 @@ mod tool_error_tests {
         assert!(!hint.contains("_jq"), "{hint}");
 
         // Other error results pass through untouched.
-        let other = CallToolResult::error(vec![rmcp::model::Content::text("{\"error_code\":1}")]);
+        let other =
+            CallToolResult::error(vec![rmcp::model::ContentBlock::text("{\"error_code\":1}")]);
         assert_eq!(
             super::wrap_argument_error("candlesticks", other.clone()),
             other
@@ -9549,14 +9638,14 @@ mod jq_catalog_tests {
 
 #[cfg(test)]
 mod finish_result_tests {
-    use rmcp::model::{CallToolResult, Content};
+    use rmcp::model::{CallToolResult, ContentBlock};
     use serde_json::json;
 
     fn oversized() -> CallToolResult {
         let rows: Vec<_> = (0..3000)
             .map(|i| json!({"id": i, "name": "x".repeat(20)}))
             .collect();
-        CallToolResult::success(vec![Content::text(json!({"list": rows}).to_string())])
+        CallToolResult::success(vec![ContentBlock::text(json!({"list": rows}).to_string())])
     }
 
     fn note(result: &CallToolResult) -> &str {

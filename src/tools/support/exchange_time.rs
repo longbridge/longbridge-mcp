@@ -827,7 +827,7 @@ mod tests {
     #[test]
     fn localize_result_rewrites_json_text_and_ignores_the_rest() {
         let text =
-            |s: &str| CallToolResult::success(vec![rmcp::model::Content::text(s.to_string())]);
+            |s: &str| CallToolResult::success(vec![rmcp::model::ContentBlock::text(s.to_string())]);
         let read = |result: CallToolResult| {
             result
                 .content

@@ -11,7 +11,7 @@
 
 use longbridge::DcRegion;
 use rmcp::ErrorData as McpError;
-use rmcp::model::{CallToolResult, Meta};
+use rmcp::model::{CallToolResult, MetaObject as Meta};
 use serde::Serialize;
 use serde_json::Value;
 

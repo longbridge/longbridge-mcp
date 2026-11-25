@@ -1252,7 +1252,7 @@ pub async fn industry_peers(
     let structured = serde_json::from_str::<serde_json::Value>(&out)
         .ok()
         .filter(serde_json::Value::is_object);
-    let mut res = rmcp::model::CallToolResult::success(vec![rmcp::model::Content::text(out)]);
+    let mut res = rmcp::model::CallToolResult::success(vec![rmcp::model::ContentBlock::text(out)]);
     res.structured_content = structured;
     Ok(res)
 }
@@ -1571,7 +1571,7 @@ mod tests {
         );
     }
     use rmcp::ErrorData as McpError;
-    use rmcp::model::Content;
+    use rmcp::model::ContentBlock;
 
     #[test]
     fn shareholder_detail_accepts_the_string_object_id_from_shareholder_top() {
@@ -1772,7 +1772,7 @@ mod tests {
 
     #[test]
     fn rating_part_returns_the_payload_and_no_warning_on_success() {
-        let ok = rmcp::model::CallToolResult::success(vec![Content::text(r#"{"a":1}"#)]);
+        let ok = rmcp::model::CallToolResult::success(vec![ContentBlock::text(r#"{"a":1}"#)]);
         let (text, warning) = rating_part("analyst", Ok(ok));
         assert_eq!(text, r#"{"a":1}"#);
         assert!(warning.is_none());

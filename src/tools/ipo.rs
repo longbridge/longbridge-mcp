@@ -18,11 +18,11 @@ fn make_result(json: String) -> CallToolResult {
         Ok(mut value) => {
             crate::serialize::round_decimals(&mut value, 6);
             let json = serde_json::to_string(&value).unwrap_or(json);
-            let mut result = CallToolResult::success(vec![rmcp::model::Content::text(json)]);
+            let mut result = CallToolResult::success(vec![rmcp::model::ContentBlock::text(json)]);
             result.structured_content = Some(value);
             result
         }
-        Err(_) => CallToolResult::success(vec![rmcp::model::Content::text(json)]),
+        Err(_) => CallToolResult::success(vec![rmcp::model::ContentBlock::text(json)]),
     }
 }
 
