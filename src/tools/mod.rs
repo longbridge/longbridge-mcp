@@ -738,14 +738,14 @@ fn recoverable_of(err: &McpError) -> &'static str {
     "none"
 }
 
-/// True when `err` is a rate-limit / too-frequent condition the caller can
-/// resolve by waiting and retrying (i.e. `recoverable_of(err) == "backoff"`).
-/// Exposed for tools that want to do their own short in-function retry.
 /// The wait before retrying `err`, a rate-limited call (see [`is_backoff`]).
 pub(crate) fn rate_limit_delay(err: &McpError) -> std::time::Duration {
     backoff_delay(upstream_message_of(err).unwrap_or(err.message.as_ref()))
 }
 
+/// True when `err` is a rate-limit / too-frequent condition the caller can
+/// resolve by waiting and retrying (i.e. `recoverable_of(err) == "backoff"`).
+/// Exposed for tools that want to do their own short in-function retry.
 pub(crate) fn is_backoff(err: &McpError) -> bool {
     recoverable_of(err) == "backoff"
 }
@@ -5998,7 +5998,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "List the current account's linked bank cards and their review state. Returns cards[]{id, bank, bank_en, bank_code, account (last 4 digits), account_type, region, region_name, country, verification (unverified: not verified yet, covering \"not verified\" and \"reviewed, awaiting a deposit\" — a deposit from this card or an eDDA / bank-securities authorization verifies it; under_review: manual review after binding, card unusable meanwhile; verified), witness (not_required/pending/witnessed), binding (binding/bound/failed), review_days (days since added, only while under_review; 14+ means overdue), bind_tip, remark, created_at, auth_list[]{flow_id (hk_edda/hk_sdda: eDDA, hk_bank_sec: bank-securities transfer, hk_fps: FPS), name, currency, authorization (unauthorized/authorized/authorizing/failed), failure_reason, max_amount, max_amount_unlimited, daily_max_count, daily_max_count_unlimited, expiry_date, long_term_valid}}. For eDDA alone use edda_authorizations instead (same upstream call; do not call both in one turn)."
+        description = "List the current account's linked bank cards and their review state. Returns cards[]{id, bank, bank_en, bank_code, account (last 4 digits), account_type, region, region_name, country, verification (unverified: not verified yet, covering \"not verified\" and \"reviewed, awaiting a deposit\" — a deposit from this card or an eDDA / bank-securities authorization verifies it; under_review: manual review after binding, card unusable meanwhile; verified), witness (not_required/pending/witnessed), binding (binding/bound/failed), review_days (days since the card was added, only while under_review), bind_tip, remark, created_at, auth_list[]{flow_id (hk_edda/hk_sdda: eDDA, hk_bank_sec: bank-securities transfer, hk_fps: FPS), name, currency, authorization (unauthorized/authorized/authorizing/failed), failure_reason, max_amount, max_amount_unlimited, daily_max_count, daily_max_count_unlimited, expiry_date, long_term_valid, is_support, doc_reviewing, no_prior_deposit_reviewing}}. For eDDA alone use edda_authorizations instead (same upstream call; do not call both in one turn)."
     )]
     async fn bank_cards(
         &self,
@@ -6017,7 +6017,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "List withdrawal history for the current account, newest first. Returns {list[]{id, order_id, created_at, currency, amount (amount applied for), fee (withdrawal fee; empty on old records), settlement_amount (amount actually paid out), state, state_label (submitted/processing/rejected/cancelled/remitted/failed/refunded/approved_awaiting_payout/large_amount_review/awaiting_confirmation/…), raw_state (unconverted upstream code; use state), state_description (status text as the app shows it; prefer it when present), bank_account (last 4 digits; matches cards[].account from bank_cards), display_bank_account, user_bank_swift_code}, total, has_more (a full page came back; ask for the next page)}. start/end: yyyy-mm-dd or RFC3339 on the application time. An estimated processing time and a back-office remark are not available."
+        description = "List withdrawal history for the current account, newest first. Returns {list[]{id, order_id, created_at, currency, amount (amount applied for), fee (withdrawal fee; empty on old records), settlement_amount (amount actually paid out), state, state_label (submitted/processing/rejected/cancelled/remitted/failed/refunded/approved_awaiting_payout/large_amount_review/awaiting_confirmation/…), raw_state (unconverted upstream code; use state), state_description (status text as the app shows it; prefer it when present), bank_account (last 4 digits; matches cards[].account from bank_cards), display_bank_account, user_bank_swift_code}, total, has_more (a full page came back; ask for the next page)}. start/end: yyyy-mm-dd (a Hong Kong date) or RFC3339 on the application time. An estimated processing time and a back-office remark are not available."
     )]
     async fn withdrawals(
         &self,
@@ -6040,7 +6040,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "List deposit history for the current account, newest first. Returns {items[]{id, created_at, updated_at, currency, amount (amount the user notified/applied for), receivable_amount (amount actually received by Longbridge's bank; 0 means not received yet), state (status text), state_code, state_label (processing/credited/failed/cancelled/invalidated/rejected), sub_state_code, bank_operation_type_name (deposit method, e.g. eDDA, FPS, bank transfer), reference_no, can_cancel, voucher_count (receipts uploaded)}, has_more (a full page came back; ask for the next page)}. There is no reliable total count. states: comma-separated state codes (0 processing, 1 credited, 2 failed, 3 cancelled, 4 invalidated, 5 rejected). currencies: comma-separated codes. start/end: yyyy-mm-dd or RFC3339 on the application time. A back-office remark is not available."
+        description = "List deposit history for the current account, newest first. Returns {items[]{id, created_at, updated_at, currency, amount (amount the user notified/applied for), receivable_amount (amount actually received by Longbridge's bank; 0 means not received yet), state (status text), state_code, state_label (processing/credited/failed/cancelled/invalidated/rejected), sub_state_code, bank_operation_type_name (deposit method, e.g. eDDA, FPS, bank transfer), reference_no, can_cancel, voucher_count (receipts uploaded)}, has_more (a full page came back; ask for the next page)}. There is no reliable total count. states: comma-separated state codes (0 processing, 1 credited, 2 failed, 3 cancelled, 4 invalidated, 5 rejected). currencies: comma-separated codes. start/end: yyyy-mm-dd (a Hong Kong date) or RFC3339 on the application time. A back-office remark is not available."
     )]
     async fn deposits(
         &self,
@@ -6060,7 +6060,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "List the current account's eDDA (electronic direct debit) authorizations across its linked bank cards. Returns authorizations[]{card_id, bank, bank_en, account (last 4 digits only), card_binding (binding/bound/failed), flow (hk_edda: authorized at the bank, hk_sdda: authorized in the app), name, currency, authorization (unauthorized/authorized/authorizing/failed), failure_reason (the bank's message), max_amount (deposit limit), max_amount_unlimited, daily_max_count, daily_max_count_unlimited, expiry_date, long_term_valid}. An empty list means no card has an eDDA authorization. To refresh one card's status use edda_status."
+        description = "List the current account's eDDA (electronic direct debit) authorizations across its linked bank cards. Returns authorizations[]{card_id, bank, bank_en, account (last 4 digits only), card_binding (binding/bound/failed), flow (hk_edda: authorized at the bank, hk_sdda: authorized in the app), name, currency, authorization (unauthorized/authorized/authorizing/failed), failure_reason (the bank's message), max_amount (deposit limit), max_amount_unlimited, daily_max_count, daily_max_count_unlimited, expiry_date, long_term_valid, is_support (1: the bank supports this flow), doc_reviewing (documents under review), no_prior_deposit_reviewing (under review because the card has no prior deposit)}. An empty list means no card has an eDDA authorization. This is the current state; edda_status only lists the applications filed for one card."
     )]
     async fn edda_authorizations(
         &self,
@@ -6105,7 +6105,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "List the current account's stock transfer-in applications (shares moving from another broker into this account), newest first. state filter / state_code: 0 submitted, 1 cancelled, 3 completed (shares received), 5 processing, 7 partially completed, 8 failed. start/end: yyyy-mm-dd or RFC3339, on the creation time. Returns {records[]{id, order_id, market, broker, broker_en, code (broker code), account (the user's account at the other broker, last 4 digits), state (status text), state_code, state_label (submitted/cancelled/completed/processing/partially_completed/failed), can_modify (1: can still be cancelled or changed in the app), app_state, user_notified_broker (the user tapped \"I have notified the broker\" in the app; their own confirmation, not a Longbridge action), stocks[]{code, name, amount, state, state_label (processing/succeeded/failed)}, created_at, updated_at, process_at, exec_at, days_in_process (days from creation until execution; for a cancelled or failed one until it ended; for an open one until today), remark, reason}, total}. A failure or cancellation reason, when there is one, is in remark/reason."
+        description = "List the current account's stock transfer-in applications (shares moving from another broker into this account), newest first. state filter / state_code: 0 submitted, 1 cancelled, 3 completed (shares received), 5 processing, 7 partially completed, 8 failed. start/end: yyyy-mm-dd (a Hong Kong date) or RFC3339, on the creation time. Returns {records[]{id, order_id, market, broker, broker_en, code (broker code), account (the user's account at the other broker, last 4 digits), state (status text), state_code, state_label (submitted/cancelled/completed/processing/partially_completed/failed), can_modify (1: can still be cancelled or changed in the app), app_state, user_notified_broker (the user tapped \"I have notified the broker\" in the app; their own confirmation, not a Longbridge action), stocks[]{code, name, amount, state, state_label (processing/succeeded/failed)}, created_at, updated_at, process_at, exec_at, days_in_process (days from creation until execution; for a cancelled or failed one until it ended; for an open one until today), remark, reason}, total}. A failure or cancellation reason, when there is one, is in remark/reason."
     )]
     async fn stock_transfers_in(
         &self,
@@ -6128,7 +6128,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "List the current account's stock transfer-out applications (shares moving from this account to another broker), newest first. state filter / state_code: 0 submitted, 1 processing, 2 executing, 3 completed, 4 cancelled, 5 partially completed, 6 failed, 7 rejected. start/end: yyyy-mm-dd or RFC3339, on the creation time. Returns {records[]{id, broker, broker_en, code (broker code), account (the user's account at the other broker, last 4 digits), state (status text), state_code (only 0 can still be cancelled), state_label (submitted/processing/executing/completed/cancelled/partially_completed/failed/rejected), app_state, user_notified_broker (as for transfers in), stocks[]{code, name, amount, state, state_label (processing/succeeded/failed)}, created_at, updated_at, agree_at, refuse_at, cancel_at, process_at, exec_at, days_in_process (as for transfers in), reason}}. A rejection or cancellation reason, when there is one, is in reason."
+        description = "List the current account's stock transfer-out applications (shares moving from this account to another broker), newest first. state filter / state_code: 0 submitted, 1 processing, 2 executing, 3 completed, 4 cancelled, 5 partially completed, 6 failed, 7 rejected. start/end: yyyy-mm-dd (a Hong Kong date) or RFC3339, on the creation time. Returns {records[]{id, broker, broker_en, code (broker code), account (the user's account at the other broker, last 4 digits), state (status text), state_code (only 0 can still be cancelled), state_label (submitted/processing/executing/completed/cancelled/partially_completed/failed/rejected), app_state, user_notified_broker (as for transfers in), stocks[]{code, name, amount, state, state_label (processing/succeeded/failed)}, created_at, updated_at, agree_at, refuse_at, cancel_at, process_at, exec_at, days_in_process (as for transfers in), reason}}. A rejection or cancellation reason, when there is one, is in reason."
     )]
     async fn stock_transfers_out(
         &self,
@@ -6151,7 +6151,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "List the current account's activity reward records (campaign rewards: cash, coupon cards, prizes such as shares or gifts), newest first. kind filters by type (cash/gift/coupon/task). start/end (yyyy-mm-dd or RFC3339) filter by send_time; with them the tool pages through the history itself (up to 300 records). Returns {rewards[]{reward_type, reward_type_label (cash/gift/coupon/task, the same words as the kind filter), record_id, activity_title, title, description, card_type, card_status, prize_type, prize_type_label (physical: shipped goods, the only ones with address/shipping deliver states), amount, currency, status, status_label (upcoming/cancelled/exited_activity/unclaimed/issuing/issued/failed/exchanged/expired/refunded), deliver_status, deliver_status_label (after issued: not_activated/activated_or_shipping/consumed/address_missing/address_filled/shipping/…), send_time, start_time, end_time, effective_time, receive_deadline}, total}. A reward is identified by activity_title and send_time. Coupon cards a reward granted are listed by coupons."
+        description = "List the current account's activity reward records (cash, coupon cards, prizes), newest first. kind filters by type (cash/gift/coupon/task). start/end (yyyy-mm-dd as a Hong Kong date, or RFC3339) filter by send_time: the tool then pages through up to 300 records and returns searched_all instead of total (false: older records were not read, so a missing reward may be among them); records not issued yet (no send_time) are always included. Returns {rewards[]{reward_type, reward_type_label (cash/gift/coupon/task, as the kind filter), record_id, activity_title, title, description, card_type, card_status, prize_type, prize_type_label (physical: shipped goods), amount, currency, status, status_label (upcoming/cancelled/exited_activity/unclaimed/issuing/issued/failed/exchanged/expired/refunded), deliver_status, deliver_status_label (issued prizes only: not_activated/activated_or_shipping/consumed/address_missing/shipping/…), send_time, start_time, end_time, effective_time, receive_deadline}, total (all records of this type; only without start/end)}. A reward is identified by activity_title and send_time; coupon cards it granted are listed by coupons."
     )]
     async fn reward_records(
         &self,

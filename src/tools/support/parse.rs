@@ -133,6 +133,23 @@ pub fn parse_rfc3339_end_new_york(s: &str) -> Result<time::OffsetDateTime, McpEr
     parse_datetime_or_date(s, time::macros::time!(23:59:59), new_york_instant)
 }
 
+/// Like [`parse_rfc3339`], but a bare date is the start of that day in Hong
+/// Kong time (UTC+8, no daylight saving) — the day an AP-account user means.
+pub fn parse_rfc3339_hong_kong(s: &str) -> Result<time::OffsetDateTime, McpError> {
+    parse_datetime_or_date(s, time::Time::MIDNIGHT, hong_kong_instant)
+}
+
+/// Like [`parse_rfc3339_end`], but a bare date is the end of that day in Hong
+/// Kong time (UTC+8).
+pub fn parse_rfc3339_end_hong_kong(s: &str) -> Result<time::OffsetDateTime, McpError> {
+    parse_datetime_or_date(s, time::macros::time!(23:59:59), hong_kong_instant)
+}
+
+fn hong_kong_instant(date: Date, time_of_day: time::Time) -> time::OffsetDateTime {
+    date.with_time(time_of_day)
+        .assume_offset(time::macros::offset!(+8))
+}
+
 fn utc_instant(date: Date, time_of_day: time::Time) -> time::OffsetDateTime {
     date.with_time(time_of_day).assume_utc()
 }

@@ -134,17 +134,22 @@ struct TransferKind {
     /// Cancelled / rejected / failed: no execution date, so the elapsed days
     /// stop at the last update instead of running on to today.
     terminal: &'static [i64],
+    /// Completed or partially completed: finished, so the count stops at the
+    /// execution date, or at the last update when that date is unset.
+    completed: &'static [i64],
 }
 
 const TRANSFER_IN: TransferKind = TransferKind {
     path: "/v1/account/stock-transfers/in",
     states: TRANSFER_IN_STATE,
     terminal: &[1, 8],
+    completed: &[3, 7],
 };
 const TRANSFER_OUT: TransferKind = TransferKind {
     path: "/v1/account/stock-transfers/out",
     states: TRANSFER_OUT_STATE,
     terminal: &[4, 6, 7],
+    completed: &[3, 5],
 };
 
 /// Stock-transfer record fields with no use in a support answer: internal
@@ -163,6 +168,16 @@ const TRANSFER_STOCK_NOISE: &[&str] = &[
     "effect_state",
     "certificate_count",
 ];
+
+/// Whether a converted timestamp is an unset placeholder: a date before
+/// [`TRANSFER_MIN_YEAR`], or a raw `0` / `"0"` the date conversion left alone.
+fn is_placeholder_time(value: &Value) -> bool {
+    match value {
+        Value::String(t) => t == "0" || t.get(..4).is_some_and(|year| year < TRANSFER_MIN_YEAR),
+        Value::Number(n) => n.as_i64().is_some_and(|n| n <= 0),
+        _ => false,
+    }
+}
 
 /// Per-stock transfer `state`, as the app's record detail reads it.
 const TRANSFER_STOCK_STATE: &[(i64, &str)] = &[(0, "processing"), (1, "succeeded"), (2, "failed")];
@@ -372,6 +387,9 @@ fn edda_row(card: &Value, auth: &Value) -> Value {
         "daily_max_count_unlimited": auth.get("daily_max_count_unlimited"),
         "expiry_date": auth.get("expiry_date"),
         "long_term_valid": auth.get("long_term_valid"),
+        "is_support": auth.get("is_support"),
+        "doc_reviewing": auth.get("doc_reviewing"),
+        "no_prior_deposit_reviewing": auth.get("no_prior_deposit_reviewing"),
     })
 }
 
@@ -475,13 +493,17 @@ fn transfer_params(
     if let Some(start) = &p.start {
         params.push((
             "start",
-            parse::parse_rfc3339(start)?.unix_timestamp().to_string(),
+            parse::parse_rfc3339_hong_kong(start)?
+                .unix_timestamp()
+                .to_string(),
         ));
     }
     if let Some(end) = &p.end {
         params.push((
             "end",
-            parse::parse_rfc3339_end(end)?.unix_timestamp().to_string(),
+            parse::parse_rfc3339_end_hong_kong(end)?
+                .unix_timestamp()
+                .to_string(),
         ));
     }
     Ok(params)
@@ -493,19 +515,19 @@ fn date_range(
     end: Option<&str>,
 ) -> Result<(Option<String>, Option<String>), McpError> {
     let start = start
-        .map(|s| parse::parse_rfc3339(s).map(|t| t.unix_timestamp().to_string()))
+        .map(|s| parse::parse_rfc3339_hong_kong(s).map(|t| t.unix_timestamp().to_string()))
         .transpose()?;
     let end = end
-        .map(|e| parse::parse_rfc3339_end(e).map(|t| t.unix_timestamp().to_string()))
+        .map(|e| parse::parse_rfc3339_end_hong_kong(e).map(|t| t.unix_timestamp().to_string()))
         .transpose()?;
     Ok((start, end))
 }
 
 /// Whole days between two RFC3339 timestamps (`to` defaults to now).
 fn days_between(from: &str, to: Option<&str>) -> Option<i64> {
-    let from = parse::parse_rfc3339(from).ok()?;
+    let from = parse::parse_rfc3339_hong_kong(from).ok()?;
     let to = match to {
-        Some(t) => parse::parse_rfc3339(t).ok()?,
+        Some(t) => parse::parse_rfc3339_hong_kong(t).ok()?,
         None => time::OffsetDateTime::now_utc(),
     };
     Some((to - from).whole_days().max(0))
@@ -555,12 +577,7 @@ fn shape_transfer(record: &mut Map<String, Value>, kind: &TransferKind) {
     }
     // Unset dates arrive as 1970 (0) or earlier (negative): drop them, or an
     // open application would read as executed in 1970.
-    record.retain(|key, value| {
-        !(key.ends_with("_at")
-            && value
-                .as_str()
-                .is_some_and(|t| t.get(..4).is_some_and(|year| year < TRANSFER_MIN_YEAR)))
-    });
+    record.retain(|key, value| !(key.ends_with("_at") && is_placeholder_time(value)));
     // Transfer-out records name the broker's English name `name_en`; use the
     // transfer-in name so both lists read the same.
     if !record.contains_key("broker_en")
@@ -590,14 +607,13 @@ fn shape_transfer(record: &mut Map<String, Value>, kind: &TransferKind) {
             .filter(|t| !t.is_empty())
             .map(str::to_owned)
     };
-    let terminal = record
-        .get("state_code")
-        .and_then(Value::as_i64)
-        .is_some_and(|code| kind.terminal.contains(&code));
-    // Executed: until execution. Ended without execution: until it ended.
-    // Still open: until now.
+    let code = record.get("state_code").and_then(Value::as_i64);
+    let finished =
+        code.is_some_and(|code| kind.terminal.contains(&code) || kind.completed.contains(&code));
+    // Executed: until execution. Finished without an execution date: until it
+    // ended. Still open: until now.
     let until = text("exec_at").or_else(|| {
-        if terminal {
+        if finished {
             ["cancel_at", "refuse_at", "updated_at"]
                 .iter()
                 .find_map(|key| text(key))
@@ -605,7 +621,7 @@ fn shape_transfer(record: &mut Map<String, Value>, kind: &TransferKind) {
             None
         }
     });
-    if terminal && until.is_none() {
+    if finished && until.is_none() {
         return;
     }
     if let Some(days) = text("created_at").and_then(|c| days_between(&c, until.as_deref())) {
@@ -659,6 +675,14 @@ fn shape_money_records(
         {
             item.insert("bank_account".into(), Value::String(account));
         }
+        // Usually a short tail like "尾号 0578"; mask it if it carries a longer
+        // run of digits.
+        if let Some(display) = item.get("display_bank_account").and_then(Value::as_str)
+            && display.chars().filter(char::is_ascii_digit).count() > 4
+        {
+            let masked = mask_account(display);
+            item.insert("display_bank_account".into(), Value::String(masked));
+        }
         if let Some(vouchers) = item.remove("vouchers") {
             let count = vouchers.as_array().map_or(0, Vec::len);
             item.insert("voucher_count".into(), Value::from(count));
@@ -673,7 +697,7 @@ pub async fn withdrawals(
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
     let page_str = p.page.unwrap_or(1).to_string();
-    let size_str = p.size.unwrap_or(20).to_string();
+    let size_str = p.size.unwrap_or(20).clamp(1, 50).to_string();
     let channel = mctx.account_channel();
     let (begin, end) = date_range(p.start.as_deref(), p.end.as_deref())?;
     let mut params: Vec<(&str, &str)> = vec![
@@ -688,7 +712,7 @@ pub async fn withdrawals(
         params.push(("end", e.as_str()));
     }
     let mut value = http_get_value(&client, "/v1/account/withdrawals", &params).await?;
-    let page_size = p.size.unwrap_or(20) as usize;
+    let page_size = p.size.unwrap_or(20).clamp(1, 50) as usize;
     shape_money_records(&mut value, "list", "state", WITHDRAWAL_STATE, page_size);
     strip_empty_strings(&mut value);
     strip_nulls(&mut value);
@@ -702,7 +726,7 @@ pub async fn deposits(
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
     let page_str = p.page.unwrap_or(1).to_string();
-    let size_str = p.size.unwrap_or(20).to_string();
+    let size_str = p.size.unwrap_or(20).clamp(1, 50).to_string();
     let channel = mctx.account_channel();
     let mut params: Vec<(&str, &str)> = vec![
         ("page", page_str.as_str()),
@@ -723,13 +747,15 @@ pub async fn deposits(
         params.push(("to_date", t.as_str()));
     }
     let mut value = http_get_value(&client, "/v1/account/deposits", &params).await?;
-    let page_size = p.size.unwrap_or(20) as usize;
+    let page_size = p.size.unwrap_or(20).clamp(1, 50) as usize;
     shape_money_records(&mut value, "items", "state_code", DEPOSIT_STATE, page_size);
     // Upstream `total` is capped at the page size, so it reads as a wrong
     // record count; `has_more` replaces it.
     if let Some(obj) = value.as_object_mut() {
         obj.remove("total");
     }
+    strip_empty_strings(&mut value);
+    strip_nulls(&mut value);
     value_result(&value)
 }
 
@@ -792,7 +818,8 @@ mod tests {
     fn edda_row_takes_card_context() {
         let mut card = json!({
             "id": 7, "bank": "HSBC", "account": "123456789", "bind_state": 1,
-            "auth_list": [{"flow_id": "hk_edda", "currency": "HKD", "status": 1}],
+            "auth_list": [{"flow_id": "hk_edda", "currency": "HKD", "status": 1,
+                "doc_reviewing": true}],
         });
         shape_card(&mut card);
         let row = edda_row(&card, &card["auth_list"][0]);
@@ -801,6 +828,10 @@ mod tests {
         assert_eq!(
             row["authorization"], "authorized",
             "auth label carried over"
+        );
+        assert!(
+            row.get("doc_reviewing").is_some(),
+            "review flags carried over"
         );
     }
 
@@ -904,6 +935,36 @@ mod tests {
     }
 
     #[test]
+    fn shape_transfer_completed_without_exec_date_stops_at_update() {
+        let mut done = json!({"state_code": 3, "created_at": "2024-01-01T00:00:00Z",
+            "exec_at": "0", "updated_at": "2024-01-06T00:00:00Z"});
+        shape_transfer(done.as_object_mut().expect("object"), &TRANSFER_IN);
+        assert!(
+            done.get("exec_at").is_none(),
+            "raw \"0\" placeholder dropped"
+        );
+        assert_eq!(
+            done["days_in_process"], 5,
+            "completed: until the last update"
+        );
+    }
+
+    #[test]
+    fn shape_money_records_masks_long_display_account() {
+        let mut value = json!({"list": [{"display_bank_account": "012345678901"},
+            {"display_bank_account": "尾号 0578"}]});
+        shape_money_records(&mut value, "list", "state", WITHDRAWAL_STATE, 20);
+        assert_eq!(
+            value["list"][0]["display_bank_account"], "****8901",
+            "long run masked"
+        );
+        assert_eq!(
+            value["list"][1]["display_bank_account"], "尾号 0578",
+            "tail kept"
+        );
+    }
+
+    #[test]
     fn shape_transfer_stops_the_clock_at_the_end() {
         let mut cancelled = json!({"state_code": 1, "created_at": "2024-01-01T00:00:00Z",
             "updated_at": "2024-01-11T00:00:00Z"});
@@ -943,8 +1004,8 @@ mod tests {
     #[test]
     fn date_range_converts_and_rejects() {
         let (s, e) = date_range(Some("2026-01-01"), Some("2026-01-01")).expect("valid dates");
-        assert_eq!(s.as_deref(), Some("1767225600"), "start of day");
-        assert_eq!(e.as_deref(), Some("1767311999"), "end of day");
+        assert_eq!(s.as_deref(), Some("1767196800"), "start of day, Hong Kong");
+        assert_eq!(e.as_deref(), Some("1767283199"), "end of day, Hong Kong");
         assert!(
             date_range(Some("yesterday"), None).is_err(),
             "bad date rejected"

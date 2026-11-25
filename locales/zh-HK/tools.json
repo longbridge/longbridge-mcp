@@ -1172,11 +1172,11 @@
     },
     "bank_cards": {
       "title": "綁定銀行卡",
-      "description": "列出當前賬戶綁定的銀行卡及審核狀態，返回 cards[]{id, bank, bank_en, bank_code, account（僅後 4 位）, account_type, region, region_name, country, verification（銀行卡出金認證：unverified = 尚未認證，含「未認證」與「已審核-待入金」，用這張卡入金任意金額，或完成 eDDA / 銀證轉賬授權即可認證；under_review = 綁卡後人工審核中，期間不能使用；verified = 已認證）, witness（not_required/pending/witnessed：是否已有該卡入金見證）, binding（binding/bound/failed）, review_days（卡片添加至今的天數，僅 under_review 時返回；約 14 天以上表示審核超時）, bind_tip（展示給用戶的審核提示）, remark, created_at, auth_list[]{flow_id（hk_edda/hk_sdda：eDDA，hk_bank_sec：銀證轉賬，hk_fps：FPS）, name, currency, authorization（unauthorized/authorized/authorizing/failed）, failure_reason（失敗原因）, max_amount, max_amount_unlimited, daily_max_count, daily_max_count_unlimited, expiry_date, long_term_valid}}。under_review 表示綁卡後正在人工審核；只查 eDDA 改用 edda_authorizations（兩者調用同一上游接口，同一輪不要都調）"
+      "description": "列出當前賬戶綁定的銀行卡及審核狀態，返回 cards[]{id, bank, bank_en, bank_code, account（僅後 4 位）, account_type, region, region_name, country, verification（銀行卡出金認證：unverified = 尚未認證，含「未認證」與「已審核-待入金」，用這張卡入金任意金額，或完成 eDDA / 銀證轉賬授權即可認證；under_review = 綁卡後人工審核中，期間不能使用；verified = 已認證）, witness（not_required/pending/witnessed：是否已有該卡入金見證）, binding（binding/bound/failed）, review_days（卡片添加至今的天數，僅 under_review 時返回）, bind_tip（展示給用戶的審核提示）, remark, created_at, auth_list[]{flow_id（hk_edda/hk_sdda：eDDA，hk_bank_sec：銀證轉賬，hk_fps：FPS）, name, currency, authorization（unauthorized/authorized/authorizing/failed）, failure_reason（失敗原因）, max_amount, max_amount_unlimited, daily_max_count, daily_max_count_unlimited, expiry_date, long_term_valid, is_support, doc_reviewing, no_prior_deposit_reviewing}}。under_review 表示綁卡後正在人工審核；只查 eDDA 改用 edda_authorizations（兩者調用同一上游接口，同一輪不要都調）"
     },
     "withdrawals": {
       "title": "提款記錄",
-      "description": "獲取當前賬戶提款歷史，按時間倒序。返回 {list[]{id, order_id, created_at, currency, amount（申請金額）, fee（手續費，舊記錄為空）, settlement_amount（實際出賬金額）, state, state_label（submitted/processing/rejected/cancelled/remitted/failed/refunded/approved_awaiting_payout/large_amount_review/awaiting_confirmation/…）, raw_state（未轉換的上游碼，請用 state）, state_description（App 展示的狀態文案，有值時優先使用）, bank_account（僅後 4 位，與 bank_cards 的 cards[].account 對應）, display_bank_account, user_bank_swift_code}, total, has_more（返回了滿頁，可取下一頁）}。start/end：yyyy-mm-dd 或 RFC3339，按申請時間篩選。不含預計處理時間和後台備註",
+      "description": "獲取當前賬戶提款歷史，按時間倒序。返回 {list[]{id, order_id, created_at, currency, amount（申請金額）, fee（手續費，舊記錄為空）, settlement_amount（實際出賬金額）, state, state_label（submitted/processing/rejected/cancelled/remitted/failed/refunded/approved_awaiting_payout/large_amount_review/awaiting_confirmation/…）, raw_state（未轉換的上游碼，請用 state）, state_description（App 展示的狀態文案，有值時優先使用）, bank_account（僅後 4 位，與 bank_cards 的 cards[].account 對應）, display_bank_account, user_bank_swift_code}, total, has_more（返回了滿頁，可取下一頁）}。start/end：yyyy-mm-dd（香港日期）或 RFC3339，按申請時間篩選。不含預計處理時間和後台備註",
       "properties": {
         "page": "頁碼（預設 1）",
         "size": "每頁條數（預設 20）",
@@ -1186,7 +1186,7 @@
     },
     "deposits": {
       "title": "入款記錄",
-      "description": "獲取當前賬戶入款歷史，按時間倒序。返回 {items[]{id, created_at, updated_at, currency, amount（用戶通知/申請的金額）, receivable_amount（長橋銀行實際到賬金額，0 表示尚未收到）, state（狀態文案）, state_code, state_label（processing/credited/failed/cancelled/invalidated/rejected）, sub_state_code, bank_operation_type_name（入金方式，如 eDDA、FPS、銀行轉賬）, reference_no, can_cancel, voucher_count（已上傳憑證張數）}, has_more（返回了滿頁，可取下一頁）}。沒有可靠的總條數。states：逗號分隔的狀態碼（0 處理中，1 已入賬，2 失敗，3 已撤銷，4 已失效，5 已駁回）；currencies：逗號分隔的貨幣代碼；start/end：yyyy-mm-dd 或 RFC3339，按申請時間篩選。不含後台備註",
+      "description": "獲取當前賬戶入款歷史，按時間倒序。返回 {items[]{id, created_at, updated_at, currency, amount（用戶通知/申請的金額）, receivable_amount（長橋銀行實際到賬金額，0 表示尚未收到）, state（狀態文案）, state_code, state_label（processing/credited/failed/cancelled/invalidated/rejected）, sub_state_code, bank_operation_type_name（入金方式，如 eDDA、FPS、銀行轉賬）, reference_no, can_cancel, voucher_count（已上傳憑證張數）}, has_more（返回了滿頁，可取下一頁）}。沒有可靠的總條數。states：逗號分隔的狀態碼（0 處理中，1 已入賬，2 失敗，3 已撤銷，4 已失效，5 已駁回）；currencies：逗號分隔的貨幣代碼；start/end：yyyy-mm-dd（香港日期）或 RFC3339，按申請時間篩選。不含後台備註",
       "properties": {
         "page": "頁碼（預設 1）",
         "size": "每頁條數（預設 20）",
@@ -1198,7 +1198,7 @@
     },
     "edda_authorizations": {
       "title": "eDDA 授權",
-      "description": "列出當前賬戶各張綁定銀行卡的 eDDA（電子直接扣款）授權，返回 authorizations[]{card_id, bank, bank_en, account（僅後 4 位）, card_binding（binding/bound/failed）, flow（hk_edda：在銀行授權，hk_sdda：在 App 內授權）, name, currency, authorization（unauthorized/authorized/authorizing/failed）, failure_reason（銀行返回信息）, max_amount（入金上限）, max_amount_unlimited, daily_max_count, daily_max_count_unlimited, expiry_date, long_term_valid}。列表為空表示沒有任何卡做過 eDDA 授權；刷新單張卡的狀態用 edda_status"
+      "description": "列出當前賬戶各張綁定銀行卡的 eDDA（電子直接扣款）授權，返回 authorizations[]{card_id, bank, bank_en, account（僅後 4 位）, card_binding（binding/bound/failed）, flow（hk_edda：在銀行授權，hk_sdda：在 App 內授權）, name, currency, authorization（unauthorized/authorized/authorizing/failed）, failure_reason（銀行返回信息）, max_amount（入金上限）, max_amount_unlimited, daily_max_count, daily_max_count_unlimited, expiry_date, long_term_valid, is_support（1：銀行支持此方式）, doc_reviewing（資料審核中）, no_prior_deposit_reviewing（因該卡無入金記錄而審核中）}。列表為空表示沒有任何卡做過 eDDA 授權。這裡是當前狀態；edda_status 只列出某張卡提交過的申請"
     },
     "edda_status": {
       "title": "eDDA 授權狀態",
@@ -1210,7 +1210,7 @@
     },
     "stock_transfers_in": {
       "title": "股票轉入申請",
-      "description": "列出當前賬戶的股票轉入申請（從其他券商轉入本賬戶），按時間倒序。state 過濾 / state_code：0 已提交，1 已撤銷，3 已完成（已入倉），5 處理中，7 部分完成，8 失敗。start/end：yyyy-mm-dd 或 RFC3339，按創建時間篩選。返回 {records[]{id, order_id, market, broker, broker_en, code（券商代碼）, account（用戶在對方券商的賬號，僅後 4 位）, state（狀態文案）, state_code, state_label（submitted/cancelled/completed/processing/partially_completed/failed）, can_modify（1：仍可在 App 內撤銷或修改）, app_state, user_notified_broker（用戶已在 App 內點擊「我已通知」轉出券商；是用戶自己的確認，不是長橋的操作）, stocks[]{code, name, amount, state, state_label（processing/succeeded/failed）}, created_at, updated_at, process_at, exec_at, days_in_process（自創建到執行的天數；已撤銷或失敗的算到結束時，未結束的算到今天）, remark, reason}, total}。失敗或撤銷原因（如有）在 remark/reason 裡",
+      "description": "列出當前賬戶的股票轉入申請（從其他券商轉入本賬戶），按時間倒序。state 過濾 / state_code：0 已提交，1 已撤銷，3 已完成（已入倉），5 處理中，7 部分完成，8 失敗。start/end：yyyy-mm-dd（香港日期）或 RFC3339，按創建時間篩選。返回 {records[]{id, order_id, market, broker, broker_en, code（券商代碼）, account（用戶在對方券商的賬號，僅後 4 位）, state（狀態文案）, state_code, state_label（submitted/cancelled/completed/processing/partially_completed/failed）, can_modify（1：仍可在 App 內撤銷或修改）, app_state, user_notified_broker（用戶已在 App 內點擊「我已通知」轉出券商；是用戶自己的確認，不是長橋的操作）, stocks[]{code, name, amount, state, state_label（processing/succeeded/failed）}, created_at, updated_at, process_at, exec_at, days_in_process（自創建到執行的天數；已撤銷或失敗的算到結束時，未結束的算到今天）, remark, reason}, total}。失敗或撤銷原因（如有）在 remark/reason 裡",
       "properties": {
         "market": "市場過濾：\"HK\"、\"US\"、\"CN\" 或 \"SG\"（默認全部）",
         "state": "狀態碼過濾（默認全部），取值見工具說明",
@@ -1222,7 +1222,7 @@
     },
     "stock_transfers_out": {
       "title": "股票轉出申請",
-      "description": "列出當前賬戶的股票轉出申請（從本賬戶轉到其他券商），按時間倒序。state 過濾 / state_code：0 已提交，1 處理中，2 執行中，3 已完成，4 已撤銷，5 部分完成，6 失敗，7 已拒絕。start/end：yyyy-mm-dd 或 RFC3339，按創建時間篩選。返回 {records[]{id, broker, broker_en, code（券商代碼）, account（用戶在對方券商的賬號，僅後 4 位）, state（狀態文案）, state_code（僅 0 仍可撤銷）, state_label（submitted/processing/executing/completed/cancelled/partially_completed/failed/rejected）, app_state, user_notified_broker（同股票轉入）, stocks[]{code, name, amount, state, state_label（processing/succeeded/failed）}, created_at, updated_at, agree_at, refuse_at, cancel_at, process_at, exec_at, days_in_process（算法同股票轉入）, reason}}。拒絕或撤銷原因（如有）在 reason 裡",
+      "description": "列出當前賬戶的股票轉出申請（從本賬戶轉到其他券商），按時間倒序。state 過濾 / state_code：0 已提交，1 處理中，2 執行中，3 已完成，4 已撤銷，5 部分完成，6 失敗，7 已拒絕。start/end：yyyy-mm-dd（香港日期）或 RFC3339，按創建時間篩選。返回 {records[]{id, broker, broker_en, code（券商代碼）, account（用戶在對方券商的賬號，僅後 4 位）, state（狀態文案）, state_code（僅 0 仍可撤銷）, state_label（submitted/processing/executing/completed/cancelled/partially_completed/failed/rejected）, app_state, user_notified_broker（同股票轉入）, stocks[]{code, name, amount, state, state_label（processing/succeeded/failed）}, created_at, updated_at, agree_at, refuse_at, cancel_at, process_at, exec_at, days_in_process（算法同股票轉入）, reason}}。拒絕或撤銷原因（如有）在 reason 裡",
       "properties": {
         "market": "市場過濾：\"HK\"、\"US\"、\"CN\" 或 \"SG\"（默認全部）",
         "state": "狀態碼過濾（默認全部），取值見工具說明",
@@ -1234,7 +1234,7 @@
     },
     "reward_records": {
       "title": "獎勵發放記錄",
-      "description": "列出當前賬戶的活動獎勵發放記錄（現金、卡券、股票或禮品等獎品），按時間倒序。kind 按類型篩選（cash/gift/coupon/task）。start/end（yyyy-mm-dd 或 RFC3339）按 send_time 篩選，帶上後工具會自動翻頁（最多 300 條）。返回 {rewards[]{reward_type, reward_type_label（cash/gift/coupon/task，與 kind 篩選的取值一致）, record_id, activity_title, title, description, card_type, card_status, prize_type, prize_type_label（physical：寄送的實物，地址與發貨類交付狀態只適用於它）, amount, currency, status, status_label（upcoming/cancelled/exited_activity/unclaimed/issuing/issued/failed/exchanged/expired/refunded）, deliver_status, deliver_status_label（已發放後的交付狀態：not_activated/activated_or_shipping/consumed/address_missing/address_filled/shipping/…）, send_time, start_time, end_time, effective_time, receive_deadline}, total}。一筆獎勵由 activity_title 和 send_time 確定。獎勵發放的卡券用 coupons 查看",
+      "description": "列出當前賬戶的活動獎勵發放記錄（現金、卡券、股票或禮品等獎品），按時間倒序。kind 按類型篩選（cash/gift/coupon/task）。start/end（yyyy-mm-dd 為香港日期，或 RFC3339）按 send_time 篩選，帶上後工具會自動翻頁（最多 300 條），並以 searched_all 代替 total（false 表示更早的記錄未讀取，漏掉的獎勵可能在其中）。尚未發放（無 send_time）的記錄總會包含在內。返回 {rewards[]{reward_type, reward_type_label（cash/gift/coupon/task，與 kind 篩選的取值一致）, record_id, activity_title, title, description, card_type, card_status, prize_type, prize_type_label（physical：寄送的實物，地址與發貨類交付狀態只適用於它）, amount, currency, status, status_label（upcoming/cancelled/exited_activity/unclaimed/issuing/issued/failed/exchanged/expired/refunded）, deliver_status, deliver_status_label（已發放後的交付狀態：not_activated/activated_or_shipping/consumed/address_missing/shipping/…）, send_time, start_time, end_time, effective_time, receive_deadline}, total（該類型全部記錄數，僅不帶 start/end 時返回）}。一筆獎勵由 activity_title 和 send_time 確定。獎勵發放的卡券用 coupons 查看",
       "properties": {
         "page": "頁碼（默認 1；帶 start 或 end 時忽略）",
         "size": "每頁條數（默認 20，最大 50）",

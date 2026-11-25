@@ -77,7 +77,7 @@ const CARD_STATUS: &[(i64, &str)] = &[
 ];
 
 /// Longest `description` kept for a coupon when its terms are not requested.
-const SHORT_DESCRIPTION_CHARS: usize = 120;
+const SHORT_DESCRIPTION_CHARS: usize = 200;
 
 /// Most upstream pages read when filtering rewards by date.
 const MAX_REWARD_PAGES: u32 = 6;
@@ -191,13 +191,18 @@ fn shape_coupon(card: &mut Value, with_terms: bool) {
     for key in CARD_DEPRECATED_KEYS {
         obj.remove(*key);
     }
-    let raw_end = obj
-        .get("end_time")
-        .and_then(Value::as_str)
-        .is_some_and(|t| t.chars().all(|c| c.is_ascii_digit()));
-    if raw_end {
+    // A converted end_time is an RFC3339 string. One left as raw seconds is
+    // either unset (0) or past 2100 (a card that never expires).
+    let raw_end = match obj.get("end_time") {
+        Some(Value::String(t)) if t.chars().all(|c| c.is_ascii_digit()) => t.parse::<i64>().ok(),
+        Some(Value::Number(n)) => n.as_i64(),
+        _ => None,
+    };
+    if let Some(seconds) = raw_end {
         obj.remove("end_time");
-        obj.insert("no_expiry".into(), Value::Bool(true));
+        if seconds > 0 {
+            obj.insert("no_expiry".into(), Value::Bool(true));
+        }
     }
     drop_zero_placeholders(card, CARD_ZERO_UNSET);
     if let Some(obj) = card.as_object_mut()
@@ -304,7 +309,10 @@ fn shape_reward(item: &Value) -> Option<Value> {
     if let Some(name) = code_name(row.get("prize_type"), PRIZE_TYPES) {
         row.insert("prize_type_label".into(), Value::String(name.to_string()));
     }
-    if let Some(name) = code_name(row.get("deliver_status"), DELIVER_STATUS) {
+    // Delivery states follow an issued (12) prize; elsewhere a 0 means nothing.
+    let issued_prize = found.is_some_and(|(kind, _)| kind == "prize")
+        && row.get("status").and_then(Value::as_i64) == Some(12);
+    if issued_prize && let Some(name) = code_name(row.get("deliver_status"), DELIVER_STATUS) {
         row.insert(
             "deliver_status_label".into(),
             Value::String(name.to_string()),
@@ -340,7 +348,7 @@ fn in_range(
     let Some(sent) = row
         .get("send_time")
         .and_then(Value::as_str)
-        .and_then(|t| crate::tools::support::parse::parse_rfc3339(t).ok())
+        .and_then(|t| crate::tools::support::parse::parse_rfc3339_hong_kong(t).ok())
     else {
         return true;
     };
@@ -357,8 +365,16 @@ pub async fn reward_records(
     let client = mctx.create_http_client();
     let channel = mctx.account_channel();
     let reward_type = reward_type_code(p.kind.as_deref())?;
-    let start = p.start.as_deref().map(parse::parse_rfc3339).transpose()?;
-    let end = p.end.as_deref().map(parse::parse_rfc3339_end).transpose()?;
+    let start = p
+        .start
+        .as_deref()
+        .map(parse::parse_rfc3339_hong_kong)
+        .transpose()?;
+    let end = p
+        .end
+        .as_deref()
+        .map(parse::parse_rfc3339_end_hong_kong)
+        .transpose()?;
     let dated = start.is_some() || end.is_some();
     let (first_page, page_size) = if dated {
         (1, "50".to_string())
@@ -368,7 +384,10 @@ pub async fn reward_records(
     };
 
     let mut rewards = Vec::new();
-    let mut total;
+    let mut total = Value::Null;
+    // Dated search only: whether every record that could fall in the range was
+    // read. False when the page cap or a failed page cut the search short.
+    let mut searched_all = true;
     let mut page = first_page;
     loop {
         let current = page.to_string();
@@ -380,7 +399,16 @@ pub async fn reward_records(
         if let Some(t) = reward_type {
             params.push(("reward_type", t));
         }
-        let raw = http_get_value_paced(&client, "/v1/account/rewards", &params).await?;
+        let raw = match http_get_value_paced(&client, "/v1/account/rewards", &params).await {
+            Ok(raw) => raw,
+            // A later page failed (e.g. still rate-limited): keep what was
+            // read and say the search is incomplete.
+            Err(_) if dated && page > first_page => {
+                searched_all = false;
+                break;
+            }
+            Err(err) => return Err(err),
+        };
         total = raw.get("total").cloned().unwrap_or(Value::Null);
         let items = raw
             .get("list")
@@ -401,12 +429,22 @@ pub async fn reward_records(
             rows.into_iter()
                 .filter(|r| in_range(r, start.as_ref(), end.as_ref())),
         );
-        if past_start || fetched < 50 || page >= MAX_REWARD_PAGES {
+        if past_start || fetched < 50 {
+            break;
+        }
+        if page >= MAX_REWARD_PAGES {
+            searched_all = false;
             break;
         }
         page += 1;
     }
-    let mut value = json!({ "rewards": rewards, "total": total });
+    // With a date range, `total` (all records of this type) would contradict
+    // the filtered list: report what matched and whether the search finished.
+    let mut value = if dated {
+        json!({ "rewards": rewards, "searched_all": searched_all })
+    } else {
+        json!({ "rewards": rewards, "total": total })
+    };
     strip_empty_strings(&mut value);
     strip_nulls(&mut value);
     value_result(&value)
@@ -568,6 +606,33 @@ mod tests {
         );
         let row = shape_reward(&json!({"reward_type": 1, "prize": {}})).expect("shapes");
         assert_eq!(row["reward_type_label"], "gift", "code wins");
+    }
+
+    #[test]
+    fn deliver_label_only_for_issued_prizes() {
+        let cash =
+            shape_reward(&json!({"cash": {"status": 12, "deliver_status": 0}})).expect("shapes");
+        assert!(
+            cash.get("deliver_status_label").is_none(),
+            "cash has no delivery"
+        );
+        let pending =
+            shape_reward(&json!({"prize": {"status": 0, "deliver_status": 0}})).expect("shapes");
+        assert!(
+            pending.get("deliver_status_label").is_none(),
+            "not issued yet"
+        );
+    }
+
+    #[test]
+    fn coupon_end_time_zero_is_unset_not_forever() {
+        let mut card = json!({"end_time": "0"});
+        shape_coupon(&mut card, false);
+        assert!(card.get("no_expiry").is_none(), "0 is unset");
+        assert!(card.get("end_time").is_none(), "placeholder removed");
+        let mut forever = json!({"end_time": 8_061_747_303_i64});
+        shape_coupon(&mut forever, false);
+        assert_eq!(forever["no_expiry"], true, "numeric far future is forever");
     }
 
     #[test]
