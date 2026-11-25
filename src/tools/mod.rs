@@ -1017,17 +1017,17 @@ impl McpContext {
     /// `true` and `1` both count; any other value, and an absent header, mean
     /// real money. Keys arrive lower-cased from [`collect_headers`].
     ///
-    /// Trusting a client header is safe in the one direction that matters:
-    /// the flag only ever *narrows* what a token may do, so it cannot route a
-    /// request somewhere unexpected.
+    /// Setting the flag never makes a request riskier than leaving it off,
+    /// so a client header may be trusted to set it.
     ///
     /// It is **not** a safety guard, though. Upstream is supposed to reject a
     /// paper-trading request made with a real-money token, but it does not do
     /// so for OAuth tokens — which is all this server uses — in any region:
-    /// the call succeeds against the real-money account. The one refusal in
-    /// place comes from the SDK: on a `us_` (LBUS) token, whose data center
-    /// has no paper-trading accounts at all, order submission and replacement
-    /// fail locally (longbridge/openapi#637). Reads are never refused.
+    /// the call succeeds against the real-money account. Reads are never
+    /// refused. The SDK will refuse order submission and replacement locally
+    /// on a `us_` (LBUS) token, whose data center has no paper-trading
+    /// accounts at all (longbridge/openapi#637), but the `longbridge` 5.5 this
+    /// server builds with predates that, so today nothing is refused.
     fn papertrading_requested(headers: &[(String, String)]) -> bool {
         headers.iter().any(|(key, value)| {
             let value = value.trim();
