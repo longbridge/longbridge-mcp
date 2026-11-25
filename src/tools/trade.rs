@@ -736,6 +736,40 @@ pub async fn order_detail(
     tool_json(&ap_order_detail_json(&result).map_err(Error::Serialize)?)
 }
 
+/// `tasks/get` for an order task: read the order with the caller's token and
+/// map its status onto the task (see `support::order_task`).
+pub async fn order_task(
+    mctx: &crate::tools::McpContext,
+    order_id: &str,
+) -> Result<rmcp::model::DetailedTask, McpError> {
+    if mctx.dc_region().await == longbridge::DcRegion::Us {
+        return Err(McpError::invalid_params(
+            "order tasks are not available for US accounts yet",
+            None,
+        ));
+    }
+    let (ctx, _) = TradeContext::new(mctx.create_config());
+    let order = ctx
+        .order_detail(GetOrderDetailOptions::new(order_id))
+        .await
+        .map_err(Error::longbridge)?;
+    let detail = ap_order_detail_json(&order).map_err(Error::Serialize)?;
+    Ok(crate::tools::support::order_task::detailed(&order, detail))
+}
+
+/// `tasks/cancel` for an order task: withdraw the order. The client sends it
+/// when the user cancels the task; the next `tasks/get` shows the result.
+pub async fn cancel_order_task(
+    mctx: &crate::tools::McpContext,
+    order_id: &str,
+) -> Result<(), McpError> {
+    let (ctx, _) = TradeContext::new(mctx.create_config());
+    ctx.cancel_order(order_id)
+        .await
+        .map_err(Error::longbridge)?;
+    Ok(())
+}
+
 pub async fn cancel_order(
     mctx: &crate::tools::McpContext,
     confirm: &Confirmer,

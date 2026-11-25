@@ -3272,9 +3272,24 @@ impl Longbridge {
             trade::submit_order(&mctx, &confirm, p)
         })
         .await?;
-        Ok(match confirm.take_input_required() {
-            Some(input_required) => input_required.into(),
-            None => result.into(),
+        if let Some(input_required) = confirm.take_input_required() {
+            return Ok(input_required.into());
+        }
+        // A client that declared the tasks extension gets a task that follows
+        // the order (see `support::order_task`); everyone else the order ID.
+        let tasks = ctx
+            .client_capabilities()
+            .is_some_and(|caps| caps.supports_tasks());
+        let submitted = result
+            .structured_content
+            .as_ref()
+            .filter(|v| v["dry_run"] == false && result.is_error != Some(true))
+            .and_then(|v| v["order_id"].as_str());
+        Ok(match submitted {
+            Some(order_id) if tasks => {
+                rmcp::model::CreateTaskResult::new(support::order_task::created(order_id)).into()
+            }
+            _ => result.into(),
         })
     }
 
@@ -6681,11 +6696,13 @@ impl ServerHandler for Longbridge {
                     .enable_tools()
                     .enable_resources()
                     .enable_skills_with_directory_read()
+                    .enable_tasks()
                     .build()
             } else {
                 rmcp::model::ServerCapabilities::builder()
                     .enable_tools()
                     .enable_resources()
+                    .enable_tasks()
                     .build()
             },
         )
@@ -6853,8 +6870,9 @@ impl ServerHandler for Longbridge {
                     .call(ToolCallContext::new(self, request, context))
                     .await
                     .map(|result| match result {
-                        CallToolResponse::InputRequired(ir) => {
-                            *pending.lock().unwrap_or_else(|e| e.into_inner()) = Some(ir);
+                        response @ (CallToolResponse::InputRequired(_)
+                        | CallToolResponse::Task(_)) => {
+                            *pending.lock().unwrap_or_else(|e| e.into_inner()) = Some(response);
                             CallToolResult::success(vec![])
                         }
                         other => wrap_argument_error(&name, complete_result(other)),
@@ -6883,16 +6901,42 @@ impl ServerHandler for Longbridge {
         crate::metrics::CURRENT_CLIENT
             .scope(client, async {
                 let result = call.await?;
-                if let Some(ir) = input_required
+                if let Some(response) = input_required
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
                     .take()
                 {
-                    return Ok(CallToolResponse::from(ir));
+                    return Ok(response);
                 }
                 Ok(CallToolResponse::from(finish_result(&tool_name, result)))
             })
             .await
+    }
+
+    /// `tasks/get` for an order task created by `submit_order`.
+    async fn get_task(
+        &self,
+        request: rmcp::model::GetTaskParams,
+        context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> Result<rmcp::model::GetTaskResult, rmcp::ErrorData> {
+        let order_id = support::order_task::order_id(&request.task_id)
+            .ok_or_else(|| rmcp::ErrorData::invalid_params("unknown task", None))?;
+        let mctx = extract_context(&context)?;
+        Ok(rmcp::model::GetTaskResult::new(
+            trade::order_task(&mctx, order_id).await?,
+        ))
+    }
+
+    /// `tasks/cancel` for an order task withdraws the order.
+    async fn cancel_task(
+        &self,
+        request: rmcp::model::CancelTaskParams,
+        context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> Result<(), rmcp::ErrorData> {
+        let order_id = support::order_task::order_id(&request.task_id)
+            .ok_or_else(|| rmcp::ErrorData::invalid_params("unknown task", None))?;
+        let mctx = extract_context(&context)?;
+        trade::cancel_order_task(&mctx, order_id).await
     }
 
     async fn list_tools(

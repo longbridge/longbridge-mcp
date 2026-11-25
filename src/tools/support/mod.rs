@@ -8,6 +8,7 @@ pub mod confirm;
 pub mod dry_run;
 pub mod exchange_time;
 pub mod http_client;
+pub mod order_task;
 pub mod parse;
 pub mod response_limit;
 pub mod symbol_alias;
