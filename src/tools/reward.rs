@@ -80,7 +80,7 @@ const CARD_STATUS: &[(i64, &str)] = &[
 const SHORT_DESCRIPTION_CHARS: usize = 120;
 
 /// Most upstream pages read when filtering rewards by date.
-const MAX_REWARD_PAGES: u32 = 10;
+const MAX_REWARD_PAGES: u32 = 6;
 
 /// Prize `prize_type` codes the app distinguishes: only physical goods have
 /// a shipping address and the address/shipping deliver states.

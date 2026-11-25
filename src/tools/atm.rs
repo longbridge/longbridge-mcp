@@ -164,6 +164,9 @@ const TRANSFER_STOCK_NOISE: &[&str] = &[
     "certificate_count",
 ];
 
+/// Per-stock transfer `state`, as the app's record detail reads it.
+const TRANSFER_STOCK_STATE: &[(i64, &str)] = &[(0, "processing"), (1, "succeeded"), (2, "failed")];
+
 /// Transfer timestamps upstream fills with a placeholder when unset (0, which
 /// becomes 1970, or a negative value): anything before this year is dropped.
 const TRANSFER_MIN_YEAR: &str = "2000";
@@ -536,7 +539,7 @@ async fn transfer_records(
 /// Shape one stock-transfer record: drop the proof-document storage keys and
 /// the account holder's name at the other broker (record level only, since
 /// `stocks[].name` is the stock name), then add `state_label`,
-/// `customer_notified_broker` and `days_in_process`.
+/// `user_notified_broker` and `days_in_process`.
 fn shape_transfer(record: &mut Map<String, Value>, kind: &TransferKind) {
     record.remove("attachments");
     record.remove("name");
@@ -558,19 +561,27 @@ fn shape_transfer(record: &mut Map<String, Value>, kind: &TransferKind) {
                 .as_str()
                 .is_some_and(|t| t.get(..4).is_some_and(|year| year < TRANSFER_MIN_YEAR)))
     });
+    // Transfer-out records name the broker's English name `name_en`; use the
+    // transfer-in name so both lists read the same.
+    if !record.contains_key("broker_en")
+        && let Some(name) = record.remove("name_en")
+    {
+        record.insert("broker_en".into(), name);
+    }
     if let Some(stocks) = record.get_mut("stocks").and_then(Value::as_array_mut) {
         for stock in stocks.iter_mut().filter_map(Value::as_object_mut) {
             for key in TRANSFER_STOCK_NOISE {
                 stock.remove(*key);
             }
+            add_label(stock, "state", "state_label", TRANSFER_STOCK_STATE);
         }
     }
     add_label(record, "state_code", "state_label", kind.states);
-    // `noticed`: the customer tapped "I have notified the broker" in the app.
-    // It is the customer's own confirmation, not a Longbridge action.
+    // `noticed`: the user tapped "I have notified the broker" in the app.
+    // It is the user's own confirmation, not a Longbridge action.
     if let Some(state) = record.get("app_state").and_then(Value::as_str) {
         let noticed = state == "noticed";
-        record.insert("customer_notified_broker".into(), Value::Bool(noticed));
+        record.insert("user_notified_broker".into(), Value::Bool(noticed));
     }
     let text = |key: &str| {
         record
@@ -853,7 +864,7 @@ mod tests {
             "id": "7053", "market_symbol": "US", "broker_id": "9", "account": "11222333444555",
             "created_at": "2026-11-25T09:59:06Z", "exec_at": "1970-01-01T00:00:00Z",
             "cancel_at": "1906-06-07T18:35:44Z", "app_state": "default", "state_code": 0,
-            "cash": [], "stocks": [{"code": "AAPL", "name": "苹果", "amount": "100",
+            "cash": [], "stocks": [{"code": "AAPL", "name": "苹果", "amount": "100", "state": 0,
                 "usi_attachments": ["k"], "is_reality": 0, "street_amount": "0"}],
         });
         shape_transfer(record.as_object_mut().expect("object"), &TRANSFER_IN);
@@ -868,7 +879,7 @@ mod tests {
             "open: counted"
         );
         assert_eq!(
-            record["customer_notified_broker"], false,
+            record["user_notified_broker"], false,
             "default: not notified"
         );
         for key in ["cash", "market_symbol", "broker_id"] {
@@ -878,6 +889,18 @@ mod tests {
         assert!(stock.get("usi_attachments").is_none(), "proof keys dropped");
         assert!(stock.get("street_amount").is_none(), "bookkeeping dropped");
         assert_eq!(stock["name"], "苹果", "stock name kept");
+        assert_eq!(
+            stock["state_label"], "processing",
+            "per-stock state labelled"
+        );
+    }
+
+    #[test]
+    fn shape_transfer_out_names_the_broker_like_transfer_in() {
+        let mut record = json!({"name_en": "Futu Securities", "state_code": 0});
+        shape_transfer(record.as_object_mut().expect("object"), &TRANSFER_OUT);
+        assert_eq!(record["broker_en"], "Futu Securities", "renamed");
+        assert!(record.get("name_en").is_none(), "old name gone");
     }
 
     #[test]
@@ -897,7 +920,7 @@ mod tests {
             "stocks": [{"code": "700", "name": "Tencent"}]});
         shape_transfer(done.as_object_mut().expect("object"), &TRANSFER_IN);
         assert_eq!(done["days_in_process"], 3, "executed: until execution");
-        assert_eq!(done["customer_notified_broker"], true, "notified flag");
+        assert_eq!(done["user_notified_broker"], true, "notified flag");
         assert!(done.get("name").is_none(), "holder name dropped");
         assert!(done.get("attachments").is_none(), "proof keys dropped");
         assert_eq!(done["stocks"][0]["name"], "Tencent", "stock name kept");
