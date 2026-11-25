@@ -8,7 +8,7 @@ use rmcp::serde::Deserialize;
 use serde_json::{Map, Value, json};
 
 use crate::serialize::{convert_unix_paths, drop_keys, strip_empty_strings, strip_nulls};
-use crate::tools::support::http_client::{http_get_value, value_result};
+use crate::tools::support::http_client::{http_get_value, value_result_hong_kong};
 use crate::tools::support::parse;
 
 /// Bank-card fields passed through. This is an allowlist: the upstream card
@@ -52,6 +52,104 @@ const AUTH_FIELDS: &[&str] = &[
     "long_term_valid",
     "doc_reviewing",
     "no_prior_deposit_reviewing",
+];
+
+/// Raw card codes dropped once labelled (`verification`, `witness`,
+/// `binding`), plus display-only fields.
+const CARD_RAW_CODES: &[&str] = &[
+    "status",
+    "witness_state",
+    "bind_state",
+    "support_witness",
+    "country_display",
+];
+
+/// Fields kept from an eDDA application (`FindAuthStatus`), after labelling.
+const EDDA_APPLICATION_FIELDS: &[&str] = &[
+    "id",
+    "flow_id",
+    "name",
+    "currency",
+    "authorization",
+    "failure_reason",
+    "created_at",
+    "updated_at",
+];
+
+/// Fields kept from a stock-transfer record, after shaping (allowlist).
+const TRANSFER_FIELDS: &[&str] = &[
+    "id",
+    "order_id",
+    "market",
+    "broker",
+    "broker_en",
+    "code",
+    "account",
+    "state",
+    "state_code",
+    "state_label",
+    "can_modify",
+    "app_state",
+    "user_notified_broker",
+    "stocks",
+    "created_at",
+    "updated_at",
+    "process_at",
+    "exec_at",
+    "agree_at",
+    "refuse_at",
+    "cancel_at",
+    "days_in_process",
+    "remark",
+    "reason",
+];
+
+/// Fields kept for each stock in a transfer record (allowlist).
+const TRANSFER_STOCK_FIELDS: &[&str] = &[
+    "code",
+    "name",
+    "name_en",
+    "market",
+    "counter_id",
+    "amount",
+    "currency",
+    "state",
+    "state_label",
+];
+
+/// Fields kept from a deposit record, after shaping (allowlist).
+const DEPOSIT_FIELDS: &[&str] = &[
+    "id",
+    "created_at",
+    "updated_at",
+    "currency",
+    "amount",
+    "receivable_amount",
+    "state",
+    "state_code",
+    "state_label",
+    "sub_state_code",
+    "bank_operation_type_name",
+    "reference_no",
+    "can_cancel",
+    "voucher_count",
+];
+
+/// Fields kept from a withdrawal record, after shaping (allowlist).
+const WITHDRAWAL_FIELDS: &[&str] = &[
+    "id",
+    "order_id",
+    "created_at",
+    "currency",
+    "amount",
+    "fee",
+    "settlement_amount",
+    "state",
+    "state_label",
+    "state_description",
+    "bank_account",
+    "display_bank_account",
+    "user_bank_swift_code",
 ];
 
 /// Auth fields upstream fills with `"0"` / `0` when unset.
@@ -137,6 +235,10 @@ struct TransferKind {
     /// Completed or partially completed: finished, so the count stops at the
     /// execution date, or at the last update when that date is unset.
     completed: &'static [i64],
+    /// Whether `can_modify` means "can still be cancelled or changed". On
+    /// transfer-out records it is 0 even for a cancellable submitted one, so
+    /// it is dropped there and `state_code` 0 decides instead.
+    keeps_can_modify: bool,
 }
 
 const TRANSFER_IN: TransferKind = TransferKind {
@@ -144,12 +246,14 @@ const TRANSFER_IN: TransferKind = TransferKind {
     states: TRANSFER_IN_STATE,
     terminal: &[1, 8],
     completed: &[3, 7],
+    keeps_can_modify: true,
 };
 const TRANSFER_OUT: TransferKind = TransferKind {
     path: "/v1/account/stock-transfers/out",
     states: TRANSFER_OUT_STATE,
     terminal: &[4, 6, 7],
     completed: &[3, 5],
+    keeps_can_modify: false,
 };
 
 /// Stock-transfer record fields with no use in a support answer: internal
@@ -314,6 +418,11 @@ fn shape_card(card: &mut Value) {
     }
     add_label(obj, "witness_state", "witness", WITNESS_STATE);
     add_label(obj, "bind_state", "binding", BIND_STATE);
+    // The labels carry these codes; the raw numbers are ambiguous next to an
+    // auth entry's own `status` (1 = under review here, authorized there).
+    for key in CARD_RAW_CODES {
+        obj.remove(*key);
+    }
     if let Some(auths) = obj.get_mut("auth_list").and_then(Value::as_array_mut) {
         for auth in auths.iter_mut().filter_map(Value::as_object_mut) {
             retain_fields(auth, AUTH_FIELDS);
@@ -329,6 +438,7 @@ fn shape_card(card: &mut Value) {
                 *auth = converted;
             }
             add_label(auth, "status", "authorization", AUTH_STATUS);
+            auth.remove("status");
             if let Some(message) = auth.remove("message") {
                 auth.insert("failure_reason".into(), message);
             }
@@ -363,7 +473,7 @@ pub async fn bank_cards(mctx: &crate::tools::McpContext) -> Result<CallToolResul
     let mut value = json!({ "cards": fetch_cards(mctx).await? });
     strip_empty_strings(&mut value);
     strip_nulls(&mut value);
-    value_result(&value)
+    value_result_hong_kong(value)
 }
 
 /// One eDDA authorization row: the card it belongs to plus the auth entry.
@@ -378,7 +488,6 @@ fn edda_row(card: &Value, auth: &Value) -> Value {
         "flow": auth.get("flow_id"),
         "name": auth.get("name"),
         "currency": auth.get("currency"),
-        "status": auth.get("status"),
         "authorization": auth.get("authorization"),
         "failure_reason": auth.get("failure_reason"),
         "max_amount": auth.get("max_amount"),
@@ -416,7 +525,7 @@ pub async fn edda_authorizations(
     let mut value = json!({ "authorizations": rows });
     strip_empty_strings(&mut value);
     strip_nulls(&mut value);
-    value_result(&value)
+    value_result_hong_kong(value)
 }
 
 /// Current eDDA authorization status of one bank card in one currency.
@@ -449,7 +558,7 @@ pub async fn edda_status(
     let mut value = shape_edda_status(value.take());
     strip_empty_strings(&mut value);
     strip_nulls(&mut value);
-    value_result(&value)
+    value_result_hong_kong(value)
 }
 
 /// Normalize a `FindAuthStatus` reply to `{applications[]}`. The RPC now
@@ -470,6 +579,7 @@ fn shape_edda_status(value: Value) -> Value {
         if let Some(message) = app.remove("message") {
             app.insert("failure_reason".into(), message);
         }
+        retain_fields(app, EDDA_APPLICATION_FIELDS);
     }
     json!({ "applications": applications })
 }
@@ -555,7 +665,7 @@ async fn transfer_records(
     }
     strip_empty_strings(&mut value);
     strip_nulls(&mut value);
-    value_result(&value)
+    value_result_hong_kong(value)
 }
 
 /// Shape one stock-transfer record: drop the proof-document storage keys and
@@ -622,10 +732,25 @@ fn shape_transfer(record: &mut Map<String, Value>, kind: &TransferKind) {
         }
     });
     if finished && until.is_none() {
+        finish_transfer(record, kind);
         return;
     }
     if let Some(days) = text("created_at").and_then(|c| days_between(&c, until.as_deref())) {
         record.insert("days_in_process".into(), Value::from(days));
+    }
+    finish_transfer(record, kind);
+}
+
+/// Keep only the allowlisted record and per-stock fields.
+fn finish_transfer(record: &mut Map<String, Value>, kind: &TransferKind) {
+    if !kind.keeps_can_modify {
+        record.remove("can_modify");
+    }
+    retain_fields(record, TRANSFER_FIELDS);
+    if let Some(stocks) = record.get_mut("stocks").and_then(Value::as_array_mut) {
+        for stock in stocks.iter_mut().filter_map(Value::as_object_mut) {
+            retain_fields(stock, TRANSFER_STOCK_FIELDS);
+        }
     }
 }
 
@@ -654,6 +779,7 @@ fn shape_money_records(
     state_key: &str,
     states: &[(i64, &'static str)],
     page_size: usize,
+    fields: &[&str],
 ) {
     // A full page means there may be more; this is the reliable signal, since
     // the deposit list's `total` follows the page size, not the record count.
@@ -687,6 +813,7 @@ fn shape_money_records(
             let count = vouchers.as_array().map_or(0, Vec::len);
             item.insert("voucher_count".into(), Value::from(count));
         }
+        retain_fields(item, fields);
     }
 }
 
@@ -713,10 +840,17 @@ pub async fn withdrawals(
     }
     let mut value = http_get_value(&client, "/v1/account/withdrawals", &params).await?;
     let page_size = p.size.unwrap_or(20).clamp(1, 50) as usize;
-    shape_money_records(&mut value, "list", "state", WITHDRAWAL_STATE, page_size);
+    shape_money_records(
+        &mut value,
+        "list",
+        "state",
+        WITHDRAWAL_STATE,
+        page_size,
+        WITHDRAWAL_FIELDS,
+    );
     strip_empty_strings(&mut value);
     strip_nulls(&mut value);
-    value_result(&value)
+    value_result_hong_kong(value)
 }
 
 /// List deposit history for the current account.
@@ -748,7 +882,14 @@ pub async fn deposits(
     }
     let mut value = http_get_value(&client, "/v1/account/deposits", &params).await?;
     let page_size = p.size.unwrap_or(20).clamp(1, 50) as usize;
-    shape_money_records(&mut value, "items", "state_code", DEPOSIT_STATE, page_size);
+    shape_money_records(
+        &mut value,
+        "items",
+        "state_code",
+        DEPOSIT_STATE,
+        page_size,
+        DEPOSIT_FIELDS,
+    );
     // Upstream `total` is capped at the page size, so it reads as a wrong
     // record count; `has_more` replaces it.
     if let Some(obj) = value.as_object_mut() {
@@ -756,7 +897,7 @@ pub async fn deposits(
     }
     strip_empty_strings(&mut value);
     strip_nulls(&mut value);
-    value_result(&value)
+    value_result_hong_kong(value)
 }
 
 #[cfg(test)]
@@ -859,17 +1000,42 @@ mod tests {
     }
 
     #[test]
-    fn shape_money_records_masks_and_counts() {
-        let mut value = json!({"list": [{"id": 1, "state": 4, "bank_account": "012345678901", "fee": "5",
-            "vouchers": [{"key": "k", "img_url": "https://x/y.png"}]}]});
-        shape_money_records(&mut value, "list", "state", WITHDRAWAL_STATE, 20);
+    fn shape_money_records_masks_and_allowlists_withdrawals() {
+        let mut value = json!({"list": [{"id": 1, "state": 4, "bank_account": "012345678901",
+            "fee": "5", "raw_state": 4, "payee_name": "CHAN TAI MAN"}]});
+        shape_money_records(
+            &mut value,
+            "list",
+            "state",
+            WITHDRAWAL_STATE,
+            20,
+            WITHDRAWAL_FIELDS,
+        );
         let item = &value["list"][0];
         assert_eq!(item["bank_account"], "****8901", "account masked");
+        assert_eq!(item["fee"], "5", "allowlisted field kept");
+        assert_eq!(item["state_label"], "remitted", "state labelled");
+        assert!(item.get("payee_name").is_none(), "unknown field dropped");
+        assert!(item.get("raw_state").is_none(), "raw_state dropped");
+        assert_eq!(value["has_more"], false, "short page: no more");
+    }
+
+    #[test]
+    fn shape_money_records_summarizes_deposit_vouchers() {
+        let mut value = json!({"items": [{"id": 1, "state_code": 1,
+            "vouchers": [{"key": "k", "img_url": "https://x/y.png"}]}]});
+        shape_money_records(
+            &mut value,
+            "items",
+            "state_code",
+            DEPOSIT_STATE,
+            20,
+            DEPOSIT_FIELDS,
+        );
+        let item = &value["items"][0];
         assert_eq!(item["voucher_count"], 1, "vouchers summarized");
         assert!(item.get("vouchers").is_none(), "voucher urls dropped");
-        assert_eq!(item["fee"], "5", "other fields untouched");
-        assert_eq!(item["state_label"], "remitted", "state labelled");
-        assert_eq!(value["has_more"], false, "short page: no more");
+        assert_eq!(item["state_label"], "credited", "state labelled");
     }
 
     #[test]
@@ -953,7 +1119,14 @@ mod tests {
     fn shape_money_records_masks_long_display_account() {
         let mut value = json!({"list": [{"display_bank_account": "012345678901"},
             {"display_bank_account": "尾号 0578"}]});
-        shape_money_records(&mut value, "list", "state", WITHDRAWAL_STATE, 20);
+        shape_money_records(
+            &mut value,
+            "list",
+            "state",
+            WITHDRAWAL_STATE,
+            20,
+            WITHDRAWAL_FIELDS,
+        );
         assert_eq!(
             value["list"][0]["display_bank_account"], "****8901",
             "long run masked"

@@ -8,7 +8,9 @@ use rmcp::serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::serialize::{convert_unix_paths, drop_keys, strip_empty_strings, strip_nulls};
-use crate::tools::support::http_client::{http_get_value, http_get_value_paced, value_result};
+use crate::tools::support::http_client::{
+    http_get_value, http_get_value_paced, value_result_hong_kong,
+};
 
 /// Fields kept from each reward sub-object (`card` / `cash` / `prize`). This is
 /// an allowlist: prize rewards also carry redemption secrets (`coupon_secret`)
@@ -152,8 +154,18 @@ const CARD_ZERO_UNSET: &[&str] = &[
     "settled_store_id",
 ];
 
-/// Order fields that only colour the app's order list.
-const ORDER_UI_KEYS: &[&str] = &["state_color"];
+/// Fields kept from a coupon's related order (allowlist).
+const ORDER_FIELDS: &[&str] = &[
+    "order_id",
+    "state",
+    "state_val",
+    "executed_price",
+    "executed_quantity",
+    "currency",
+    "settlement_currency",
+    "rebate",
+    "rebate_dt",
+];
 
 /// Remove `"0"` / `0` placeholders under `keys` at any depth.
 fn drop_zero_placeholders(value: &mut Value, keys: &[&str]) {
@@ -198,10 +210,23 @@ fn shape_coupon(card: &mut Value, with_terms: bool) {
         Some(Value::Number(n)) => n.as_i64(),
         _ => None,
     };
-    if let Some(seconds) = raw_end {
+    if let Some(raw) = raw_end {
         obj.remove("end_time");
-        if seconds > 0 {
-            obj.insert("no_expiry".into(), Value::Bool(true));
+        match raw {
+            // Milliseconds: convert when it lands on a real date.
+            ms if ms > 1_000_000_000_000 => {
+                let seconds = ms / 1000;
+                if (946_684_800..4_102_444_800).contains(&seconds) {
+                    let end = crate::serialize::timestamp_to_rfc3339(seconds);
+                    obj.insert("end_time".into(), Value::String(end));
+                }
+            }
+            // Seconds past 2100: a card that never expires.
+            seconds if seconds > 4_102_444_800 => {
+                obj.insert("no_expiry".into(), Value::Bool(true));
+            }
+            // 0 or an odd value: unset.
+            _ => {}
         }
     }
     drop_zero_placeholders(card, CARD_ZERO_UNSET);
@@ -320,6 +345,7 @@ fn shape_reward(item: &Value) -> Option<Value> {
     }
     let mut row = Value::Object(row);
     convert_unix_paths(&mut row, REWARD_TIME_KEYS);
+    drop_zero_placeholders(&mut row, REWARD_TIME_KEYS);
     Some(row)
 }
 
@@ -447,7 +473,7 @@ pub async fn reward_records(
     };
     strip_empty_strings(&mut value);
     strip_nulls(&mut value);
-    value_result(&value)
+    value_result_hong_kong(value)
 }
 
 /// Map the `status` parameter to the upstream `card_status` filter.
@@ -487,8 +513,14 @@ pub async fn coupons(
     }
     let mut raw = http_get_value(&client, "/v1/account/cards", &params).await?;
     // The app splits the list into pinned top / main / bottom sections; a
-    // support answer needs them as one list.
-    let cards: Vec<Value> = ["top_list", "list", "bottom_list"]
+    // support answer needs them as one list. The pinned sections come back
+    // on every page, so they are merged on the first page only.
+    let sections: &[&str] = if p.page.unwrap_or(1) <= 1 {
+        &["top_list", "list", "bottom_list"]
+    } else {
+        &["list"]
+    };
+    let cards: Vec<Value> = sections
         .iter()
         .filter_map(|key| raw.get_mut(*key).map(Value::take))
         .filter_map(|section| match section {
@@ -512,7 +544,7 @@ pub async fn coupons(
     }
     strip_empty_strings(&mut value);
     strip_nulls(&mut value);
-    value_result(&value)
+    value_result_hong_kong(value)
 }
 
 /// Whether `id` has the shape of a coupon card id (32 hex characters).
@@ -548,15 +580,24 @@ pub async fn coupon_orders(
     // tightly, and two concurrent calls draw 429s.
     let locked = http_get_value_paced(&client, path, &locked_params).await?;
     let settled = http_get_value_paced(&client, path, &settled_params).await?;
-    let orders = |v: Value| v.get("orders").cloned().unwrap_or_else(|| json!([]));
+    let orders = |v: Value| -> Vec<Value> {
+        let mut orders = match v.get("orders") {
+            Some(Value::Array(orders)) => orders.clone(),
+            _ => Vec::new(),
+        };
+        for order in orders.iter_mut().filter_map(Value::as_object_mut) {
+            order.retain(|k, _| ORDER_FIELDS.contains(&k.as_str()));
+        }
+        orders
+    };
     let mut value = json!({
         "card_id": card_id,
         "locked": orders(locked),
         "settled": orders(settled),
     });
-    drop_keys(&mut value, ORDER_UI_KEYS);
     strip_empty_strings(&mut value);
-    value_result(&value)
+    strip_nulls(&mut value);
+    value_result_hong_kong(value)
 }
 
 #[cfg(test)]
@@ -566,7 +607,7 @@ mod tests {
     #[test]
     fn shape_reward_drops_secrets() {
         let item = json!({
-            "reward_type": 3,
+            "reward_type": 1,
             "prize": {
                 "activity_title": "Open account",
                 "title": "Coffee",
@@ -582,7 +623,7 @@ mod tests {
             row.get("kind").is_none(),
             "no output kind: it clashed with the filter"
         );
-        assert_eq!(row["reward_type"], 3, "reward_type carried over");
+        assert_eq!(row["reward_type"], 1, "reward_type carried over");
         assert!(
             row.get("coupon_secret").is_none(),
             "secrets must be dropped"
@@ -625,6 +666,30 @@ mod tests {
     }
 
     #[test]
+    fn coupon_end_time_in_milliseconds_is_a_date() {
+        let mut card = json!({"end_time": 1_798_732_800_000_i64});
+        shape_coupon(&mut card, false);
+        assert!(
+            card.get("no_expiry").is_none(),
+            "milliseconds are not forever"
+        );
+        assert!(
+            card["end_time"].is_string(),
+            "milliseconds converted to a date"
+        );
+    }
+
+    #[test]
+    fn reward_send_time_zero_is_dropped() {
+        let row =
+            shape_reward(&json!({"reward_type": 0, "cash": {"send_time": "0"}})).expect("shapes");
+        assert!(
+            row.get("send_time").is_none(),
+            "placeholder send_time dropped"
+        );
+    }
+
+    #[test]
     fn coupon_end_time_zero_is_unset_not_forever() {
         let mut card = json!({"end_time": "0"});
         shape_coupon(&mut card, false);
@@ -640,7 +705,7 @@ mod tests {
         let item = json!({"reward_type": 0, "cash": {"status": 12, "amount": 38}});
         let row = shape_reward(&item).expect("a cash item must shape");
         assert_eq!(row["status_label"], "issued", "12 is issued");
-        let item = json!({"reward_type": 3, "prize": {"status": 12, "deliver_status": 8, "prize_type": 0}});
+        let item = json!({"reward_type": 1, "prize": {"status": 12, "deliver_status": 8, "prize_type": 0}});
         let row = shape_reward(&item).expect("a prize item must shape");
         assert_eq!(
             row["deliver_status_label"], "address_missing",
