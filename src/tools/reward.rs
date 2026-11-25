@@ -70,7 +70,8 @@ const CARD_STATUS: &[(i64, &str)] = &[
     (0, "unused"),
     (1, "used"),
     (2, "expired"),
-    (3, "locked"),
+    // LOCKED in the app's code, shown as 兑换中 (being redeemed).
+    (3, "redeeming"),
     (4, "in_use"),
     (5, "processing"),
 ];
@@ -80,6 +81,10 @@ const SHORT_DESCRIPTION_CHARS: usize = 120;
 
 /// Most upstream pages read when filtering rewards by date.
 const MAX_REWARD_PAGES: u32 = 10;
+
+/// Prize `prize_type` codes the app distinguishes: only physical goods have
+/// a shipping address and the address/shipping deliver states.
+const PRIZE_TYPES: &[(i64, &str)] = &[(0, "physical")];
 
 /// Commission-card `bz_types`: the instruments the card applies to.
 const TARGET_TYPES: &[(i64, &str)] = &[
@@ -295,6 +300,9 @@ fn shape_reward(item: &Value) -> Option<Value> {
     }
     if let Some(name) = code_name(row.get("status"), REWARD_STATUS) {
         row.insert("status_label".into(), Value::String(name.to_string()));
+    }
+    if let Some(name) = code_name(row.get("prize_type"), PRIZE_TYPES) {
+        row.insert("prize_type_label".into(), Value::String(name.to_string()));
     }
     if let Some(name) = code_name(row.get("deliver_status"), DELIVER_STATUS) {
         row.insert(
@@ -567,12 +575,13 @@ mod tests {
         let item = json!({"reward_type": 0, "cash": {"status": 12, "amount": 38}});
         let row = shape_reward(&item).expect("a cash item must shape");
         assert_eq!(row["status_label"], "issued", "12 is issued");
-        let item = json!({"reward_type": 3, "prize": {"status": 12, "deliver_status": 8}});
+        let item = json!({"reward_type": 3, "prize": {"status": 12, "deliver_status": 8, "prize_type": 0}});
         let row = shape_reward(&item).expect("a prize item must shape");
         assert_eq!(
             row["deliver_status_label"], "address_missing",
             "deliver label"
         );
+        assert_eq!(row["prize_type_label"], "physical", "physical prize");
         let unknown = shape_reward(&json!({"cash": {"status": 99}})).expect("shapes");
         assert!(
             unknown.get("status_label").is_none(),
@@ -635,9 +644,12 @@ mod tests {
     #[test]
     fn shape_coupon_labels_and_trims_terms() {
         let long = "x".repeat(300);
-        let mut card = json!({"card_status": 4, "description": long, "detail": "terms"});
+        let mut card = json!({"card_status": 3, "description": long, "detail": "terms"});
         shape_coupon(&mut card, false);
-        assert_eq!(card["card_status_label"], "in_use", "status labelled");
+        assert_eq!(
+            card["card_status_label"], "redeeming",
+            "3 reads as redeeming"
+        );
         assert!(card.get("detail").is_none(), "detail dropped by default");
         assert_eq!(
             card["description"].as_str().map(|d| d.chars().count()),

@@ -1172,11 +1172,11 @@
     },
     "bank_cards": {
       "title": "绑定银行卡",
-      "description": "列出当前账户绑定的银行卡及审核状态，返回 cards[]{id, bank, bank_en, bank_code, account（仅后 4 位）, account_type, region, region_name, country, verification（unverified/under_review/verified：银行卡出金认证）, witness（not_required/pending/witnessed：是否已有该卡入金见证）, binding（binding/bound/failed）, review_days（卡片添加至今的天数，仅 under_review 时返回；约 14 天以上表示审核超时）, bind_tip（展示给用户的审核提示）, remark, created_at, auth_list[]{flow_id（hk_edda/hk_sdda：eDDA，hk_bank_sec：银证转账，hk_fps：FPS）, name, currency, authorization（unauthorized/authorized/authorizing/failed）, failure_reason（失败原因）, max_amount, max_amount_unlimited, daily_max_count, daily_max_count_unlimited, expiry_date, long_term_valid}}。under_review 表示绑卡后正在人工审核；只查 eDDA 改用 edda_authorizations（两者调用同一上游接口，同一轮不要都调）"
+      "description": "列出当前账户绑定的银行卡及审核状态，返回 cards[]{id, bank, bank_en, bank_code, account（仅后 4 位）, account_type, region, region_name, country, verification（银行卡出金认证：unverified = 尚未认证，含「未认证」与「已审核-待入金」，用这张卡入金任意金额，或完成 eDDA / 银证转账授权即可认证；under_review = 绑卡后人工审核中，期间不能使用；verified = 已认证）, witness（not_required/pending/witnessed：是否已有该卡入金见证）, binding（binding/bound/failed）, review_days（卡片添加至今的天数，仅 under_review 时返回；约 14 天以上表示审核超时）, bind_tip（展示给用户的审核提示）, remark, created_at, auth_list[]{flow_id（hk_edda/hk_sdda：eDDA，hk_bank_sec：银证转账，hk_fps：FPS）, name, currency, authorization（unauthorized/authorized/authorizing/failed）, failure_reason（失败原因）, max_amount, max_amount_unlimited, daily_max_count, daily_max_count_unlimited, expiry_date, long_term_valid}}。under_review 表示绑卡后正在人工审核；只查 eDDA 改用 edda_authorizations（两者调用同一上游接口，同一轮不要都调）"
     },
     "withdrawals": {
       "title": "提款记录",
-      "description": "获取当前账户提款历史，按时间倒序。返回 {list[]{id, order_id, created_at, currency, amount（申请金额）, fee（手续费，旧记录为空）, settlement_amount（实际出账金额）, state, state_label（submitted/processing/rejected/cancelled/remitted/failed）, raw_state, state_description（状态文案）, bank_account（仅后 4 位）, display_bank_account, user_bank_swift_code}, total, has_more（返回了满页，可取下一页）}。start/end：yyyy-mm-dd 或 RFC3339，按申请时间筛选。不含预计处理时间和后台备注",
+      "description": "获取当前账户提款历史，按时间倒序。返回 {list[]{id, order_id, created_at, currency, amount（申请金额）, fee（手续费，旧记录为空）, settlement_amount（实际出账金额）, state, state_label（submitted/processing/rejected/cancelled/remitted/failed/refunded/approved_awaiting_payout/large_amount_review/awaiting_confirmation/…）, raw_state, state_description（App 展示的状态文案，有值时优先使用）, bank_account（仅后 4 位）, display_bank_account, user_bank_swift_code}, total, has_more（返回了满页，可取下一页）}。start/end：yyyy-mm-dd 或 RFC3339，按申请时间筛选。不含预计处理时间和后台备注",
       "properties": {
         "page": "页码（默认 1）",
         "size": "每页条数（默认 20）",
@@ -1210,7 +1210,7 @@
     },
     "stock_transfers_in": {
       "title": "股票转入申请",
-      "description": "列出当前账户的股票转入申请（从其他券商转入本账户），按时间倒序。state 过滤 / state_code：0 已提交，1 已撤销，3 已完成（已入仓），5 处理中，7 部分完成，8 失败。start/end：yyyy-mm-dd 或 RFC3339，按创建时间筛选。返回 {records[]{id, order_id, market, broker, broker_en, account（在对方券商的账号）, state（状态文案）, state_code, state_label（submitted/cancelled/completed/processing/partially_completed/failed）, app_state, broker_notified（是否已通知对方券商）, stocks[]{code, name, amount, state}, created_at, updated_at, process_at, exec_at, days_in_process（自创建到执行的天数；已撤销或失败的算到结束时，未结束的算到今天）, remark, reason}, total}。失败或撤销原因在 remark/reason 里，回复时原样转述",
+      "description": "列出当前账户的股票转入申请（从其他券商转入本账户），按时间倒序。state 过滤 / state_code：0 已提交，1 已撤销，3 已完成（已入仓），5 处理中，7 部分完成，8 失败。start/end：yyyy-mm-dd 或 RFC3339，按创建时间筛选。返回 {records[]{id, order_id, market, broker, broker_en, account（在对方券商的账号）, state（状态文案）, state_code, state_label（submitted/cancelled/completed/processing/partially_completed/failed）, app_state, customer_notified_broker（客户已在 App 内点击「我已通知」转出券商；是客户自己的确认，不是长桥的操作）, stocks[]{code, name, amount, state}, created_at, updated_at, process_at, exec_at, days_in_process（自创建到执行的天数；已撤销或失败的算到结束时，未结束的算到今天）, remark, reason}, total}。失败或撤销原因在 remark/reason 里，回复时原样转述",
       "properties": {
         "market": "市场过滤：\"HK\"、\"US\"、\"CN\" 或 \"SG\"（默认全部）",
         "state": "状态码过滤（默认全部），取值见工具说明",
@@ -1222,7 +1222,7 @@
     },
     "stock_transfers_out": {
       "title": "股票转出申请",
-      "description": "列出当前账户的股票转出申请（从本账户转到其他券商），按时间倒序。state 过滤 / state_code：0 已提交，1 处理中，2 执行中，3 已完成，4 已撤销，5 部分完成，6 部分失败，7 已拒绝。start/end：yyyy-mm-dd 或 RFC3339，按创建时间筛选。返回 {records[]{id, broker, account（在对方券商的账号）, state（状态文案）, state_code, state_label（submitted/processing/executing/completed/cancelled/partially_completed/partially_failed/rejected）, app_state, broker_notified, stocks[]{code, name, amount}, created_at, updated_at, agree_at, refuse_at, cancel_at, process_at, exec_at, days_in_process（算法同股票转入）, reason}}。拒绝或撤销原因在 reason 里，回复时原样转述",
+      "description": "列出当前账户的股票转出申请（从本账户转到其他券商），按时间倒序。state 过滤 / state_code：0 已提交，1 处理中，2 执行中，3 已完成，4 已撤销，5 部分完成，6 失败，7 已拒绝。start/end：yyyy-mm-dd 或 RFC3339，按创建时间筛选。返回 {records[]{id, broker, account（在对方券商的账号）, state（状态文案）, state_code, state_label（submitted/processing/executing/completed/cancelled/partially_completed/failed/rejected）, app_state, customer_notified_broker（同股票转入）, stocks[]{code, name, amount}, created_at, updated_at, agree_at, refuse_at, cancel_at, process_at, exec_at, days_in_process（算法同股票转入）, reason}}。拒绝或撤销原因在 reason 里，回复时原样转述",
       "properties": {
         "market": "市场过滤：\"HK\"、\"US\"、\"CN\" 或 \"SG\"（默认全部）",
         "state": "状态码过滤（默认全部），取值见工具说明",
@@ -1234,7 +1234,7 @@
     },
     "reward_records": {
       "title": "奖励发放记录",
-      "description": "列出当前账户的活动奖励发放记录（现金、卡券、股票或礼品等奖品），按时间倒序。kind 按类型筛选（cash/gift/coupon/task）。start/end（yyyy-mm-dd 或 RFC3339）按 send_time 筛选，带上后工具会自动翻页（最多 500 条），客户给出日期时前后各放宽几天。返回 {rewards[]{reward_type, reward_type_label（cash/gift/coupon/task，与 kind 筛选的取值一致）, record_id, activity_title, title, description, card_type, card_status, prize_type, amount, currency, status, status_label（upcoming/cancelled/exited_activity/unclaimed/issuing/issued/failed/exchanged/expired/refunded）, deliver_status, deliver_status_label（已发放后的交付状态：not_activated/activated_or_shipping/consumed/address_missing/address_filled/shipping/…）, send_time, start_time, end_time, effective_time, receive_deadline}, total}。用于「奖励没到账」类问题：按 activity_title 对活动、按 send_time 对日期。奖励发放的卡券用 coupons 查看",
+      "description": "列出当前账户的活动奖励发放记录（现金、卡券、股票或礼品等奖品），按时间倒序。kind 按类型筛选（cash/gift/coupon/task）。start/end（yyyy-mm-dd 或 RFC3339）按 send_time 筛选，带上后工具会自动翻页（最多 500 条），客户给出日期时前后各放宽几天。返回 {rewards[]{reward_type, reward_type_label（cash/gift/coupon/task，与 kind 筛选的取值一致）, record_id, activity_title, title, description, card_type, card_status, prize_type, prize_type_label（physical：寄送到地址的实物，地址与发货类交付状态只适用于它）, amount, currency, status, status_label（upcoming/cancelled/exited_activity/unclaimed/issuing/issued/failed/exchanged/expired/refunded）, deliver_status, deliver_status_label（已发放后的交付状态：not_activated/activated_or_shipping/consumed/address_missing/address_filled/shipping/…）, send_time, start_time, end_time, effective_time, receive_deadline}, total}。用于「奖励没到账」类问题：按 activity_title 对活动、按 send_time 对日期。奖励发放的卡券用 coupons 查看",
       "properties": {
         "page": "页码（默认 1；带 start 或 end 时忽略）",
         "size": "每页条数（默认 20，最大 50）",
@@ -1245,7 +1245,7 @@
     },
     "coupons": {
       "title": "我的卡券",
-      "description": "列出当前账户的卡券（免佣卡、平台费抵扣卡、股票卡、行情/基本面卡、现金卡、打新卡等）。status：\"valid\"（默认，未过期：未使用、使用中或已使用）或 \"expired\"。默认 description 会截短、不返回 detail，with_terms 为 true 时返回完整使用须知；客户问卡券怎么用时再带上。返回 {cards[]{card_id, card_type, title, title_sec, description, detail, card_status, card_status_label（unused/used/expired/locked/in_use/processing）, start_time, end_time（有效期；永久有效的卡无此字段，返回 no_expiry: true）, activate_time, amount, currency, available_trade_session, trade_sessions（可用时段）, commission{markets, targets（适用标的：stocks/options/warrants/ETF/LOF）, rebate_rate, bz_types, commission_balance, commission_expired_time}, quote{markets, quote_market, current_end_time}, stock{…}, platform_fee_deduct{…}, …}, total, expired_count}。卡券用在了哪些订单：coupon_orders",
+      "description": "列出当前账户的卡券（免佣卡、平台费抵扣卡、股票卡、行情/基本面卡、现金卡、打新卡等）。status：\"valid\"（默认，未过期：未使用、使用中或已使用）或 \"expired\"。默认 description 会截短、不返回 detail，with_terms 为 true 时返回完整使用须知；客户问卡券怎么用时再带上。返回 {cards[]{card_id, card_type, title, title_sec, description, detail, card_status, card_status_label（unused/used/expired/redeeming/in_use/processing）, start_time, end_time（有效期；永久有效的卡无此字段，返回 no_expiry: true）, activate_time, amount, currency, available_trade_session, trade_sessions（可用时段）, commission{markets, targets（适用标的：stocks/options/warrants/ETF/LOF）, rebate_rate, bz_types, commission_balance, commission_expired_time}, quote{markets, quote_market, current_end_time}, stock{…}, platform_fee_deduct{…}, …}, total, expired_count}。卡券用在了哪些订单：coupon_orders",
       "properties": {
         "status": "\"valid\"（未过期，默认）或 \"expired\"",
         "card_type": "卡券类型过滤，如 \"commission\"、\"platform_fee_deduct\"、\"stock\"、\"quote\"、\"cash\"（默认全部）",

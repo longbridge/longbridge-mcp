@@ -96,7 +96,9 @@ const TRANSFER_OUT_STATE: &[(i64, &str)] = &[
     (3, "completed"),
     (4, "cancelled"),
     (5, "partially_completed"),
-    (6, "partially_failed"),
+    // The app shows 6 as 失败 (failed); the proto comment says partial
+    // failure. Follow what the customer sees.
+    (6, "failed"),
     (7, "rejected"),
 ];
 const DEPOSIT_STATE: &[(i64, &str)] = &[
@@ -107,6 +109,7 @@ const DEPOSIT_STATE: &[(i64, &str)] = &[
     (4, "invalidated"),
     (5, "rejected"),
 ];
+/// Withdrawal `state` codes, as the app's withdrawal records read them.
 const WITHDRAWAL_STATE: &[(i64, &str)] = &[
     (0, "submitted"),
     (1, "processing"),
@@ -114,6 +117,14 @@ const WITHDRAWAL_STATE: &[(i64, &str)] = &[
     (3, "cancelled"),
     (4, "remitted"),
     (5, "failed"),
+    (6, "refunded"),
+    (7, "approved_awaiting_payout"),
+    (8, "large_amount_review"),
+    (9, "change_pending_approval"),
+    (10, "deletion_pending_approval"),
+    (11, "deleted"),
+    (12, "rejection_pending_approval"),
+    (15, "awaiting_confirmation"),
 ];
 
 /// How a stock-transfer list labels its codes and which codes are final.
@@ -501,12 +512,19 @@ async fn transfer_records(
     value_result(&value)
 }
 
-/// Add `state_label`, `broker_notified` and `days_in_process` to one record.
+/// Shape one stock-transfer record: drop the proof-document storage keys and
+/// the account holder's name at the other broker (record level only, since
+/// `stocks[].name` is the stock name), then add `state_label`,
+/// `customer_notified_broker` and `days_in_process`.
 fn shape_transfer(record: &mut Map<String, Value>, kind: &TransferKind) {
+    record.remove("attachments");
+    record.remove("name");
     add_label(record, "state_code", "state_label", kind.states);
+    // `noticed`: the customer tapped "I have notified the broker" in the app.
+    // It is the customer's own confirmation, not a Longbridge action.
     if let Some(state) = record.get("app_state").and_then(Value::as_str) {
         let noticed = state == "noticed";
-        record.insert("broker_notified".into(), Value::Bool(noticed));
+        record.insert("customer_notified_broker".into(), Value::Bool(noticed));
     }
     let text = |key: &str| {
         record
@@ -792,10 +810,15 @@ mod tests {
         assert_eq!(cancelled["state_label"], "cancelled", "state labelled");
 
         let mut done = json!({"state_code": 3, "created_at": "2024-01-01T00:00:00Z",
-            "exec_at": "2024-01-04T00:00:00Z", "app_state": "noticed"});
+            "exec_at": "2024-01-04T00:00:00Z", "app_state": "noticed",
+            "name": "CHAN TAI MAN", "attachments": "[\"ai/x\"]",
+            "stocks": [{"code": "700", "name": "Tencent"}]});
         shape_transfer(done.as_object_mut().expect("object"), &TRANSFER_IN);
         assert_eq!(done["days_in_process"], 3, "executed: until execution");
-        assert_eq!(done["broker_notified"], true, "notified flag");
+        assert_eq!(done["customer_notified_broker"], true, "notified flag");
+        assert!(done.get("name").is_none(), "holder name dropped");
+        assert!(done.get("attachments").is_none(), "proof keys dropped");
+        assert_eq!(done["stocks"][0]["name"], "Tencent", "stock name kept");
 
         let mut rejected = json!({"state_code": 7, "created_at": "2024-01-01T00:00:00Z"});
         shape_transfer(rejected.as_object_mut().expect("object"), &TRANSFER_OUT);
