@@ -35,12 +35,30 @@ pub fn subject(token: &str) -> Option<Value> {
     serde_json::from_str(claims["sub"].as_str()?).ok()
 }
 
-/// `account_channel` from the `sub` claim.
+/// The account channel the token names (e.g. `lb`, `lb_papertrading`), or
+/// `None` when the token is not a JWT or names none.
+///
+/// Read, in order, from the top-level `ac` claim (API-key access tokens, whose
+/// `sub` is not JSON), from `account_channel` inside the `sub` claim (OAuth
+/// tokens), then from a top-level `account_channel` claim; values are trimmed
+/// and empty ones skipped. This matches the Rust and Go SDKs. Callers fall
+/// back to `lb`, as the SDKs do.
 pub fn account_channel(token: &str) -> Option<String> {
-    subject(token)?["account_channel"]
-        .as_str()
-        .filter(|s| !s.is_empty())
-        .map(str::to_owned)
+    let token = token.strip_prefix("Bearer ").unwrap_or(token);
+    let claims = claims(token)?;
+    let non_empty = |v: Option<&Value>| {
+        v?.as_str()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned)
+    };
+    let from_sub = || {
+        let sub: Value = serde_json::from_str(claims.get("sub")?.as_str()?).ok()?;
+        non_empty(sub.get("account_channel"))
+    };
+    non_empty(claims.get("ac"))
+        .or_else(from_sub)
+        .or_else(|| non_empty(claims.get("account_channel")))
 }
 
 /// Minimal base64url decoder (no padding required, no external crate).
@@ -98,6 +116,13 @@ pub(crate) fn test_token(payload: &str) -> String {
     format!("eyJhbGciOiJub25lIn0.{out}.sig")
 }
 
+/// [`test_token`] with the `hk_m_` region prefix Longbridge puts on the header
+/// segment of API-key access tokens, for tests.
+#[cfg(test)]
+pub(crate) fn test_prefixed_token(payload: &str) -> String {
+    format!("hk_m_{}", test_token(payload))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -130,5 +155,55 @@ mod tests {
     fn reads_account_channel_from_nested_sub() {
         let t = test_token(r#"{"sub":"{\"account_channel\":\"lb_papertrading\"}"}"#);
         assert_eq!(account_channel(&t).as_deref(), Some("lb_papertrading"));
+    }
+
+    #[test]
+    fn reads_account_channel_from_top_level_ac() {
+        let payload = r#"{"iss":"longbridge","sub":"access_token","ak":"example","aaid":1,"ac":"lb_papertrading"}"#;
+        for t in [test_token(payload), test_prefixed_token(payload)] {
+            assert_eq!(
+                account_channel(&t).as_deref(),
+                Some("lb_papertrading"),
+                "ac claim on {t}"
+            );
+        }
+        assert_eq!(
+            account_channel(&format!("Bearer {}", test_prefixed_token(payload))).as_deref(),
+            Some("lb_papertrading"),
+            "a Bearer prefix is ignored"
+        );
+    }
+
+    #[test]
+    fn account_channel_claim_precedence() {
+        let t = test_prefixed_token(
+            r#"{"ac":" us ","sub":"{\"account_channel\":\"lb\"}","account_channel":"x"}"#,
+        );
+        assert_eq!(
+            account_channel(&t).as_deref(),
+            Some("us"),
+            "ac wins, trimmed"
+        );
+        let t = test_token(
+            r#"{"ac":"  ","sub":"{\"account_channel\":\"lb_papertrading\"}","account_channel":"x"}"#,
+        );
+        assert_eq!(
+            account_channel(&t).as_deref(),
+            Some("lb_papertrading"),
+            "a blank ac falls through to sub"
+        );
+        let t = test_token(r#"{"sub":"access_token","account_channel":"us_lb"}"#);
+        assert_eq!(
+            account_channel(&t).as_deref(),
+            Some("us_lb"),
+            "top-level account_channel is the last resort"
+        );
+    }
+
+    #[test]
+    fn account_channel_absent() {
+        let t = test_prefixed_token(r#"{"iss":"longbridge","sub":"access_token"}"#);
+        assert_eq!(account_channel(&t), None, "a JWT naming no channel");
+        assert_eq!(account_channel("opaque-token"), None, "not a JWT");
     }
 }

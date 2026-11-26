@@ -1180,8 +1180,9 @@ impl McpContext {
     /// evict.
     pub fn evict_quote_context(&self) {}
 
-    /// Extracts `account_channel` from the JWT bearer token's `sub` claim.
-    /// Falls back to `"lb"` when the token cannot be decoded.
+    /// The account channel of the bearer token (see
+    /// [`crate::auth::jwt::account_channel`]). Falls back to `"lb"` when the
+    /// token cannot be decoded or names none.
     pub fn account_channel(&self) -> String {
         crate::auth::jwt::account_channel(&self.token).unwrap_or_else(|| "lb".to_string())
     }
@@ -7542,6 +7543,43 @@ mod tests {
                 "no paper trading requested: nothing to refuse"
             );
         }
+    }
+
+    fn ctx_with_token(token: String) -> super::McpContext {
+        super::McpContext {
+            token,
+            language: None,
+            client_user_agent: None,
+            extra_headers: vec![("x-papertrading".to_string(), "true".to_string())],
+        }
+    }
+
+    #[test]
+    fn papertrading_detection_reads_the_ac_claim() {
+        use crate::auth::jwt::{test_prefixed_token, test_token};
+
+        let paper =
+            r#"{"iss":"longbridge","sub":"access_token","ak":"example","ac":"lb_papertrading"}"#;
+        for token in [test_token(paper), test_prefixed_token(paper)] {
+            let ctx = ctx_with_token(token);
+            assert_eq!(ctx.account_channel(), "lb_papertrading", "ac-only token");
+            assert!(
+                !ctx.papertrading_with_real_money_token(),
+                "a paper-trading channel in ac is not a real-money token"
+            );
+        }
+        let real = r#"{"iss":"longbridge","sub":"access_token","ac":"lb"}"#;
+        assert!(
+            ctx_with_token(test_prefixed_token(real)).papertrading_with_real_money_token(),
+            "a real-money channel in ac is detected"
+        );
+        let none = r#"{"iss":"longbridge","sub":"access_token"}"#;
+        let ctx = ctx_with_token(test_prefixed_token(none));
+        assert_eq!(ctx.account_channel(), "lb", "no channel falls back to lb");
+        assert!(
+            ctx.papertrading_with_real_money_token(),
+            "a token naming no channel counts as real money"
+        );
     }
 
     #[test]
