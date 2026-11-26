@@ -2295,6 +2295,44 @@ mod execute_gate_tests {
         }
     }
 
+    /// The server instructions describe the gate by the `execute` parameter,
+    /// not by listing tools: a list there grows with every gated tool and
+    /// goes stale silently, since nothing else checks it.
+    #[test]
+    fn server_instructions_name_no_gated_tool() {
+        use rmcp::ServerHandler;
+        let english = crate::tools::Longbridge
+            .get_info()
+            .instructions
+            .expect("the server has instructions");
+        let mut texts = vec![("en".to_string(), english)];
+        for (lang, raw) in [
+            ("zh-CN", include_str!("../../locales/zh-CN/tools.json")),
+            ("zh-HK", include_str!("../../locales/zh-HK/tools.json")),
+            ("ja", include_str!("../../locales/ja/tools.json")),
+        ] {
+            let json: serde_json::Value =
+                serde_json::from_str(raw).expect("locale file must be valid JSON");
+            let text = json["server_instructions"]
+                .as_str()
+                .expect("locale must have server_instructions")
+                .to_string();
+            texts.push((lang.to_string(), text));
+        }
+        for (lang, text) in texts {
+            assert!(
+                text.contains("`execute`"),
+                "{lang}: must describe the gate by `execute`"
+            );
+            for name in GATED_TOOLS {
+                assert!(
+                    !text.contains(name),
+                    "{lang}: server instructions must not list `{name}`"
+                );
+            }
+        }
+    }
+
     #[test]
     fn every_gated_tool_description_states_the_two_step_protocol() {
         let tools = crate::tools::list_tools();
