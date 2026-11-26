@@ -51,6 +51,82 @@ fn result_from_raw_json_with_unix_paths(
     Ok(success_with_structured(json))
 }
 
+/// GET `path` and return the response as a transformed JSON `Value` (snake_case
+/// keys, `*_at` timestamps as RFC3339), for tools that reshape the payload
+/// before returning it. Pair with [`value_result`].
+pub async fn http_get_value(
+    client: &HttpClient,
+    path: &str,
+    params: &[(&str, &str)],
+) -> Result<serde_json::Value, McpError> {
+    let params: Vec<(&str, &str)> = params.to_vec();
+    let resp: String = client
+        .request(Method::GET, path)
+        .query_params(params)
+        .response::<String>()
+        .send()
+        .await
+        .map_err(|e| Error::longbridge(e.into()))?;
+    let transformed = transform_json(resp.as_bytes()).map_err(Error::Serialize)?;
+    Ok(serde_json::from_str(&transformed).map_err(Error::Serialize)?)
+}
+
+/// Attempts [`http_get_value_paced`] makes before giving up on a rate limit.
+const PACED_ATTEMPTS: usize = 3;
+
+/// [`http_get_value`] for a tool that sends several requests to the same
+/// route in one call (paging, or one request per filter value). The gateway
+/// rate-limits these routes to about one call a second per member, so a
+/// rate-limited request waits the delay the upstream suggests and is retried
+/// here, instead of failing the whole tool call.
+pub async fn http_get_value_paced(
+    client: &HttpClient,
+    path: &str,
+    params: &[(&str, &str)],
+) -> Result<serde_json::Value, McpError> {
+    let mut attempt = 1;
+    loop {
+        match http_get_value(client, path, params).await {
+            Err(err) if attempt < PACED_ATTEMPTS && crate::tools::is_backoff(&err) => {
+                tokio::time::sleep(crate::tools::rate_limit_delay(&err)).await;
+                attempt += 1;
+            }
+            result => return result,
+        }
+    }
+}
+
+/// Rewrite every RFC3339 UTC timestamp (`…Z`) in `value` as Hong Kong time
+/// (`…+08:00`), at any depth. For the AP-account tools, whose users read dates
+/// as Hong Kong days: a deposit at 01:00 HKT must not read as the day before.
+pub fn localize_hong_kong(value: &mut serde_json::Value) {
+    use time::format_description::well_known::Rfc3339;
+    match value {
+        serde_json::Value::String(text) if text.ends_with('Z') => {
+            if let Ok(utc) = time::OffsetDateTime::parse(text, &Rfc3339)
+                && let Ok(local) = utc.to_offset(time::macros::offset!(+8)).format(&Rfc3339)
+            {
+                *text = local;
+            }
+        }
+        serde_json::Value::Array(items) => items.iter_mut().for_each(localize_hong_kong),
+        serde_json::Value::Object(map) => map.values_mut().for_each(localize_hong_kong),
+        _ => {}
+    }
+}
+
+/// [`value_result`] for an AP-account tool: timestamps in Hong Kong time.
+pub fn value_result_hong_kong(mut value: serde_json::Value) -> Result<CallToolResult, McpError> {
+    localize_hong_kong(&mut value);
+    value_result(&value)
+}
+
+/// Build a tool result from an already reshaped JSON `Value`.
+pub fn value_result(value: &serde_json::Value) -> Result<CallToolResult, McpError> {
+    let json = serde_json::to_string(value).map_err(Error::Serialize)?;
+    Ok(success_with_structured(json))
+}
+
 pub async fn http_get_tool(
     client: &HttpClient,
     path: &str,
@@ -357,4 +433,30 @@ pub async fn http_delete_tool(
         .await
         .map_err(|e| Error::longbridge(e.into()))?;
     result_from_raw_json(&resp)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn localize_hong_kong_shifts_utc_only() {
+        let mut value = serde_json::json!({
+            "created_at": "2026-11-25T18:00:00Z",
+            "nested": [{"send_time": "2026-01-01T00:00:00Z"}],
+            "note": "Z",
+            "already": "2026-11-25T18:00:00+08:00",
+        });
+        localize_hong_kong(&mut value);
+        assert_eq!(
+            value["created_at"], "2026-11-26T02:00:00+08:00",
+            "next HK day"
+        );
+        assert_eq!(
+            value["nested"][0]["send_time"], "2026-01-01T08:00:00+08:00",
+            "nested"
+        );
+        assert_eq!(value["note"], "Z", "non-timestamps untouched");
+        assert_eq!(value["already"], "2026-11-25T18:00:00+08:00", "offset kept");
+    }
 }
