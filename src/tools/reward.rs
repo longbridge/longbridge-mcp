@@ -295,9 +295,13 @@ fn page_params(page: Option<u32>, size: Option<u32>) -> (String, String) {
 
 /// Flatten one reward-list item into `{kind, reward_type, …allowlisted fields}`.
 fn shape_reward(item: &Value) -> Option<Value> {
-    let found = ["cash", "card", "prize"]
-        .iter()
-        .find_map(|kind| item.get(*kind).map(|detail| (*kind, detail)));
+    // Upstream sends the unused detail objects as null (`"cash": null,
+    // "card": {...}`), so take the first one that is an object.
+    let found = ["cash", "card", "prize"].iter().find_map(|kind| {
+        item.get(*kind)
+            .filter(|detail| detail.is_object())
+            .map(|detail| (*kind, detail))
+    });
     let mut row = serde_json::Map::new();
     if let Some(reward_type) = item.get("reward_type") {
         row.insert("reward_type".into(), reward_type.clone());
@@ -717,6 +721,22 @@ mod tests {
             unknown.get("status_label").is_none(),
             "unknown code has no label"
         );
+    }
+
+    #[test]
+    fn shape_reward_skips_null_detail_objects() {
+        // Shape of a real coupon reward: the unused details come back as null.
+        let item = json!({
+            "reward_type": 2,
+            "cash": null,
+            "prize": null,
+            "card": {"activity_title": "Open account", "title": "HKD 100 fee card",
+                "card_type": "platform_fee_deduct", "amount": 100, "status": 12},
+        });
+        let row = shape_reward(&item).expect("a coupon item must shape");
+        assert_eq!(row["activity_title"], "Open account", "card fields read");
+        assert_eq!(row["card_type"], "platform_fee_deduct", "card fields read");
+        assert_eq!(row["reward_type_label"], "coupon", "type labelled");
     }
 
     #[test]
