@@ -182,10 +182,17 @@ impl Confirmer {
                 .and_then(|r| r.get(INPUT_KEY))
                 .and_then(|v| serde_json::from_value::<ElicitResult>(v.clone()).ok());
             if let Some(answer) = answer {
-                return match accepted(&answer) {
-                    true => Decision::Proceed,
-                    false => Decision::Respond(not_confirmed(scope)),
-                };
+                if accepted(&answer) {
+                    return Decision::Proceed;
+                }
+                // What the client sent back, so a form the user believes they
+                // approved can be told apart from one they declined.
+                tracing::info!(
+                    action = ?answer.action,
+                    content = ?answer.content,
+                    "confirmation form answered without approval"
+                );
+                return Decision::Respond(not_confirmed(scope));
             }
         }
         // A retry that carried a state but did not match was approved for a
@@ -232,6 +239,10 @@ fn is_live_state(scope: &Scope, state: Option<&str>, window: u64) -> bool {
     state.is_some_and(|state| live_windows(window).any(|w| request_state_in(scope, w) == state))
 }
 
+/// Approval is the user pressing accept. The checkbox starts ticked; only
+/// unticking it turns an accept into a refusal. (A required, unticked box
+/// made clients reject the accept button until it was ticked, so a user who
+/// pressed accept saw nothing happen.)
 fn accepted(answer: &ElicitResult) -> bool {
     answer.action == ElicitationAction::Accept
         && answer
@@ -239,7 +250,7 @@ fn accepted(answer: &ElicitResult) -> bool {
             .as_ref()
             .and_then(|c| c.get(FIELD))
             .and_then(serde_json::Value::as_bool)
-            == Some(true)
+            != Some(false)
 }
 
 fn form(preview: &serde_json::Value, again: bool) -> ElicitRequestParams {
@@ -256,9 +267,9 @@ fn form(preview: &serde_json::Value, again: bool) -> ElicitRequestParams {
             summary(preview)
         ),
         requested_schema: ElicitationSchema::builder()
-            .required_bool_property(FIELD, |b| {
-                b.title("Confirm")
-                    .description("Tick to send this request exactly as shown above.")
+            .bool_property(FIELD, |b| {
+                b.title("Send this request exactly as shown above")
+                    .with_default(true)
             })
             .build_unchecked(),
     }
@@ -504,12 +515,31 @@ mod tests {
                 .unwrap()
                 .starts_with("Place this order\n\n• Symbol: 700.HK\n• Side: Buy\n")
         );
-        assert_eq!(req["params"]["requestedSchema"]["required"][0], FIELD);
+        // Not required, and ticked by default: accept alone approves.
+        let schema = &req["params"]["requestedSchema"];
+        assert!(
+            schema
+                .get("required")
+                .is_none_or(|r| r.as_array().unwrap().is_empty())
+        );
+        assert_eq!(schema["properties"][FIELD]["default"], true);
     }
 
     #[tokio::test]
     async fn accepted_retry_for_the_same_order_proceeds() {
         let scope = order();
+        // Ticked, or the client sent no content at all: both are an accept.
+        for confirm in [Some(true), None] {
+            let c = retry(
+                request_state(&scope),
+                answer(ElicitationAction::Accept, confirm),
+            );
+            let d = c
+                .confirm(&scope, None, serde_json::json!({}))
+                .await
+                .unwrap();
+            assert!(matches!(d, Decision::Proceed), "{confirm:?}");
+        }
         let c = retry(
             request_state(&scope),
             answer(ElicitationAction::Accept, Some(true)),
@@ -529,7 +559,6 @@ mod tests {
             answer(ElicitationAction::Decline, None),
             answer(ElicitationAction::Cancel, None),
             answer(ElicitationAction::Accept, Some(false)),
-            answer(ElicitationAction::Accept, None),
         ] {
             let c = retry(request_state(&scope), value);
             let d = c
