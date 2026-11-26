@@ -1182,7 +1182,7 @@
     },
     "bank_cards": {
       "title": "綁定銀行卡",
-      "description": "列出當前賬戶綁定的銀行卡及審核狀態，返回 cards[]{id, bank, bank_en, bank_code, account（僅後 4 位）, account_type, region, region_name, country, verification（銀行卡出金認證：unverified = 尚未認證，含「未認證」與「已審核-待入金」，用這張卡入金任意金額，或完成 eDDA / 銀證轉賬授權即可認證；under_review = 綁卡後人工審核中，期間不能使用；verified = 已認證）, witness（not_required/pending/witnessed：是否已有該卡入金見證）, binding（binding/bound/failed）, review_days（卡片添加至今的天數，僅 under_review 時返回）, bind_tip（展示給用戶的審核提示）, remark, created_at, auth_list[]{flow_id（hk_edda/hk_sdda：eDDA，hk_bank_sec：銀證轉賬，hk_fps：FPS）, name, currency, authorization（unauthorized/authorized/authorizing/failed）, failure_reason（失敗原因）, max_amount, max_amount_unlimited, daily_max_count, daily_max_count_unlimited, expiry_date, long_term_valid, is_support, doc_reviewing, no_prior_deposit_reviewing}}。under_review 表示綁卡後正在人工審核；只查 eDDA 改用 edda_authorizations（兩者調用同一上游接口，同一輪不要都調）。時間為香港時間（+08:00）"
+      "description": "列出當前賬戶綁定的銀行卡及審核狀態，返回 cards[]{id, bank, bank_en, bank_code, account（僅後 4 位）, account_type, region, region_name, country, verification（銀行卡出金認證：unverified = 尚未認證，含「未認證」與「已審核-待入金」，用這張卡入金任意金額，或完成 eDDA / 銀證轉賬授權即可認證；under_review = 綁卡後人工審核中，期間不能使用；verified = 已認證）, witness（not_required/pending/witnessed：是否已有該卡入金見證）, binding（binding/bound/failed）, review_days（卡片添加至今的天數，僅 under_review 時返回）, bind_tip（展示給用戶的審核提示）, remark, created_at, auth_list[]{flow_id（hk_edda/hk_sdda：eDDA，hk_bank_sec：銀證轉賬，hk_fps：FPS）, name, currency, authorization（unauthorized/authorized/authorizing/failed）, failure_reason（失敗原因）, max_amount, max_amount_unlimited, daily_max_count, daily_max_count_unlimited, expiry_date, long_term_valid, is_support, doc_reviewing, no_prior_deposit_reviewing}}。沒有已知標籤的代碼改為在原字段返回原始數值（status、witness_state、bind_state、auth_list[].status）。under_review 表示綁卡後正在人工審核；只查 eDDA 改用 edda_authorizations（兩者調用同一上游接口，同一輪不要都調）。時間為香港時間（+08:00）"
     },
     "withdrawals": {
       "title": "提款記錄",
@@ -1208,11 +1208,11 @@
     },
     "edda_authorizations": {
       "title": "eDDA 授權",
-      "description": "列出當前賬戶各張綁定銀行卡的 eDDA（電子直接扣款）授權，返回 authorizations[]{card_id, bank, bank_en, account（僅後 4 位）, card_binding（binding/bound/failed）, flow（hk_edda：在銀行授權，hk_sdda：在 App 內授權）, name, currency, authorization（unauthorized/authorized/authorizing/failed）, failure_reason（銀行返回信息）, max_amount（入金上限）, max_amount_unlimited, daily_max_count, daily_max_count_unlimited, expiry_date, long_term_valid, is_support（1：銀行支持此方式）, doc_reviewing（資料審核中）, no_prior_deposit_reviewing（因該卡無入金記錄而審核中）}。列表為空表示沒有任何卡做過 eDDA 授權。這裡是當前狀態；edda_status 只列出某張卡提交過的申請。時間為香港時間（+08:00）"
+      "description": "列出當前賬戶各張綁定銀行卡的 eDDA（電子直接扣款）授權，返回 authorizations[]{card_id, bank, bank_en, account（僅後 4 位）, card_binding（binding/bound/failed）, flow（hk_edda：在銀行授權，hk_sdda：在 App 內授權）, name, currency, authorization（unauthorized/authorized/authorizing/failed；沒有已知標籤的代碼改為以 status 返回原始數值）, failure_reason（銀行返回信息）, max_amount（入金上限）, max_amount_unlimited, daily_max_count, daily_max_count_unlimited, expiry_date, long_term_valid, is_support（1：銀行支持此方式）, doc_reviewing（資料審核中）, no_prior_deposit_reviewing（因該卡無入金記錄而審核中）}。列表為空表示沒有任何卡做過 eDDA 授權。這裡是當前狀態；edda_status 只列出某張卡提交過的申請。時間為香港時間（+08:00）"
     },
     "edda_status": {
       "title": "eDDA 授權狀態",
-      "description": "列出某張綁定銀行卡在某個幣種下提交過的 eDDA 授權申請。多數 eDDA 授權（如銀行端推送）沒有申請單，所以通常為空：回答 eDDA 問題先用 edda_authorizations，只在需要查申請單時用本工具。card_id 取自 bank_cards 的 cards[].id（或 edda_authorizations 的 authorizations[].card_id）。返回 {applications[]{id, flow_id, name, currency, authorization（unauthorized/authorized/authorizing/failed）, failure_reason, created_at, updated_at}}：該卡提交過的 eDDA 授權申請。列表為空表示沒有提交過申請（銀行端推送的 eDDA 或從未申請），此時該卡當前的 eDDA 狀態看 edda_authorizations。時間為香港時間（+08:00）",
+      "description": "列出某張綁定銀行卡在某個幣種下提交過的 eDDA 授權申請。多數 eDDA 授權（如銀行端推送）沒有申請單，所以通常為空：回答 eDDA 問題先用 edda_authorizations，只在需要查申請單時用本工具。card_id 取自 bank_cards 的 cards[].id（或 edda_authorizations 的 authorizations[].card_id）。返回 {applications[]{id, flow_id, name, currency, authorization（unauthorized/authorized/authorizing/failed；沒有已知標籤的代碼改為以 status 返回原始數值）, failure_reason, created_at, updated_at}}：該卡提交過的 eDDA 授權申請。列表為空表示沒有提交過申請（銀行端推送的 eDDA 或從未申請），此時該卡當前的 eDDA 狀態看 edda_authorizations。時間為香港時間（+08:00）",
       "properties": {
         "card_id": "銀行卡 id，取自 bank_cards（cards[].id）",
         "currency": "授權幣種，如 \"HKD\" 或 \"USD\""

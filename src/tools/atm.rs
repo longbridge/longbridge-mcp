@@ -54,15 +54,8 @@ const AUTH_FIELDS: &[&str] = &[
     "no_prior_deposit_reviewing",
 ];
 
-/// Raw card codes dropped once labelled (`verification`, `witness`,
-/// `binding`), plus display-only fields.
-const CARD_RAW_CODES: &[&str] = &[
-    "status",
-    "witness_state",
-    "bind_state",
-    "support_witness",
-    "country_display",
-];
+/// Display-only card fields dropped after shaping.
+const CARD_DISPLAY_FIELDS: &[&str] = &["support_witness", "country_display"];
 
 /// Fields kept from an eDDA application (`FindAuthStatus`), after labelling.
 const EDDA_APPLICATION_FIELDS: &[&str] = &[
@@ -71,6 +64,7 @@ const EDDA_APPLICATION_FIELDS: &[&str] = &[
     "name",
     "currency",
     "authorization",
+    "status",
     "failure_reason",
     "created_at",
     "updated_at",
@@ -362,13 +356,28 @@ fn label(value: Option<&Value>, names: &[(i64, &'static str)]) -> Option<&'stati
 
 /// Insert `key: label` next to an integer code when the code is known.
 fn add_label(
-    card: &mut Map<String, Value>,
+    obj: &mut Map<String, Value>,
     code_key: &str,
     key: &str,
     names: &[(i64, &'static str)],
 ) {
-    if let Some(name) = label(card.get(code_key), names) {
-        card.insert(key.to_string(), Value::String(name.to_string()));
+    if let Some(name) = label(obj.get(code_key), names) {
+        obj.insert(key.to_string(), Value::String(name.to_string()));
+    }
+}
+
+/// Replace the integer code at `code_key` with `key: label` when the code is
+/// known; otherwise keep the raw code under `code_key`, so an undocumented
+/// code is still shown (as the CLI does).
+fn label_code(
+    obj: &mut Map<String, Value>,
+    code_key: &str,
+    key: &str,
+    names: &[(i64, &'static str)],
+) {
+    if let Some(name) = label(obj.get(code_key), names) {
+        obj.remove(code_key);
+        obj.insert(key.to_string(), Value::String(name.to_string()));
     }
 }
 
@@ -405,7 +414,6 @@ fn shape_card(card: &mut Value) {
     {
         obj.insert("account".into(), Value::String(account));
     }
-    add_label(obj, "status", "verification", CARD_STATUS);
     // Days a card has been waiting for manual review since it was added, for
     // the "still under review after about two weeks" check.
     if obj.get("status").and_then(Value::as_i64) == Some(1)
@@ -416,11 +424,12 @@ fn shape_card(card: &mut Value) {
     {
         obj.insert("review_days".into(), Value::from(days));
     }
-    add_label(obj, "witness_state", "witness", WITNESS_STATE);
-    add_label(obj, "bind_state", "binding", BIND_STATE);
-    // The labels carry these codes; the raw numbers are ambiguous next to an
+    // Labelled codes are dropped: the raw numbers are ambiguous next to an
     // auth entry's own `status` (1 = under review here, authorized there).
-    for key in CARD_RAW_CODES {
+    label_code(obj, "status", "verification", CARD_STATUS);
+    label_code(obj, "witness_state", "witness", WITNESS_STATE);
+    label_code(obj, "bind_state", "binding", BIND_STATE);
+    for key in CARD_DISPLAY_FIELDS {
         obj.remove(*key);
     }
     if let Some(auths) = obj.get_mut("auth_list").and_then(Value::as_array_mut) {
@@ -437,8 +446,7 @@ fn shape_card(card: &mut Value) {
             if let Value::Object(converted) = auth_value {
                 *auth = converted;
             }
-            add_label(auth, "status", "authorization", AUTH_STATUS);
-            auth.remove("status");
+            label_code(auth, "status", "authorization", AUTH_STATUS);
             if let Some(message) = auth.remove("message") {
                 auth.insert("failure_reason".into(), message);
             }
@@ -489,6 +497,7 @@ fn edda_row(card: &Value, auth: &Value) -> Value {
         "name": auth.get("name"),
         "currency": auth.get("currency"),
         "authorization": auth.get("authorization"),
+        "status": auth.get("status"),
         "failure_reason": auth.get("failure_reason"),
         "max_amount": auth.get("max_amount"),
         "max_amount_unlimited": auth.get("max_amount_unlimited"),
@@ -575,7 +584,7 @@ fn shape_edda_status(value: Value) -> Value {
         _ => Vec::new(),
     };
     for app in applications.iter_mut().filter_map(Value::as_object_mut) {
-        add_label(app, "status", "authorization", AUTH_STATUS);
+        label_code(app, "status", "authorization", AUTH_STATUS);
         if let Some(message) = app.remove("message") {
             app.insert("failure_reason".into(), message);
         }
@@ -953,6 +962,63 @@ mod tests {
             assert!(auth.get(key).is_none(), "auth field {key} must be dropped");
         }
         assert_eq!(auth["max_amount_unlimited"], false, "limit flags are kept");
+    }
+
+    #[test]
+    fn shape_card_keeps_unlabelled_codes() {
+        let mut card = json!({
+            "id": "1", "account": "123456789", "status": 9, "witness_state": 2,
+            "bind_state": 7, "support_witness": true,
+            "auth_list": [
+                {"flow_id": "hk_edda", "currency": "HKD", "status": 8},
+                {"flow_id": "hk_edda", "currency": "USD", "status": 1},
+            ],
+        });
+        shape_card(&mut card);
+        assert_eq!(card["status"], 9, "unknown card status keeps its code");
+        assert!(card.get("verification").is_none(), "no label for code 9");
+        assert_eq!(card["witness"], "pending", "known witness state labelled");
+        assert!(
+            card.get("witness_state").is_none(),
+            "a labelled code is dropped"
+        );
+        assert_eq!(card["bind_state"], 7, "unknown bind state keeps its code");
+        assert!(card.get("binding").is_none(), "no label for bind state 7");
+        assert!(
+            card.get("support_witness").is_none(),
+            "display-only fields are dropped"
+        );
+        let unknown = &card["auth_list"][0];
+        assert_eq!(unknown["status"], 8, "unknown auth status keeps its code");
+        assert!(unknown.get("authorization").is_none(), "no label for 8");
+        let known = &card["auth_list"][1];
+        assert_eq!(known["authorization"], "authorized", "known auth labelled");
+        assert!(known.get("status").is_none(), "a labelled code is dropped");
+
+        let row = edda_row(&card, unknown);
+        assert_eq!(row["status"], 8, "edda row carries the unlabelled code");
+        assert!(
+            row["authorization"].is_null(),
+            "edda row has no label for it"
+        );
+        let row = edda_row(&card, known);
+        assert!(row["status"].is_null(), "edda row omits a labelled code");
+    }
+
+    #[test]
+    fn shape_edda_status_keeps_unlabelled_codes() {
+        let value = shape_edda_status(json!({"list": [
+            {"id": 1, "status": 6},
+            {"id": 2, "status": 2},
+        ]}));
+        let apps = &value["applications"];
+        assert_eq!(apps[0]["status"], 6, "unknown status keeps its code");
+        assert!(apps[0].get("authorization").is_none(), "no label for 6");
+        assert_eq!(apps[1]["authorization"], "authorizing", "known labelled");
+        assert!(
+            apps[1].get("status").is_none(),
+            "a labelled code is dropped"
+        );
     }
 
     #[test]
