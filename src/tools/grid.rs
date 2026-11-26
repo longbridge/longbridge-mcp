@@ -225,8 +225,8 @@ pub struct GridSubmitParam {
     ///
     /// Required protocol: call once without `execute`, show the returned
     /// preview to the user, and call again quoting the code only after the user
-    /// has explicitly confirmed it. The code is single use, expires in 10
-    /// minutes, and applies only to this exact request — change any field and
+    /// has explicitly confirmed it. The code is derived from the request
+    /// itself, so it applies only to this exact request — change any field and
     /// it stops working. A grid strategy keeps placing orders on its own once
     /// live, so never quote the code back on your own initiative.
     pub execute: Option<String>,
@@ -247,8 +247,8 @@ pub struct GridReplaceParam {
     ///
     /// Required protocol: call once without `execute`, show the returned
     /// preview to the user, and call again quoting the code only after the user
-    /// has explicitly confirmed it. The code is single use, expires in 10
-    /// minutes, and applies only to this exact request — change any field and
+    /// has explicitly confirmed it. The code is derived from the request
+    /// itself, so it applies only to this exact request — change any field and
     /// it stops working. A grid strategy keeps placing orders on its own once
     /// live, so never quote the code back on your own initiative.
     pub execute: Option<String>,
@@ -267,8 +267,8 @@ pub struct GridOrderIdParam {
     ///
     /// Required protocol: call once without `execute`, show the returned
     /// preview to the user, and call again quoting the code only after the user
-    /// has explicitly confirmed it. The code is single use, expires in 10
-    /// minutes, and applies only to this exact request — change any field and
+    /// has explicitly confirmed it. The code is derived from the request
+    /// itself, so it applies only to this exact request — change any field and
     /// it stops working. A grid strategy keeps placing orders on its own once
     /// live, so never quote the code back on your own initiative.
     pub execute: Option<String>,

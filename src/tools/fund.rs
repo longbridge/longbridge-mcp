@@ -253,9 +253,9 @@ pub struct FundSubmitOrderParam {
     ///
     /// Required protocol: call once without `execute`, show the returned
     /// preview to the user, and call again quoting the code only after the user
-    /// has explicitly confirmed that exact order. The code is single use,
-    /// expires in 10 minutes, and applies only to this exact order — change any
-    /// field and it stops working. Never quote it back on your own initiative,
+    /// has explicitly confirmed that exact order. The code is derived
+    /// from the order itself, so it applies only to this exact order — change
+    /// any field and it stops working. Never quote it back on your own initiative,
     /// and never in the same turn the user first asks.
     pub execute: Option<String>,
 }
@@ -276,9 +276,9 @@ pub struct FundCancelOrderParam {
     ///
     /// Required protocol: call once without `execute`, show the returned
     /// preview to the user, and call again quoting the code only after the user
-    /// has explicitly confirmed that exact order. The code is single use,
-    /// expires in 10 minutes, and applies only to this exact order — change any
-    /// field and it stops working. Never quote it back on your own initiative,
+    /// has explicitly confirmed that exact order. The code is derived
+    /// from the order itself, so it applies only to this exact order — change
+    /// any field and it stops working. Never quote it back on your own initiative,
     /// and never in the same turn the user first asks.
     pub execute: Option<String>,
 }

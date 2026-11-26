@@ -174,9 +174,9 @@ pub struct SubmitOrderParam {
     ///
     /// Required protocol: call once without `execute`, show the returned
     /// preview to the user, and call again quoting the code only after the user
-    /// has explicitly confirmed that exact order. The code is single use,
-    /// expires in 10 minutes, and applies only to this exact order — change any
-    /// field and it stops working. Never quote it back on your own initiative,
+    /// has explicitly confirmed that exact order. The code is derived
+    /// from the order itself, so it applies only to this exact order — change
+    /// any field and it stops working. Never quote it back on your own initiative,
     /// and never in the same turn the user first asks.
     pub execute: Option<String>,
 }
@@ -304,9 +304,9 @@ pub struct ReplaceOrderParam {
     ///
     /// Required protocol: call once without `execute`, show the returned
     /// preview to the user, and call again quoting the code only after the user
-    /// has explicitly confirmed that exact order. The code is single use,
-    /// expires in 10 minutes, and applies only to this exact order — change any
-    /// field and it stops working. Never quote it back on your own initiative,
+    /// has explicitly confirmed that exact order. The code is derived
+    /// from the order itself, so it applies only to this exact order — change
+    /// any field and it stops working. Never quote it back on your own initiative,
     /// and never in the same turn the user first asks.
     pub execute: Option<String>,
 }
@@ -355,9 +355,9 @@ pub struct CancelOrderParam {
     ///
     /// Required protocol: call once without `execute`, show the returned
     /// preview to the user, and call again quoting the code only after the user
-    /// has explicitly confirmed that exact order. The code is single use,
-    /// expires in 10 minutes, and applies only to this exact order — change any
-    /// field and it stops working. Never quote it back on your own initiative,
+    /// has explicitly confirmed that exact order. The code is derived
+    /// from the order itself, so it applies only to this exact order — change
+    /// any field and it stops working. Never quote it back on your own initiative,
     /// and never in the same turn the user first asks.
     pub execute: Option<String>,
 }
@@ -765,19 +765,6 @@ pub async fn order_task(
         .map_err(Error::longbridge)?;
     let detail = ap_order_detail_json(&order).map_err(Error::Serialize)?;
     Ok(crate::tools::support::order_task::detailed(&order, detail))
-}
-
-/// `tasks/cancel` for an order task: withdraw the order. The client sends it
-/// when the user cancels the task; the next `tasks/get` shows the result.
-pub async fn cancel_order_task(
-    mctx: &crate::tools::McpContext,
-    order_id: &str,
-) -> Result<(), McpError> {
-    let (ctx, _) = TradeContext::new(mctx.create_config());
-    ctx.cancel_order(order_id)
-        .await
-        .map_err(Error::longbridge)?;
-    Ok(())
 }
 
 pub async fn cancel_order(

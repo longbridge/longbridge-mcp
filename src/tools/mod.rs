@@ -3300,9 +3300,12 @@ impl Longbridge {
         }
         // A client that declared the tasks extension gets a task that follows
         // the order (see `support::order_task`); everyone else the order ID.
+        // `tasks/get` cannot read US orders yet, so a US account keeps the
+        // plain order ID rather than a task it could never follow.
         let tasks = ctx
             .client_capabilities()
-            .is_some_and(|caps| caps.supports_tasks());
+            .is_some_and(|caps| caps.supports_tasks())
+            && mctx.dc_region().await != longbridge::DcRegion::Us;
         let submitted = result
             .structured_content
             .as_ref()
@@ -7190,16 +7193,23 @@ impl ServerHandler for Longbridge {
         ))
     }
 
-    /// `tasks/cancel` for an order task withdraws the order.
+    /// `tasks/cancel` for an order task is refused: withdrawing an order moves
+    /// money, so it goes through `cancel_order` and its confirmation gate.
+    /// Cancelling here would skip the user's approval, and would also let the
+    /// read-only `/v2` endpoint, which never lists `cancel_order`, withdraw
+    /// orders by their task ID.
     async fn cancel_task(
         &self,
         request: rmcp::model::CancelTaskParams,
-        context: rmcp::service::RequestContext<rmcp::RoleServer>,
+        _context: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> Result<(), rmcp::ErrorData> {
-        let order_id = support::order_task::order_id(&request.task_id)
+        support::order_task::order_id(&request.task_id)
             .ok_or_else(|| rmcp::ErrorData::invalid_params("unknown task", None))?;
-        let mctx = extract_context(&context)?;
-        trade::cancel_order_task(&mctx, order_id).await
+        Err(rmcp::ErrorData::invalid_request(
+            "Cancelling an order task does not withdraw the order. To withdraw it, call \
+             cancel_order, which asks the user to confirm first.",
+            None,
+        ))
     }
 
     async fn list_tools(

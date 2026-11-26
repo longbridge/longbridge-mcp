@@ -7,6 +7,10 @@
 //! withdrawn. The client polls `tasks/get`; the model no longer has to call
 //! `order_detail` in a loop.
 //!
+//! `tasks/cancel` is refused: withdrawing the order goes through
+//! `cancel_order` and its confirmation gate. US accounts get the plain order
+//! ID, since their order detail has a different shape.
+//!
 //! The server keeps no task state. The task ID is the order ID, and every
 //! `tasks/get` reads the order with the caller's own token, so:
 //! - any instance behind the load balancer can answer, with no shared store;
