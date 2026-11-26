@@ -14,7 +14,7 @@
   <a href="https://longbridge.com"><img alt="Longbridge" src="https://img.shields.io/badge/brokerage-Longbridge-ffe000?labelColor=000"></a>
 </p>
 
-Official MCP server for the [Longbridge](https://longbridge.com) brokerage. **164 tools** across real-time quotes, options, order routing, fundamentals, analyst ratings, calendars, IPO, price alerts, DCA plans, grid trading, portfolio analytics and community sharelists — covering **US and HK markets**. Built with Rust using [rmcp](https://github.com/anthropics/rmcp) and [axum](https://github.com/tokio-rs/axum).
+Official MCP server for the [Longbridge](https://longbridge.com) brokerage. **204 tools** across real-time quotes, options, order routing, fundamentals, analyst ratings, calendars, IPO, price alerts, DCA plans, grid trading, portfolio analytics and community sharelists — covering **US and HK markets**. Built with Rust using [rmcp](https://github.com/anthropics/rmcp) and [axum](https://github.com/tokio-rs/axum).
 
 ---
 
@@ -37,7 +37,7 @@ Sign in once with your Longbridge account. Every request runs over the same host
 
 ## Highlights
 
-- **164 tools, one endpoint** — quotes, options, order routing, fundamentals, analyst research, screeners, IPO, alerts, DCA, grid trading and portfolio analytics across **US and HK markets**.
+- **204 tools, one endpoint** — quotes, options, order routing, fundamentals, analyst research, screeners, IPO, alerts, DCA, grid trading and portfolio analytics across **US and HK markets**.
 - **Stateless by design** — every request forwards its Bearer token straight to the Longbridge SDK. No sessions, no database, nothing stored server-side.
 - **OAuth 2.1, auto-discovered** — RFC 9728 protected-resource and RFC 8414 authorization-server metadata; clients complete the flow with no token to paste.
 - **Clean, typed responses** — snake_case fields, RFC 3339 timestamps, human-readable symbols, and typed response schemas available as MCP resources.
@@ -128,29 +128,34 @@ On first use, the client reads the `WWW-Authenticate` challenge, fetches `/.well
 
 </details>
 
-## The 164 tools
+## The 204 tools
 
-Twenty categories spanning market data, trading, research and account management.
+Twenty-five categories spanning market data, trading, research and account management.
 
 | Category | Count | Coverage |
 |----------|-------|----------|
 | **Quote** | 32 | Real-time and historical quotes, candlesticks, depth, brokers, options, warrants, watchlists, capital flow, market temperature, short positions, option volume |
 | **Fundamental** | 33 | Financial statements/reports, business segments, institutional views, industry peers/valuation, dividends, EPS forecasts, valuations & valuation comparison, company info/executives, shareholders, corporate actions, operating metrics |
-| **Trade** | 15 | Order submission/cancellation/replacement, multi-leg option combination orders, positions, balance, executions, cash flow, margin |
+| **Fund** | 28 | Mutual funds: catalogue, filters, NAV, performance, holdings and analysis; fund positions, dividends and P&L; order validate/submit/cancel and order history |
+| **Trade** | 16 | Order submission/cancellation/replacement, multi-leg option combination orders, positions, balance, executions, cash flow, margin, risk assessment |
 | **Market** | 15 | Market status, industry/top-mover rank, broker holdings, A/H premium, trade statistics, anomalies, short trades/margin, index constituents |
+| **Grid** | 10 | Grid trading order submit/replace/cancel/suspend/restart, list/detail/trigger-history reads, per-symbol setup info |
 | **DCA** | 9 | Dollar-cost averaging plan create/update/pause/resume/stop, execution history, statistics, support check |
-| **Grid** | 11 | Grid trading order submit/replace/cancel/suspend/restart, list/detail/trigger-history reads, per-symbol setup info, one-time strategy consent |
 | **Sharelist** | 8 | Community sharelist CRUD, member add/remove/sort, popular lists |
+| **ATM** | 7 | Bank cards, deposit and withdrawal records, eDDA authorizations and status, stock transfers in/out |
 | **IPO** | 7 | IPO subscriptions, calendar, listed stocks, order detail, profit/loss analysis |
 | **Content** | 7 | News list/detail, discussion topic CRUD and replies |
 | **Alert** | 5 | Price alert CRUD (add, delete, enable, disable, list) |
 | **Screener** | 5 | Stock screener search, indicators, strategy recommendation/management |
 | **Portfolio** | 4 | Exchange rates, profit/loss analysis (summary, detail, realized) |
-| **ATM** | 3 | Bank cards, withdrawal records, deposit records |
+| **Reward** | 3 | Reward records, coupons and coupon orders |
+| **Signal** | 3 | Trading signals, signal detail, security facts |
 | **Macrodata** | 2 | Macroeconomic indicator list and detail |
 | **Search** | 2 | News search, community topic search |
 | **Statement** | 2 | Account statement listing and export |
 | **Calendar** | 1 | Finance calendar (earnings, dividends, IPOs, macro data, closures) |
+| **FX** | 1 | Currency conversion rates |
+| **Profile** | 1 | The signed-in Longbridge account |
 | **Quant** | 1 | Run a quant indicator script against historical K-line data |
 | **Authenticate** | 1 | OAuth code exchange for clients that can't complete a browser redirect |
 | **Utility** | 1 | Current UTC time |
@@ -211,6 +216,9 @@ Advanced environment variables — most deployments never touch these; they exis
 | `LONGBRIDGE_GLOBAL_OAUTH_URL` | *(none)* | Authorization-server URL advertised to requests arriving via an allowlisted `X-Host` (global single-domain entry). Unset = fall back to the mode's OpenAPI base URL |
 | `LONGBRIDGE_MCP_QUOTE_WS_IDLE_TTL_SECS` | `600` | Idle seconds before a cached quote WebSocket context is evicted |
 | `LONGBRIDGE_MCP_QUOTE_WS_MAX_CONTEXTS` | `1024` | Maximum cached quote WebSocket contexts per server process |
+| `LONGBRIDGE_MCP_SKILLS_DIR` | *(unset; `/opt/longbridge/skills` in the Docker image)* | Directory of [Agent Skills](https://github.com/longbridge/skills) served over MCP (one folder per skill). Unset = no skills |
+| `LONGBRIDGE_MCP_SKILLS_CACHE_DIR` | system temp dir | Where the MCP-rewritten copies of the skills are written. Must be writable (e.g. an `emptyDir` on a read-only root filesystem) |
+| `LONGBRIDGE_MCP_SKILLS_RELOAD_SECS` | *(unset)* | Re-read the skills every N seconds, for a directory mounted from outside the image (e.g. a ConfigMap) |
 | `LONGBRIDGE_MCP_LOG_PAYLOADS` | *(unset)* | `1` lifts the payload log caps (see below). Never set this in production |
 | `LONGBRIDGE_LOG_PATH` | *(none)* | SDK internal log path. **Leave unset in production** — the SDK writes unfiltered request/response bodies there |
 

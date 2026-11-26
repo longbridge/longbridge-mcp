@@ -249,6 +249,9 @@ The server reads configuration from CLI arguments (highest priority), a JSON con
 | `canary` | Talk to the Longbridge canary environment (`*.longbridge.xyz`) instead of production (CLI flag `--canary`) |
 | `LONGBRIDGE_MCP_QUOTE_WS_IDLE_TTL_SECS` | Idle TTL for cached quote WebSocket contexts (default: 600) |
 | `LONGBRIDGE_MCP_QUOTE_WS_MAX_CONTEXTS` | Maximum cached quote WebSocket contexts per process (default: 1024) |
+| `LONGBRIDGE_MCP_SKILLS_DIR` | Skills directory served over MCP (set to `/opt/longbridge/skills` in the Docker image, pinned to a `longbridge/skills` commit via the `SKILLS_REF` build arg) |
+| `LONGBRIDGE_MCP_SKILLS_CACHE_DIR` | Writable directory for the MCP-rewritten skill copies (default: system temp dir) |
+| `LONGBRIDGE_MCP_SKILLS_RELOAD_SECS` | Re-read a mounted skills directory every N seconds (default: off) |
 
 ## Deployment
 

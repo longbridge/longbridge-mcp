@@ -137,7 +137,9 @@
         "valuation_rank",
         "warrant_issuers",
         "warrant_list",
-        "warrant_quote"
+        "warrant_quote",
+        "macrodata",
+        "macrodata_indicators"
       ]
     },
     {

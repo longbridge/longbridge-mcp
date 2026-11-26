@@ -10220,3 +10220,69 @@ mod finish_result_tests {
         assert!(note(&result).contains("_jq `.list["), "{}", note(&result));
     }
 }
+
+#[cfg(test)]
+mod tool_data_tests {
+    //! The tool counts and lists published outside the code (README,
+    //! `server.json`, `data/scopes.json`) drifted for several releases.
+    //! These fail as soon as a tool is added without updating them.
+
+    fn tool_names() -> Vec<String> {
+        super::all_tools_full_cached()
+            .iter()
+            .map(|t| t.name.to_string())
+            .collect()
+    }
+
+    #[test]
+    fn scopes_json_lists_every_tool() {
+        let scopes: serde_json::Value =
+            serde_json::from_str(include_str!("../../data/scopes.json"))
+                .expect("data/scopes.json must be valid JSON");
+        let listed: Vec<&str> = scopes["scopes"]
+            .as_array()
+            .expect("scopes array")
+            .iter()
+            .flat_map(|s| s["tools"].as_array().into_iter().flatten())
+            .filter_map(|t| t.as_str())
+            .collect();
+        // `authenticate` only exists on the unauthenticated `/agent` endpoint
+        // and needs no scope.
+        let missing: Vec<String> = tool_names()
+            .into_iter()
+            .filter(|t| t != "authenticate" && !listed.contains(&t.as_str()))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "add these tools to data/scopes.json: {missing:?}"
+        );
+    }
+
+    #[test]
+    fn published_tool_counts_match_the_code() {
+        let count = tool_names().len();
+        let readme = include_str!("../../README.md");
+        assert!(
+            readme.contains(&format!("**{count} tools**")),
+            "README must say **{count} tools**"
+        );
+        let server: serde_json::Value = serde_json::from_str(include_str!("../../server.json"))
+            .expect("server.json must be valid JSON");
+        let meta = server
+            .pointer("/_meta")
+            .and_then(|m| m.as_object())
+            .and_then(|m| m.values().find(|v| v.get("toolCount").is_some()))
+            .expect("server.json must carry toolCount");
+        assert_eq!(meta["toolCount"], count, "server.json toolCount");
+        let by_category: u64 = meta["toolCategories"]
+            .as_object()
+            .expect("toolCategories")
+            .values()
+            .filter_map(|v| v.as_u64())
+            .sum();
+        assert_eq!(
+            by_category, count as u64,
+            "server.json toolCategories must add up to toolCount"
+        );
+    }
+}
