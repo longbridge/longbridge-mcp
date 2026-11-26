@@ -34,6 +34,12 @@ pub enum RestrictedVersion {
     /// community) but still no trade execution, DCA, IPO orders, or money
     /// movement.
     V2,
+    /// `/public` — login-free market data. Callers send no credential; the
+    /// server calls upstream with the operator-configured service credential
+    /// (see [`crate::public`]). Only the `PUBLIC` allowlist: market data,
+    /// fundamentals, news and research, never anything account-bound or a
+    /// write.
+    Public,
 }
 
 impl RestrictedVersion {
@@ -43,6 +49,9 @@ impl RestrictedVersion {
     pub fn metadata_path(self) -> &'static str {
         match self {
             RestrictedVersion::V2 => "/.well-known/oauth-protected-resource/v2",
+            // `/public` never answers 401, so this is never advertised; it
+            // falls back to the server-wide metadata to stay well-formed.
+            RestrictedVersion::Public => "/.well-known/oauth-protected-resource",
         }
     }
 }
@@ -60,6 +69,37 @@ impl RestrictedVersion {
 /// tool set must still be restricted.
 #[derive(Clone, Copy, Debug)]
 pub struct RestrictedEndpoint(pub RestrictedVersion);
+
+/// Auth middleware for the login-free `/public` endpoint.
+///
+/// Whatever `Authorization` header the caller sends is discarded: the request
+/// always proceeds with the operator's service credential as its
+/// [`BearerToken`], tagged [`RestrictedEndpoint`]`(Public)` so handlers expose
+/// and accept only the public allowlist, and carrying the shared
+/// [`crate::public::PublicAccess`] so `call_tool` can apply the rate and
+/// concurrency limits. Without a configured credential the endpoint does not
+/// exist: every request gets `404`.
+pub async fn public_auth_layer(
+    mut req: Request,
+    next: Next,
+    access: Option<std::sync::Arc<crate::public::PublicAccess>>,
+) -> Response {
+    let Some(access) = access else {
+        return (
+            StatusCode::NOT_FOUND,
+            "the public endpoint is not enabled on this server",
+        )
+            .into_response();
+    };
+    // Never let a caller-supplied credential reach upstream (or a log) via
+    // this endpoint; a user with their own account should use `/mcp`.
+    req.headers_mut().remove(axum::http::header::AUTHORIZATION);
+    let extensions = req.extensions_mut();
+    extensions.insert(BearerToken(access.token().to_string()));
+    extensions.insert(RestrictedEndpoint(RestrictedVersion::Public));
+    extensions.insert(access);
+    next.run(req).await
+}
 
 /// Which endpoint a request arrived on, which decides how token-less requests
 /// are handled.
@@ -282,6 +322,67 @@ mod tests {
             .await
             .unwrap();
         (status, challenge, String::from_utf8(body.to_vec()).unwrap())
+    }
+
+    async fn call_public(
+        access: Option<std::sync::Arc<crate::public::PublicAccess>>,
+        authorization: Option<&str>,
+    ) -> (StatusCode, String) {
+        let app = Router::new().route(
+            "/public",
+            get(|req: Request| async move {
+                let token = req
+                    .extensions()
+                    .get::<BearerToken>()
+                    .map(|t| t.0.clone())
+                    .unwrap_or_default();
+                let restricted = req.extensions().get::<RestrictedEndpoint>().map(|r| r.0);
+                let header = req.headers().get("authorization").is_some();
+                format!("{token}|{restricted:?}|{header}")
+            })
+            .layer(axum::middleware::from_fn(
+                move |req: Request, next: Next| {
+                    let access = access.clone();
+                    async move { public_auth_layer(req, next, access).await }
+                },
+            )),
+        );
+        let mut builder = axum::http::Request::builder().uri("/public");
+        if let Some(value) = authorization {
+            builder = builder.header("Authorization", value);
+        }
+        let response = app
+            .oneshot(builder.body(axum::body::Body::empty()).unwrap())
+            .await
+            .unwrap();
+        let status = response.status();
+        let body = axum::body::to_bytes(response.into_body(), 1024)
+            .await
+            .unwrap();
+        (status, String::from_utf8(body.to_vec()).unwrap())
+    }
+
+    #[tokio::test]
+    async fn public_endpoint_is_404_when_not_configured() {
+        let (status, _) = call_public(None, None).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn public_endpoint_uses_the_service_token_and_drops_the_callers() {
+        let access = std::sync::Arc::new(crate::public::PublicAccess::new(
+            "service-token".into(),
+            10,
+            2,
+        ));
+        for authorization in [None, Some("Bearer caller-token")] {
+            let (status, body) = call_public(Some(access.clone()), authorization).await;
+            assert_eq!(status, StatusCode::OK);
+            assert_eq!(
+                body, "service-token|Some(Public)|false",
+                "{authorization:?}"
+            );
+        }
     }
 
     #[tokio::test]

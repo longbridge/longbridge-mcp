@@ -249,6 +249,18 @@ async fn tools_json() -> axum::Json<&'static serde_json::Value> {
     axum::Json(&*TOOLS_JSON)
 }
 
+/// Tool manifest for the login-free `/public` endpoint: market data,
+/// fundamentals, news and research only.
+async fn public_tools_json() -> axum::Json<&'static serde_json::Value> {
+    static PUBLIC_TOOLS_JSON: std::sync::LazyLock<serde_json::Value> =
+        std::sync::LazyLock::new(|| {
+            let allow: std::collections::HashSet<&'static str> =
+                tools::public_tool_names().into_iter().collect();
+            build_tools_json(Some(&allow))
+        });
+    axum::Json(&*PUBLIC_TOOLS_JSON)
+}
+
 /// Restricted tool manifest for the public `/v2` endpoint: the broader
 /// allowlist (read-only account/portfolio + order history, but no trade
 /// execution, DCA, IPO orders, or money movement), with scopes pruned to match.
@@ -348,6 +360,9 @@ async fn openai_apps_challenge() -> &'static str {
 
 pub struct AppState {
     pub base_url: String,
+    /// Configuration of the login-free `/public` endpoint; `None` keeps it
+    /// disabled (every `/public` request gets 404).
+    pub public: Option<Arc<crate::public::PublicAccess>>,
 }
 
 pub fn create_router(state: Arc<AppState>) -> Router {
@@ -398,7 +413,9 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route("/mcp/tools.json", axum::routing::get(tools_json))
         .route("/mcp/scopes.json", axum::routing::get(scopes_json))
         // Restricted public manifest for the `/v2` endpoint (allowlist only).
-        .route("/v2/tools.json", axum::routing::get(v2_tools_json));
+        .route("/v2/tools.json", axum::routing::get(v2_tools_json))
+        // Manifest for the login-free `/public` endpoint (allowlist only).
+        .route("/public/tools.json", axum::routing::get(public_tools_json));
 
     let oauth_proxy_routes: Router = Router::new()
         .route(
@@ -471,6 +488,26 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         Some(middleware::RestrictedVersion::V2),
     );
 
+    // Login-free endpoint — callers send no credential; the server calls
+    // upstream with the operator's service credential, exposes only the public
+    // market-data allowlist and rate-limits tool calls (see `crate::public`).
+    let public_access = state.public.clone();
+    let mcp_public = tower::ServiceBuilder::new()
+        .layer(axum::middleware::from_fn(limit_request_body))
+        .layer(axum::middleware::from_fn(
+            move |req: axum::extract::Request, next: axum::middleware::Next| {
+                let access = public_access.clone();
+                async move { middleware::public_auth_layer(req, next, access).await }
+            },
+        ))
+        .service(StreamableHttpService::new(
+            move || Ok(Longbridge),
+            Arc::new(NeverSessionManager::default()),
+            StreamableHttpServerConfig::default()
+                .with_legacy_session_mode(false)
+                .disable_allowed_hosts(),
+        ));
+
     Router::new()
         .merge(metadata_routes)
         .merge(server_card_route)
@@ -481,6 +518,7 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .merge(oauth_proxy_routes)
         .nest_service("/agent", mcp_agent)
         .nest_service("/v2", mcp_v2)
+        .nest_service("/public", mcp_public)
         .nest_service("/mcp", mcp_with_auth)
         // Also serve at root so deployments that omit the /mcp path prefix work.
         .fallback_service(root_service)
@@ -509,6 +547,7 @@ mod tests {
     fn router() -> axum::Router {
         create_router(Arc::new(AppState {
             base_url: "http://127.0.0.1:8000".to_string(),
+            public: None,
         }))
     }
 
@@ -622,6 +661,7 @@ mod tests {
     async fn authorize_route_redirects_without_bearer_and_is_not_cacheable() {
         let router = create_router(Arc::new(AppState {
             base_url: "http://127.0.0.1:8000".to_string(),
+            public: None,
         }));
         let query = "response_type=code&client_id=abc&state=s%2B1&code_challenge=x";
         let response = router

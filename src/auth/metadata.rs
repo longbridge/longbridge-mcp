@@ -512,6 +512,7 @@ mod tests {
         ]);
         let state = Arc::new(AppState {
             base_url: BASE.to_string(),
+            public: None,
         });
         let Json(metadata) = authorization_server_metadata(State(state), h).await;
 
