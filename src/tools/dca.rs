@@ -5,6 +5,8 @@ use rmcp::model::CallToolResult;
 use rmcp::schemars::JsonSchema;
 use rmcp::serde::Deserialize;
 
+use crate::tools::support::confirm::{Confirmer, Decision};
+use crate::tools::support::dry_run::Scope;
 use crate::tools::support::http_client::{http_get_tool, http_get_tool_unix, http_post_tool};
 use crate::tools::support::tolerant::{
     tolerant_option_bool, tolerant_option_u32, tolerant_vec_string,
@@ -40,6 +42,16 @@ pub struct DcaCreateParam {
     /// Allow margin financing (default false)
     #[serde(default, deserialize_with = "tolerant_option_bool")]
     pub allow_margin: Option<bool>,
+    /// The `confirmation_code` from this request's dry run. WITHOUT IT NOTHING
+    /// IS SENT.
+    ///
+    /// Omitted (the default) makes this a DRY RUN: the request is validated and
+    /// echoed back with a three-digit `confirmation_code`, and nothing changes.
+    /// Call once without `execute`, show the returned preview to the user, and
+    /// call again quoting the code only after the user has explicitly confirmed
+    /// that exact request. The code expires 10 to 20 minutes after the dry
+    /// run. Never quote it back on your own initiative.
+    pub execute: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -58,12 +70,32 @@ pub struct DcaUpdateParam {
     /// Allow margin financing
     #[serde(default, deserialize_with = "tolerant_option_bool")]
     pub allow_margin: Option<bool>,
+    /// The `confirmation_code` from this request's dry run. WITHOUT IT NOTHING
+    /// IS SENT.
+    ///
+    /// Omitted (the default) makes this a DRY RUN: the request is validated and
+    /// echoed back with a three-digit `confirmation_code`, and nothing changes.
+    /// Call once without `execute`, show the returned preview to the user, and
+    /// call again quoting the code only after the user has explicitly confirmed
+    /// that exact request. The code expires 10 to 20 minutes after the dry
+    /// run. Never quote it back on your own initiative.
+    pub execute: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct DcaPlanIdParam {
     /// Plan ID
     pub plan_id: String,
+    /// The `confirmation_code` from this request's dry run. WITHOUT IT NOTHING
+    /// IS SENT.
+    ///
+    /// Omitted (the default) makes this a DRY RUN: the request is validated and
+    /// echoed back with a three-digit `confirmation_code`, and nothing changes.
+    /// Call once without `execute`, show the returned preview to the user, and
+    /// call again quoting the code only after the user has explicitly confirmed
+    /// that exact request. The code expires 10 to 20 minutes after the dry
+    /// run. Never quote it back on your own initiative.
+    pub execute: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -117,9 +149,9 @@ pub async fn dca_list(
 
 pub async fn dca_create(
     mctx: &crate::tools::McpContext,
+    confirm: &Confirmer,
     p: DcaCreateParam,
 ) -> Result<CallToolResult, McpError> {
-    let client = mctx.create_http_client();
     let allow_margin = if p.allow_margin.unwrap_or(false) {
         1
     } else {
@@ -140,14 +172,25 @@ pub async fn dca_create(
         body["invest_day_of_month"] = serde_json::json!(dom.to_string());
     }
 
+    // A plan keeps buying on its own once created, so every field that shapes
+    // what it buys and when is part of what the user approves.
+    let scope = plan_scope(Scope::request("dca create").and("symbol", &p.symbol), &body);
+    let preview = serde_json::json!({ "action": "dca_create", "plan": plan_preview(&body) });
+    if let Decision::Respond(r) = confirm
+        .confirm(&scope, p.execute.as_deref(), preview)
+        .await?
+    {
+        return Ok(r);
+    }
+    let client = mctx.create_http_client();
     http_post_tool(&client, "/v1/dailycoins/create", body).await
 }
 
 pub async fn dca_update(
     mctx: &crate::tools::McpContext,
+    confirm: &Confirmer,
     p: DcaUpdateParam,
 ) -> Result<CallToolResult, McpError> {
-    let client = mctx.create_http_client();
     let mut body = serde_json::json!({ "plan_id": p.plan_id });
 
     if let Some(ref amount) = p.amount {
@@ -166,34 +209,107 @@ pub async fn dca_update(
         body["allow_margin_finance"] = serde_json::json!(if allow { 1 } else { 0 });
     }
 
+    let scope = plan_scope(Scope::on("dca update", "plan", &p.plan_id), &body);
+    let preview = serde_json::json!({ "action": "dca_update", "changes": plan_preview(&body) });
+    if let Decision::Respond(r) = confirm
+        .confirm(&scope, p.execute.as_deref(), preview)
+        .await?
+    {
+        return Ok(r);
+    }
+    let client = mctx.create_http_client();
     http_post_tool(&client, "/v1/dailycoins/update", body).await
 }
 
 pub async fn dca_pause(
     mctx: &crate::tools::McpContext,
+    confirm: &Confirmer,
     p: DcaPlanIdParam,
 ) -> Result<CallToolResult, McpError> {
-    let client = mctx.create_http_client();
-    let body = serde_json::json!({ "plan_id": p.plan_id, "status": "Suspended" });
-    http_post_tool(&client, "/v1/dailycoins/toggle", body).await
+    toggle(mctx, confirm, p, "dca pause", "Suspended").await
 }
 
 pub async fn dca_resume(
     mctx: &crate::tools::McpContext,
+    confirm: &Confirmer,
     p: DcaPlanIdParam,
 ) -> Result<CallToolResult, McpError> {
-    let client = mctx.create_http_client();
-    let body = serde_json::json!({ "plan_id": p.plan_id, "status": "Active" });
-    http_post_tool(&client, "/v1/dailycoins/toggle", body).await
+    toggle(mctx, confirm, p, "dca resume", "Active").await
 }
 
 pub async fn dca_stop(
     mctx: &crate::tools::McpContext,
+    confirm: &Confirmer,
     p: DcaPlanIdParam,
 ) -> Result<CallToolResult, McpError> {
+    toggle(mctx, confirm, p, "dca stop", "Finished").await
+}
+
+/// Pause, resume or stop a plan, after the user confirms it.
+async fn toggle(
+    mctx: &crate::tools::McpContext,
+    confirm: &Confirmer,
+    p: DcaPlanIdParam,
+    action: &str,
+    status: &str,
+) -> Result<CallToolResult, McpError> {
+    let scope = Scope::on(action, "plan", &p.plan_id);
+    let preview = serde_json::json!({
+        "action": action.replace(' ', "_"),
+        "plan_id": p.plan_id,
+        "new_status": status,
+    });
+    if let Decision::Respond(r) = confirm
+        .confirm(&scope, p.execute.as_deref(), preview)
+        .await?
+    {
+        return Ok(r);
+    }
     let client = mctx.create_http_client();
-    let body = serde_json::json!({ "plan_id": p.plan_id, "status": "Finished" });
+    let body = serde_json::json!({ "plan_id": p.plan_id, "status": status });
     http_post_tool(&client, "/v1/dailycoins/toggle", body).await
+}
+
+/// A plan request body with the tool's own parameter names, for the preview a
+/// person reads (the upstream body says `per_invest_amount` and
+/// `allow_margin_finance: 0`).
+fn plan_preview(body: &serde_json::Value) -> serde_json::Value {
+    let mut preview = serde_json::Map::new();
+    for (key, name) in [
+        ("plan_id", "plan_id"),
+        ("symbol", "symbol"),
+        ("per_invest_amount", "amount"),
+        ("invest_frequency", "frequency"),
+        ("invest_day_of_week", "day_of_week"),
+        ("invest_day_of_month", "day_of_month"),
+    ] {
+        if let Some(v) = body.get(key).filter(|v| !v.is_null()) {
+            preview.insert(name.to_string(), v.clone());
+        }
+    }
+    if let Some(margin) = body.get("allow_margin_finance").and_then(|v| v.as_i64()) {
+        preview.insert("allow_margin".to_string(), serde_json::json!(margin == 1));
+    }
+    serde_json::Value::Object(preview)
+}
+
+/// Fold every field of a plan request body into `scope`, in a fixed order, so
+/// a code confirmed for one amount or schedule cannot apply another.
+fn plan_scope(mut scope: Scope, body: &serde_json::Value) -> Scope {
+    for (label, key) in [
+        ("amount", "per_invest_amount"),
+        ("frequency", "invest_frequency"),
+        ("day_of_week", "invest_day_of_week"),
+        ("day_of_month", "invest_day_of_month"),
+        ("margin", "allow_margin_finance"),
+    ] {
+        match &body[key] {
+            serde_json::Value::Null => {}
+            serde_json::Value::String(v) => scope = scope.and(label, v),
+            other => scope = scope.and(label, &other.to_string()),
+        }
+    }
+    scope
 }
 
 pub async fn dca_history(
@@ -230,4 +346,52 @@ pub async fn dca_check(
     let client = mctx.create_http_client();
     let body = serde_json::json!({ "symbols": p.symbols });
     http_post_tool(&client, "/v1/dailycoins/batch-check-support", body).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn body(amount: &str) -> serde_json::Value {
+        serde_json::json!({
+            "symbol": "AAPL.US",
+            "per_invest_amount": amount,
+            "invest_frequency": "Weekly",
+            "invest_day_of_week": "Mon",
+            "allow_margin_finance": 0,
+        })
+    }
+
+    #[test]
+    fn plan_scope_binds_amount_schedule_and_margin() {
+        let scope = |b: &serde_json::Value| plan_scope(Scope::request("dca create"), b);
+        assert_eq!(
+            scope(&body("100")).to_string(),
+            "dca create + amount 100 + frequency WEEKLY + day_of_week MON + margin 0"
+        );
+        // A code confirmed for one amount must not create a bigger plan.
+        assert_ne!(scope(&body("100")).code(), scope(&body("1000")).code());
+        assert_eq!(scope(&body("100")).code(), scope(&body("100.00")).code());
+    }
+
+    #[test]
+    fn preview_uses_the_tool_parameter_names() {
+        assert_eq!(
+            plan_preview(&body("100")),
+            serde_json::json!({
+                "symbol": "AAPL.US",
+                "amount": "100",
+                "frequency": "Weekly",
+                "day_of_week": "Mon",
+                "allow_margin": false,
+            })
+        );
+    }
+
+    #[test]
+    fn omitting_execute_deserializes_to_a_dry_run() {
+        let p: DcaPlanIdParam =
+            serde_json::from_value(serde_json::json!({ "plan_id": "1" })).unwrap();
+        assert!(p.execute.is_none(), "no execute must mean a dry run");
+    }
 }

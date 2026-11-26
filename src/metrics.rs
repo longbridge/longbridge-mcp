@@ -175,6 +175,34 @@ static TOOL_BACKOFF_RETRIES_TOTAL: LazyLock<IntCounterVec> = LazyLock::new(|| {
     counter
 });
 
+static SKILL_REQUESTS_TOTAL: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    let counter = IntCounterVec::new(
+        Opts::new(
+            "mcp_skill_requests_total",
+            "Skills-over-MCP requests: `kind` is list / get / read, `skill` the skill \
+             asked for (`*` for list)",
+        ),
+        &["kind", "skill", "client"],
+    )
+    .unwrap();
+    REGISTRY.register(Box::new(counter.clone())).unwrap();
+    counter
+});
+
+static TASK_REQUESTS_TOTAL: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    let counter = IntCounterVec::new(
+        Opts::new(
+            "mcp_task_requests_total",
+            "MCP Tasks requests on order tasks: `method` is get / cancel, `result` \
+             the task status returned, `refused` or `error`",
+        ),
+        &["method", "result"],
+    )
+    .unwrap();
+    REGISTRY.register(Box::new(counter.clone())).unwrap();
+    counter
+});
+
 static FX_RATE_CACHE_TOTAL: LazyLock<IntCounterVec> = LazyLock::new(|| {
     let counter = IntCounterVec::new(
         Opts::new(
@@ -275,6 +303,21 @@ pub fn record_backoff_retry(tool_name: &str) {
     let client = CURRENT_CLIENT.try_with(|c| *c).unwrap_or("unknown");
     TOOL_BACKOFF_RETRIES_TOTAL
         .with_label_values(&[tool_name, client])
+        .inc();
+}
+
+/// Record one skills-over-MCP request.
+pub fn record_skill_request(kind: &str, skill: &str) {
+    let client = CURRENT_CLIENT.try_with(|c| *c).unwrap_or("unknown");
+    SKILL_REQUESTS_TOTAL
+        .with_label_values(&[kind, skill, client])
+        .inc();
+}
+
+/// Record one `tasks/get` or `tasks/cancel` on an order task.
+pub fn record_task_request(method: &str, result: &str) {
+    TASK_REQUESTS_TOTAL
+        .with_label_values(&[method, result])
         .inc();
 }
 

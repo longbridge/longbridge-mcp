@@ -8,7 +8,7 @@
 //! oversized results are trimmed here instead, keeping valid JSON and telling
 //! the model what was cut and how to ask for less.
 
-use rmcp::model::{CallToolResult, Content};
+use rmcp::model::{CallToolResult, ContentBlock};
 use serde_json::Value;
 
 /// Largest result text, in UTF-8 bytes, returned as-is. Sized for the
@@ -76,12 +76,12 @@ pub fn limit_with(mut result: CallToolResult, hint: RestHint) -> (CallToolResult
         // The note goes first: some clients surface only the first block, and
         // a model must not read a partial result as complete.
         result.content = vec![
-            Content::text(format!(
+            ContentBlock::text(format!(
                 "[TRUNCATED — partial result: the result was {} bytes, over the \
                  {MAX_RESPONSE_BYTES}-byte limit; narrow the request]",
                 text.len()
             )),
-            Content::text(clipped),
+            ContentBlock::text(clipped),
         ];
         return (result, true);
     };
@@ -189,7 +189,10 @@ pub fn limit_with(mut result: CallToolResult, hint: RestHint) -> (CallToolResult
         );
     }
     // The note goes first: some clients surface only the first block.
-    result.content = vec![Content::text(note), Content::text(value.to_string())];
+    result.content = vec![
+        ContentBlock::text(note),
+        ContentBlock::text(value.to_string()),
+    ];
     result.structured_content = None;
     (result, true)
 }
@@ -366,7 +369,7 @@ mod tests {
         let rows: Vec<_> = (0..2000)
             .map(|i| json!({ "id": i, "name": "x".repeat(20) }))
             .collect();
-        let (result, trimmed) = limit(CallToolResult::success(vec![Content::text(
+        let (result, trimmed) = limit(CallToolResult::success(vec![ContentBlock::text(
             json!({ "items": rows }).to_string(),
         )]));
         assert!(trimmed, "an oversized result must be trimmed");
@@ -388,7 +391,7 @@ mod tests {
 
     #[test]
     fn small_results_pass_through() {
-        let result = CallToolResult::success(vec![Content::text(r#"{"a":1}"#)]);
+        let result = CallToolResult::success(vec![ContentBlock::text(r#"{"a":1}"#)]);
         let (out, trimmed) = limit(result.clone());
         assert!(!trimmed, "a small result must not be trimmed");
         assert_eq!(out, result);
@@ -402,7 +405,7 @@ mod tests {
         let candles: Vec<Value> = (0..2000)
             .map(|i| json!({"timestamp": format!("{}", first + i * 86_400), "close": "123.456789", "volume": "123456789"}))
             .collect();
-        let result = CallToolResult::success(vec![Content::text(json!(candles).to_string())]);
+        let result = CallToolResult::success(vec![ContentBlock::text(json!(candles).to_string())]);
         let (out, trimmed) = limit(result);
         assert!(trimmed, "an oversized result must be trimmed");
         let body = text_of(&out, 1);
@@ -434,7 +437,7 @@ mod tests {
                 json!({"timestamp": ts, "close": "123.456789", "volume": "123456789", "turnover": "98765432.1"})
             })
             .collect();
-        let result = CallToolResult::success(vec![Content::text(json!(bars).to_string())]);
+        let result = CallToolResult::success(vec![ContentBlock::text(json!(bars).to_string())]);
         let (out, trimmed) = limit(result);
         assert!(trimmed, "960 minute bars exceed the limit");
         let kept: Vec<Value> = serde_json::from_str(&text_of(&out, 1)).expect("still valid JSON");
@@ -461,7 +464,7 @@ mod tests {
             })
             .collect();
         let doc = json!({"list": {"b_s": {"indicators": indicators}}});
-        let result = CallToolResult::success(vec![Content::text(doc.to_string())]);
+        let result = CallToolResult::success(vec![ContentBlock::text(doc.to_string())]);
         let (out, trimmed) = limit(result);
         assert!(trimmed, "the report exceeds the limit");
         let body: Value = serde_json::from_str(&text_of(&out, 1)).expect("still valid JSON");
@@ -486,7 +489,7 @@ mod tests {
             })
             .collect();
         let result =
-            CallToolResult::success(vec![Content::text(json!({"list": days}).to_string())]);
+            CallToolResult::success(vec![ContentBlock::text(json!({"list": days}).to_string())]);
         let (out, trimmed) = limit(result);
         assert!(trimmed, "an oversized result must be trimmed");
         let body: Value = serde_json::from_str(&text_of(&out, 1)).unwrap();
@@ -509,7 +512,7 @@ mod tests {
             )
             .collect();
         let doc = json!({"list": [{"date": "2026-10-16", "infos": infos}], "partial": false});
-        let result = CallToolResult::success(vec![Content::text(doc.to_string())]);
+        let result = CallToolResult::success(vec![ContentBlock::text(doc.to_string())]);
         let (out, trimmed) = limit(result);
         assert!(trimmed, "an oversized result must be trimmed");
         let body: Value = serde_json::from_str(&text_of(&out, 1)).unwrap();
@@ -533,7 +536,7 @@ mod tests {
     #[test]
     fn errors_are_never_trimmed() {
         let big = "x".repeat(MAX_RESPONSE_BYTES * 2);
-        let result = CallToolResult::error(vec![Content::text(big)]);
+        let result = CallToolResult::error(vec![ContentBlock::text(big)]);
         let (_, trimmed) = limit(result);
         assert!(!trimmed, "an error result must never be trimmed");
     }

@@ -13,9 +13,17 @@
 //! another would fail intermittently, for no reason the user could see.
 //!
 //! So the code is *recomputed* rather than remembered — three digits off a
-//! digest of the canonical request, and nothing else. No clock, no stored
-//! state, no per-instance value: every instance derives the same answer from
-//! the same request, with no shared store and nothing to configure.
+//! digest of the canonical request and the current ten-minute window. No
+//! stored state, no per-instance value: every instance derives the same answer
+//! from the same request and the wall clock, with no shared store and nothing
+//! to configure.
+//!
+//! # Expiry
+//!
+//! A code is accepted in the window it was issued in and the next one, so it
+//! lives 10 to 20 minutes. Without the window the code for a request never
+//! changed: an approval given once could be quoted again for the same order
+//! days later, without the user seeing it again.
 //!
 //! # What it is for
 //!
@@ -46,6 +54,24 @@ use rmcp::ErrorData as McpError;
 use rmcp::model::CallToolResult;
 use sha2::{Digest, Sha256};
 use std::str::FromStr;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+/// Length of one confirmation window. A code or an approval is accepted in
+/// the window it was issued in and the next, so it lives 10 to 20 minutes.
+pub const WINDOW_SECS: u64 = 600;
+
+/// The current confirmation window.
+pub fn current_window() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs() / WINDOW_SECS)
+}
+
+/// The windows a confirmation issued at or after `window - 1` is still valid
+/// in: the current one first, then the one before.
+pub fn live_windows(window: u64) -> impl Iterator<Item = u64> {
+    std::iter::once(window).chain(window.checked_sub(1))
+}
 
 /// Canonical form of one field.
 ///
@@ -157,6 +183,18 @@ impl Scope {
         ))
     }
 
+    /// `dca create` — any other gated request, named by what it does. Every
+    /// field the user approves is folded in with [`Scope::and`].
+    pub fn request(action: &str) -> Self {
+        Self(action.to_string())
+    }
+
+    /// `dca pause plan 42` — an action on something that already exists and
+    /// is not an order (a DCA plan, a price alert).
+    pub fn on(action: &str, kind: &str, id: &str) -> Self {
+        Self(format!("{action} {kind} {}", canonical(id)))
+    }
+
     /// `grid submit 100 700.HK @ 449` — a grid strategy.
     pub fn grid(action: &str, symbol: &str, quantity: &str, base_price: &str) -> Self {
         Self(format!(
@@ -168,12 +206,18 @@ impl Scope {
         ))
     }
 
-    /// The three-digit code this scope is confirmed by.
+    /// The three-digit code this scope is confirmed by right now.
     pub fn code(&self) -> String {
+        self.code_in(current_window())
+    }
+
+    /// The code for this scope in a given confirmation window.
+    fn code_in(&self, window: u64) -> String {
         let mut hasher = Sha256::new();
         // Domain separator: this digest must never coincide with any other use
         // of the same text elsewhere in the server.
-        hasher.update(b"longbridge-mcp/execute-confirmation/v1");
+        hasher.update(b"longbridge-mcp/execute-confirmation/v2");
+        hasher.update(window.to_be_bytes());
         hasher.update(self.0.as_bytes());
         let digest = hasher.finalize();
         let n = (u32::from(digest[0]) << 8) | u32::from(digest[1]);
@@ -188,16 +232,21 @@ impl Scope {
     /// canonical text goes into the error so a mismatch can be read rather than
     /// guessed at.
     pub fn verify(&self, code: &str) -> Result<(), McpError> {
+        self.verify_at(code, current_window())
+    }
+
+    fn verify_at(&self, code: &str, window: u64) -> Result<(), McpError> {
         let trimmed = code.trim();
         let normalized = trimmed
             .parse::<u32>()
             .map_or_else(|_| trimmed.to_string(), |n| format!("{:03}", n % 1000));
-        if normalized == self.code() {
+        if live_windows(window).any(|w| normalized == self.code_in(w)) {
             return Ok(());
         }
         Err(McpError::invalid_params(
             format!(
-                "Confirmation code {trimmed} does not match this request ({self}). Call this \
+                "Confirmation code {trimmed} does not match this request ({self}) or has \
+                 expired (codes last 10 to 20 minutes). Call this \
                  tool again without `execute`, show the returned preview to the user, and \
                  only then re-call with the `confirmation_code` that preview returns."
             ),
@@ -222,10 +271,11 @@ pub fn result(scope: &Scope, preview: serde_json::Value) -> Result<CallToolResul
         "preview": preview,
         "confirmation_code": code,
         "next_step": format!(
-            "DRY RUN — nothing was sent to the exchange. Show this preview to the user and \
-             ask them to confirm it. Only call this tool again with execute=\"{code}\" after \
-             the user has explicitly confirmed this exact order. The code applies only to this \
-             exact request. Never quote it back on your own initiative."
+            "DRY RUN — nothing was sent. Show this preview to the user and ask them to \
+             confirm it. Only call this tool again with execute=\"{code}\" after the user has \
+             explicitly confirmed this exact request. The code applies only to this exact \
+             request and expires within 20 minutes. Never quote it back on your own \
+             initiative."
         ),
     }))
 }
@@ -233,6 +283,25 @@ pub fn result(scope: &Scope, preview: serde_json::Value) -> Result<CallToolResul
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_code_lives_through_the_next_window_only() {
+        let scope = Scope::order("Buy", "700.HK", "100", "400");
+        let issued = scope.code_in(1000);
+        assert!(scope.verify_at(&issued, 1000).is_ok());
+        assert!(
+            scope.verify_at(&issued, 1001).is_ok(),
+            "next window still valid"
+        );
+        assert!(
+            scope.verify_at(&issued, 1002).is_err(),
+            "a code two windows old must be rejected"
+        );
+        assert!(
+            scope.verify_at(&issued, 999).is_err(),
+            "no codes from the future"
+        );
+    }
 
     #[test]
     fn and_json_treats_equal_decimals_as_one_value() {

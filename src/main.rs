@@ -291,6 +291,10 @@ async fn serve() -> anyhow::Result<()> {
         return Ok(());
     }
 
+    // Load the skills now, so a bad skills directory shows in the startup
+    // log rather than on the first request, and keep them fresh if asked to.
+    crate::tools::init_skills();
+
     let app_state = Arc::new(crate::auth::AppState {
         base_url: config.base_url.clone(),
     });

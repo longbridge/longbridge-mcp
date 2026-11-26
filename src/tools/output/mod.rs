@@ -26,7 +26,9 @@ use std::collections::BTreeMap;
 use rmcp::schemars::JsonSchema;
 use rmcp::serde::Serialize;
 
-/// Returned by `submit_order`, which is a dry run unless `execute=true`.
+/// Returned by `submit_order` / `submit_multileg_order`, which are dry runs
+/// unless `execute` carries the confirmation code (or the user confirmed it
+/// in the client).
 ///
 /// One struct covers both outcomes because the MCP spec requires every response
 /// from a tool declaring an `outputSchema` to validate against it, and the dry
@@ -372,14 +374,6 @@ pub struct AttachedOrderDetailResponse {
     pub force_only_rth: Option<String>,
     /// Order tag (e.g. `Normal`, `LongTerm`).
     pub tag: String,
-}
-
-/// Returned by `submit_order` / `submit_multileg_order`.
-#[derive(Debug, Serialize, JsonSchema)]
-pub struct OrderIdResponse {
-    /// The newly-created order ID. Pass this to `cancel_order` /
-    /// `replace_order` / `order_detail`.
-    pub order_id: String,
 }
 
 /// Returned by `order_detail`. Single order with full lifecycle metadata.

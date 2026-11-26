@@ -19,6 +19,7 @@ use rmcp::serde::Deserialize;
 
 use crate::error::Error;
 use crate::serialize::{strip_nulls, strip_trailing_zeros};
+use crate::tools::support::confirm::{Confirmer, Decision};
 use crate::tools::support::dry_run;
 use crate::tools::support::http_client::http_get_tool;
 use crate::tools::support::parse;
@@ -173,9 +174,10 @@ pub struct SubmitOrderParam {
     ///
     /// Required protocol: call once without `execute`, show the returned
     /// preview to the user, and call again quoting the code only after the user
-    /// has explicitly confirmed that exact order. The code is single use,
-    /// expires in 10 minutes, and applies only to this exact order — change any
-    /// field and it stops working. Never quote it back on your own initiative,
+    /// has explicitly confirmed that exact order. The code is derived
+    /// from the order itself, so it applies only to this exact order — change
+    /// any field and it stops working. It expires 10 to 20 minutes after the
+    /// dry run. Never quote it back on your own initiative,
     /// and never in the same turn the user first asks.
     pub execute: Option<String>,
 }
@@ -215,6 +217,17 @@ pub struct SubmitMultiLegOrderParam {
     /// Idempotency key, unique per intended order. See the field of the same
     /// name on `submit_order`.
     pub client_request_id: Option<String>,
+    /// The `confirmation_code` from this order's dry run. WITHOUT IT NOTHING IS
+    /// SENT.
+    ///
+    /// Omitted (the default) makes this a DRY RUN: the request is validated and
+    /// echoed back with a three-digit `confirmation_code`, and nothing reaches
+    /// the exchange. Call once without `execute`, show the returned preview to
+    /// the user, and call again quoting the code only after the user has
+    /// explicitly confirmed that exact order. The code expires 10 to 20 minutes
+    /// after the dry run. Never quote it back on your own initiative, and never
+    /// in the same turn the user first asks.
+    pub execute: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -293,9 +306,10 @@ pub struct ReplaceOrderParam {
     ///
     /// Required protocol: call once without `execute`, show the returned
     /// preview to the user, and call again quoting the code only after the user
-    /// has explicitly confirmed that exact order. The code is single use,
-    /// expires in 10 minutes, and applies only to this exact order — change any
-    /// field and it stops working. Never quote it back on your own initiative,
+    /// has explicitly confirmed that exact order. The code is derived
+    /// from the order itself, so it applies only to this exact order — change
+    /// any field and it stops working. It expires 10 to 20 minutes after the
+    /// dry run. Never quote it back on your own initiative,
     /// and never in the same turn the user first asks.
     pub execute: Option<String>,
 }
@@ -344,9 +358,10 @@ pub struct CancelOrderParam {
     ///
     /// Required protocol: call once without `execute`, show the returned
     /// preview to the user, and call again quoting the code only after the user
-    /// has explicitly confirmed that exact order. The code is single use,
-    /// expires in 10 minutes, and applies only to this exact order — change any
-    /// field and it stops working. Never quote it back on your own initiative,
+    /// has explicitly confirmed that exact order. The code is derived
+    /// from the order itself, so it applies only to this exact order — change
+    /// any field and it stops working. It expires 10 to 20 minutes after the
+    /// dry run. Never quote it back on your own initiative,
     /// and never in the same turn the user first asks.
     pub execute: Option<String>,
 }
@@ -735,8 +750,30 @@ pub async fn order_detail(
     tool_json(&ap_order_detail_json(&result).map_err(Error::Serialize)?)
 }
 
+/// `tasks/get` for an order task: read the order with the caller's token and
+/// map its status onto the task (see `support::order_task`).
+pub async fn order_task(
+    mctx: &crate::tools::McpContext,
+    order_id: &str,
+) -> Result<rmcp::model::DetailedTask, McpError> {
+    if mctx.dc_region().await == longbridge::DcRegion::Us {
+        return Err(McpError::invalid_params(
+            "order tasks are not available for US accounts yet",
+            None,
+        ));
+    }
+    let (ctx, _) = TradeContext::new(mctx.create_config());
+    let order = ctx
+        .order_detail(GetOrderDetailOptions::new(order_id))
+        .await
+        .map_err(Error::longbridge)?;
+    let detail = ap_order_detail_json(&order).map_err(Error::Serialize)?;
+    Ok(crate::tools::support::order_task::detailed(&order, detail))
+}
+
 pub async fn cancel_order(
     mctx: &crate::tools::McpContext,
+    confirm: &Confirmer,
     p: CancelOrderParam,
 ) -> Result<CallToolResult, McpError> {
     let (ctx, _) = TradeContext::new(mctx.create_config());
@@ -752,20 +789,25 @@ pub async fn cancel_order(
         },
         &p.order_id,
     );
-    // Two-step by design: without a confirmation code this cancels nothing.
-    let Some(code) = p.execute.clone() else {
+    // Two-step by design: nothing is cancelled until the user (through the
+    // client) or a quoted confirmation code approves it.
+    let preview = if confirm.needs_preview(p.execute.is_some()) {
         let existing = preview_existing_order(mctx, &ctx, &p.order_id, is_attached).await;
-        return dry_run::result(
-            &scope,
-            serde_json::json!({
-                "action": "cancel_order",
-                "order_id": p.order_id,
-                "is_attached": is_attached,
-                "order": existing,
-            }),
-        );
+        serde_json::json!({
+            "action": "cancel_order",
+            "order_id": p.order_id,
+            "is_attached": is_attached,
+            "order": existing,
+        })
+    } else {
+        serde_json::Value::Null
     };
-    scope.verify(&code)?;
+    if let Decision::Respond(r) = confirm
+        .confirm(&scope, p.execute.as_deref(), preview)
+        .await?
+    {
+        return Ok(r);
+    }
     let mut opts = CancelOrderOptions::new(p.order_id);
     if is_attached {
         opts = opts.is_attached();
@@ -1708,6 +1750,7 @@ fn missing_order_fields(p: &SubmitOrderParam) -> Vec<&'static str> {
 
 pub async fn submit_order(
     mctx: &crate::tools::McpContext,
+    confirm: &Confirmer,
     p: SubmitOrderParam,
 ) -> Result<CallToolResult, McpError> {
     use longbridge::Decimal;
@@ -1802,31 +1845,32 @@ pub async fn submit_order(
     }
 
     let scope = submit_scope(&p);
-    // Two-step by design: without a confirmation code this places nothing.
-    let Some(code) = p.execute.clone() else {
-        return dry_run::result(
-            &scope,
-            serde_json::json!({
-                "action": "submit_order",
-                "symbol": p.symbol,
-                "side": p.side,
-                "order_type": p.order_type,
-                "quantity": p.submitted_quantity,
-                "time_in_force": p.time_in_force,
-                "price": p.submitted_price,
-                "trigger_price": p.trigger_price,
-                "limit_offset": p.limit_offset,
-                "trailing_amount": p.trailing_amount,
-                "trailing_percent": p.trailing_percent,
-                "expire_date": p.expire_date,
-                "outside_rth": p.outside_rth,
-                "remark": p.remark,
-                "client_request_id": p.client_request_id,
-                "attached": attached_submit_preview(&p),
-            }),
-        );
-    };
-    scope.verify(&code)?;
+    // Two-step by design: nothing is placed until the user (through the
+    // client) or a quoted confirmation code approves this exact order.
+    let preview = serde_json::json!({
+        "action": "submit_order",
+        "symbol": p.symbol,
+        "side": p.side,
+        "order_type": p.order_type,
+        "quantity": p.submitted_quantity,
+        "time_in_force": p.time_in_force,
+        "price": p.submitted_price,
+        "trigger_price": p.trigger_price,
+        "limit_offset": p.limit_offset,
+        "trailing_amount": p.trailing_amount,
+        "trailing_percent": p.trailing_percent,
+        "expire_date": p.expire_date,
+        "outside_rth": p.outside_rth,
+        "remark": p.remark,
+        "client_request_id": p.client_request_id,
+        "attached": attached_submit_preview(&p),
+    });
+    if let Decision::Respond(r) = confirm
+        .confirm(&scope, p.execute.as_deref(), preview)
+        .await?
+    {
+        return Ok(r);
+    }
 
     let (ctx, _) = TradeContext::new(mctx.create_config());
     let result = ctx.submit_order(opts).await.map_err(Error::longbridge)?;
@@ -1843,6 +1887,7 @@ pub async fn submit_order(
 /// a single strategy order and fills or rests as one.
 pub async fn submit_multileg_order(
     mctx: &crate::tools::McpContext,
+    confirm: &Confirmer,
     p: SubmitMultiLegOrderParam,
 ) -> Result<CallToolResult, McpError> {
     use longbridge::Decimal;
@@ -1872,6 +1917,35 @@ pub async fn submit_multileg_order(
         .map_err(|e| McpError::invalid_params(format!("invalid order_type: {e}"), None))?;
     let quantity = Decimal::from_str(&p.submitted_quantity)
         .map_err(|e| McpError::invalid_params(format!("invalid submitted_quantity: {e}"), None))?;
+
+    // The strategy, order type and every leg (symbol and ratio, in order) are
+    // part of what the user approves: a code confirmed for one spread must not
+    // place another. `remark` and `client_request_id` change nothing traded.
+    let mut scope = dry_run::Scope::order(
+        &p.side,
+        &p.strategy,
+        &p.submitted_quantity,
+        p.submitted_price.as_deref().unwrap_or(""),
+    )
+    .and("type", &p.order_type);
+    for leg in &p.legs {
+        scope = scope.and("leg", &format!("{} x{}", leg.symbol, leg.ratio_quantity));
+    }
+    let preview = serde_json::json!({
+        "action": "submit_multileg_order",
+        "strategy": p.strategy,
+        "side": p.side,
+        "order_type": p.order_type,
+        "quantity": p.submitted_quantity,
+        "price": p.submitted_price,
+        "legs": p.legs.iter().map(|leg| serde_json::json!({
+            "symbol": leg.symbol,
+            "ratio_quantity": leg.ratio_quantity,
+        })).collect::<Vec<_>>(),
+        "remark": p.remark,
+        "client_request_id": p.client_request_id,
+    });
+    let execute = p.execute.clone();
 
     let legs = p
         .legs
@@ -1909,13 +1983,24 @@ pub async fn submit_multileg_order(
         opts = opts.client_request_id(v.clone());
     }
 
+    // Validate everything first, so the dry run reports the same errors a real
+    // submit would; nothing is sent until the user approves this exact order.
+    if let Decision::Respond(r) = confirm.confirm(&scope, execute.as_deref(), preview).await? {
+        return Ok(r);
+    }
     let (ctx, _) = TradeContext::new(mctx.create_config());
     let result = ctx.submit_multileg(opts).await.map_err(Error::longbridge)?;
-    tool_json(&result)
+    // Same envelope as the dry run so both outcomes validate against
+    // `output::SubmitOrderResult`.
+    tool_json(&serde_json::json!({
+        "dry_run": false,
+        "order_id": result.order_id,
+    }))
 }
 
 pub async fn replace_order(
     mctx: &crate::tools::McpContext,
+    confirm: &Confirmer,
     p: ReplaceOrderParam,
 ) -> Result<CallToolResult, McpError> {
     use longbridge::Decimal;
@@ -1958,12 +2043,11 @@ pub async fn replace_order(
     }
     let (ctx, _) = TradeContext::new(mctx.create_config());
     let scope = replace_scope(&p);
-    // Two-step by design: without a confirmation code this changes nothing.
-    let Some(code) = p.execute.clone() else {
+    // Two-step by design: nothing changes until the user (through the
+    // client) or a quoted confirmation code approves it.
+    let preview = if confirm.needs_preview(p.execute.is_some()) {
         let existing = preview_existing_order(mctx, &ctx, &p.order_id, false).await;
-        return dry_run::result(
-            &scope,
-            serde_json::json!({
+        serde_json::json!({
                 "action": "replace_order",
                 "order_id": p.order_id,
                 "current_order": existing,
@@ -1974,10 +2058,16 @@ pub async fn replace_order(
                 "new_trailing_amount": p.trailing_amount,
                 "new_trailing_percent": p.trailing_percent,
                 "attached": attached_replace_preview(&p),
-            }),
-        );
+        })
+    } else {
+        serde_json::Value::Null
     };
-    scope.verify(&code)?;
+    if let Decision::Respond(r) = confirm
+        .confirm(&scope, p.execute.as_deref(), preview)
+        .await?
+    {
+        return Ok(r);
+    }
     ctx.replace_order(opts).await.map_err(Error::longbridge)?;
     Ok(tool_result("order replaced".to_string()))
 }
@@ -2038,13 +2128,24 @@ mod execute_gate_tests {
 
     use super::{CancelOrderParam, ReplaceOrderParam, SubmitOrderParam};
 
-    /// Every tool that can move real money. Grid writes count: a live grid keeps
-    /// placing orders on its own, so it is at least as consequential as a single
-    /// order.
-    const GATED_TOOLS: [&str; 10] = [
+    /// Every tool that can move real money or act on the user's behalf later.
+    /// Grid and DCA writes count: a live grid or plan keeps placing orders on
+    /// its own, so it is at least as consequential as a single order. Price
+    /// alerts are gated too, as part of the same user-confirmed write policy.
+    const GATED_TOOLS: [&str; 20] = [
         "submit_order",
         "cancel_order",
         "replace_order",
+        "submit_multileg_order",
+        "dca_create",
+        "dca_update",
+        "dca_pause",
+        "dca_resume",
+        "dca_stop",
+        "alert_add",
+        "alert_delete",
+        "alert_enable",
+        "alert_disable",
         "grid_submit",
         "grid_replace",
         "grid_cancel",
@@ -2132,7 +2233,13 @@ mod execute_gate_tests {
         // The original response schema remains available as a resource even
         // when jq projections have a different shape. It must admit dry runs.
         let tools = crate::tools::all_tools_full_cached();
-        for name in ["submit_order", "grid_submit"] {
+        for name in [
+            "submit_order",
+            "submit_multileg_order",
+            "grid_submit",
+            "alert_enable",
+            "alert_disable",
+        ] {
             let schema = tools
                 .iter()
                 .find(|t| t.name == name)
@@ -2148,6 +2255,81 @@ mod execute_gate_tests {
                 ["dry_run"],
                 "{name}: only `dry_run` may be required so both outcomes validate"
             );
+        }
+    }
+
+    /// Writes that move no money and act only on the user's own lists or
+    /// posts. Anything else that writes must be in `GATED_TOOLS`.
+    const UNGATED_WRITES: [&str; 12] = [
+        "authenticate",
+        "create_watchlist_group",
+        "delete_watchlist_group",
+        "update_watchlist_group",
+        "fund_validate_order",
+        "topic_create",
+        "topic_create_reply",
+        "sharelist_create",
+        "sharelist_delete",
+        "sharelist_add",
+        "sharelist_remove",
+        "sharelist_sort",
+    ];
+
+    #[test]
+    fn every_write_tool_is_gated_or_explicitly_exempt() {
+        for tool in crate::tools::all_tools_full_cached() {
+            let read_only = tool
+                .annotations
+                .as_ref()
+                .and_then(|a| a.read_only_hint)
+                .unwrap_or(false);
+            let name = tool.name.as_ref();
+            if read_only || UNGATED_WRITES.contains(&name) {
+                continue;
+            }
+            assert!(
+                GATED_TOOLS.contains(&name),
+                "{name} writes but is neither confirmation-gated nor listed as exempt; \
+                 gate it with `Confirmer` or add it to UNGATED_WRITES with a reason"
+            );
+        }
+    }
+
+    /// The server instructions describe the gate by the `execute` parameter,
+    /// not by listing tools: a list there grows with every gated tool and
+    /// goes stale silently, since nothing else checks it.
+    #[test]
+    fn server_instructions_name_no_gated_tool() {
+        use rmcp::ServerHandler;
+        let english = crate::tools::Longbridge
+            .get_info()
+            .instructions
+            .expect("the server has instructions");
+        let mut texts = vec![("en".to_string(), english)];
+        for (lang, raw) in [
+            ("zh-CN", include_str!("../../locales/zh-CN/tools.json")),
+            ("zh-HK", include_str!("../../locales/zh-HK/tools.json")),
+            ("ja", include_str!("../../locales/ja/tools.json")),
+        ] {
+            let json: serde_json::Value =
+                serde_json::from_str(raw).expect("locale file must be valid JSON");
+            let text = json["server_instructions"]
+                .as_str()
+                .expect("locale must have server_instructions")
+                .to_string();
+            texts.push((lang.to_string(), text));
+        }
+        for (lang, text) in texts {
+            assert!(
+                text.contains("`execute`"),
+                "{lang}: must describe the gate by `execute`"
+            );
+            for name in GATED_TOOLS {
+                assert!(
+                    !text.contains(name),
+                    "{lang}: server instructions must not list `{name}`"
+                );
+            }
         }
     }
 

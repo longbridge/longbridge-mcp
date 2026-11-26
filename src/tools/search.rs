@@ -215,7 +215,7 @@ fn make_result(value: serde_json::Value) -> CallToolResult {
     let structured = serde_json::from_str::<serde_json::Value>(&json)
         .ok()
         .filter(serde_json::Value::is_object);
-    let mut result = CallToolResult::success(vec![rmcp::model::Content::text(json)]);
+    let mut result = CallToolResult::success(vec![rmcp::model::ContentBlock::text(json)]);
     result.structured_content = structured;
     result
 }

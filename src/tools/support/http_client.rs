@@ -1,6 +1,6 @@
 use longbridge::httpclient::{HttpClient, Json};
 use reqwest::Method;
-use rmcp::model::{CallToolResult, Content, ErrorData as McpError};
+use rmcp::model::{CallToolResult, ContentBlock, ErrorData as McpError};
 
 use crate::error::Error;
 use crate::serialize::{convert_unix_paths, drop_redundant_counter_ids, transform_json};
@@ -20,12 +20,12 @@ fn success_with_structured(json: String) -> CallToolResult {
     let Ok(mut value) = serde_json::from_str::<serde_json::Value>(&json) else {
         // `transform_json` always emits valid JSON; on the theoretical parse
         // failure, fall back to the raw text with no structured content.
-        return CallToolResult::success(vec![Content::text(json)]);
+        return CallToolResult::success(vec![ContentBlock::text(json)]);
     };
     drop_redundant_counter_ids(&mut value);
     let json = serde_json::to_string(&value).unwrap_or(json);
     let structured = value.is_object().then_some(value);
-    let mut result = CallToolResult::success(vec![Content::text(json)]);
+    let mut result = CallToolResult::success(vec![ContentBlock::text(json)]);
     result.structured_content = structured;
     result
 }

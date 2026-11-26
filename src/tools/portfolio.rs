@@ -1,7 +1,7 @@
 use longbridge::DcRegion;
 use longbridge::trade::TradeContext;
 use rmcp::ErrorData as McpError;
-use rmcp::model::{CallToolResult, Content};
+use rmcp::model::{CallToolResult, ContentBlock};
 use rmcp::schemars::JsonSchema;
 use rmcp::serde::Deserialize;
 
@@ -141,7 +141,7 @@ pub async fn profit_analysis(
     let mut value = serde_json::Value::Object(merged);
     convert_unix_paths(&mut value, &["start_time", "end_time", "trade_update_time"]);
 
-    Ok(CallToolResult::success(vec![Content::text(
+    Ok(CallToolResult::success(vec![ContentBlock::text(
         value.to_string(),
     )]))
 }

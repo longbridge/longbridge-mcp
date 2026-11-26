@@ -1,6 +1,6 @@
 {
   "$schema": "../tools.schema.json",
-  "server_instructions": "長橋 OpenAPI MCP —— 市場數據、交易與分析。委託寫操作（submit_order、cancel_order、replace_order、grid_*、fund_submit_order、fund_cancel_order）均為兩步確認：先不帶 execute 呼叫一次以取得 confirmation_code，把預覽展示給用戶，待用戶確認後再以 execute=該確認碼再次呼叫。調用失敗時，工具會返回帶 `error_code` 與 `recoverable` 欄位的 JSON 信封：`reauth`（重新鑑權後重試）、`backoff`（等待後重試）、`fix_params`（修正參數後重試）或 `none`（不要重試，告知用戶）。\n\n所有工具均接受可選的 `_jq` 參數：一個使用 jq CLI 語法、作用於響應的篩選表達式；只有一個輸出時原樣返回，多個輸出時以 JSON 數組返回。各工具的響應結構不同（有的是頂層數組，有的是物件；大多數沒有 `data` 外層包裝），多數工具描述已說明其返回內容。如不確定，可先用 keys（物件）或 .[0] | keys（數組）低成本探查結構，而不是拉取完整響應。省略 `_jq` 則返回完整 JSON 響應。",
+  "server_instructions": "長橋 OpenAPI MCP —— 市場數據、交易與分析。凡是帶 `execute` 參數的工具都需兩步確認：先不帶 `execute` 呼叫，取得預覽和 `confirmation_code`，向用戶展示預覽，待用戶確認後再以 `execute` 設為該確認碼再次呼叫。若客戶端改為直接向用戶彈出確認表單，則 `execute` 會被忽略。調用失敗時，工具會返回帶 `error_code` 與 `recoverable` 欄位的 JSON 信封：`reauth`（重新鑑權後重試）、`backoff`（等待後重試）、`fix_params`（修正參數後重試）或 `none`（不要重試，告知用戶）。\n\n所有工具均接受可選的 `_jq` 參數：一個使用 jq CLI 語法、作用於響應的篩選表達式；只有一個輸出時原樣返回，多個輸出時以 JSON 數組返回。各工具的響應結構不同（有的是頂層數組，有的是物件；大多數沒有 `data` 外層包裝），多數工具描述已說明其返回內容。如不確定，可先用 keys（物件）或 .[0] | keys（數組）低成本探查結構，而不是拉取完整響應。省略 `_jq` 則返回完整 JSON 響應。",
   "tools": {
     "create_watchlist_group": {
       "title": "新建自選分組",
@@ -203,7 +203,7 @@
     },
     "cancel_order": {
       "title": "撤銷委託",
-      "description": "按 order_id 撤銷未成交的委託，成功返回 \"order cancelled\"；已成交或已撤銷則報錯。【必須兩步確認】未傳本次試執行返回的 confirmation_code 時，本工具為 DRY RUN（試執行）：只校驗並回顯委託內容，不會發往交易所。請先不帶 execute 呼叫一次，把返回的預覽完整展示給用戶，只有在用戶明確確認這筆委託之後，才可再次呼叫並把該確認碼傳入 execute。確認碼由訂單本身（代碼、方向、數量、價格）推導而來，只對這一筆完全相同的請求生效。絕不可自行決定回填確認碼，也不可在用戶首次提出請求的同一輪就回填。試執行還會回顯本次要撤銷的委託，便於用戶核對是否為目標訂單。設為 is_attached=true 可按附加單自身的 order_id 單獨撤銷某個止盈/止損附加單；撤銷母單則會連同其附加單一併撤銷",
+      "description": "按 order_id 撤銷未成交的委託，成功返回 \"order cancelled\"；已成交或已撤銷則報錯。【必須兩步確認】未傳本次試執行返回的 confirmation_code 時，本工具為 DRY RUN（試執行）：只校驗並回顯委託內容，不會發往交易所。請先不帶 execute 呼叫一次，把返回的預覽完整展示給用戶，只有在用戶明確確認這筆委託之後，才可再次呼叫並把該確認碼傳入 execute。確認碼由訂單本身（代碼、方向、數量、價格）推導而來，只對這一筆完全相同的請求生效。絕不可自行決定回填確認碼，也不可在用戶首次提出請求的同一輪就回填。試執行還會回顯本次要撤銷的委託，便於用戶核對是否為目標訂單。設為 is_attached=true 可按附加單自身的 order_id 單獨撤銷某個止盈/止損附加單；撤銷母單則會連同其附加單一併撤銷。客戶端支援直接詢問用戶時，會改為向用戶彈出確認表單，此時 execute 會被忽略",
       "properties": {
         "order_id": "委託單號",
         "is_attached": "設為 true 表示按止盈/止損附加單自身的 order_id 撤銷該附加單，母單保持不變；省略或傳 false 表示撤銷母單（其附加單會一併撤銷）",
@@ -212,52 +212,57 @@
     },
     "dca_create": {
       "title": "創建定投計劃",
-      "description": "創建定投（DCA）計劃。frequency：Daily/Weekly/Monthly；週頻對應 day_of_week（Mon–Fri），月頻對應 day_of_month（1-28）",
+      "description": "創建定投（DCA）計劃。frequency：Daily/Weekly/Monthly；週頻對應 day_of_week（Mon–Fri），月頻對應 day_of_month（1-28）。【必須兩步確認】未傳本次試執行返回的 confirmation_code 時，本工具為 DRY RUN（試執行）：只校驗並回顯請求內容，不會真正執行。請先不帶 execute 呼叫一次，把返回的預覽完整展示給用戶，只有在用戶明確確認之後，才可再次呼叫並把該確認碼傳入 execute。確認碼由請求本身推導而來，只對這一筆完全相同的請求生效。絕不可自行決定回填確認碼。客戶端支援直接詢問用戶時，會改為向用戶彈出確認表單，此時 execute 會被忽略",
       "properties": {
         "symbol": "證券代碼，例如 `\"AAPL.US\"`",
         "amount": "每期投入金額，例如 `\"100\"`",
         "frequency": "定投頻率：`Daily`（每日）、`Weekly`（每週）、`Monthly`（每月）",
         "day_of_week": "週頻時指定的週幾：`Mon`、`Tue`、`Wed`、`Thu`、`Fri`",
         "day_of_month": "月頻時指定的日期（1-28）",
-        "allow_margin": "是否允許使用融資（預設 `false`）"
+        "allow_margin": "是否允許使用融資（預設 `false`）",
+        "execute": "本次試執行返回的 confirmation_code。省略（預設）表示 DRY RUN：只校驗並回顯請求，同時返回一個三位確認碼，不會真正執行。必須先不帶該參數呼叫一次，把預覽展示給用戶，待用戶明確確認後才可再次呼叫並回填該碼。確認碼由請求本身推導而來，只對這一筆完全相同的請求生效——改動任何欄位即失效。不可自行決定回填。"
       }
     },
     "dca_pause": {
       "title": "暫停定投計劃",
-      "description": "按 plan_id 暫停定投計劃，計劃停止執行直至恢復。返回上游 API 響應。使用 dca_resume 重新啟動",
+      "description": "按 plan_id 暫停定投計劃，計劃停止執行直至恢復。返回上游 API 響應。使用 dca_resume 重新啟動。【必須兩步確認】未傳本次試執行返回的 confirmation_code 時，本工具為 DRY RUN（試執行）：只校驗並回顯請求內容，不會真正執行。請先不帶 execute 呼叫一次，把返回的預覽完整展示給用戶，只有在用戶明確確認之後，才可再次呼叫並把該確認碼傳入 execute。確認碼由請求本身推導而來，只對這一筆完全相同的請求生效。絕不可自行決定回填確認碼。客戶端支援直接詢問用戶時，會改為向用戶彈出確認表單，此時 execute 會被忽略",
       "properties": {
-        "plan_id": "定投計劃 ID"
+        "plan_id": "定投計劃 ID",
+        "execute": "本次試執行返回的 confirmation_code。省略（預設）表示 DRY RUN：只校驗並回顯請求，同時返回一個三位確認碼，不會真正執行。必須先不帶該參數呼叫一次，把預覽展示給用戶，待用戶明確確認後才可再次呼叫並回填該碼。確認碼由請求本身推導而來，只對這一筆完全相同的請求生效——改動任何欄位即失效。不可自行決定回填。"
       }
     },
     "dca_resume": {
       "title": "恢復定投計劃",
-      "description": "按 plan_id 恢復已暫停的定投計劃，按原有週期繼續自動執行",
+      "description": "按 plan_id 恢復已暫停的定投計劃，按原有週期繼續自動執行。【必須兩步確認】未傳本次試執行返回的 confirmation_code 時，本工具為 DRY RUN（試執行）：只校驗並回顯請求內容，不會真正執行。請先不帶 execute 呼叫一次，把返回的預覽完整展示給用戶，只有在用戶明確確認之後，才可再次呼叫並把該確認碼傳入 execute。確認碼由請求本身推導而來，只對這一筆完全相同的請求生效。絕不可自行決定回填確認碼。客戶端支援直接詢問用戶時，會改為向用戶彈出確認表單，此時 execute 會被忽略",
       "properties": {
-        "plan_id": "定投計劃 ID"
+        "plan_id": "定投計劃 ID",
+        "execute": "本次試執行返回的 confirmation_code。省略（預設）表示 DRY RUN：只校驗並回顯請求，同時返回一個三位確認碼，不會真正執行。必須先不帶該參數呼叫一次，把預覽展示給用戶，待用戶明確確認後才可再次呼叫並回填該碼。確認碼由請求本身推導而來，只對這一筆完全相同的請求生效——改動任何欄位即失效。不可自行決定回填。"
       }
     },
     "dca_stop": {
       "title": "終止定投計劃",
-      "description": "按 plan_id 永久終止定投計劃，操作不可撤銷。如需臨時暫停請使用 dca_pause",
+      "description": "按 plan_id 永久終止定投計劃，操作不可撤銷。如需臨時暫停請使用 dca_pause。【必須兩步確認】未傳本次試執行返回的 confirmation_code 時，本工具為 DRY RUN（試執行）：只校驗並回顯請求內容，不會真正執行。請先不帶 execute 呼叫一次，把返回的預覽完整展示給用戶，只有在用戶明確確認之後，才可再次呼叫並把該確認碼傳入 execute。確認碼由請求本身推導而來，只對這一筆完全相同的請求生效。絕不可自行決定回填確認碼。客戶端支援直接詢問用戶時，會改為向用戶彈出確認表單，此時 execute 會被忽略",
       "properties": {
-        "plan_id": "定投計劃 ID"
+        "plan_id": "定投計劃 ID",
+        "execute": "本次試執行返回的 confirmation_code。省略（預設）表示 DRY RUN：只校驗並回顯請求，同時返回一個三位確認碼，不會真正執行。必須先不帶該參數呼叫一次，把預覽展示給用戶，待用戶明確確認後才可再次呼叫並回填該碼。確認碼由請求本身推導而來，只對這一筆完全相同的請求生效——改動任何欄位即失效。不可自行決定回填。"
       }
     },
     "dca_update": {
       "title": "更新定投計劃",
-      "description": "按 plan_id 更新定投計劃，可修改 amount、frequency（Daily/Weekly/Monthly）、day_of_week（Mon-Fri）或 day_of_month（1-28）",
+      "description": "按 plan_id 更新定投計劃，可修改 amount、frequency（Daily/Weekly/Monthly）、day_of_week（Mon-Fri）或 day_of_month（1-28）。【必須兩步確認】未傳本次試執行返回的 confirmation_code 時，本工具為 DRY RUN（試執行）：只校驗並回顯請求內容，不會真正執行。請先不帶 execute 呼叫一次，把返回的預覽完整展示給用戶，只有在用戶明確確認之後，才可再次呼叫並把該確認碼傳入 execute。確認碼由請求本身推導而來，只對這一筆完全相同的請求生效。絕不可自行決定回填確認碼。客戶端支援直接詢問用戶時，會改為向用戶彈出確認表單，此時 execute 會被忽略",
       "properties": {
         "plan_id": "待更新的定投計劃 ID",
         "amount": "新的每期投入金額",
         "frequency": "新的定投頻率：`Daily`、`Weekly`、`Monthly`",
         "day_of_week": "週頻時指定的週幾：`Mon`、`Tue`、`Wed`、`Thu`、`Fri`",
         "day_of_month": "月頻時指定的日期（1-28）",
-        "allow_margin": "是否允許使用融資"
+        "allow_margin": "是否允許使用融資",
+        "execute": "本次試執行返回的 confirmation_code。省略（預設）表示 DRY RUN：只校驗並回顯請求，同時返回一個三位確認碼，不會真正執行。必須先不帶該參數呼叫一次，把預覽展示給用戶，待用戶明確確認後才可再次呼叫並回填該碼。確認碼由請求本身推導而來，只對這一筆完全相同的請求生效——改動任何欄位即失效。不可自行決定回填。"
       }
     },
     "replace_order": {
       "title": "修改委託",
-      "description": "修改未成交委託的數量、價格、觸發價或追蹤止損參數，成功返回 \"order replaced\"。【必須兩步確認】未傳本次試執行返回的 confirmation_code 時，本工具為 DRY RUN（試執行）：只校驗並回顯委託內容，不會發往交易所。請先不帶 execute 呼叫一次，把返回的預覽完整展示給用戶，只有在用戶明確確認這筆委託之後，才可再次呼叫並把該確認碼傳入 execute。確認碼由訂單本身（代碼、方向、數量、價格）推導而來，只對這一筆完全相同的請求生效。絕不可自行決定回填確認碼，也不可在用戶首次提出請求的同一輪就回填。試執行會同時回顯當前委託與本次擬修改的內容。止盈/止損附加單也在此修改：attached_order_type 配合新的 attached_profit_taker_price / attached_stop_loss_price 可新增或改價，attached_profit_taker_id / attached_stop_loss_id 用於指定要修改的現有附加單，attached_cancel_all=true 則撤銷全部附加單而保留母單",
+      "description": "修改未成交委託的數量、價格、觸發價或追蹤止損參數，成功返回 \"order replaced\"。【必須兩步確認】未傳本次試執行返回的 confirmation_code 時，本工具為 DRY RUN（試執行）：只校驗並回顯委託內容，不會發往交易所。請先不帶 execute 呼叫一次，把返回的預覽完整展示給用戶，只有在用戶明確確認這筆委託之後，才可再次呼叫並把該確認碼傳入 execute。確認碼由訂單本身（代碼、方向、數量、價格）推導而來，只對這一筆完全相同的請求生效。絕不可自行決定回填確認碼，也不可在用戶首次提出請求的同一輪就回填。試執行會同時回顯當前委託與本次擬修改的內容。止盈/止損附加單也在此修改：attached_order_type 配合新的 attached_profit_taker_price / attached_stop_loss_price 可新增或改價，attached_profit_taker_id / attached_stop_loss_id 用於指定要修改的現有附加單，attached_cancel_all=true 則撤銷全部附加單而保留母單。客戶端支援直接詢問用戶時，會改為向用戶彈出確認表單，此時 execute 會被忽略",
       "properties": {
         "order_id": "委託單號",
         "quantity": "新的委託數量",
@@ -286,7 +291,7 @@
     },
     "submit_order": {
       "title": "提交委託",
-      "description": "提交買賣委託。order_type：LO（限價）/ ELO（港股增強限價）/ MO（市價）/ AO（港股競價）/ ALO（港股競價限價）/ ODD（港股碎股）/ LIT（觸價限價）/ MIT（觸價市價）/ TSLPAMT（按金額追蹤止損）/ TSLPPCT（按百分比追蹤止損）/ SLO（港股特別限價）；side：Buy/Sell；time_in_force：Day/GTC/GTD。【必須兩步確認】未傳本次試執行返回的 confirmation_code 時，本工具為 DRY RUN（試執行）：只校驗並回顯委託內容，不會發往交易所。請先不帶 execute 呼叫一次，把返回的預覽完整展示給用戶，只有在用戶明確確認這筆委託之後，才可再次呼叫並把該確認碼傳入 execute。確認碼由訂單本身（代碼、方向、數量、價格）推導而來，只對這一筆完全相同的請求生效。絕不可自行決定回填確認碼，也不可在用戶首次提出請求的同一輪就回填。該委託會動用真實資金——試執行是用戶發現代碼、方向、數量或價格錯誤的唯一機會。如需附加止盈/止損單：設置 attached_order_type（PROFIT_TAKER / STOP_LOSS / BRACKET）並填寫 attached_profit_taker_price 和/或 attached_stop_loss_price；附加單會在試執行預覽中回顯，並計入確認碼",
+      "description": "提交買賣委託。order_type：LO（限價）/ ELO（港股增強限價）/ MO（市價）/ AO（港股競價）/ ALO（港股競價限價）/ ODD（港股碎股）/ LIT（觸價限價）/ MIT（觸價市價）/ TSLPAMT（按金額追蹤止損）/ TSLPPCT（按百分比追蹤止損）/ SLO（港股特別限價）；side：Buy/Sell；time_in_force：Day/GTC/GTD。【必須兩步確認】未傳本次試執行返回的 confirmation_code 時，本工具為 DRY RUN（試執行）：只校驗並回顯委託內容，不會發往交易所。請先不帶 execute 呼叫一次，把返回的預覽完整展示給用戶，只有在用戶明確確認這筆委託之後，才可再次呼叫並把該確認碼傳入 execute。確認碼由訂單本身（代碼、方向、數量、價格）推導而來，只對這一筆完全相同的請求生效。絕不可自行決定回填確認碼，也不可在用戶首次提出請求的同一輪就回填。該委託會動用真實資金——試執行是用戶發現代碼、方向、數量或價格錯誤的唯一機會。如需附加止盈/止損單：設置 attached_order_type（PROFIT_TAKER / STOP_LOSS / BRACKET）並填寫 attached_profit_taker_price 和/或 attached_stop_loss_price；附加單會在試執行預覽中回顯，並計入確認碼。客戶端支援直接詢問用戶時，會改為向用戶彈出確認表單，此時 execute 會被忽略",
       "properties": {
         "symbol": "證券代碼",
         "order_type": "委託類型（港股全部支援；美股僅支援 `LO` / `MO` / `LIT` / `MIT` / `TSLPAMT` / `TSLPPCT`）：<br>- `LO`（限價單）：需 `submitted_price`<br>- `ELO`（增強限價單，港股）：需 `submitted_price`<br>- `MO`（市價單）：無需價格<br>- `AO`（競價單，港股）：以競價價成交，無需價格<br>- `ALO`（競價限價單，港股）：需 `submitted_price`<br>- `ODD`（碎股單，港股）：需 `submitted_price`，用於非標準手數<br>- `LIT`（觸價限價）：需 `submitted_price` 與 `trigger_price`，行情觸及觸發價時激活<br>- `MIT`（觸價市價）：僅需 `trigger_price`，觸及後按市價成交<br>- `TSLPAMT`（按金額追蹤止損限價）：需 `trailing_amount` 與 `limit_offset`<br>- `TSLPPCT`（按百分比追蹤止損限價）：需 `trailing_percent`（0-1）與 `limit_offset`<br>- `SLO`（特別限價單，港股）：需 `submitted_price`，提交後不可改單",
@@ -316,7 +321,7 @@
     },
     "submit_multileg_order": {
       "title": "提交組合期權委託",
-      "description": "提交多腿期權組合委託，各腿作為一個策略單一起成交或掛單。strategy：CoveredCall（備兌認購）/ CoveredPut（備兌認沽）/ VerticalCallSpread（垂直認購價差）/ VerticalPutSpread（垂直認沽價差）/ Collar（領口）/ Straddle（跨式）/ Strangle（寬跨式）/ CalendarCallSpread（認購日曆價差）/ CalendarPutSpread（認沽日曆價差）；side：Buy/Sell（整個策略的方向）；order_type：LO（需 submitted_price，為組合淨價）或 MO；legs[]：{symbol, ratio_quantity}，按策略順序排列，僅接受期權代碼；ratio_quantity 恆為正數——每條腿的買賣方向由 strategy 與 side 共同決定",
+      "description": "提交多腿期權組合委託，各腿作為一個策略單一起成交或掛單。strategy：CoveredCall（備兌認購）/ CoveredPut（備兌認沽）/ VerticalCallSpread（垂直認購價差）/ VerticalPutSpread（垂直認沽價差）/ Collar（領口）/ Straddle（跨式）/ Strangle（寬跨式）/ CalendarCallSpread（認購日曆價差）/ CalendarPutSpread（認沽日曆價差）；side：Buy/Sell（整個策略的方向）；order_type：LO（需 submitted_price，為組合淨價）或 MO；legs[]：{symbol, ratio_quantity}，按策略順序排列，僅接受期權代碼；ratio_quantity 恆為正數——每條腿的買賣方向由 strategy 與 side 共同決定。【必須兩步確認】未傳本次試執行返回的 confirmation_code 時，本工具為 DRY RUN（試執行）：只校驗並回顯請求內容，不會真正執行。請先不帶 execute 呼叫一次，把返回的預覽完整展示給用戶，只有在用戶明確確認之後，才可再次呼叫並把該確認碼傳入 execute。確認碼由請求本身推導而來，只對這一筆完全相同的請求生效。絕不可自行決定回填確認碼。客戶端支援直接詢問用戶時，會改為向用戶彈出確認表單，此時 execute 會被忽略",
       "properties": {
         "strategy": "組合策略，決定所需腿數與每條腿的方向：`CoveredCall`（備兌認購）/ `CoveredPut`（備兌認沽）/ `VerticalCallSpread`（垂直認購價差）/ `VerticalPutSpread`（垂直認沽價差）/ `Collar`（領口）/ `Straddle`（跨式）/ `Strangle`（寬跨式）/ `CalendarCallSpread`（認購日曆價差）/ `CalendarPutSpread`（認沽日曆價差）。兩種日曆價差為相同行使價、不同到期日",
         "side": "買賣方向：`Buy`（買入）或 `Sell`（賣出），指整個策略的方向",
@@ -325,7 +330,8 @@
         "legs": "組合的各條腿，按策略順序排列，僅接受期權代碼",
         "submitted_price": "整個組合的淨限價，`LO` 必填",
         "remark": "委託備註（最多 255 字符）",
-        "client_request_id": "冪等鍵，每筆委託唯一。含義同 submit_order 的同名欄位"
+        "client_request_id": "冪等鍵，每筆委託唯一。含義同 submit_order 的同名欄位",
+        "execute": "本次試執行返回的 confirmation_code。省略（預設）表示 DRY RUN：只校驗並回顯請求，同時返回一個三位確認碼，不會真正執行。必須先不帶該參數呼叫一次，把預覽展示給用戶，待用戶明確確認後才可再次呼叫並回填該碼。確認碼由請求本身推導而來，只對這一筆完全相同的請求生效——改動任何欄位即失效。不可自行決定回填。"
       }
     },
     "ah_premium": {
@@ -346,33 +352,37 @@
     },
     "alert_add": {
       "title": "新增價格預警",
-      "description": "新增價格預警，返回已創建的預警對象。condition：price_rise/price_fall（絕對價格）或 percent_rise/percent_fall（升跌幅）；frequency：once/daily/every",
+      "description": "新增價格預警，返回已創建的預警對象。condition：price_rise/price_fall（絕對價格）或 percent_rise/percent_fall（升跌幅）；frequency：once/daily/every。【必須兩步確認】未傳本次試執行返回的 confirmation_code 時，本工具為 DRY RUN（試執行）：只校驗並回顯請求內容，不會真正執行。請先不帶 execute 呼叫一次，把返回的預覽完整展示給用戶，只有在用戶明確確認之後，才可再次呼叫並把該確認碼傳入 execute。確認碼由請求本身推導而來，只對這一筆完全相同的請求生效。絕不可自行決定回填確認碼。客戶端支援直接詢問用戶時，會改為向用戶彈出確認表單，此時 execute 會被忽略",
       "properties": {
         "symbol": "證券代碼，例如 `\"700.HK\"`。請用規範代碼，補零的代碼（如 \"00700.HK\"）會返回空記錄而非報錯",
         "condition": "預警條件：`price_rise`、`price_fall`、`percent_rise`、`percent_fall`",
         "price": "閾值價格或百分比數值",
-        "frequency": "預警頻率：`once`（觸發一次後停用）、`daily`（每日一次）、`every`（每次滿足條件都觸發）"
+        "frequency": "預警頻率：`once`（觸發一次後停用）、`daily`（每日一次）、`every`（每次滿足條件都觸發）",
+        "execute": "本次試執行返回的 confirmation_code。省略（預設）表示 DRY RUN：只校驗並回顯請求，同時返回一個三位確認碼，不會真正執行。必須先不帶該參數呼叫一次，把預覽展示給用戶，待用戶明確確認後才可再次呼叫並回填該碼。確認碼由請求本身推導而來，只對這一筆完全相同的請求生效——改動任何欄位即失效。不可自行決定回填。"
       }
     },
     "alert_delete": {
       "title": "刪除價格預警",
-      "description": "按 alert_id（來自 alert_list 的數字字符串）刪除價格預警",
+      "description": "按 alert_id（來自 alert_list 的數字字符串）刪除價格預警。【必須兩步確認】未傳本次試執行返回的 confirmation_code 時，本工具為 DRY RUN（試執行）：只校驗並回顯請求內容，不會真正執行。請先不帶 execute 呼叫一次，把返回的預覽完整展示給用戶，只有在用戶明確確認之後，才可再次呼叫並把該確認碼傳入 execute。確認碼由請求本身推導而來，只對這一筆完全相同的請求生效。絕不可自行決定回填確認碼。客戶端支援直接詢問用戶時，會改為向用戶彈出確認表單，此時 execute 會被忽略",
       "properties": {
-        "alert_id": "預警指標 id"
+        "alert_id": "預警指標 id",
+        "execute": "本次試執行返回的 confirmation_code。省略（預設）表示 DRY RUN：只校驗並回顯請求，同時返回一個三位確認碼，不會真正執行。必須先不帶該參數呼叫一次，把預覽展示給用戶，待用戶明確確認後才可再次呼叫並回填該碼。確認碼由請求本身推導而來，只對這一筆完全相同的請求生效——改動任何欄位即失效。不可自行決定回填。"
       }
     },
     "alert_disable": {
       "title": "停用價格預警",
-      "description": "按 alert_id 停用價格預警，返回 {alert_id, enabled: false}",
+      "description": "按 alert_id 停用價格預警，返回 {alert_id, enabled: false}。【必須兩步確認】未傳本次試執行返回的 confirmation_code 時，本工具為 DRY RUN（試執行）：只校驗並回顯請求內容，不會真正執行。請先不帶 execute 呼叫一次，把返回的預覽完整展示給用戶，只有在用戶明確確認之後，才可再次呼叫並把該確認碼傳入 execute。確認碼由請求本身推導而來，只對這一筆完全相同的請求生效。絕不可自行決定回填確認碼。客戶端支援直接詢問用戶時，會改為向用戶彈出確認表單，此時 execute 會被忽略",
       "properties": {
-        "alert_id": "預警指標 id"
+        "alert_id": "預警指標 id",
+        "execute": "本次試執行返回的 confirmation_code。省略（預設）表示 DRY RUN：只校驗並回顯請求，同時返回一個三位確認碼，不會真正執行。必須先不帶該參數呼叫一次，把預覽展示給用戶，待用戶明確確認後才可再次呼叫並回填該碼。確認碼由請求本身推導而來，只對這一筆完全相同的請求生效——改動任何欄位即失效。不可自行決定回填。"
       }
     },
     "alert_enable": {
       "title": "啟用價格預警",
-      "description": "按 alert_id 啟用價格預警，返回 {alert_id, enabled: true}",
+      "description": "按 alert_id 啟用價格預警，返回 {alert_id, enabled: true}。【必須兩步確認】未傳本次試執行返回的 confirmation_code 時，本工具為 DRY RUN（試執行）：只校驗並回顯請求內容，不會真正執行。請先不帶 execute 呼叫一次，把返回的預覽完整展示給用戶，只有在用戶明確確認之後，才可再次呼叫並把該確認碼傳入 execute。確認碼由請求本身推導而來，只對這一筆完全相同的請求生效。絕不可自行決定回填確認碼。客戶端支援直接詢問用戶時，會改為向用戶彈出確認表單，此時 execute 會被忽略",
       "properties": {
-        "alert_id": "預警指標 id"
+        "alert_id": "預警指標 id",
+        "execute": "本次試執行返回的 confirmation_code。省略（預設）表示 DRY RUN：只校驗並回顯請求，同時返回一個三位確認碼，不會真正執行。必須先不帶該參數呼叫一次，把預覽展示給用戶，待用戶明確確認後才可再次呼叫並回填該碼。確認碼由請求本身推導而來，只對這一筆完全相同的請求生效——改動任何欄位即失效。不可自行決定回填。"
       }
     },
     "alert_list": {
@@ -633,7 +643,7 @@
     },
     "grid_submit": {
       "title": "提交網格訂單",
-      "description": "提交網格交易訂單。需提供 symbol、settlement_currency 及網格規則:基準價/上限價/下限價、trigger_price_type(1=價差,2=百分比)及對應的價差/百分比上下沿、trigger_quantity、上下限數量、time_in_force(0=當日,1=GTC,6=GTD)、grid_order_type_up/down(GMO/GLO/GTG)、邊界事件(1=忽略,2=按最新價平倉)。價格/數量為字串。【必須兩步確認】未傳本次試執行返回的 confirmation_code 時，本工具為 DRY RUN（試執行）：只校驗並回顯請求內容，不會發往交易所。請先不帶 execute 呼叫一次，把返回的預覽完整展示給用戶，只有在用戶明確確認之後，才可再次呼叫並把該確認碼傳入 execute。確認碼由訂單本身（代碼、方向、數量、價格）推導而來，只對這一筆完全相同的請求生效。絕不可自行決定回填確認碼。網格一旦生效會自行持續交易",
+      "description": "提交網格交易訂單。需提供 symbol、settlement_currency 及網格規則:基準價/上限價/下限價、trigger_price_type(1=價差,2=百分比)及對應的價差/百分比上下沿、trigger_quantity、上下限數量、time_in_force(0=當日,1=GTC,6=GTD)、grid_order_type_up/down(GMO/GLO/GTG)、邊界事件(1=忽略,2=按最新價平倉)。價格/數量為字串。【必須兩步確認】未傳本次試執行返回的 confirmation_code 時，本工具為 DRY RUN（試執行）：只校驗並回顯請求內容，不會發往交易所。請先不帶 execute 呼叫一次，把返回的預覽完整展示給用戶，只有在用戶明確確認之後，才可再次呼叫並把該確認碼傳入 execute。確認碼由訂單本身（代碼、方向、數量、價格）推導而來，只對這一筆完全相同的請求生效。絕不可自行決定回填確認碼。網格一旦生效會自行持續交易。客戶端支援直接詢問用戶時，會改為向用戶彈出確認表單，此時 execute 會被忽略",
       "properties": {
         "symbol": "證券代碼,例如 \"700.HK\"",
         "settlement_currency": "結算貨幣,例如 \"HKD\"",
@@ -664,7 +674,7 @@
     },
     "grid_replace": {
       "title": "修改網格訂單",
-      "description": "按 order_id 修改網格訂單規則,規則欄位同 grid_submit。【必須兩步確認】未傳本次試執行返回的 confirmation_code 時，本工具為 DRY RUN（試執行）：只校驗並回顯請求內容，不會發往交易所。請先不帶 execute 呼叫一次，把返回的預覽完整展示給用戶，只有在用戶明確確認之後，才可再次呼叫並把該確認碼傳入 execute。確認碼由訂單本身（代碼、方向、數量、價格）推導而來，只對這一筆完全相同的請求生效。絕不可自行決定回填確認碼。試執行會回顯將要替換當前規則的新規則",
+      "description": "按 order_id 修改網格訂單規則,規則欄位同 grid_submit。【必須兩步確認】未傳本次試執行返回的 confirmation_code 時，本工具為 DRY RUN（試執行）：只校驗並回顯請求內容，不會發往交易所。請先不帶 execute 呼叫一次，把返回的預覽完整展示給用戶，只有在用戶明確確認之後，才可再次呼叫並把該確認碼傳入 execute。確認碼由訂單本身（代碼、方向、數量、價格）推導而來，只對這一筆完全相同的請求生效。絕不可自行決定回填確認碼。試執行會回顯將要替換當前規則的新規則。客戶端支援直接詢問用戶時，會改為向用戶彈出確認表單，此時 execute 會被忽略",
       "properties": {
         "order_id": "網格訂單號",
         "submitted_base_price": "基準價(網格錨定價,小數字串)",
@@ -694,7 +704,7 @@
     },
     "grid_cancel": {
       "title": "取消網格訂單",
-      "description": "按 order_id 取消(終止)網格訂單。【必須兩步確認】未傳本次試執行返回的 confirmation_code 時，本工具為 DRY RUN（試執行）：只校驗並回顯請求內容，不會發往交易所。請先不帶 execute 呼叫一次，把返回的預覽完整展示給用戶，只有在用戶明確確認之後，才可再次呼叫並把該確認碼傳入 execute。確認碼由訂單本身（代碼、方向、數量、價格）推導而來，只對這一筆完全相同的請求生效。絕不可自行決定回填確認碼",
+      "description": "按 order_id 取消(終止)網格訂單。【必須兩步確認】未傳本次試執行返回的 confirmation_code 時，本工具為 DRY RUN（試執行）：只校驗並回顯請求內容，不會發往交易所。請先不帶 execute 呼叫一次，把返回的預覽完整展示給用戶，只有在用戶明確確認之後，才可再次呼叫並把該確認碼傳入 execute。確認碼由訂單本身（代碼、方向、數量、價格）推導而來，只對這一筆完全相同的請求生效。絕不可自行決定回填確認碼。客戶端支援直接詢問用戶時，會改為向用戶彈出確認表單，此時 execute 會被忽略",
       "properties": {
         "order_id": "網格訂單號",
         "execute": "本次試執行返回的 confirmation_code。省略（預設）表示 DRY RUN：只校驗並回顯請求，同時返回一個三位確認碼，不會發往交易所。必須先不帶該參數呼叫一次，把預覽展示給用戶，待用戶明確確認後才可再次呼叫並回填該碼。確認碼由訂單本身（代碼、方向、數量、價格）推導而來，只對這一筆完全相同的請求生效——改動任何欄位即失效。不可自行決定回填。"
@@ -702,7 +712,7 @@
     },
     "grid_suspend": {
       "title": "暫停網格訂單",
-      "description": "按 order_id 暫停運行中的網格訂單,可用 grid_restart 恢復。【必須兩步確認】未傳本次試執行返回的 confirmation_code 時，本工具為 DRY RUN（試執行）：只校驗並回顯請求內容，不會發往交易所。請先不帶 execute 呼叫一次，把返回的預覽完整展示給用戶，只有在用戶明確確認之後，才可再次呼叫並把該確認碼傳入 execute。確認碼由訂單本身（代碼、方向、數量、價格）推導而來，只對這一筆完全相同的請求生效。絕不可自行決定回填確認碼",
+      "description": "按 order_id 暫停運行中的網格訂單,可用 grid_restart 恢復。【必須兩步確認】未傳本次試執行返回的 confirmation_code 時，本工具為 DRY RUN（試執行）：只校驗並回顯請求內容，不會發往交易所。請先不帶 execute 呼叫一次，把返回的預覽完整展示給用戶，只有在用戶明確確認之後，才可再次呼叫並把該確認碼傳入 execute。確認碼由訂單本身（代碼、方向、數量、價格）推導而來，只對這一筆完全相同的請求生效。絕不可自行決定回填確認碼。客戶端支援直接詢問用戶時，會改為向用戶彈出確認表單，此時 execute 會被忽略",
       "properties": {
         "order_id": "網格訂單號",
         "execute": "本次試執行返回的 confirmation_code。省略（預設）表示 DRY RUN：只校驗並回顯請求，同時返回一個三位確認碼，不會發往交易所。必須先不帶該參數呼叫一次，把預覽展示給用戶，待用戶明確確認後才可再次呼叫並回填該碼。確認碼由訂單本身（代碼、方向、數量、價格）推導而來，只對這一筆完全相同的請求生效——改動任何欄位即失效。不可自行決定回填。"
@@ -710,7 +720,7 @@
     },
     "grid_restart": {
       "title": "恢復網格訂單",
-      "description": "按 order_id 恢復已暫停的網格訂單。【必須兩步確認】未傳本次試執行返回的 confirmation_code 時，本工具為 DRY RUN（試執行）：只校驗並回顯請求內容，不會發往交易所。請先不帶 execute 呼叫一次，把返回的預覽完整展示給用戶，只有在用戶明確確認之後，才可再次呼叫並把該確認碼傳入 execute。確認碼由訂單本身（代碼、方向、數量、價格）推導而來，只對這一筆完全相同的請求生效。絕不可自行決定回填確認碼。重啟後網格會重新自行持續下單",
+      "description": "按 order_id 恢復已暫停的網格訂單。【必須兩步確認】未傳本次試執行返回的 confirmation_code 時，本工具為 DRY RUN（試執行）：只校驗並回顯請求內容，不會發往交易所。請先不帶 execute 呼叫一次，把返回的預覽完整展示給用戶，只有在用戶明確確認之後，才可再次呼叫並把該確認碼傳入 execute。確認碼由訂單本身（代碼、方向、數量、價格）推導而來，只對這一筆完全相同的請求生效。絕不可自行決定回填確認碼。重啟後網格會重新自行持續下單。客戶端支援直接詢問用戶時，會改為向用戶彈出確認表單，此時 execute 會被忽略",
       "properties": {
         "order_id": "網格訂單號",
         "execute": "本次試執行返回的 confirmation_code。省略（預設）表示 DRY RUN：只校驗並回顯請求，同時返回一個三位確認碼，不會發往交易所。必須先不帶該參數呼叫一次，把預覽展示給用戶，待用戶明確確認後才可再次呼叫並回填該碼。確認碼由訂單本身（代碼、方向、數量、價格）推導而來，只對這一筆完全相同的請求生效——改動任何欄位即失效。不可自行決定回填。"
@@ -1714,7 +1724,7 @@
     },
     "fund_submit_order": {
       "title": "提交基金委託",
-      "description": "提交基金買賣委託。【必須兩步確認】未傳本次試運行返回的 confirmation_code 時為 DRY RUN（試運行）：先不帶 execute 調用一次，把預覽完整展示給用戶，只有在用戶明確確認後才可再次調用並把該確認碼傳入 execute。需認證。counter_id 來自 fund_hot / fund_list；action 為 buy 或 sell；currency 如 HKD/USD；amount（投入現金）與 units（賣出份額）二選一；is_sell_all=true 全部贖回。可先用 fund_validate_order 做安全的下單前校驗。",
+      "description": "提交基金買賣委託。【必須兩步確認】未傳本次試運行返回的 confirmation_code 時為 DRY RUN（試運行）：先不帶 execute 調用一次，把預覽完整展示給用戶，只有在用戶明確確認後才可再次調用並把該確認碼傳入 execute。需認證。counter_id 來自 fund_hot / fund_list；action 為 buy 或 sell；currency 如 HKD/USD；amount（投入現金）與 units（賣出份額）二選一；is_sell_all=true 全部贖回。可先用 fund_validate_order 做安全的下單前校驗。客戶端支援直接詢問用戶時，會改為向用戶彈出確認表單，此時 execute 會被忽略",
       "properties": {
         "counter_id": "基金 counter_id（如 UT/FD/HK0000384492），來自 fund_hot / fund_list",
         "action": "委託方向：buy（買入）或 sell（賣出）",
@@ -1731,7 +1741,7 @@
     },
     "fund_cancel_order": {
       "title": "撤銷基金委託",
-      "description": "按 order_id 撤銷基金委託。【必須兩步確認】未傳本次試運行返回的 confirmation_code 時為 DRY RUN（試運行）：先不帶 execute 調用一次，把返回的預覽（會回顯本次要撤銷的委託）完整展示給用戶，只有在用戶明確確認這筆委託後才可再次調用並把該確認碼傳入 execute。需認證。order_id 來自 fund_orders。",
+      "description": "按 order_id 撤銷基金委託。【必須兩步確認】未傳本次試運行返回的 confirmation_code 時為 DRY RUN（試運行）：先不帶 execute 調用一次，把返回的預覽（會回顯本次要撤銷的委託）完整展示給用戶，只有在用戶明確確認這筆委託後才可再次調用並把該確認碼傳入 execute。需認證。order_id 來自 fund_orders。客戶端支援直接詢問用戶時，會改為向用戶彈出確認表單，此時 execute 會被忽略",
       "properties": {
         "order_id": "要撤銷的基金訂單 id（來自 fund_orders）",
         "execute": "本次試運行返回的 confirmation_code。省略（預設）表示 DRY RUN：只校驗並回顯請求，同時返回一個三位確認碼，不會發往基金通道。必須先不帶該參數調用一次，把預覽展示給用戶，待用戶明確確認後才可再次調用並回填該碼。確認碼由訂單本身推導而來，只對這一筆完全相同的請求生效——改動任何欄位即失效。不可自行決定回填。"

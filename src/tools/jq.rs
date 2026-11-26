@@ -7,7 +7,7 @@ use jaq_core::{
 use jaq_json::Val;
 use rmcp::{
     ErrorData as McpError,
-    model::{CallToolRequestParams, CallToolResult, Content, Tool},
+    model::{CallToolRequestParams, CallToolResult, ContentBlock, Tool},
 };
 use serde_json::Value;
 
@@ -287,7 +287,7 @@ where
     }
     let name = request.name.clone();
     let mut result = invoke(request).await?;
-    if result.is_error == Some(true) || is_error_envelope(&result) {
+    if result.is_error == Some(true) || is_error_envelope(&result) || is_dry_run(&result) {
         return Ok(result);
     }
     let input = take_input(&mut result);
@@ -303,7 +303,7 @@ where
         Ok(slot) => match jq_sandbox::run(slot, &code, input, read_only).await {
             Ok(Reply::Values(values)) => return Ok(finish(result, values)),
             Ok(Reply::Trimmed(blocks)) => {
-                result.content = blocks.into_iter().map(Content::text).collect();
+                result.content = blocks.into_iter().map(ContentBlock::text).collect();
                 result.structured_content = None;
                 return Ok(result);
             }
@@ -392,7 +392,7 @@ impl Failure {
                 "The tool is read-only, so retrying is safe: retry shortly, or omit _jq.",
             ),
         };
-        CallToolResult::error(vec![Content::text(
+        CallToolResult::error(vec![ContentBlock::text(
             serde_json::json!({
                 "error_code": error_code,
                 "message": message,
@@ -417,7 +417,7 @@ impl Failure {
 /// result), and `response_limit` only trims single-block results.
 fn with_jq_warning(mut result: CallToolResult, unfiltered: Value, message: &str) -> CallToolResult {
     result.structured_content = None;
-    result.content = vec![Content::text(
+    result.content = vec![ContentBlock::text(
         serde_json::json!({
             "jq_warning": message,
             "hint": "`result` is the tool's full, unfiltered output; read it to see what happened. If the call performed an action, it has happened: do not repeat it just to retry the filter. If it only returned a preview or confirmation step, nothing was executed yet; continue the normal flow.",
@@ -528,7 +528,7 @@ fn is_error_envelope(result: &CallToolResult) -> bool {
 
 /// The `_jq` expression itself was rejected, before the tool ran.
 fn syntax_error(message: &str) -> CallToolResult {
-    CallToolResult::error(vec![Content::text(serde_json::json!({
+    CallToolResult::error(vec![ContentBlock::text(serde_json::json!({
         "error_code": "jq_syntax_error",
         "message": message,
         "recoverable": "fix_params",
@@ -539,6 +539,16 @@ fn syntax_error(message: &str) -> CallToolResult {
 
 /// The JSON value a filter runs on: the structured content when present,
 /// otherwise the text content parsed as JSON (or kept as a string).
+/// A gated write's dry run (see `support::dry_run`). It is returned whole: a
+/// filter written for the executed result (`.order_id`) would turn it into
+/// `null` and drop the preview and the confirmation code the caller needs.
+fn is_dry_run(result: &CallToolResult) -> bool {
+    result
+        .structured_content
+        .as_ref()
+        .is_some_and(|v| v.get("dry_run") == Some(&Value::Bool(true)))
+}
+
 fn take_input(result: &mut CallToolResult) -> Value {
     result.structured_content.take().unwrap_or_else(|| {
         let mut values: Vec<Value> = result
@@ -565,7 +575,7 @@ fn take_input(result: &mut CallToolResult) -> Value {
 /// several (or none) as an array.
 fn finish(mut result: CallToolResult, values: Vec<Value>) -> CallToolResult {
     let value = response_value(values);
-    result.content = vec![Content::text(value.to_string())];
+    result.content = vec![ContentBlock::text(value.to_string())];
     result.structured_content = value.is_object().then_some(value);
     result
 }
@@ -644,7 +654,7 @@ fn trim(value: Value, read_only: bool) -> Reply {
         RestHint::None
     };
     let (trimmed, _) = limit_with(
-        CallToolResult::success(vec![Content::text(value.to_string())]),
+        CallToolResult::success(vec![ContentBlock::text(value.to_string())]),
         hint,
     );
     let blocks: Vec<String> = trimmed
@@ -888,6 +898,23 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_dry_run_is_returned_whole_whatever_the_filter() {
+        // `.order_id` is right for the executed order but would turn the dry
+        // run into `null`, hiding the preview and the confirmation code.
+        let dry_run =
+            json!({"dry_run": true, "preview": {"symbol": "700.HK"}, "confirmation_code": "042"});
+        let result = super::call(request(json!(".order_id")), false, |_| async move {
+            Ok(super::super::tool_result(dry_run.to_string()))
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            result.structured_content.as_ref().unwrap()["confirmation_code"],
+            "042"
+        );
+    }
+
+    #[tokio::test]
     async fn a_failed_filter_on_a_write_returns_the_unfiltered_result() {
         let result = super::call(request(json!(".a[]")), false, |_| async {
             Ok(super::super::tool_result(
@@ -924,7 +951,7 @@ mod tests {
             jq_sandbox::tests::with_slots(
                 0,
                 super::call(request(json!(".")), false, |_| async {
-                    Ok(CallToolResult::error(vec![Content::text(
+                    Ok(CallToolResult::error(vec![ContentBlock::text(
                         "Not authenticated",
                     )]))
                 }),
@@ -1259,7 +1286,7 @@ mod tests {
     #[tokio::test]
     async fn json_text_and_plain_text_are_supported() {
         let result = call(request(json!("ascii_upcase")), |_| async {
-            Ok(CallToolResult::success(vec![Content::text("hello")]))
+            Ok(CallToolResult::success(vec![ContentBlock::text("hello")]))
         })
         .await
         .unwrap();

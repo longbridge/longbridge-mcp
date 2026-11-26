@@ -1862,7 +1862,7 @@ fn normalize_short_positions(result: CallToolResult, is_hk: bool, symbol: &str) 
     let Ok(json) = serde_json::to_string(&d) else {
         return result;
     };
-    CallToolResult::success(vec![rmcp::model::Content::text(json)])
+    CallToolResult::success(vec![rmcp::model::ContentBlock::text(json)])
 }
 
 pub async fn option_volume(
@@ -1998,7 +1998,8 @@ mod tests {
         // HKEX short-position dates are stamped at Hong Kong midnight:
         // 2026-10-08T16:00:00Z is the 2026-10-09 record.
         let raw = r#"{"data":[{"timestamp":"2026-10-08T16:00:00Z","amount":"1"}]}"#;
-        let result = rmcp::model::CallToolResult::success(vec![rmcp::model::Content::text(raw)]);
+        let result =
+            rmcp::model::CallToolResult::success(vec![rmcp::model::ContentBlock::text(raw)]);
         let text = super::normalize_short_positions(result, true, "700.HK")
             .content
             .first()
