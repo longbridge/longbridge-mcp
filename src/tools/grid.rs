@@ -15,6 +15,7 @@ use rmcp::schemars::JsonSchema;
 use rmcp::serde::Deserialize;
 
 use crate::error::Error;
+use crate::tools::support::confirm::{Confirmer, Decision};
 use crate::tools::support::dry_run;
 use crate::tools::{tool_json, tool_result};
 
@@ -329,6 +330,7 @@ fn build_rule(p: GridRuleParam) -> Result<GridTradeRule, McpError> {
 
 pub async fn grid_submit(
     mctx: &crate::tools::McpContext,
+    confirm: &Confirmer,
     p: GridSubmitParam,
 ) -> Result<CallToolResult, McpError> {
     let execute = p.execute.clone();
@@ -350,19 +352,17 @@ pub async fn grid_submit(
     let scope = scope
         .and("currency", &p.settlement_currency)
         .and_json("rule", &rule_json);
-    // Two-step by design: without a confirmation code this submits nothing.
-    let Some(code) = execute else {
-        return dry_run::result(
-            &scope,
-            serde_json::json!({
-                "action": "grid_submit",
-                "symbol": p.symbol,
-                "settlement_currency": p.settlement_currency,
-                "rule": rule_json,
-            }),
-        );
-    };
-    scope.verify(&code)?;
+    // Two-step by design: nothing happens until the user (through the
+    // client) or a quoted confirmation code approves it.
+    let preview = serde_json::json!({
+        "action": "grid_submit",
+        "symbol": p.symbol,
+        "settlement_currency": p.settlement_currency,
+        "rule": rule_json,
+    });
+    if let Decision::Respond(r) = confirm.confirm(&scope, execute.as_deref(), preview).await? {
+        return Ok(r);
+    }
     let ctx = GridContext::new(mctx.create_config());
     let result = ctx.submit(opts).await.map_err(Error::longbridge)?;
     // Same envelope as the dry run so both outcomes validate against
@@ -375,6 +375,7 @@ pub async fn grid_submit(
 
 pub async fn grid_replace(
     mctx: &crate::tools::McpContext,
+    confirm: &Confirmer,
     p: GridReplaceParam,
 ) -> Result<CallToolResult, McpError> {
     let execute = p.execute.clone();
@@ -384,18 +385,16 @@ pub async fn grid_replace(
     // The new rule is what the user approves: a code confirmed for one rule
     // must not apply another to the same grid order.
     let scope = dry_run::Scope::on_order("grid replace", &p.order_id).and_json("rule", &rule_json);
-    // Two-step by design: without a confirmation code this changes nothing.
-    let Some(code) = execute else {
-        return dry_run::result(
-            &scope,
-            serde_json::json!({
-                "action": "grid_replace",
-                "order_id": p.order_id,
-                "rule": rule_json,
-            }),
-        );
-    };
-    scope.verify(&code)?;
+    // Two-step by design: nothing happens until the user (through the
+    // client) or a quoted confirmation code approves it.
+    let preview = serde_json::json!({
+        "action": "grid_replace",
+        "order_id": p.order_id,
+        "rule": rule_json,
+    });
+    if let Decision::Respond(r) = confirm.confirm(&scope, execute.as_deref(), preview).await? {
+        return Ok(r);
+    }
     let ctx = GridContext::new(mctx.create_config());
     ctx.replace(opts).await.map_err(Error::longbridge)?;
     Ok(tool_result("grid order replaced".to_string()))
@@ -403,20 +402,22 @@ pub async fn grid_replace(
 
 pub async fn grid_cancel(
     mctx: &crate::tools::McpContext,
+    confirm: &Confirmer,
     p: GridOrderIdParam,
 ) -> Result<CallToolResult, McpError> {
     let scope = dry_run::Scope::on_order("grid cancel", &p.order_id);
-    // Two-step by design: without a confirmation code this does nothing.
-    let Some(code) = p.execute.clone() else {
-        return dry_run::result(
-            &scope,
-            serde_json::json!({
-                "action": "grid_cancel",
-                "order_id": p.order_id,
-            }),
-        );
-    };
-    scope.verify(&code)?;
+    // Two-step by design: nothing happens until the user (through the
+    // client) or a quoted confirmation code approves it.
+    let preview = serde_json::json!({
+        "action": "grid_cancel",
+        "order_id": p.order_id,
+    });
+    if let Decision::Respond(r) = confirm
+        .confirm(&scope, p.execute.as_deref(), preview)
+        .await?
+    {
+        return Ok(r);
+    }
     let ctx = GridContext::new(mctx.create_config());
     ctx.cancel(p.order_id).await.map_err(Error::longbridge)?;
     Ok(tool_result("grid order cancelled".to_string()))
@@ -424,20 +425,22 @@ pub async fn grid_cancel(
 
 pub async fn grid_suspend(
     mctx: &crate::tools::McpContext,
+    confirm: &Confirmer,
     p: GridOrderIdParam,
 ) -> Result<CallToolResult, McpError> {
     let scope = dry_run::Scope::on_order("grid suspend", &p.order_id);
-    // Two-step by design: without a confirmation code this does nothing.
-    let Some(code) = p.execute.clone() else {
-        return dry_run::result(
-            &scope,
-            serde_json::json!({
-                "action": "grid_suspend",
-                "order_id": p.order_id,
-            }),
-        );
-    };
-    scope.verify(&code)?;
+    // Two-step by design: nothing happens until the user (through the
+    // client) or a quoted confirmation code approves it.
+    let preview = serde_json::json!({
+        "action": "grid_suspend",
+        "order_id": p.order_id,
+    });
+    if let Decision::Respond(r) = confirm
+        .confirm(&scope, p.execute.as_deref(), preview)
+        .await?
+    {
+        return Ok(r);
+    }
     let ctx = GridContext::new(mctx.create_config());
     ctx.suspend(p.order_id).await.map_err(Error::longbridge)?;
     Ok(tool_result("grid order suspended".to_string()))
@@ -445,20 +448,22 @@ pub async fn grid_suspend(
 
 pub async fn grid_restart(
     mctx: &crate::tools::McpContext,
+    confirm: &Confirmer,
     p: GridOrderIdParam,
 ) -> Result<CallToolResult, McpError> {
     let scope = dry_run::Scope::on_order("grid restart", &p.order_id);
-    // Two-step by design: without a confirmation code this does nothing.
-    let Some(code) = p.execute.clone() else {
-        return dry_run::result(
-            &scope,
-            serde_json::json!({
-                "action": "grid_restart",
-                "order_id": p.order_id,
-            }),
-        );
-    };
-    scope.verify(&code)?;
+    // Two-step by design: nothing happens until the user (through the
+    // client) or a quoted confirmation code approves it.
+    let preview = serde_json::json!({
+        "action": "grid_restart",
+        "order_id": p.order_id,
+    });
+    if let Decision::Respond(r) = confirm
+        .confirm(&scope, p.execute.as_deref(), preview)
+        .await?
+    {
+        return Ok(r);
+    }
     let ctx = GridContext::new(mctx.create_config());
     ctx.restart(p.order_id).await.map_err(Error::longbridge)?;
     Ok(tool_result("grid order restarted".to_string()))

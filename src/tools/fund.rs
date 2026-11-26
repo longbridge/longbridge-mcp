@@ -19,6 +19,7 @@ use rmcp::schemars::JsonSchema;
 use rmcp::serde::Deserialize;
 
 use crate::error::Error;
+use crate::tools::support::confirm::{Confirmer, Decision};
 use crate::tools::support::dry_run;
 use crate::tools::support::tolerant::{tolerant_id_i64, tolerant_option_vec_i64};
 use crate::tools::{McpContext, tool_json};
@@ -664,6 +665,7 @@ pub async fn fund_validate_order(
 
 pub async fn fund_submit_order(
     mctx: &McpContext,
+    confirm: &Confirmer,
     p: FundSubmitOrderParam,
 ) -> Result<CallToolResult, McpError> {
     // The confirmation code covers every field that shapes the order the broker
@@ -686,26 +688,27 @@ pub async fn fund_submit_order(
         scope = scope.and("sell_all", "true");
     }
 
-    // Two-step by design: without a confirmation code this places nothing.
-    let Some(code) = p.execute.clone() else {
-        return dry_run::result(
-            &scope,
-            serde_json::json!({
-                "action": "fund_submit_order",
-                "counter_id": p.counter_id,
-                "fund_action": p.action,
-                "currency": p.currency,
-                "amount": p.amount,
-                "units": p.units,
-                "dividend_option": p.dividend_option,
-                "fee": p.fee,
-                "is_sell_all": p.is_sell_all,
-                "remark": p.remark,
-                "trade_method": p.trade_method,
-            }),
-        );
-    };
-    scope.verify(&code)?;
+    // Two-step by design: nothing happens until the user (through the
+    // client) or a quoted confirmation code approves it.
+    let preview = serde_json::json!({
+        "action": "fund_submit_order",
+        "counter_id": p.counter_id,
+        "fund_action": p.action,
+        "currency": p.currency,
+        "amount": p.amount,
+        "units": p.units,
+        "dividend_option": p.dividend_option,
+        "fee": p.fee,
+        "is_sell_all": p.is_sell_all,
+        "remark": p.remark,
+        "trade_method": p.trade_method,
+    });
+    if let Decision::Respond(r) = confirm
+        .confirm(&scope, p.execute.as_deref(), preview)
+        .await?
+    {
+        return Ok(r);
+    }
 
     let mut opts = SubmitFundOrderOptions::new(p.counter_id, p.action, p.currency);
     if let Some(amount) = p.amount {
@@ -741,29 +744,35 @@ pub async fn fund_submit_order(
 
 pub async fn fund_cancel_order(
     mctx: &McpContext,
+    confirm: &Confirmer,
     p: FundCancelOrderParam,
 ) -> Result<CallToolResult, McpError> {
     let ctx = context(mctx);
     let scope = dry_run::Scope::on_order("cancel fund", &p.order_id.to_string());
 
-    // Two-step by design: without a confirmation code this cancels nothing.
-    let Some(code) = p.execute.clone() else {
+    // Two-step by design: nothing is cancelled until the user (through the
+    // client) or a quoted confirmation code approves it.
+    let preview = if confirm.needs_preview(p.execute.is_some()) {
         // Best-effort snapshot of the targeted order so the user can confirm it
         // is the right one; a lookup failure must not break the dry run.
         let existing = match ctx.order(p.order_id).await {
             Ok(order) => serde_json::to_value(&order).unwrap_or(serde_json::Value::Null),
             Err(_) => serde_json::Value::Null,
         };
-        return dry_run::result(
-            &scope,
-            serde_json::json!({
-                "action": "fund_cancel_order",
-                "order_id": p.order_id,
-                "order": existing,
-            }),
-        );
+        serde_json::json!({
+            "action": "fund_cancel_order",
+            "order_id": p.order_id,
+            "order": existing,
+        })
+    } else {
+        serde_json::Value::Null
     };
-    scope.verify(&code)?;
+    if let Decision::Respond(r) = confirm
+        .confirm(&scope, p.execute.as_deref(), preview)
+        .await?
+    {
+        return Ok(r);
+    }
 
     ctx.cancel_order(p.order_id)
         .await

@@ -3163,7 +3163,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Cancel an open order by order_id. Returns plain text \"order cancelled\" on success; errors if the order is already filled or cancelled. TWO-STEP CONFIRMATION IS MANDATORY: this tool is a DRY RUN unless you pass the confirmation_code its own dry run returned. Call it first without execute, show the returned preview to the user, and only call it again with execute=\"<confirmation_code>\" after the user has explicitly confirmed that exact order. The code is derived from the order itself, so it applies only to that exact order. Never quote it back on your own initiative, and never in the same turn the user first asks. The dry run also echoes the order being targeted so the user can verify it is the right one. Set is_attached=true to cancel a single take-profit/stop-loss leg by its own order_id; cancelling a parent order cancels its legs along with it."
+        description = "Cancel an open order by order_id. Returns plain text \"order cancelled\" on success; errors if the order is already filled or cancelled. TWO-STEP CONFIRMATION IS MANDATORY: this tool is a DRY RUN unless you pass the confirmation_code its own dry run returned. Call it first without execute, show the returned preview to the user, and only call it again with execute=\"<confirmation_code>\" after the user has explicitly confirmed that exact order. The code is derived from the order itself, so it applies only to that exact order. Never quote it back on your own initiative, and never in the same turn the user first asks. The dry run also echoes the order being targeted so the user can verify it is the right one. Set is_attached=true to cancel a single take-profit/stop-loss leg by its own order_id; cancelling a parent order cancels its legs along with it. When the client can ask the user directly, it shows them a confirmation form instead and execute is ignored."
     )]
     async fn cancel_order(
         &self,
@@ -3178,10 +3178,7 @@ impl Longbridge {
             trade::cancel_order(&mctx, &confirm, p)
         })
         .await?;
-        Ok(match confirm.take_input_required() {
-            Some(input_required) => input_required.into(),
-            None => result.into(),
-        })
+        Ok(confirm.respond(result))
     }
 
     /// Get today's trade executions.
@@ -3283,7 +3280,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::SubmitOrderResult>(),
-        description = "Submit a buy/sell order. DRY RUN unless execute is the confirmation_code from its own dry run: call once without execute, show the preview to the user, then re-call quoting the code only after they explicitly confirm. order_type: LO (Limit) / ELO (Enhanced Limit, HK) / MO (Market) / AO (At-auction, HK) / ALO (At-auction Limit, HK) / ODD (Odd Lots, HK) / LIT (Limit If Touched) / MIT (Market If Touched) / TSLPAMT (Trailing Limit by Amount) / TSLPPCT (Trailing Limit by Percent) / SLO (Special Limit, HK). side: Buy/Sell. time_in_force: Day/GTC/GTD. To attach a take-profit/stop-loss leg, set attached_order_type (PROFIT_TAKER / STOP_LOSS / BRACKET) with attached_profit_taker_price and/or attached_stop_loss_price; the legs are echoed in the dry-run preview and are part of what the confirmation_code covers"
+        description = "Submit a buy/sell order. DRY RUN unless execute is the confirmation_code from its own dry run: call once without execute, show the preview to the user, then re-call quoting the code only after they explicitly confirm. order_type: LO (Limit) / ELO (Enhanced Limit, HK) / MO (Market) / AO (At-auction, HK) / ALO (At-auction Limit, HK) / ODD (Odd Lots, HK) / LIT (Limit If Touched) / MIT (Market If Touched) / TSLPAMT (Trailing Limit by Amount) / TSLPPCT (Trailing Limit by Percent) / SLO (Special Limit, HK). side: Buy/Sell. time_in_force: Day/GTC/GTD. To attach a take-profit/stop-loss leg, set attached_order_type (PROFIT_TAKER / STOP_LOSS / BRACKET) with attached_profit_taker_price and/or attached_stop_loss_price; the legs are echoed in the dry-run preview and are part of what the confirmation_code covers When the client can ask the user directly, it shows them a confirmation form instead and execute is ignored."
     )]
     async fn submit_order(
         &self,
@@ -3328,19 +3325,23 @@ impl Longbridge {
             idempotent_hint = false,
             open_world_hint = true
         ),
-        output_schema = schema_for::<output::OrderIdResponse>(),
-        description = "Submit a multi-leg option combination order; all legs fill or rest together as one strategy order. strategy: CoveredCall / CoveredPut / VerticalCallSpread / VerticalPutSpread / Collar / Straddle / Strangle / CalendarCallSpread / CalendarPutSpread. side: Buy/Sell (direction of the whole strategy). order_type: LO (needs submitted_price, a net price for the combination) or MO. legs[]: {symbol, ratio_quantity} in strategy order, option symbols only; ratio_quantity is always positive — each leg's buy/sell direction is implied by strategy plus side."
+        output_schema = schema_for::<output::SubmitOrderResult>(),
+        description = "Submit a multi-leg option combination order; all legs fill or rest together as one strategy order. strategy: CoveredCall / CoveredPut / VerticalCallSpread / VerticalPutSpread / Collar / Straddle / Strangle / CalendarCallSpread / CalendarPutSpread. side: Buy/Sell (direction of the whole strategy). order_type: LO (needs submitted_price, a net price for the combination) or MO. legs[]: {symbol, ratio_quantity} in strategy order, option symbols only; ratio_quantity is always positive — each leg's buy/sell direction is implied by strategy plus side. TWO-STEP CONFIRMATION IS MANDATORY: this tool is a DRY RUN unless you pass the confirmation_code its own dry run returned. Call it first without execute, show the returned preview to the user, and only call it again with execute=\"<confirmation_code>\" after the user has explicitly confirmed it. The code applies only to that exact request. Never quote it back on your own initiative, and never in the same turn the user first asks. When the client can ask the user directly, it shows them a confirmation form instead and execute is ignored."
     )]
     async fn submit_multileg_order(
         &self,
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<SubmitMultiLegOrderParam>,
-    ) -> Result<CallToolResult, McpError> {
+        InputResponses(input_responses): InputResponses,
+        RequestState(request_state): RequestState,
+    ) -> Result<CallToolResponse, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("submit_multileg_order", format!("{p:?}"), || {
-            trade::submit_multileg_order(&mctx, p)
+        let confirm = Confirmer::new(&ctx, input_responses, request_state);
+        let result = measured_tool_call("submit_multileg_order", format!("{p:?}"), || {
+            trade::submit_multileg_order(&mctx, &confirm, p)
         })
-        .await
+        .await?;
+        Ok(confirm.respond(result))
     }
 
     /// Replace (modify) an order.
@@ -3352,7 +3353,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Modify an open order's quantity, price, trigger_price, or trailing params. Returns \"order replaced\" on success. Only open/pending orders can be modified. TWO-STEP CONFIRMATION IS MANDATORY: this tool is a DRY RUN unless you pass the confirmation_code its own dry run returned. Call it first without execute, show the returned preview to the user, and only call it again with execute=\"<confirmation_code>\" after the user has explicitly confirmed that exact order. The code is derived from the order itself, so it applies only to that exact order. Never quote it back on your own initiative, and never in the same turn the user first asks. The dry run echoes the current order alongside the requested change. Attached take-profit/stop-loss legs are changed here too: attached_order_type with the new attached_profit_taker_price / attached_stop_loss_price adds or reprices a leg, attached_profit_taker_id / attached_stop_loss_id target an existing leg, and attached_cancel_all=true removes every leg while leaving the order in place."
+        description = "Modify an open order's quantity, price, trigger_price, or trailing params. Returns \"order replaced\" on success. Only open/pending orders can be modified. TWO-STEP CONFIRMATION IS MANDATORY: this tool is a DRY RUN unless you pass the confirmation_code its own dry run returned. Call it first without execute, show the returned preview to the user, and only call it again with execute=\"<confirmation_code>\" after the user has explicitly confirmed that exact order. The code is derived from the order itself, so it applies only to that exact order. Never quote it back on your own initiative, and never in the same turn the user first asks. The dry run echoes the current order alongside the requested change. Attached take-profit/stop-loss legs are changed here too: attached_order_type with the new attached_profit_taker_price / attached_stop_loss_price adds or reprices a leg, attached_profit_taker_id / attached_stop_loss_id target an existing leg, and attached_cancel_all=true removes every leg while leaving the order in place. When the client can ask the user directly, it shows them a confirmation form instead and execute is ignored."
     )]
     async fn replace_order(
         &self,
@@ -3367,10 +3368,7 @@ impl Longbridge {
             trade::replace_order(&mctx, &confirm, p)
         })
         .await?;
-        Ok(match confirm.take_input_required() {
-            Some(input_required) => input_required.into(),
-            None => result.into(),
-        })
+        Ok(confirm.respond(result))
     }
 
     /// Estimate max purchase quantity.
@@ -4621,18 +4619,22 @@ impl Longbridge {
             idempotent_hint = false,
             open_world_hint = true
         ),
-        description = "Submit a fund buy/sell order. DRY RUN unless execute is the confirmation_code from its own dry run: call once without execute, show the preview to the user, then re-call quoting the code only after they explicitly confirm. Requires auth. counter_id from fund_hot / fund_list; action is buy or sell; currency e.g. HKD/USD; give either amount (cash to invest) or units (shares to sell); is_sell_all=true redeems the whole position. Use fund_validate_order first for a safe pre-trade check."
+        description = "Submit a fund buy/sell order. DRY RUN unless execute is the confirmation_code from its own dry run: call once without execute, show the preview to the user, then re-call quoting the code only after they explicitly confirm. Requires auth. counter_id from fund_hot / fund_list; action is buy or sell; currency e.g. HKD/USD; give either amount (cash to invest) or units (shares to sell); is_sell_all=true redeems the whole position. Use fund_validate_order first for a safe pre-trade check. When the client can ask the user directly, it shows them a confirmation form instead and execute is ignored."
     )]
     async fn fund_submit_order(
         &self,
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<fund::FundSubmitOrderParam>,
-    ) -> Result<CallToolResult, McpError> {
+        InputResponses(input_responses): InputResponses,
+        RequestState(request_state): RequestState,
+    ) -> Result<CallToolResponse, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("fund_submit_order", format!("{p:?}"), || {
-            fund::fund_submit_order(&mctx, p)
+        let confirm = Confirmer::new(&ctx, input_responses, request_state);
+        let result = measured_tool_call("fund_submit_order", format!("{p:?}"), || {
+            fund::fund_submit_order(&mctx, &confirm, p)
         })
-        .await
+        .await?;
+        Ok(confirm.respond(result))
     }
 
     /// Cancel a fund order.
@@ -4644,18 +4646,22 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Cancel a fund order by order_id. DRY RUN unless execute is the confirmation_code from its own dry run: call once without execute, show the returned preview (which echoes the order being cancelled) to the user, then re-call quoting the code only after they explicitly confirm that exact order. Requires auth. order_id from fund_orders."
+        description = "Cancel a fund order by order_id. DRY RUN unless execute is the confirmation_code from its own dry run: call once without execute, show the returned preview (which echoes the order being cancelled) to the user, then re-call quoting the code only after they explicitly confirm that exact order. Requires auth. order_id from fund_orders. When the client can ask the user directly, it shows them a confirmation form instead and execute is ignored."
     )]
     async fn fund_cancel_order(
         &self,
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<fund::FundCancelOrderParam>,
-    ) -> Result<CallToolResult, McpError> {
+        InputResponses(input_responses): InputResponses,
+        RequestState(request_state): RequestState,
+    ) -> Result<CallToolResponse, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("fund_cancel_order", format!("{p:?}"), || {
-            fund::fund_cancel_order(&mctx, p)
+        let confirm = Confirmer::new(&ctx, input_responses, request_state);
+        let result = measured_tool_call("fund_cancel_order", format!("{p:?}"), || {
+            fund::fund_cancel_order(&mctx, &confirm, p)
         })
-        .await
+        .await?;
+        Ok(confirm.respond(result))
     }
 
     /// Get exchange rates.
@@ -4797,15 +4803,22 @@ impl Longbridge {
             idempotent_hint = false,
             open_world_hint = true
         ),
-        description = "Add a price alert. condition: price_rise/price_fall (absolute price) or percent_rise/percent_fall (relative %). frequency: once/daily/every. Returns created alert object."
+        description = "Add a price alert. condition: price_rise/price_fall (absolute price) or percent_rise/percent_fall (relative %). frequency: once/daily/every. Returns created alert object. TWO-STEP CONFIRMATION IS MANDATORY: this tool is a DRY RUN unless you pass the confirmation_code its own dry run returned. Call it first without execute, show the returned preview to the user, and only call it again with execute=\"<confirmation_code>\" after the user has explicitly confirmed it. The code applies only to that exact request. Never quote it back on your own initiative, and never in the same turn the user first asks. When the client can ask the user directly, it shows them a confirmation form instead and execute is ignored."
     )]
     async fn alert_add(
         &self,
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<alert::AlertAddParam>,
-    ) -> Result<CallToolResult, McpError> {
+        InputResponses(input_responses): InputResponses,
+        RequestState(request_state): RequestState,
+    ) -> Result<CallToolResponse, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("alert_add", format!("{p:?}"), || alert::alert_add(&mctx, p)).await
+        let confirm = Confirmer::new(&ctx, input_responses, request_state);
+        let result = measured_tool_call("alert_add", format!("{p:?}"), || {
+            alert::alert_add(&mctx, &confirm, p)
+        })
+        .await?;
+        Ok(confirm.respond(result))
     }
 
     /// Delete a price alert.
@@ -4817,18 +4830,22 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Delete a price alert by alert_id (numeric string from alert_list). Returns upstream API response on success; errors if alert_id is invalid."
+        description = "Delete a price alert by alert_id (numeric string from alert_list). Returns upstream API response on success; errors if alert_id is invalid. TWO-STEP CONFIRMATION IS MANDATORY: this tool is a DRY RUN unless you pass the confirmation_code its own dry run returned. Call it first without execute, show the returned preview to the user, and only call it again with execute=\"<confirmation_code>\" after the user has explicitly confirmed it. The code applies only to that exact request. Never quote it back on your own initiative, and never in the same turn the user first asks. When the client can ask the user directly, it shows them a confirmation form instead and execute is ignored."
     )]
     async fn alert_delete(
         &self,
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<alert::AlertIdParam>,
-    ) -> Result<CallToolResult, McpError> {
+        InputResponses(input_responses): InputResponses,
+        RequestState(request_state): RequestState,
+    ) -> Result<CallToolResponse, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("alert_delete", format!("{p:?}"), || {
-            alert::alert_delete(&mctx, p)
+        let confirm = Confirmer::new(&ctx, input_responses, request_state);
+        let result = measured_tool_call("alert_delete", format!("{p:?}"), || {
+            alert::alert_delete(&mctx, &confirm, p)
         })
-        .await
+        .await?;
+        Ok(confirm.respond(result))
     }
 
     /// Enable a price alert.
@@ -4841,18 +4858,22 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::social::AlertToggleResponse>(),
-        description = "Enable a price alert by alert_id. Returns {alert_id, enabled: true} on success. Use alert_list to find the numeric alert_id."
+        description = "Enable a price alert by alert_id. Returns {dry_run: false, alert_id, enabled: true} on success. Use alert_list to find the numeric alert_id. TWO-STEP CONFIRMATION IS MANDATORY: this tool is a DRY RUN unless you pass the confirmation_code its own dry run returned. Call it first without execute, show the returned preview to the user, and only call it again with execute=\"<confirmation_code>\" after the user has explicitly confirmed it. The code applies only to that exact request. Never quote it back on your own initiative, and never in the same turn the user first asks. When the client can ask the user directly, it shows them a confirmation form instead and execute is ignored."
     )]
     async fn alert_enable(
         &self,
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<alert::AlertIdParam>,
-    ) -> Result<CallToolResult, McpError> {
+        InputResponses(input_responses): InputResponses,
+        RequestState(request_state): RequestState,
+    ) -> Result<CallToolResponse, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("alert_enable", format!("{p:?}"), || {
-            alert::alert_enable(&mctx, p)
+        let confirm = Confirmer::new(&ctx, input_responses, request_state);
+        let result = measured_tool_call("alert_enable", format!("{p:?}"), || {
+            alert::alert_enable(&mctx, &confirm, p)
         })
-        .await
+        .await?;
+        Ok(confirm.respond(result))
     }
 
     /// Disable a price alert.
@@ -4865,18 +4886,22 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::social::AlertToggleResponse>(),
-        description = "Disable a price alert by alert_id. Returns {alert_id, enabled: false} on success. Use alert_list to find the numeric alert_id."
+        description = "Disable a price alert by alert_id. Returns {dry_run: false, alert_id, enabled: false} on success. Use alert_list to find the numeric alert_id. TWO-STEP CONFIRMATION IS MANDATORY: this tool is a DRY RUN unless you pass the confirmation_code its own dry run returned. Call it first without execute, show the returned preview to the user, and only call it again with execute=\"<confirmation_code>\" after the user has explicitly confirmed it. The code applies only to that exact request. Never quote it back on your own initiative, and never in the same turn the user first asks. When the client can ask the user directly, it shows them a confirmation form instead and execute is ignored."
     )]
     async fn alert_disable(
         &self,
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<alert::AlertIdParam>,
-    ) -> Result<CallToolResult, McpError> {
+        InputResponses(input_responses): InputResponses,
+        RequestState(request_state): RequestState,
+    ) -> Result<CallToolResponse, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("alert_disable", format!("{p:?}"), || {
-            alert::alert_disable(&mctx, p)
+        let confirm = Confirmer::new(&ctx, input_responses, request_state);
+        let result = measured_tool_call("alert_disable", format!("{p:?}"), || {
+            alert::alert_disable(&mctx, &confirm, p)
         })
-        .await
+        .await?;
+        Ok(confirm.respond(result))
     }
 
     /// Query strategy signals.
@@ -5249,15 +5274,22 @@ impl Longbridge {
             idempotent_hint = false,
             open_world_hint = true
         ),
-        description = "Create a DCA recurring investment plan. frequency: Daily/Weekly/Monthly. day_of_week (Weekly): Mon/Tue/Wed/Thu/Fri. day_of_month (Monthly): 1-28."
+        description = "Create a DCA recurring investment plan. frequency: Daily/Weekly/Monthly. day_of_week (Weekly): Mon/Tue/Wed/Thu/Fri. day_of_month (Monthly): 1-28. TWO-STEP CONFIRMATION IS MANDATORY: this tool is a DRY RUN unless you pass the confirmation_code its own dry run returned. Call it first without execute, show the returned preview to the user, and only call it again with execute=\"<confirmation_code>\" after the user has explicitly confirmed it. The code applies only to that exact request. Never quote it back on your own initiative, and never in the same turn the user first asks. When the client can ask the user directly, it shows them a confirmation form instead and execute is ignored."
     )]
     async fn dca_create(
         &self,
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<dca::DcaCreateParam>,
-    ) -> Result<CallToolResult, McpError> {
+        InputResponses(input_responses): InputResponses,
+        RequestState(request_state): RequestState,
+    ) -> Result<CallToolResponse, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("dca_create", format!("{p:?}"), || dca::dca_create(&mctx, p)).await
+        let confirm = Confirmer::new(&ctx, input_responses, request_state);
+        let result = measured_tool_call("dca_create", format!("{p:?}"), || {
+            dca::dca_create(&mctx, &confirm, p)
+        })
+        .await?;
+        Ok(confirm.respond(result))
     }
 
     /// Update a DCA plan.
@@ -5269,15 +5301,22 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Update an existing DCA plan by plan_id. Can change amount, frequency (Daily/Weekly/Monthly), day_of_week (Mon-Fri), or day_of_month (1-28). Returns updated plan."
+        description = "Update an existing DCA plan by plan_id. Can change amount, frequency (Daily/Weekly/Monthly), day_of_week (Mon-Fri), or day_of_month (1-28). Returns updated plan. TWO-STEP CONFIRMATION IS MANDATORY: this tool is a DRY RUN unless you pass the confirmation_code its own dry run returned. Call it first without execute, show the returned preview to the user, and only call it again with execute=\"<confirmation_code>\" after the user has explicitly confirmed it. The code applies only to that exact request. Never quote it back on your own initiative, and never in the same turn the user first asks. When the client can ask the user directly, it shows them a confirmation form instead and execute is ignored."
     )]
     async fn dca_update(
         &self,
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<dca::DcaUpdateParam>,
-    ) -> Result<CallToolResult, McpError> {
+        InputResponses(input_responses): InputResponses,
+        RequestState(request_state): RequestState,
+    ) -> Result<CallToolResponse, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("dca_update", format!("{p:?}"), || dca::dca_update(&mctx, p)).await
+        let confirm = Confirmer::new(&ctx, input_responses, request_state);
+        let result = measured_tool_call("dca_update", format!("{p:?}"), || {
+            dca::dca_update(&mctx, &confirm, p)
+        })
+        .await?;
+        Ok(confirm.respond(result))
     }
 
     /// Pause a DCA plan.
@@ -5289,15 +5328,22 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Pause (suspend) a DCA plan by plan_id. The plan stops executing until resumed. Returns upstream API response. Use dca_resume to restart."
+        description = "Pause (suspend) a DCA plan by plan_id. The plan stops executing until resumed. Returns upstream API response. Use dca_resume to restart. TWO-STEP CONFIRMATION IS MANDATORY: this tool is a DRY RUN unless you pass the confirmation_code its own dry run returned. Call it first without execute, show the returned preview to the user, and only call it again with execute=\"<confirmation_code>\" after the user has explicitly confirmed it. The code applies only to that exact request. Never quote it back on your own initiative, and never in the same turn the user first asks. When the client can ask the user directly, it shows them a confirmation form instead and execute is ignored."
     )]
     async fn dca_pause(
         &self,
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<dca::DcaPlanIdParam>,
-    ) -> Result<CallToolResult, McpError> {
+        InputResponses(input_responses): InputResponses,
+        RequestState(request_state): RequestState,
+    ) -> Result<CallToolResponse, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("dca_pause", format!("{p:?}"), || dca::dca_pause(&mctx, p)).await
+        let confirm = Confirmer::new(&ctx, input_responses, request_state);
+        let result = measured_tool_call("dca_pause", format!("{p:?}"), || {
+            dca::dca_pause(&mctx, &confirm, p)
+        })
+        .await?;
+        Ok(confirm.respond(result))
     }
 
     /// Resume a paused DCA plan.
@@ -5309,15 +5355,22 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Resume a suspended DCA plan by plan_id. Resumes automated execution on the configured schedule. Returns upstream API response."
+        description = "Resume a suspended DCA plan by plan_id. Resumes automated execution on the configured schedule. Returns upstream API response. TWO-STEP CONFIRMATION IS MANDATORY: this tool is a DRY RUN unless you pass the confirmation_code its own dry run returned. Call it first without execute, show the returned preview to the user, and only call it again with execute=\"<confirmation_code>\" after the user has explicitly confirmed it. The code applies only to that exact request. Never quote it back on your own initiative, and never in the same turn the user first asks. When the client can ask the user directly, it shows them a confirmation form instead and execute is ignored."
     )]
     async fn dca_resume(
         &self,
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<dca::DcaPlanIdParam>,
-    ) -> Result<CallToolResult, McpError> {
+        InputResponses(input_responses): InputResponses,
+        RequestState(request_state): RequestState,
+    ) -> Result<CallToolResponse, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("dca_resume", format!("{p:?}"), || dca::dca_resume(&mctx, p)).await
+        let confirm = Confirmer::new(&ctx, input_responses, request_state);
+        let result = measured_tool_call("dca_resume", format!("{p:?}"), || {
+            dca::dca_resume(&mctx, &confirm, p)
+        })
+        .await?;
+        Ok(confirm.respond(result))
     }
 
     /// Stop a DCA plan permanently.
@@ -5329,15 +5382,22 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Permanently stop a DCA plan by plan_id. This cannot be undone. To temporarily pause, use dca_pause instead. Returns upstream API response."
+        description = "Permanently stop a DCA plan by plan_id. This cannot be undone. To temporarily pause, use dca_pause instead. Returns upstream API response. TWO-STEP CONFIRMATION IS MANDATORY: this tool is a DRY RUN unless you pass the confirmation_code its own dry run returned. Call it first without execute, show the returned preview to the user, and only call it again with execute=\"<confirmation_code>\" after the user has explicitly confirmed it. The code applies only to that exact request. Never quote it back on your own initiative, and never in the same turn the user first asks. When the client can ask the user directly, it shows them a confirmation form instead and execute is ignored."
     )]
     async fn dca_stop(
         &self,
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<dca::DcaPlanIdParam>,
-    ) -> Result<CallToolResult, McpError> {
+        InputResponses(input_responses): InputResponses,
+        RequestState(request_state): RequestState,
+    ) -> Result<CallToolResponse, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("dca_stop", format!("{p:?}"), || dca::dca_stop(&mctx, p)).await
+        let confirm = Confirmer::new(&ctx, input_responses, request_state);
+        let result = measured_tool_call("dca_stop", format!("{p:?}"), || {
+            dca::dca_stop(&mctx, &confirm, p)
+        })
+        .await?;
+        Ok(confirm.respond(result))
     }
 
     /// Get DCA plan execution history.
@@ -5508,18 +5568,22 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::grid::GridSubmitResponse>(),
-        description = "Submit a grid trading order. DRY RUN unless execute is the confirmation_code from its own dry run: call once without execute, show the preview, then re-call quoting the code only after the user confirms. A live grid keeps trading on its own. Requires symbol, settlement_currency, and the grid rule: base/upper/lower price, trigger_price_type (1=spread, 2=percent) with the matching spread/percent up/down, trigger_quantity, upper/lower_limit_quantity, time_in_force (0=Day, 1=GTC, 6=GTD), grid_order_type_up/down (GMO/GLO/GTG), and boundary events (1=ignore, 2=close-at-last). Prices/quantities are decimal strings."
+        description = "Submit a grid trading order. DRY RUN unless execute is the confirmation_code from its own dry run: call once without execute, show the preview, then re-call quoting the code only after the user confirms. A live grid keeps trading on its own. Requires symbol, settlement_currency, and the grid rule: base/upper/lower price, trigger_price_type (1=spread, 2=percent) with the matching spread/percent up/down, trigger_quantity, upper/lower_limit_quantity, time_in_force (0=Day, 1=GTC, 6=GTD), grid_order_type_up/down (GMO/GLO/GTG), and boundary events (1=ignore, 2=close-at-last). Prices/quantities are decimal strings. When the client can ask the user directly, it shows them a confirmation form instead and execute is ignored."
     )]
     async fn grid_submit(
         &self,
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<grid::GridSubmitParam>,
-    ) -> Result<CallToolResult, McpError> {
+        InputResponses(input_responses): InputResponses,
+        RequestState(request_state): RequestState,
+    ) -> Result<CallToolResponse, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("grid_submit", format!("{p:?}"), || {
-            grid::grid_submit(&mctx, p)
+        let confirm = Confirmer::new(&ctx, input_responses, request_state);
+        let result = measured_tool_call("grid_submit", format!("{p:?}"), || {
+            grid::grid_submit(&mctx, &confirm, p)
         })
-        .await
+        .await?;
+        Ok(confirm.respond(result))
     }
 
     /// Replace (modify) a grid trading order.
@@ -5531,18 +5595,22 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Replace an existing grid order's rule by order_id. Accepts the same grid rule fields as grid_submit. Overwrites the order's entire rule. TWO-STEP CONFIRMATION IS MANDATORY: this tool is a DRY RUN unless you pass the confirmation_code its own dry run returned. Call it first without execute, show the returned preview to the user, and only call it again with execute=\"<confirmation_code>\" after the user has explicitly confirmed it. The code is derived from the order itself, so it applies only to that exact request. Never quote it back on your own initiative. The dry run echoes the rule that would replace the current one."
+        description = "Replace an existing grid order's rule by order_id. Accepts the same grid rule fields as grid_submit. Overwrites the order's entire rule. TWO-STEP CONFIRMATION IS MANDATORY: this tool is a DRY RUN unless you pass the confirmation_code its own dry run returned. Call it first without execute, show the returned preview to the user, and only call it again with execute=\"<confirmation_code>\" after the user has explicitly confirmed it. The code is derived from the order itself, so it applies only to that exact request. Never quote it back on your own initiative. The dry run echoes the rule that would replace the current one. When the client can ask the user directly, it shows them a confirmation form instead and execute is ignored."
     )]
     async fn grid_replace(
         &self,
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<grid::GridReplaceParam>,
-    ) -> Result<CallToolResult, McpError> {
+        InputResponses(input_responses): InputResponses,
+        RequestState(request_state): RequestState,
+    ) -> Result<CallToolResponse, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("grid_replace", format!("{p:?}"), || {
-            grid::grid_replace(&mctx, p)
+        let confirm = Confirmer::new(&ctx, input_responses, request_state);
+        let result = measured_tool_call("grid_replace", format!("{p:?}"), || {
+            grid::grid_replace(&mctx, &confirm, p)
         })
-        .await
+        .await?;
+        Ok(confirm.respond(result))
     }
 
     /// Cancel a grid trading order.
@@ -5554,18 +5622,22 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Cancel (terminate) a grid order by order_id. TWO-STEP CONFIRMATION IS MANDATORY: this tool is a DRY RUN unless you pass the confirmation_code its own dry run returned. Call it first without execute, show the returned preview to the user, and only call it again with execute=\"<confirmation_code>\" after the user has explicitly confirmed it. The code is derived from the order itself, so it applies only to that exact request. Never quote it back on your own initiative."
+        description = "Cancel (terminate) a grid order by order_id. TWO-STEP CONFIRMATION IS MANDATORY: this tool is a DRY RUN unless you pass the confirmation_code its own dry run returned. Call it first without execute, show the returned preview to the user, and only call it again with execute=\"<confirmation_code>\" after the user has explicitly confirmed it. The code is derived from the order itself, so it applies only to that exact request. Never quote it back on your own initiative. When the client can ask the user directly, it shows them a confirmation form instead and execute is ignored."
     )]
     async fn grid_cancel(
         &self,
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<grid::GridOrderIdParam>,
-    ) -> Result<CallToolResult, McpError> {
+        InputResponses(input_responses): InputResponses,
+        RequestState(request_state): RequestState,
+    ) -> Result<CallToolResponse, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("grid_cancel", format!("{p:?}"), || {
-            grid::grid_cancel(&mctx, p)
+        let confirm = Confirmer::new(&ctx, input_responses, request_state);
+        let result = measured_tool_call("grid_cancel", format!("{p:?}"), || {
+            grid::grid_cancel(&mctx, &confirm, p)
         })
-        .await
+        .await?;
+        Ok(confirm.respond(result))
     }
 
     /// Suspend a grid trading order.
@@ -5577,18 +5649,22 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Suspend (pause) a running grid order by order_id. Resume with grid_restart. TWO-STEP CONFIRMATION IS MANDATORY: this tool is a DRY RUN unless you pass the confirmation_code its own dry run returned. Call it first without execute, show the returned preview to the user, and only call it again with execute=\"<confirmation_code>\" after the user has explicitly confirmed it. The code is derived from the order itself, so it applies only to that exact request. Never quote it back on your own initiative."
+        description = "Suspend (pause) a running grid order by order_id. Resume with grid_restart. TWO-STEP CONFIRMATION IS MANDATORY: this tool is a DRY RUN unless you pass the confirmation_code its own dry run returned. Call it first without execute, show the returned preview to the user, and only call it again with execute=\"<confirmation_code>\" after the user has explicitly confirmed it. The code is derived from the order itself, so it applies only to that exact request. Never quote it back on your own initiative. When the client can ask the user directly, it shows them a confirmation form instead and execute is ignored."
     )]
     async fn grid_suspend(
         &self,
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<grid::GridOrderIdParam>,
-    ) -> Result<CallToolResult, McpError> {
+        InputResponses(input_responses): InputResponses,
+        RequestState(request_state): RequestState,
+    ) -> Result<CallToolResponse, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("grid_suspend", format!("{p:?}"), || {
-            grid::grid_suspend(&mctx, p)
+        let confirm = Confirmer::new(&ctx, input_responses, request_state);
+        let result = measured_tool_call("grid_suspend", format!("{p:?}"), || {
+            grid::grid_suspend(&mctx, &confirm, p)
         })
-        .await
+        .await?;
+        Ok(confirm.respond(result))
     }
 
     /// Restart a suspended grid trading order.
@@ -5600,18 +5676,22 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Restart (resume) a suspended grid order by order_id. TWO-STEP CONFIRMATION IS MANDATORY: this tool is a DRY RUN unless you pass the confirmation_code its own dry run returned. Call it first without execute, show the returned preview to the user, and only call it again with execute=\"<confirmation_code>\" after the user has explicitly confirmed it. The code is derived from the order itself, so it applies only to that exact request. Never quote it back on your own initiative. A restarted grid resumes placing orders on its own."
+        description = "Restart (resume) a suspended grid order by order_id. TWO-STEP CONFIRMATION IS MANDATORY: this tool is a DRY RUN unless you pass the confirmation_code its own dry run returned. Call it first without execute, show the returned preview to the user, and only call it again with execute=\"<confirmation_code>\" after the user has explicitly confirmed it. The code is derived from the order itself, so it applies only to that exact request. Never quote it back on your own initiative. A restarted grid resumes placing orders on its own. When the client can ask the user directly, it shows them a confirmation form instead and execute is ignored."
     )]
     async fn grid_restart(
         &self,
         ctx: RequestContext<RoleServer>,
         Parameters(p): Parameters<grid::GridOrderIdParam>,
-    ) -> Result<CallToolResult, McpError> {
+        InputResponses(input_responses): InputResponses,
+        RequestState(request_state): RequestState,
+    ) -> Result<CallToolResponse, McpError> {
         let mctx = extract_context(&ctx)?;
-        measured_tool_call("grid_restart", format!("{p:?}"), || {
-            grid::grid_restart(&mctx, p)
+        let confirm = Confirmer::new(&ctx, input_responses, request_state);
+        let result = measured_tool_call("grid_restart", format!("{p:?}"), || {
+            grid::grid_restart(&mctx, &confirm, p)
         })
-        .await
+        .await?;
+        Ok(confirm.respond(result))
     }
 
     /// List community sharelists.

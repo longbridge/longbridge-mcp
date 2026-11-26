@@ -30,15 +30,16 @@ use super::dry_run::Scope;
 use rmcp::ErrorData as McpError;
 use rmcp::RoleServer;
 use rmcp::model::{
-    CallToolResult, ElicitRequest, ElicitRequestParams, ElicitResult, ElicitationAction,
-    ElicitationSchema, InputRequest, InputRequests, InputRequiredResult, InputResponses,
+    CallToolResponse, CallToolResult, ElicitRequest, ElicitRequestParams, ElicitResult,
+    ElicitationAction, ElicitationSchema, InputRequest, InputRequests, InputRequiredResult,
+    InputResponses,
 };
 use rmcp::service::RequestContext;
 use sha2::{Digest, Sha256};
 use std::sync::Mutex;
 
 /// The key of the one input request this module makes.
-const INPUT_KEY: &str = "confirm_order";
+const INPUT_KEY: &str = "confirm";
 /// The boolean field of the confirmation form.
 const FIELD: &str = "confirm";
 
@@ -76,7 +77,7 @@ impl Gate {
 
 /// What the tool should do after asking for confirmation.
 pub enum Decision {
-    /// The user (or a valid code) approved this exact order: send it.
+    /// The user (or a valid code) approved this exact request: send it.
     Proceed,
     /// Do not send anything; return this to the caller.
     Respond(CallToolResult),
@@ -134,6 +135,15 @@ impl Confirmer {
             .take()
     }
 
+    /// The tool's response: the pending `input_required` when the user is
+    /// being asked, the tool result otherwise.
+    pub fn respond(&self, result: CallToolResult) -> CallToolResponse {
+        match self.take_input_required() {
+            Some(input_required) => input_required.into(),
+            None => result.into(),
+        }
+    }
+
     /// Whether this call will show a preview (a dry run or a confirmation
     /// form), so the caller can skip fetching one for a code-confirmed execute.
     pub fn needs_preview(&self, has_code: bool) -> bool {
@@ -189,7 +199,7 @@ impl Confirmer {
         // Placeholder for the metrics wrapper; the caller replaces it with the
         // `input_required` result above.
         Decision::Respond(crate::tools::tool_result(
-            "Waiting for the user to confirm this order in the client.".to_string(),
+            "Waiting for the user to confirm this request in the client.".to_string(),
         ))
     }
 }
@@ -229,13 +239,11 @@ fn form(scope: &Scope, preview: &serde_json::Value) -> ElicitRequestParams {
     let details = serde_json::to_string_pretty(&shown).unwrap_or_default();
     ElicitRequestParams::FormElicitationParams {
         meta: None,
-        message: format!(
-            "Confirm this order: {scope}\n\nNothing is sent until you confirm.\n\n{details}"
-        ),
+        message: format!("Confirm: {scope}\n\nNothing is sent until you confirm.\n\n{details}"),
         requested_schema: ElicitationSchema::builder()
             .required_bool_property(FIELD, |b| {
-                b.title("Send this order")
-                    .description("Tick to send the order exactly as shown above.")
+                b.title("Confirm")
+                    .description("Tick to send this request exactly as shown above.")
             })
             .build_unchecked(),
     }
@@ -243,7 +251,7 @@ fn form(scope: &Scope, preview: &serde_json::Value) -> ElicitRequestParams {
 
 fn not_confirmed(scope: &Scope) -> CallToolResult {
     crate::tools::tool_result(format!(
-        "The user did not confirm this order ({scope}). Nothing was sent. Do not retry \
+        "The user did not confirm this request ({scope}). Nothing was sent. Do not retry \
          unless the user asks again."
     ))
 }

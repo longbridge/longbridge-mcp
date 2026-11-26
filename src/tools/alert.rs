@@ -4,6 +4,8 @@ use rmcp::schemars::JsonSchema;
 use rmcp::serde::Deserialize;
 
 use crate::error::Error;
+use crate::tools::support::confirm::{Confirmer, Decision};
+use crate::tools::support::dry_run::Scope;
 use crate::tools::support::http_client::{http_delete_tool, http_get_tool, http_post_tool};
 use crate::tools::tool_json;
 
@@ -17,12 +19,30 @@ pub struct AlertAddParam {
     pub price: String,
     /// Alert frequency: "once" (trigger once then disable), "daily" (once per day), "every" (alert every time condition is met)
     pub frequency: Option<String>,
+    /// The `confirmation_code` from this request's dry run. WITHOUT IT NOTHING
+    /// IS SENT.
+    ///
+    /// Omitted (the default) makes this a DRY RUN: the request is validated and
+    /// echoed back with a three-digit `confirmation_code`, and nothing changes.
+    /// Call once without `execute`, show the returned preview to the user, and
+    /// call again quoting the code only after the user has explicitly confirmed
+    /// that exact request. Never quote it back on your own initiative.
+    pub execute: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct AlertIdParam {
     /// Alert indicator id
     pub alert_id: String,
+    /// The `confirmation_code` from this request's dry run. WITHOUT IT NOTHING
+    /// IS SENT.
+    ///
+    /// Omitted (the default) makes this a DRY RUN: the request is validated and
+    /// echoed back with a three-digit `confirmation_code`, and nothing changes.
+    /// Call once without `execute`, show the returned preview to the user, and
+    /// call again quoting the code only after the user has explicitly confirmed
+    /// that exact request. Never quote it back on your own initiative.
+    pub execute: Option<String>,
 }
 
 pub async fn alert_list(mctx: &crate::tools::McpContext) -> Result<CallToolResult, McpError> {
@@ -32,9 +52,9 @@ pub async fn alert_list(mctx: &crate::tools::McpContext) -> Result<CallToolResul
 
 pub async fn alert_add(
     mctx: &crate::tools::McpContext,
+    confirm: &Confirmer,
     p: AlertAddParam,
 ) -> Result<CallToolResult, McpError> {
-    let client = mctx.create_http_client();
     let indicator_id: i32 = match p.condition.as_str() {
         "percent_fall" => 4,
         "percent_rise" => 3,
@@ -60,33 +80,79 @@ pub async fn alert_add(
         "scope": 0,
         "state": [1],
     });
+    let scope = Scope::request("alert add")
+        .and("symbol", &p.symbol)
+        .and("condition", &p.condition)
+        .and("value", &p.price)
+        .and("frequency", p.frequency.as_deref().unwrap_or("once"));
+    let preview = serde_json::json!({
+        "action": "alert_add",
+        "symbol": p.symbol,
+        "condition": p.condition,
+        "value": p.price,
+        "frequency": p.frequency.as_deref().unwrap_or("once"),
+    });
+    if let Decision::Respond(r) = confirm
+        .confirm(&scope, p.execute.as_deref(), preview)
+        .await?
+    {
+        return Ok(r);
+    }
+    let client = mctx.create_http_client();
     http_post_tool(&client, "/v1/notify/reminders", body).await
 }
 
 pub async fn alert_delete(
     mctx: &crate::tools::McpContext,
+    confirm: &Confirmer,
     p: AlertIdParam,
 ) -> Result<CallToolResult, McpError> {
-    let client = mctx.create_http_client();
     let id_num: i64 = p
         .alert_id
         .parse()
         .map_err(|_| McpError::invalid_params("invalid alert_id", None))?;
+    let scope = Scope::on("alert delete", "alert", &p.alert_id);
+    let preview = serde_json::json!({ "action": "alert_delete", "alert_id": p.alert_id });
+    if let Decision::Respond(r) = confirm
+        .confirm(&scope, p.execute.as_deref(), preview)
+        .await?
+    {
+        return Ok(r);
+    }
+    let client = mctx.create_http_client();
     let body = serde_json::json!({ "ids": [id_num] });
     http_delete_tool(&client, "/v1/notify/reminders", body).await
 }
 
 pub async fn alert_enable(
     mctx: &crate::tools::McpContext,
+    confirm: &Confirmer,
     p: AlertIdParam,
 ) -> Result<CallToolResult, McpError> {
+    let scope = Scope::on("alert enable", "alert", &p.alert_id);
+    let preview = serde_json::json!({ "action": "alert_enable", "alert_id": p.alert_id });
+    if let Decision::Respond(r) = confirm
+        .confirm(&scope, p.execute.as_deref(), preview)
+        .await?
+    {
+        return Ok(r);
+    }
     alert_set_enabled(mctx, &p.alert_id, true).await
 }
 
 pub async fn alert_disable(
     mctx: &crate::tools::McpContext,
+    confirm: &Confirmer,
     p: AlertIdParam,
 ) -> Result<CallToolResult, McpError> {
+    let scope = Scope::on("alert disable", "alert", &p.alert_id);
+    let preview = serde_json::json!({ "action": "alert_disable", "alert_id": p.alert_id });
+    if let Decision::Respond(r) = confirm
+        .confirm(&scope, p.execute.as_deref(), preview)
+        .await?
+    {
+        return Ok(r);
+    }
     alert_set_enabled(mctx, &p.alert_id, false).await
 }
 
@@ -138,6 +204,7 @@ async fn alert_set_enabled(
                     });
                     http_post_tool(&client, "/v1/notify/reminders", body).await?;
                     return tool_json(&serde_json::json!({
+                        "dry_run": false,
                         "alert_id": alert_id,
                         "enabled": enabled,
                     }));

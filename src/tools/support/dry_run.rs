@@ -157,6 +157,18 @@ impl Scope {
         ))
     }
 
+    /// `dca create` — any other gated request, named by what it does. Every
+    /// field the user approves is folded in with [`Scope::and`].
+    pub fn request(action: &str) -> Self {
+        Self(action.to_string())
+    }
+
+    /// `dca pause plan 42` — an action on something that already exists and
+    /// is not an order (a DCA plan, a price alert).
+    pub fn on(action: &str, kind: &str, id: &str) -> Self {
+        Self(format!("{action} {kind} {}", canonical(id)))
+    }
+
     /// `grid submit 100 700.HK @ 449` — a grid strategy.
     pub fn grid(action: &str, symbol: &str, quantity: &str, base_price: &str) -> Self {
         Self(format!(
@@ -222,10 +234,10 @@ pub fn result(scope: &Scope, preview: serde_json::Value) -> Result<CallToolResul
         "preview": preview,
         "confirmation_code": code,
         "next_step": format!(
-            "DRY RUN — nothing was sent to the exchange. Show this preview to the user and \
-             ask them to confirm it. Only call this tool again with execute=\"{code}\" after \
-             the user has explicitly confirmed this exact order. The code applies only to this \
-             exact request. Never quote it back on your own initiative."
+            "DRY RUN — nothing was sent. Show this preview to the user and ask them to \
+             confirm it. Only call this tool again with execute=\"{code}\" after the user has \
+             explicitly confirmed this exact request. The code applies only to this exact \
+             request. Never quote it back on your own initiative."
         ),
     }))
 }

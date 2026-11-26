@@ -216,6 +216,16 @@ pub struct SubmitMultiLegOrderParam {
     /// Idempotency key, unique per intended order. See the field of the same
     /// name on `submit_order`.
     pub client_request_id: Option<String>,
+    /// The `confirmation_code` from this order's dry run. WITHOUT IT NOTHING IS
+    /// SENT.
+    ///
+    /// Omitted (the default) makes this a DRY RUN: the request is validated and
+    /// echoed back with a three-digit `confirmation_code`, and nothing reaches
+    /// the exchange. Call once without `execute`, show the returned preview to
+    /// the user, and call again quoting the code only after the user has
+    /// explicitly confirmed that exact order. Never quote it back on your own
+    /// initiative, and never in the same turn the user first asks.
+    pub execute: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -1886,6 +1896,7 @@ pub async fn submit_order(
 /// a single strategy order and fills or rests as one.
 pub async fn submit_multileg_order(
     mctx: &crate::tools::McpContext,
+    confirm: &Confirmer,
     p: SubmitMultiLegOrderParam,
 ) -> Result<CallToolResult, McpError> {
     use longbridge::Decimal;
@@ -1915,6 +1926,35 @@ pub async fn submit_multileg_order(
         .map_err(|e| McpError::invalid_params(format!("invalid order_type: {e}"), None))?;
     let quantity = Decimal::from_str(&p.submitted_quantity)
         .map_err(|e| McpError::invalid_params(format!("invalid submitted_quantity: {e}"), None))?;
+
+    // The strategy, order type and every leg (symbol and ratio, in order) are
+    // part of what the user approves: a code confirmed for one spread must not
+    // place another. `remark` and `client_request_id` change nothing traded.
+    let mut scope = dry_run::Scope::order(
+        &p.side,
+        &p.strategy,
+        &p.submitted_quantity,
+        p.submitted_price.as_deref().unwrap_or(""),
+    )
+    .and("type", &p.order_type);
+    for leg in &p.legs {
+        scope = scope.and("leg", &format!("{} x{}", leg.symbol, leg.ratio_quantity));
+    }
+    let preview = serde_json::json!({
+        "action": "submit_multileg_order",
+        "strategy": p.strategy,
+        "side": p.side,
+        "order_type": p.order_type,
+        "quantity": p.submitted_quantity,
+        "price": p.submitted_price,
+        "legs": p.legs.iter().map(|leg| serde_json::json!({
+            "symbol": leg.symbol,
+            "ratio_quantity": leg.ratio_quantity,
+        })).collect::<Vec<_>>(),
+        "remark": p.remark,
+        "client_request_id": p.client_request_id,
+    });
+    let execute = p.execute.clone();
 
     let legs = p
         .legs
@@ -1952,9 +1992,19 @@ pub async fn submit_multileg_order(
         opts = opts.client_request_id(v.clone());
     }
 
+    // Validate everything first, so the dry run reports the same errors a real
+    // submit would; nothing is sent until the user approves this exact order.
+    if let Decision::Respond(r) = confirm.confirm(&scope, execute.as_deref(), preview).await? {
+        return Ok(r);
+    }
     let (ctx, _) = TradeContext::new(mctx.create_config());
     let result = ctx.submit_multileg(opts).await.map_err(Error::longbridge)?;
-    tool_json(&result)
+    // Same envelope as the dry run so both outcomes validate against
+    // `output::SubmitOrderResult`.
+    tool_json(&serde_json::json!({
+        "dry_run": false,
+        "order_id": result.order_id,
+    }))
 }
 
 pub async fn replace_order(
@@ -2087,13 +2137,24 @@ mod execute_gate_tests {
 
     use super::{CancelOrderParam, ReplaceOrderParam, SubmitOrderParam};
 
-    /// Every tool that can move real money. Grid writes count: a live grid keeps
-    /// placing orders on its own, so it is at least as consequential as a single
-    /// order.
-    const GATED_TOOLS: [&str; 10] = [
+    /// Every tool that can move real money or act on the user's behalf later.
+    /// Grid and DCA writes count: a live grid or plan keeps placing orders on
+    /// its own, so it is at least as consequential as a single order. Price
+    /// alerts are gated too, as part of the same user-confirmed write policy.
+    const GATED_TOOLS: [&str; 20] = [
         "submit_order",
         "cancel_order",
         "replace_order",
+        "submit_multileg_order",
+        "dca_create",
+        "dca_update",
+        "dca_pause",
+        "dca_resume",
+        "dca_stop",
+        "alert_add",
+        "alert_delete",
+        "alert_enable",
+        "alert_disable",
         "grid_submit",
         "grid_replace",
         "grid_cancel",
@@ -2181,7 +2242,13 @@ mod execute_gate_tests {
         // The original response schema remains available as a resource even
         // when jq projections have a different shape. It must admit dry runs.
         let tools = crate::tools::all_tools_full_cached();
-        for name in ["submit_order", "grid_submit"] {
+        for name in [
+            "submit_order",
+            "submit_multileg_order",
+            "grid_submit",
+            "alert_enable",
+            "alert_disable",
+        ] {
             let schema = tools
                 .iter()
                 .find(|t| t.name == name)
@@ -2196,6 +2263,43 @@ mod execute_gate_tests {
                 required,
                 ["dry_run"],
                 "{name}: only `dry_run` may be required so both outcomes validate"
+            );
+        }
+    }
+
+    /// Writes that move no money and act only on the user's own lists or
+    /// posts. Anything else that writes must be in `GATED_TOOLS`.
+    const UNGATED_WRITES: [&str; 12] = [
+        "authenticate",
+        "create_watchlist_group",
+        "delete_watchlist_group",
+        "update_watchlist_group",
+        "fund_validate_order",
+        "topic_create",
+        "topic_create_reply",
+        "sharelist_create",
+        "sharelist_delete",
+        "sharelist_add",
+        "sharelist_remove",
+        "sharelist_sort",
+    ];
+
+    #[test]
+    fn every_write_tool_is_gated_or_explicitly_exempt() {
+        for tool in crate::tools::all_tools_full_cached() {
+            let read_only = tool
+                .annotations
+                .as_ref()
+                .and_then(|a| a.read_only_hint)
+                .unwrap_or(false);
+            let name = tool.name.as_ref();
+            if read_only || UNGATED_WRITES.contains(&name) {
+                continue;
+            }
+            assert!(
+                GATED_TOOLS.contains(&name),
+                "{name} writes but is neither confirmation-gated nor listed as exempt; \
+                 gate it with `Confirmer` or add it to UNGATED_WRITES with a reason"
             );
         }
     }
