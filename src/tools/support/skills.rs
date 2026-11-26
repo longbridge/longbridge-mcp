@@ -20,6 +20,12 @@
 //!
 //! Skills marked `risk_level: mutating` (orders, DCA, watchlist writes) are
 //! hidden on the read-only `/v2` endpoint, whose tools cannot act on them.
+//!
+//! Some tools exist only in one data center (DCA is AP-only, for example).
+//! Clients check a skill's digest, so its text cannot change per request:
+//! instead there is one rewritten copy per data center, whose preamble names
+//! the tools that account cannot use, and each connection is served the copy
+//! for its account's region.
 
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -33,6 +39,10 @@ use rmcp::model::{
 
 /// Directory holding the skills to serve, one folder per skill.
 const SOURCE_ENV: &str = "LONGBRIDGE_MCP_SKILLS_DIR";
+/// Optional: where the rewritten copies are written (default: the system
+/// temporary directory). Must be writable, e.g. an `emptyDir` when the root
+/// filesystem is read-only.
+const CACHE_ENV: &str = "LONGBRIDGE_MCP_SKILLS_CACHE_DIR";
 /// Optional: re-read the skills every this many seconds, for a directory
 /// mounted from outside the image (e.g. a ConfigMap) that changes without a
 /// redeploy.
@@ -58,40 +68,113 @@ or the client asks the user with a confirmation form. Show the preview, and call
 `execute` set to that code only after the user explicitly confirms that exact preview. The \
 preview is the confirmation step: do not ask for a separate confirmation before the first call, \
 and do not follow this skill's CLI rule that a write has no dry run.
+> - Every other write (a tool with no `execute` parameter, such as watchlist groups, shared \
+lists or community posts) takes effect on the first call. Describe the change and get the \
+user's explicit agreement in the conversation before calling it.
 ";
 
-struct Skills {
-    source: PathBuf,
+/// The data-center-specific line added to [`MCP_PREAMBLE`], or `None` when
+/// every tool is available.
+fn region_note(unavailable: &[&str]) -> Option<String> {
+    if unavailable.is_empty() {
+        return None;
+    }
+    let names: Vec<String> = unavailable.iter().map(|n| format!("`{n}`")).collect();
+    Some(format!(
+        "> - This account cannot use {}. Where this skill relies on them, tell the user that \
+         feature is not available for their account; do not look for a substitute.\n",
+        names.join(", ")
+    ))
+}
+
+/// Which data center's copy of the skills a connection is served.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Region {
+    Ap,
+    Us,
+}
+
+impl From<longbridge::DcRegion> for Region {
+    fn from(region: longbridge::DcRegion) -> Self {
+        match region {
+            longbridge::DcRegion::Us => Self::Us,
+            longbridge::DcRegion::Ap => Self::Ap,
+        }
+    }
+}
+
+/// What a connection may see.
+#[derive(Debug, Clone, Copy)]
+pub struct View {
+    /// The read-only `/v2` endpoint: mutating skills are hidden.
+    pub read_only: bool,
+    pub region: Region,
+}
+
+/// One rewritten copy of the skills.
+struct Copy {
     served: PathBuf,
+    note: Option<String>,
     catalog: SkillCatalog,
 }
 
+struct Skills {
+    source: PathBuf,
+    ap: Copy,
+    us: Copy,
+}
+
+impl Skills {
+    fn copy(&self, region: Region) -> &Copy {
+        match region {
+            Region::Ap => &self.ap,
+            Region::Us => &self.us,
+        }
+    }
+}
+
 static SKILLS: OnceLock<Option<Skills>> = OnceLock::new();
+
+fn load_copy(source: &Path, served: PathBuf, unavailable: &[&str]) -> Result<Copy, String> {
+    let note = region_note(unavailable);
+    materialize(source, &served, note.as_deref()).map_err(|e| format!("{served:?}: {e}"))?;
+    let catalog = SkillCatalog::from_dir(&served).map_err(|e| e.to_string())?;
+    Ok(Copy {
+        served,
+        note,
+        catalog,
+    })
+}
 
 fn skills() -> Option<&'static Skills> {
     SKILLS
         .get_or_init(|| {
             let source = PathBuf::from(std::env::var_os(SOURCE_ENV)?);
-            let served =
-                std::env::temp_dir().join(format!("longbridge-mcp-skills-{}", std::process::id()));
-            let loaded = materialize(&source, &served)
-                .map_err(|e| e.to_string())
-                .and_then(|()| SkillCatalog::from_dir(&served).map_err(|e| e.to_string()));
+            let cache = std::env::var_os(CACHE_ENV)
+                .map(PathBuf::from)
+                .unwrap_or_else(std::env::temp_dir)
+                .join(format!("longbridge-mcp-skills-{}", std::process::id()));
+            let loaded = load_copy(&source, cache.join("ap"), crate::tools::US_ONLY_TOOLS)
+                .and_then(|ap| {
+                    let us = load_copy(&source, cache.join("us"), crate::tools::AP_ONLY_TOOLS)?;
+                    Ok((ap, us))
+                });
             match loaded {
-                Ok(catalog) => {
+                Ok((ap, us)) => {
                     tracing::info!(
                         ?source,
-                        skills = catalog.list_skills().skills.len(),
+                        skills = ap.catalog.list_skills().skills.len(),
                         "loaded MCP skills"
                     );
-                    Some(Skills {
-                        source,
-                        served,
-                        catalog,
-                    })
+                    Some(Skills { source, ap, us })
                 }
                 Err(error) => {
-                    tracing::error!(?source, %error, "failed to load MCP skills");
+                    tracing::error!(
+                        ?source,
+                        %error,
+                        "failed to load MCP skills; set {CACHE_ENV} to a writable directory \
+                         if the default one is read-only"
+                    );
                     None
                 }
             }
@@ -122,14 +205,17 @@ pub fn spawn_reload() {
         tick.tick().await;
         loop {
             tick.tick().await;
-            let result = materialize(&skills.source, &skills.served)
-                .map_err(|e| e.to_string())
-                .and_then(|()| skills.catalog.reload().map_err(|e| e.to_string()));
-            match result {
-                Ok(true) => tracing::info!("reloaded MCP skills"),
-                Ok(false) => {}
-                Err(error) => {
-                    tracing::warn!(%error, "failed to reload MCP skills; keeping the last good set")
+            for copy in [&skills.ap, &skills.us] {
+                let result = materialize(&skills.source, &copy.served, copy.note.as_deref())
+                    .map_err(|e| e.to_string())
+                    .and_then(|()| copy.catalog.reload().map_err(|e| e.to_string()));
+                match result {
+                    Ok(true) => tracing::info!(served = ?copy.served, "reloaded MCP skills"),
+                    Ok(false) => {}
+                    Err(error) => tracing::warn!(
+                        %error,
+                        "failed to reload MCP skills; keeping the last good set"
+                    ),
                 }
             }
         }
@@ -139,19 +225,19 @@ pub fn spawn_reload() {
 /// Copy `source` into `served`, rewriting every `<skill>/SKILL.md` for MCP.
 /// Builds the new copy beside the old one and swaps it in, so a failed copy
 /// leaves the last good one in place.
-fn materialize(source: &Path, served: &Path) -> std::io::Result<()> {
+fn materialize(source: &Path, served: &Path, note: Option<&str>) -> std::io::Result<()> {
     let next = served.with_extension("next");
     if next.exists() {
         std::fs::remove_dir_all(&next)?;
     }
-    copy_tree(source, &next, 0)?;
+    copy_tree(source, &next, 0, note)?;
     if served.exists() {
         std::fs::remove_dir_all(served)?;
     }
     std::fs::rename(&next, served)
 }
 
-fn copy_tree(from: &Path, to: &Path, depth: usize) -> std::io::Result<()> {
+fn copy_tree(from: &Path, to: &Path, depth: usize, note: Option<&str>) -> std::io::Result<()> {
     std::fs::create_dir_all(to)?;
     for entry in std::fs::read_dir(from)? {
         let entry = entry?;
@@ -165,10 +251,10 @@ fn copy_tree(from: &Path, to: &Path, depth: usize) -> std::io::Result<()> {
         // visible entry is a symlink into the hidden `..data` directory.
         let kind = std::fs::metadata(&src)?.file_type();
         if kind.is_dir() {
-            copy_tree(&src, &dst, depth + 1)?;
+            copy_tree(&src, &dst, depth + 1, note)?;
         } else if kind.is_file() {
             if depth == 1 && name == "SKILL.md" {
-                std::fs::write(&dst, for_mcp(&std::fs::read_to_string(&src)?))?;
+                std::fs::write(&dst, for_mcp(&std::fs::read_to_string(&src)?, note))?;
             } else {
                 std::fs::copy(&src, &dst)?;
             }
@@ -180,7 +266,7 @@ fn copy_tree(from: &Path, to: &Path, depth: usize) -> std::io::Result<()> {
 /// Rewrite one `SKILL.md` for MCP: cut the trigger list from `description`
 /// and insert [`MCP_PREAMBLE`] after the frontmatter. A file without
 /// frontmatter is left alone; rmcp skips it anyway.
-pub fn for_mcp(skill_md: &str) -> String {
+pub fn for_mcp(skill_md: &str, note: Option<&str>) -> String {
     let Some(rest) = skill_md.strip_prefix("---\n") else {
         return skill_md.to_string();
     };
@@ -189,8 +275,9 @@ pub fn for_mcp(skill_md: &str) -> String {
     };
     let (frontmatter, body) = (&rest[..end], &rest[end + "\n---\n".len()..]);
     format!(
-        "---\n{}\n---\n\n{MCP_PREAMBLE}\n{}",
+        "---\n{}\n---\n\n{MCP_PREAMBLE}{}\n{}",
         without_triggers(frontmatter),
+        note.unwrap_or(""),
         body.trim_start_matches('\n')
     )
 }
@@ -265,12 +352,11 @@ fn is_mutating(skill: &Skill) -> bool {
 }
 
 /// Names of the skills hidden on this connection.
-fn hidden(skills: &Skills, read_only: bool) -> Vec<String> {
+fn hidden(catalog: &SkillCatalog, read_only: bool) -> Vec<String> {
     if !read_only {
         return Vec::new();
     }
-    skills
-        .catalog
+    catalog
         .list_skills()
         .skills
         .iter()
@@ -287,23 +373,28 @@ fn unknown(uri: &str) -> McpError {
     McpError::invalid_params(format!("unknown skill resource: {uri}"), None)
 }
 
+/// The catalog a connection is served, and the skills hidden on it.
+fn view(view: View) -> Option<(&'static SkillCatalog, Vec<String>)> {
+    let catalog = &skills()?.copy(view.region).catalog;
+    Some((catalog, hidden(catalog, view.read_only)))
+}
+
 /// `skills/list`. `None` when this server offers no skills.
-pub fn list(read_only: bool) -> Option<ListSkillsResult> {
-    let skills = skills()?;
-    let hidden = hidden(skills, read_only);
-    let mut result = skills.catalog.list_skills();
+pub fn list(v: View) -> Option<ListSkillsResult> {
+    let (catalog, hidden) = view(v)?;
+    let mut result = catalog.list_skills();
     result.skills.retain(|s| !is_hidden(&hidden, &s.uri));
     crate::metrics::record_skill_request("list", "*");
     Some(result)
 }
 
 /// `skills/get`. `None` when this server offers no skills.
-pub fn get(uri: &str, read_only: bool) -> Option<Result<GetSkillResult, McpError>> {
-    let skills = skills()?;
-    if is_hidden(&hidden(skills, read_only), uri) {
+pub fn get(uri: &str, v: View) -> Option<Result<GetSkillResult, McpError>> {
+    let (catalog, hidden) = view(v)?;
+    if is_hidden(&hidden, uri) {
         return Some(Err(unknown(uri)));
     }
-    let result = skills.catalog.get_skill(uri);
+    let result = catalog.get_skill(uri);
     // Counted only once the skill exists: the URI comes from the client, and
     // an unknown one must not become a new metrics label.
     if result.is_ok() {
@@ -313,36 +404,34 @@ pub fn get(uri: &str, read_only: bool) -> Option<Result<GetSkillResult, McpError
 }
 
 /// The skill files to add to `resources/list`.
-pub fn resources(read_only: bool) -> Vec<Resource> {
-    let Some(skills) = skills() else {
+pub fn resources(v: View) -> Vec<Resource> {
+    let Some((catalog, hidden)) = view(v) else {
         return Vec::new();
     };
-    let hidden = hidden(skills, read_only);
-    let mut resources = skills.catalog.resources();
+    let mut resources = catalog.resources();
     resources.retain(|r| !is_hidden(&hidden, &r.uri));
     resources
 }
 
 /// `resources/read` for a `skill://` URI; `None` when it is not one this
 /// server serves on this connection.
-pub fn read(uri: &str, read_only: bool) -> Option<ReadResourceResult> {
-    let skills = skills()?;
-    if is_hidden(&hidden(skills, read_only), uri) {
+pub fn read(uri: &str, v: View) -> Option<ReadResourceResult> {
+    let (catalog, hidden) = view(v)?;
+    if is_hidden(&hidden, uri) {
         return None;
     }
-    let result = skills.catalog.read_resource(uri)?;
+    let result = catalog.read_resource(uri)?;
     crate::metrics::record_skill_request("read", skill_of(uri).unwrap_or("unknown"));
     Some(result)
 }
 
 /// `resources/directory/read`. `None` when this server offers no skills.
-pub fn read_directory(uri: &str, read_only: bool) -> Option<Result<ListResourcesResult, McpError>> {
-    let skills = skills()?;
-    let hidden = hidden(skills, read_only);
+pub fn read_directory(uri: &str, v: View) -> Option<Result<ListResourcesResult, McpError>> {
+    let (catalog, hidden) = view(v)?;
     if is_hidden(&hidden, uri) {
         return Some(Err(unknown(uri)));
     }
-    Some(skills.catalog.read_resource_directory(uri).map(|mut dir| {
+    Some(catalog.read_resource_directory(uri).map(|mut dir| {
         dir.resources.retain(|r| !is_hidden(&hidden, &r.uri));
         dir
     }))
@@ -370,7 +459,7 @@ Body.
 
     #[test]
     fn block_description_loses_its_triggers_and_gains_the_preamble() {
-        let out = for_mcp(BLOCK);
+        let out = for_mcp(BLOCK, None);
         assert!(!out.contains("Triggers"), "{out}");
         assert!(
             out.contains("  Account assets, positions and DCA plans via Longbridge.\nlicense: MIT")
@@ -390,7 +479,7 @@ Body.
     fn inline_description_is_cut_and_keeps_its_quote() {
         let md =
             "---\nname: x\ndescription: \"Quotes and charts. Triggers: price, 股价\"\n---\nBody\n";
-        let out = for_mcp(md);
+        let out = for_mcp(md, None);
         assert!(
             out.contains("description: \"Quotes and charts.\"\n"),
             "{out}"
@@ -400,12 +489,21 @@ Body.
     #[test]
     fn a_description_that_is_only_triggers_is_left_alone() {
         let md = "---\nname: x\ndescription: |\n  Triggers: a, b\n---\nBody\n";
-        assert!(for_mcp(md).contains("  Triggers: a, b"));
+        assert!(for_mcp(md, None).contains("  Triggers: a, b"));
+    }
+
+    #[test]
+    fn the_region_note_names_the_missing_tools() {
+        let note = region_note(&["dca_create", "fund_positions"]).unwrap();
+        let out = for_mcp(BLOCK, Some(&note));
+        assert!(out.contains("This account cannot use `dca_create`, `fund_positions`."));
+        assert!(out.find("cannot use") < out.find("# Longbridge Portfolio"));
+        assert_eq!(region_note(&[]), None);
     }
 
     #[test]
     fn a_file_without_frontmatter_is_unchanged() {
-        assert_eq!(for_mcp("# Just a doc\n"), "# Just a doc\n");
+        assert_eq!(for_mcp("# Just a doc\n", None), "# Just a doc\n");
     }
 
     #[test]
@@ -437,7 +535,7 @@ Body.
         std::fs::create_dir_all(&mount).unwrap();
         std::os::unix::fs::symlink(&data, mount.join("longbridge-portfolio")).unwrap();
         let served = root.join("served");
-        materialize(&mount, &served).unwrap();
+        materialize(&mount, &served, None).unwrap();
         let catalog = SkillCatalog::from_dir(&served).unwrap();
         assert_eq!(
             catalog.list_skills().skills.len(),
@@ -458,9 +556,9 @@ Body.
         std::fs::write(source.join("longbridge-portfolio/references/dca.md"), "dca").unwrap();
         std::fs::write(source.join(".claude-plugin/plugin.json"), "{}").unwrap();
 
-        materialize(&source, &served).unwrap();
+        materialize(&source, &served, None).unwrap();
         // A second run replaces the first copy.
-        materialize(&source, &served).unwrap();
+        materialize(&source, &served, None).unwrap();
         let catalog = SkillCatalog::from_dir(&served).unwrap();
         let listed = catalog.list_skills().skills;
         assert_eq!(listed.len(), 1);

@@ -846,6 +846,21 @@ mod signal;
 mod statement;
 mod support;
 
+/// What this connection may see of the skills served over MCP: mutating
+/// skills are hidden on the read-only endpoint, and the account's data center
+/// picks the copy that names the tools it cannot use. Unauthenticated callers
+/// get the AP copy, like the default tool list.
+async fn skills_view(context: &RequestContext<RoleServer>) -> support::skills::View {
+    let region = match extract_context(context) {
+        Ok(mctx) => mctx.dc_region().await.into(),
+        Err(_) => support::skills::Region::Ap,
+    };
+    support::skills::View {
+        read_only: restricted_version(context).is_some(),
+        region,
+    }
+}
+
 /// Load the skills served over MCP (if configured) and start reloading them
 /// on the configured interval. See `support::skills`.
 pub fn init_skills() {
@@ -7246,9 +7261,7 @@ impl ServerHandler for Longbridge {
         context: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> Result<ListResourcesResult, rmcp::ErrorData> {
         let mut resources = output_schema_resources();
-        resources.extend(support::skills::resources(
-            restricted_version(&context).is_some(),
-        ));
+        resources.extend(support::skills::resources(skills_view(&context).await));
         Ok(ListResourcesResult::with_all_items(resources))
     }
 
@@ -7257,9 +7270,7 @@ impl ServerHandler for Longbridge {
         request: ReadResourceRequestParams,
         context: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> Result<ReadResourceResponse, rmcp::ErrorData> {
-        if let Some(result) =
-            support::skills::read(&request.uri, restricted_version(&context).is_some())
-        {
+        if let Some(result) = support::skills::read(&request.uri, skills_view(&context).await) {
             return Ok(result.into());
         }
         read_output_schema_resource(&request.uri).map(ReadResourceResponse::from)
@@ -7270,7 +7281,7 @@ impl ServerHandler for Longbridge {
         _request: Option<rmcp::model::PaginatedRequestParams>,
         context: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> Result<rmcp::model::ListSkillsResult, rmcp::ErrorData> {
-        support::skills::list(restricted_version(&context).is_some()).ok_or_else(|| {
+        support::skills::list(skills_view(&context).await).ok_or_else(|| {
             rmcp::ErrorData::method_not_found::<rmcp::model::ListSkillsRequestMethod>()
         })
     }
@@ -7280,13 +7291,11 @@ impl ServerHandler for Longbridge {
         request: rmcp::model::GetSkillRequestParams,
         context: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> Result<rmcp::model::GetSkillResult, rmcp::ErrorData> {
-        support::skills::get(&request.uri, restricted_version(&context).is_some()).unwrap_or_else(
-            || {
-                Err(rmcp::ErrorData::method_not_found::<
-                    rmcp::model::GetSkillRequestMethod,
-                >())
-            },
-        )
+        support::skills::get(&request.uri, skills_view(&context).await).unwrap_or_else(|| {
+            Err(rmcp::ErrorData::method_not_found::<
+                rmcp::model::GetSkillRequestMethod,
+            >())
+        })
     }
 
     async fn read_resource_directory(
@@ -7294,12 +7303,13 @@ impl ServerHandler for Longbridge {
         request: rmcp::model::ReadResourceDirectoryRequestParams,
         context: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> Result<rmcp::model::ReadResourceDirectoryResult, rmcp::ErrorData> {
-        support::skills::read_directory(&request.uri, restricted_version(&context).is_some())
-            .unwrap_or_else(|| {
+        support::skills::read_directory(&request.uri, skills_view(&context).await).unwrap_or_else(
+            || {
                 Err(rmcp::ErrorData::method_not_found::<
                     rmcp::model::ReadResourceDirectoryRequestMethod,
                 >())
-            })
+            },
+        )
     }
 }
 

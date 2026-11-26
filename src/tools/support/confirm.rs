@@ -194,7 +194,7 @@ impl Confirmer {
         let mut requests = InputRequests::new();
         requests.insert(
             INPUT_KEY.to_string(),
-            InputRequest::Elicitation(ElicitRequest::new(form(scope, preview, again))),
+            InputRequest::Elicitation(ElicitRequest::new(form(preview, again))),
         );
         *self
             .input_required
@@ -242,28 +242,18 @@ fn accepted(answer: &ElicitResult) -> bool {
             == Some(true)
 }
 
-fn form(scope: &Scope, preview: &serde_json::Value, again: bool) -> ElicitRequestParams {
-    // Unset fields are noise in a form a person reads.
-    let shown = match preview {
-        serde_json::Value::Object(map) => serde_json::Value::Object(
-            map.iter()
-                .filter(|(_, v)| !v.is_null())
-                .map(|(k, v)| (k.clone(), v.clone()))
-                .collect(),
-        ),
-        other => other.clone(),
-    };
-    let details = serde_json::to_string_pretty(&shown).unwrap_or_default();
+fn form(preview: &serde_json::Value, again: bool) -> ElicitRequestParams {
     ElicitRequestParams::FormElicitationParams {
         meta: None,
         message: format!(
-            "{}Confirm: {scope}\n\nNothing is sent until you confirm.\n\n{details}",
+            "{}{}\n\nNothing is sent until you confirm.",
             if again {
                 "Your earlier confirmation has expired (confirmations last 10 to 20 minutes) \
                  or was for a different request, so please confirm again.\n\n"
             } else {
                 ""
-            }
+            },
+            summary(preview)
         ),
         requested_schema: ElicitationSchema::builder()
             .required_bool_property(FIELD, |b| {
@@ -271,6 +261,145 @@ fn form(scope: &Scope, preview: &serde_json::Value, again: bool) -> ElicitReques
                     .description("Tick to send this request exactly as shown above.")
             })
             .build_unchecked(),
+    }
+}
+
+/// Fields of an existing order (as echoed by a cancel / replace preview)
+/// worth showing a person, in reading order.
+const ORDER_FIELDS: &[&str] = &[
+    "symbol",
+    "stock_name",
+    "side",
+    "order_type",
+    "quantity",
+    "price",
+    "trigger_price",
+    "time_in_force",
+    "executed_quantity",
+    "status",
+    "lookup_failed",
+    "note",
+];
+/// Preview keys holding an existing order.
+const ORDER_KEYS: &[&str] = &["order", "current_order"];
+/// Preview keys that mean nothing to a person.
+const HIDDEN_KEYS: &[&str] = &["action", "client_request_id"];
+/// Most lines a form shows before it says how many it left out.
+const MAX_LINES: usize = 30;
+
+/// A preview as the plain-text summary a person reads in the confirmation
+/// form: a title for what is about to happen, then one `• Label: value` line
+/// per field, with unset fields and bookkeeping left out.
+fn summary(preview: &serde_json::Value) -> String {
+    let serde_json::Value::Object(map) = preview else {
+        return preview.to_string();
+    };
+    let title = map
+        .get("action")
+        .and_then(serde_json::Value::as_str)
+        .map_or_else(|| "Confirm this request".to_string(), title_of);
+    let mut lines = Vec::new();
+    for (key, value) in map {
+        if !HIDDEN_KEYS.contains(&key.as_str()) {
+            push_field(&mut lines, key, value, 0);
+        }
+    }
+    if lines.len() > MAX_LINES {
+        let more = lines.len() - MAX_LINES;
+        lines.truncate(MAX_LINES);
+        lines.push(format!("… and {more} more"));
+    }
+    format!("{title}\n\n{}", lines.join("\n"))
+}
+
+fn title_of(action: &str) -> String {
+    match action {
+        "submit_order" => "Place this order",
+        "cancel_order" => "Cancel this order",
+        "replace_order" => "Modify this order",
+        "submit_multileg_order" => "Place this multi-leg option order",
+        "fund_submit_order" => "Place this fund order",
+        "fund_cancel_order" => "Cancel this fund order",
+        "grid_submit" => "Start this grid strategy",
+        "grid_replace" => "Change this grid strategy",
+        "grid_cancel" => "Stop this grid strategy",
+        "grid_suspend" => "Suspend this grid strategy",
+        "grid_restart" => "Restart this grid strategy",
+        "dca_create" => "Create this recurring investment (DCA) plan",
+        "dca_update" => "Change this DCA plan",
+        "dca_pause" => "Pause this DCA plan",
+        "dca_resume" => "Resume this DCA plan",
+        "dca_stop" => "Stop this DCA plan permanently",
+        "alert_add" => "Add this price alert",
+        "alert_delete" => "Delete this price alert",
+        "alert_enable" => "Enable this price alert",
+        "alert_disable" => "Disable this price alert",
+        other => return label(other),
+    }
+    .to_string()
+}
+
+/// `new_trailing_amount` → `New trailing amount`.
+fn label(key: &str) -> String {
+    let text = key.replace('_', " ");
+    let mut chars = text.chars();
+    chars
+        .next()
+        .map(|c| c.to_uppercase().chain(chars).collect())
+        .unwrap_or_default()
+}
+
+fn push_field(lines: &mut Vec<String>, key: &str, value: &serde_json::Value, depth: usize) {
+    use serde_json::Value;
+    let indent = "  ".repeat(depth);
+    let label = label(key);
+    match value {
+        Value::Null => {}
+        Value::String(s) if s.is_empty() => {}
+        Value::String(s) => lines.push(format!("{indent}• {label}: {s}")),
+        Value::Bool(_) | Value::Number(_) => lines.push(format!("{indent}• {label}: {value}")),
+        Value::Array(items) if items.is_empty() => {}
+        Value::Array(items) => {
+            let shown: Vec<String> = items.iter().map(inline).collect();
+            lines.push(format!("{indent}• {label}: {}", shown.join("; ")));
+        }
+        // Deep structures (a grid rule's levels) stay on one line.
+        Value::Object(_) if depth >= 2 => {
+            lines.push(format!("{indent}• {label}: {}", inline(value)));
+        }
+        Value::Object(map) => {
+            let mut nested = Vec::new();
+            if ORDER_KEYS.contains(&key) {
+                for field in ORDER_FIELDS {
+                    if let Some(v) = map.get(*field) {
+                        push_field(&mut nested, field, v, depth + 1);
+                    }
+                }
+            } else {
+                for (k, v) in map {
+                    push_field(&mut nested, k, v, depth + 1);
+                }
+            }
+            if !nested.is_empty() {
+                lines.push(format!("{indent}• {label}:"));
+                lines.extend(nested);
+            }
+        }
+    }
+}
+
+/// A value on one line: objects as `key value, …`, without JSON punctuation.
+fn inline(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::Object(map) => map
+            .iter()
+            .filter(|(_, v)| !v.is_null())
+            .map(|(k, v)| format!("{} {}", label(k).to_lowercase(), inline(v)))
+            .collect::<Vec<_>>()
+            .join(", "),
+        serde_json::Value::Array(items) => items.iter().map(inline).collect::<Vec<_>>().join("; "),
+        other => other.to_string(),
     }
 }
 
@@ -344,7 +473,18 @@ mod tests {
         let scope = order();
         // Even a correct code does not skip the user.
         let d = c
-            .confirm(&scope, Some(&scope.code()), serde_json::json!({"x": 1}))
+            .confirm(
+                &scope,
+                Some(&scope.code()),
+                serde_json::json!({
+                    "action": "submit_order",
+                    "symbol": "700.HK",
+                    "side": "Buy",
+                    "quantity": "100",
+                    "price": "400",
+                    "remark": null,
+                }),
+            )
             .await
             .unwrap();
         assert!(matches!(d, Decision::Respond(_)));
@@ -362,7 +502,7 @@ mod tests {
             req["params"]["message"]
                 .as_str()
                 .unwrap()
-                .contains("buy 100 700.HK @ 400")
+                .starts_with("Place this order\n\n• Symbol: 700.HK\n• Side: Buy\n")
         );
         assert_eq!(req["params"]["requestedSchema"]["required"][0], FIELD);
     }
@@ -440,6 +580,40 @@ mod tests {
         assert!(is_live_state(&scope, Some(&issued), 1001));
         assert!(!is_live_state(&scope, Some(&issued), 1002));
         assert!(!is_live_state(&scope, None, 1000));
+    }
+
+    #[test]
+    fn summary_reads_as_text_not_json() {
+        let text = summary(&serde_json::json!({
+            "action": "cancel_order",
+            "order_id": "701",
+            "is_attached": false,
+            "client_request_id": "abc",
+            "order": {
+                "order_id": "701",
+                "symbol": "700.HK",
+                "side": "Buy",
+                "quantity": "100",
+                "price": "400",
+                "status": "New",
+                "submitted_at": "2026-11-26T01:00:00Z",
+                "msg": "",
+            },
+        }));
+        assert_eq!(
+            text,
+            "Cancel this order\n\n• Order id: 701\n• Is attached: false\n• Order:\n  \
+             • Symbol: 700.HK\n  • Side: Buy\n  • Quantity: 100\n  • Price: 400\n  • Status: New"
+        );
+        let legs = summary(&serde_json::json!({
+            "action": "submit_multileg_order",
+            "legs": [{"symbol": "AAPL260116C200000.US", "ratio_quantity": "1"}],
+        }));
+        assert!(
+            legs.contains("• Legs: symbol AAPL260116C200000.US, ratio quantity 1"),
+            "{legs}"
+        );
+        assert!(!legs.contains('{'), "{legs}");
     }
 
     #[test]
