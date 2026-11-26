@@ -161,7 +161,9 @@ fn copy_tree(from: &Path, to: &Path, depth: usize) -> std::io::Result<()> {
             continue;
         }
         let (src, dst) = (entry.path(), to.join(&name));
-        let kind = entry.file_type()?;
+        // `metadata` follows symlinks: in a Kubernetes ConfigMap mount every
+        // visible entry is a symlink into the hidden `..data` directory.
+        let kind = std::fs::metadata(&src)?.file_type();
         if kind.is_dir() {
             copy_tree(&src, &dst, depth + 1)?;
         } else if kind.is_file() {
@@ -301,8 +303,13 @@ pub fn get(uri: &str, read_only: bool) -> Option<Result<GetSkillResult, McpError
     if is_hidden(&hidden(skills, read_only), uri) {
         return Some(Err(unknown(uri)));
     }
-    crate::metrics::record_skill_request("get", skill_of(uri).unwrap_or("unknown"));
-    Some(skills.catalog.get_skill(uri))
+    let result = skills.catalog.get_skill(uri);
+    // Counted only once the skill exists: the URI comes from the client, and
+    // an unknown one must not become a new metrics label.
+    if result.is_ok() {
+        crate::metrics::record_skill_request("get", skill_of(uri).unwrap_or("unknown"));
+    }
+    Some(result)
 }
 
 /// The skill files to add to `resources/list`.
@@ -415,6 +422,29 @@ Body.
             &hidden,
             "skill://longbridge-portfolio-x/SKILL.md"
         ));
+    }
+
+    /// A Kubernetes ConfigMap mount: every visible entry is a symlink into a
+    /// hidden `..data` directory.
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_mount_is_followed() {
+        let root = std::env::temp_dir().join(format!("lb-skills-link-{}", std::process::id()));
+        let data = root.join("..data/longbridge-portfolio");
+        std::fs::create_dir_all(&data).unwrap();
+        std::fs::write(data.join("SKILL.md"), BLOCK).unwrap();
+        let mount = root.join("mount");
+        std::fs::create_dir_all(&mount).unwrap();
+        std::os::unix::fs::symlink(&data, mount.join("longbridge-portfolio")).unwrap();
+        let served = root.join("served");
+        materialize(&mount, &served).unwrap();
+        let catalog = SkillCatalog::from_dir(&served).unwrap();
+        assert_eq!(
+            catalog.list_skills().skills.len(),
+            1,
+            "symlinked skill must load"
+        );
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
