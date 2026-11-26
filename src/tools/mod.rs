@@ -845,6 +845,13 @@ mod sharelist;
 mod signal;
 mod statement;
 mod support;
+
+/// Load the skills served over MCP (if configured) and start reloading them
+/// on the configured interval. See `support::skills`.
+pub fn init_skills() {
+    support::skills::enabled();
+    support::skills::spawn_reload();
+}
 mod trade;
 
 /// Helper to build a JSON Schema `Arc<JsonObject>` from a `JsonSchema`-derived
@@ -1470,26 +1477,6 @@ pub(crate) fn tool_label(name: &str) -> &str {
 /// Prefix rmcp puts on a tool-argument deserialization failure, which it
 /// returns as a plain-text `isError` result before our tool code runs.
 const ARGUMENT_ERROR_PREFIX: &str = "failed to deserialize parameters:";
-
-/// Skills served over MCP (SEP-2640), loaded once from the directory named by
-/// `LONGBRIDGE_MCP_SKILLS_DIR`. Unset means the server does not offer skills.
-fn skill_catalog() -> Option<&'static rmcp::handler::server::skill_catalog::SkillCatalog> {
-    static CATALOG: std::sync::OnceLock<
-        Option<rmcp::handler::server::skill_catalog::SkillCatalog>,
-    > = std::sync::OnceLock::new();
-    CATALOG
-        .get_or_init(|| {
-            let dir = std::env::var_os("LONGBRIDGE_MCP_SKILLS_DIR")?;
-            match rmcp::handler::server::skill_catalog::SkillCatalog::from_dir(&dir) {
-                Ok(catalog) => Some(catalog),
-                Err(error) => {
-                    tracing::error!(?dir, %error, "failed to load MCP skills");
-                    None
-                }
-            }
-        })
-        .as_ref()
-}
 
 /// Unwraps a router response. This server runs every tool synchronously; the
 /// only other outcome, `input_required` from a confirmation-gated write, is
@@ -6957,7 +6944,7 @@ impl ServerHandler for Longbridge {
 
     fn get_info(&self) -> rmcp::model::ServerConfig {
         rmcp::model::ServerConfig::new(
-            if skill_catalog().is_some() {
+            if support::skills::enabled() {
                 rmcp::model::ServerCapabilities::builder()
                     .enable_tools()
                     .enable_resources()
@@ -7188,9 +7175,19 @@ impl ServerHandler for Longbridge {
         let order_id = support::order_task::order_id(&request.task_id)
             .ok_or_else(|| rmcp::ErrorData::invalid_params("unknown task", None))?;
         let mctx = extract_context(&context)?;
-        Ok(rmcp::model::GetTaskResult::new(
-            trade::order_task(&mctx, order_id).await?,
-        ))
+        match trade::order_task(&mctx, order_id).await {
+            Ok(task) => {
+                crate::metrics::record_task_request(
+                    "get",
+                    support::order_task::status_label(&task),
+                );
+                Ok(rmcp::model::GetTaskResult::new(task))
+            }
+            Err(err) => {
+                crate::metrics::record_task_request("get", "error");
+                Err(err)
+            }
+        }
     }
 
     /// `tasks/cancel` for an order task is refused: withdrawing an order moves
@@ -7205,6 +7202,7 @@ impl ServerHandler for Longbridge {
     ) -> Result<(), rmcp::ErrorData> {
         support::order_task::order_id(&request.task_id)
             .ok_or_else(|| rmcp::ErrorData::invalid_params("unknown task", None))?;
+        crate::metrics::record_task_request("cancel", "refused");
         Err(rmcp::ErrorData::invalid_request(
             "Cancelling an order task does not withdraw the order. To withdraw it, call \
              cancel_order, which asks the user to confirm first.",
@@ -7245,21 +7243,22 @@ impl ServerHandler for Longbridge {
     async fn list_resources(
         &self,
         _request: Option<rmcp::model::PaginatedRequestParams>,
-        _context: rmcp::service::RequestContext<rmcp::RoleServer>,
+        context: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> Result<ListResourcesResult, rmcp::ErrorData> {
         let mut resources = output_schema_resources();
-        if let Some(skills) = skill_catalog() {
-            resources.extend(skills.resources());
-        }
+        resources.extend(support::skills::resources(
+            restricted_version(&context).is_some(),
+        ));
         Ok(ListResourcesResult::with_all_items(resources))
     }
 
     async fn read_resource(
         &self,
         request: ReadResourceRequestParams,
-        _context: rmcp::service::RequestContext<rmcp::RoleServer>,
+        context: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> Result<ReadResourceResponse, rmcp::ErrorData> {
-        if let Some(result) = skill_catalog().and_then(|skills| skills.read_resource(&request.uri))
+        if let Some(result) =
+            support::skills::read(&request.uri, restricted_version(&context).is_some())
         {
             return Ok(result.into());
         }
@@ -7269,40 +7268,38 @@ impl ServerHandler for Longbridge {
     async fn list_skills(
         &self,
         _request: Option<rmcp::model::PaginatedRequestParams>,
-        _context: rmcp::service::RequestContext<rmcp::RoleServer>,
+        context: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> Result<rmcp::model::ListSkillsResult, rmcp::ErrorData> {
-        match skill_catalog() {
-            Some(skills) => Ok(skills.list_skills()),
-            None => Err(rmcp::ErrorData::method_not_found::<
-                rmcp::model::ListSkillsRequestMethod,
-            >()),
-        }
+        support::skills::list(restricted_version(&context).is_some()).ok_or_else(|| {
+            rmcp::ErrorData::method_not_found::<rmcp::model::ListSkillsRequestMethod>()
+        })
     }
 
     async fn get_skill(
         &self,
         request: rmcp::model::GetSkillRequestParams,
-        _context: rmcp::service::RequestContext<rmcp::RoleServer>,
+        context: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> Result<rmcp::model::GetSkillResult, rmcp::ErrorData> {
-        match skill_catalog() {
-            Some(skills) => skills.get_skill(&request.uri),
-            None => Err(rmcp::ErrorData::method_not_found::<
-                rmcp::model::GetSkillRequestMethod,
-            >()),
-        }
+        support::skills::get(&request.uri, restricted_version(&context).is_some()).unwrap_or_else(
+            || {
+                Err(rmcp::ErrorData::method_not_found::<
+                    rmcp::model::GetSkillRequestMethod,
+                >())
+            },
+        )
     }
 
     async fn read_resource_directory(
         &self,
         request: rmcp::model::ReadResourceDirectoryRequestParams,
-        _context: rmcp::service::RequestContext<rmcp::RoleServer>,
+        context: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> Result<rmcp::model::ReadResourceDirectoryResult, rmcp::ErrorData> {
-        match skill_catalog() {
-            Some(skills) => skills.read_resource_directory(&request.uri),
-            None => Err(rmcp::ErrorData::method_not_found::<
-                rmcp::model::ReadResourceDirectoryRequestMethod,
-            >()),
-        }
+        support::skills::read_directory(&request.uri, restricted_version(&context).is_some())
+            .unwrap_or_else(|| {
+                Err(rmcp::ErrorData::method_not_found::<
+                    rmcp::model::ReadResourceDirectoryRequestMethod,
+                >())
+            })
     }
 }
 

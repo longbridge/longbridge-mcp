@@ -175,7 +175,7 @@ pub async fn dca_create(
     // A plan keeps buying on its own once created, so every field that shapes
     // what it buys and when is part of what the user approves.
     let scope = plan_scope(Scope::request("dca create").and("symbol", &p.symbol), &body);
-    let preview = serde_json::json!({ "action": "dca_create", "plan": body });
+    let preview = serde_json::json!({ "action": "dca_create", "plan": plan_preview(&body) });
     if let Decision::Respond(r) = confirm
         .confirm(&scope, p.execute.as_deref(), preview)
         .await?
@@ -210,7 +210,7 @@ pub async fn dca_update(
     }
 
     let scope = plan_scope(Scope::on("dca update", "plan", &p.plan_id), &body);
-    let preview = serde_json::json!({ "action": "dca_update", "changes": body });
+    let preview = serde_json::json!({ "action": "dca_update", "changes": plan_preview(&body) });
     if let Decision::Respond(r) = confirm
         .confirm(&scope, p.execute.as_deref(), preview)
         .await?
@@ -268,6 +268,29 @@ async fn toggle(
     let client = mctx.create_http_client();
     let body = serde_json::json!({ "plan_id": p.plan_id, "status": status });
     http_post_tool(&client, "/v1/dailycoins/toggle", body).await
+}
+
+/// A plan request body with the tool's own parameter names, for the preview a
+/// person reads (the upstream body says `per_invest_amount` and
+/// `allow_margin_finance: 0`).
+fn plan_preview(body: &serde_json::Value) -> serde_json::Value {
+    let mut preview = serde_json::Map::new();
+    for (key, name) in [
+        ("plan_id", "plan_id"),
+        ("symbol", "symbol"),
+        ("per_invest_amount", "amount"),
+        ("invest_frequency", "frequency"),
+        ("invest_day_of_week", "day_of_week"),
+        ("invest_day_of_month", "day_of_month"),
+    ] {
+        if let Some(v) = body.get(key).filter(|v| !v.is_null()) {
+            preview.insert(name.to_string(), v.clone());
+        }
+    }
+    if let Some(margin) = body.get("allow_margin_finance").and_then(|v| v.as_i64()) {
+        preview.insert("allow_margin".to_string(), serde_json::json!(margin == 1));
+    }
+    serde_json::Value::Object(preview)
 }
 
 /// Fold every field of a plan request body into `scope`, in a fixed order, so
@@ -349,6 +372,20 @@ mod tests {
         // A code confirmed for one amount must not create a bigger plan.
         assert_ne!(scope(&body("100")).code(), scope(&body("1000")).code());
         assert_eq!(scope(&body("100")).code(), scope(&body("100.00")).code());
+    }
+
+    #[test]
+    fn preview_uses_the_tool_parameter_names() {
+        assert_eq!(
+            plan_preview(&body("100")),
+            serde_json::json!({
+                "symbol": "AAPL.US",
+                "amount": "100",
+                "frequency": "Weekly",
+                "day_of_week": "Mon",
+                "allow_margin": false,
+            })
+        );
     }
 
     #[test]

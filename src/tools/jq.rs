@@ -287,7 +287,7 @@ where
     }
     let name = request.name.clone();
     let mut result = invoke(request).await?;
-    if result.is_error == Some(true) || is_error_envelope(&result) {
+    if result.is_error == Some(true) || is_error_envelope(&result) || is_dry_run(&result) {
         return Ok(result);
     }
     let input = take_input(&mut result);
@@ -539,6 +539,16 @@ fn syntax_error(message: &str) -> CallToolResult {
 
 /// The JSON value a filter runs on: the structured content when present,
 /// otherwise the text content parsed as JSON (or kept as a string).
+/// A gated write's dry run (see `support::dry_run`). It is returned whole: a
+/// filter written for the executed result (`.order_id`) would turn it into
+/// `null` and drop the preview and the confirmation code the caller needs.
+fn is_dry_run(result: &CallToolResult) -> bool {
+    result
+        .structured_content
+        .as_ref()
+        .is_some_and(|v| v.get("dry_run") == Some(&Value::Bool(true)))
+}
+
 fn take_input(result: &mut CallToolResult) -> Value {
     result.structured_content.take().unwrap_or_else(|| {
         let mut values: Vec<Value> = result
@@ -885,6 +895,23 @@ mod tests {
             assert!(!warning.contains("retry"), "{warning}");
         })
         .await;
+    }
+
+    #[tokio::test]
+    async fn a_dry_run_is_returned_whole_whatever_the_filter() {
+        // `.order_id` is right for the executed order but would turn the dry
+        // run into `null`, hiding the preview and the confirmation code.
+        let dry_run =
+            json!({"dry_run": true, "preview": {"symbol": "700.HK"}, "confirmation_code": "042"});
+        let result = super::call(request(json!(".order_id")), false, |_| async move {
+            Ok(super::super::tool_result(dry_run.to_string()))
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            result.structured_content.as_ref().unwrap()["confirmation_code"],
+            "042"
+        );
     }
 
     #[tokio::test]

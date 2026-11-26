@@ -11,6 +11,7 @@ pub mod http_client;
 pub mod order_task;
 pub mod parse;
 pub mod response_limit;
+pub mod skills;
 pub mod symbol_alias;
 pub mod text;
 pub mod tolerant;

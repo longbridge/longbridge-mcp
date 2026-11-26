@@ -48,7 +48,10 @@ fn now() -> String {
 pub fn created(order_id: &str) -> Task {
     let now = now();
     Task::new(task_id(order_id), TaskStatus::Working, now.clone(), now)
-        .with_status_message("Submitted; waiting for the exchange")
+        .with_status_message(format!(
+            "Order {order_id} submitted; waiting for the exchange. Use this order_id with \
+             order_detail, replace_order or cancel_order."
+        ))
         .with_poll_interval_ms(POLL_INTERVAL_MS)
 }
 
@@ -84,8 +87,8 @@ pub fn detailed(order: &OrderDetail, detail: serde_json::Value) -> DetailedTask 
         .format(&time::format_description::well_known::Rfc3339)
         .unwrap_or_else(|_| now.clone());
     let message = format!(
-        "{:?}: filled {}/{}",
-        order.status, order.executed_quantity, order.quantity
+        "Order {}: {:?}, filled {}/{}",
+        order.order_id, order.status, order.executed_quantity, order.quantity
     );
     let task = Task::new(
         task_id(&order.order_id),
@@ -124,6 +127,18 @@ pub fn detailed(order: &OrderDetail, detail: serde_json::Value) -> DetailedTask 
         Phase::Cancelled { partial: false } => TaskPayload::Cancelled,
     };
     DetailedTask::new(task, payload)
+}
+
+/// The task's status as a metrics label.
+pub fn status_label(task: &DetailedTask) -> &'static str {
+    match task.payload {
+        TaskPayload::Working => "working",
+        TaskPayload::InputRequired { .. } => "input_required",
+        TaskPayload::Completed { .. } => "completed",
+        TaskPayload::Failed { .. } => "failed",
+        TaskPayload::Cancelled => "cancelled",
+        _ => "other",
+    }
 }
 
 #[cfg(test)]
@@ -174,5 +189,13 @@ mod tests {
         assert_eq!(task.status, TaskStatus::Working);
         assert_eq!(task.ttl_ms, None);
         assert_eq!(task.poll_interval_ms, Some(POLL_INTERVAL_MS));
+        // The model sees the status message, not the task ID: it must carry
+        // the order ID the model needs to change or cancel the order.
+        assert!(
+            task.status_message
+                .as_deref()
+                .unwrap()
+                .contains("Order 42 ")
+        );
     }
 }

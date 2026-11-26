@@ -188,10 +188,13 @@ impl Confirmer {
                 };
             }
         }
+        // A retry that carried a state but did not match was approved for a
+        // different request or too long ago: say why the user is asked again.
+        let again = self.request_state.is_some();
         let mut requests = InputRequests::new();
         requests.insert(
             INPUT_KEY.to_string(),
-            InputRequest::Elicitation(ElicitRequest::new(form(scope, preview))),
+            InputRequest::Elicitation(ElicitRequest::new(form(scope, preview, again))),
         );
         *self
             .input_required
@@ -239,7 +242,7 @@ fn accepted(answer: &ElicitResult) -> bool {
             == Some(true)
 }
 
-fn form(scope: &Scope, preview: &serde_json::Value) -> ElicitRequestParams {
+fn form(scope: &Scope, preview: &serde_json::Value, again: bool) -> ElicitRequestParams {
     // Unset fields are noise in a form a person reads.
     let shown = match preview {
         serde_json::Value::Object(map) => serde_json::Value::Object(
@@ -253,7 +256,15 @@ fn form(scope: &Scope, preview: &serde_json::Value) -> ElicitRequestParams {
     let details = serde_json::to_string_pretty(&shown).unwrap_or_default();
     ElicitRequestParams::FormElicitationParams {
         meta: None,
-        message: format!("Confirm: {scope}\n\nNothing is sent until you confirm.\n\n{details}"),
+        message: format!(
+            "{}Confirm: {scope}\n\nNothing is sent until you confirm.\n\n{details}",
+            if again {
+                "Your earlier confirmation has expired (confirmations last 10 to 20 minutes) \
+                 or was for a different request, so please confirm again.\n\n"
+            } else {
+                ""
+            }
+        ),
         requested_schema: ElicitationSchema::builder()
             .required_bool_property(FIELD, |b| {
                 b.title("Confirm")
@@ -406,8 +417,15 @@ mod tests {
             .await
             .unwrap();
         assert!(matches!(d, Decision::Respond(_)));
-        // It asks again, for the order actually being sent.
+        // It asks again, for the order actually being sent, and says why.
         let ir = c.take_input_required().expect("asks again");
+        let wire = serde_json::to_value(&ir).unwrap();
+        assert!(
+            wire["inputRequests"][INPUT_KEY]["params"]["message"]
+                .as_str()
+                .unwrap()
+                .starts_with("Your earlier confirmation has expired")
+        );
         assert_eq!(
             ir.request_state.as_deref(),
             Some(request_state(&other).as_str())
