@@ -309,7 +309,7 @@ pub struct WithdrawalParam {
 pub struct DepositParam {
     /// Page number (default: 1)
     pub page: Option<u32>,
-    /// Page size (default: 20)
+    /// Page size (default: 20, max 20)
     pub size: Option<u32>,
     /// Filter by state codes, comma-separated (e.g. "0,2"): 0 processing, 1 credited, 2 failed, 3 cancelled, 4 invalidated, 5 rejected
     pub states: Option<String>,
@@ -853,6 +853,17 @@ pub async fn withdrawals(
     value_result_hong_kong(value)
 }
 
+/// Largest deposit page size upstream honours. Above it the deposit list
+/// silently falls back to 10 rows, which would read as a short last page and
+/// hide the remaining records.
+const DEPOSIT_MAX_PAGE_SIZE: usize = 20;
+
+/// The deposit page size sent upstream: default 20, clamped to
+/// [`DEPOSIT_MAX_PAGE_SIZE`].
+fn deposit_page_size(size: Option<u32>) -> usize {
+    (size.unwrap_or(20) as usize).clamp(1, DEPOSIT_MAX_PAGE_SIZE)
+}
+
 /// List deposit history for the current account.
 pub async fn deposits(
     mctx: &crate::tools::McpContext,
@@ -860,7 +871,8 @@ pub async fn deposits(
 ) -> Result<CallToolResult, McpError> {
     let client = mctx.create_http_client();
     let page_str = p.page.unwrap_or(1).to_string();
-    let size_str = p.size.unwrap_or(20).clamp(1, 50).to_string();
+    let page_size = deposit_page_size(p.size);
+    let size_str = page_size.to_string();
     let channel = mctx.account_channel();
     let mut params: Vec<(&str, &str)> = vec![
         ("page", page_str.as_str()),
@@ -881,7 +893,6 @@ pub async fn deposits(
         params.push(("to_date", t.as_str()));
     }
     let mut value = http_get_value(&client, "/v1/account/deposits", &params).await?;
-    let page_size = p.size.unwrap_or(20).clamp(1, 50) as usize;
     shape_money_records(
         &mut value,
         "items",
@@ -1196,6 +1207,18 @@ mod tests {
             days_between("not a date", None),
             None,
             "bad input is skipped"
+        );
+    }
+
+    #[test]
+    fn deposit_page_size_caps_at_what_upstream_honours() {
+        assert_eq!(deposit_page_size(None), 20, "default page size");
+        assert_eq!(deposit_page_size(Some(5)), 5, "small size kept");
+        assert_eq!(deposit_page_size(Some(0)), 1, "zero raised to one");
+        assert_eq!(
+            deposit_page_size(Some(50)),
+            20,
+            "above 20 upstream falls back to 10 rows, so cap at 20"
         );
     }
 }

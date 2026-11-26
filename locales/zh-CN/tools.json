@@ -1199,7 +1199,7 @@
       "description": "获取当前账户入款历史，按时间倒序。返回 {items[]{id, created_at, updated_at, currency, amount（用户通知/申请的金额）, receivable_amount（长桥银行实际到账金额，0 表示尚未收到）, state（状态文案）, state_code, state_label（processing/credited/failed/cancelled/invalidated/rejected）, sub_state_code, bank_operation_type_name（入金方式，如 eDDA、FPS、银行转账）, reference_no, can_cancel, voucher_count（已上传凭证张数）}, has_more（返回了满页，可取下一页）}。没有可靠的总条数。states：逗号分隔的状态码（0 处理中，1 已入账，2 失败，3 已撤销，4 已失效，5 已驳回）；currencies：逗号分隔的货币代码；start/end：yyyy-mm-dd（香港日期）或 RFC3339，按申请时间筛选。不含后台备注。时间为香港时间（+08:00）",
       "properties": {
         "page": "页码（默认 1）",
-        "size": "每页条数（默认 20）",
+        "size": "每页条数（默认 20，最多 20）",
         "states": "状态码过滤（逗号分隔，如 \"0,2\"）：0 处理中，1 已入账，2 失败，3 已撤销，4 已失效，5 已驳回",
         "currencies": "货币代码过滤（逗号分隔），例如 `\"USD,HKD\"`",
         "start": "申请时间起（yyyy-mm-dd 或 RFC3339）",

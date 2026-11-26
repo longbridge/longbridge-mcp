@@ -1199,7 +1199,7 @@
       "description": "獲取當前賬戶入款歷史，按時間倒序。返回 {items[]{id, created_at, updated_at, currency, amount（用戶通知/申請的金額）, receivable_amount（長橋銀行實際到賬金額，0 表示尚未收到）, state（狀態文案）, state_code, state_label（processing/credited/failed/cancelled/invalidated/rejected）, sub_state_code, bank_operation_type_name（入金方式，如 eDDA、FPS、銀行轉賬）, reference_no, can_cancel, voucher_count（已上傳憑證張數）}, has_more（返回了滿頁，可取下一頁）}。沒有可靠的總條數。states：逗號分隔的狀態碼（0 處理中，1 已入賬，2 失敗，3 已撤銷，4 已失效，5 已駁回）；currencies：逗號分隔的貨幣代碼；start/end：yyyy-mm-dd（香港日期）或 RFC3339，按申請時間篩選。不含後台備註。時間為香港時間（+08:00）",
       "properties": {
         "page": "頁碼（預設 1）",
-        "size": "每頁條數（預設 20）",
+        "size": "每頁條數（預設 20，最多 20）",
         "states": "狀態碼過濾（逗號分隔，如 \"0,2\"）：0 處理中，1 已入賬，2 失敗，3 已撤銷，4 已失效，5 已駁回",
         "currencies": "貨幣代碼過濾（逗號分隔），例如 `\"USD,HKD\"`",
         "start": "申請時間起（yyyy-mm-dd 或 RFC3339）",
