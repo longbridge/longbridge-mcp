@@ -44,21 +44,45 @@ pub fn subject(token: &str) -> Option<Value> {
 /// and empty ones skipped. This matches the Rust and Go SDKs. Callers fall
 /// back to `lb`, as the SDKs do.
 pub fn account_channel(token: &str) -> Option<String> {
+    channel_claims(token).into_iter().next()
+}
+
+/// Whether the token is bound to a paper-trading account. Conservative: every
+/// channel claim the token carries (`ac`, `sub.account_channel`, top-level
+/// `account_channel`) must name a paper-trading channel, so a token whose
+/// claims disagree counts as real money. A token naming no channel is not a
+/// paper-trading token.
+pub fn is_papertrading(token: &str) -> bool {
+    let channels = channel_claims(token);
+    !channels.is_empty() && channels.iter().all(|c| c.contains("papertrading"))
+}
+
+/// The non-blank channel claims of the token, trimmed, in precedence order:
+/// `ac`, `account_channel` inside `sub`, top-level `account_channel`.
+fn channel_claims(token: &str) -> Vec<String> {
     let token = token.strip_prefix("Bearer ").unwrap_or(token);
-    let claims = claims(token)?;
+    let Some(claims) = claims(token) else {
+        return Vec::new();
+    };
     let non_empty = |v: Option<&Value>| {
         v?.as_str()
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .map(str::to_owned)
     };
-    let from_sub = || {
-        let sub: Value = serde_json::from_str(claims.get("sub")?.as_str()?).ok()?;
-        non_empty(sub.get("account_channel"))
-    };
-    non_empty(claims.get("ac"))
-        .or_else(from_sub)
-        .or_else(|| non_empty(claims.get("account_channel")))
+    let from_sub = claims
+        .get("sub")
+        .and_then(Value::as_str)
+        .and_then(|sub| serde_json::from_str::<Value>(sub).ok())
+        .and_then(|sub| non_empty(sub.get("account_channel")));
+    [
+        non_empty(claims.get("ac")),
+        from_sub,
+        non_empty(claims.get("account_channel")),
+    ]
+    .into_iter()
+    .flatten()
+    .collect()
 }
 
 /// Minimal base64url decoder (no padding required, no external crate).
@@ -198,6 +222,46 @@ mod tests {
             Some("us_lb"),
             "top-level account_channel is the last resort"
         );
+    }
+
+    #[test]
+    fn papertrading_needs_every_channel_claim_to_agree() {
+        let cases = [
+            (
+                r#"{"sub":"access_token","ac":"lb_papertrading"}"#,
+                true,
+                "ac paper, sub not JSON",
+            ),
+            (
+                r#"{"ac":"lb_papertrading","sub":"{\"account_channel\":\"lb\"}"}"#,
+                false,
+                "ac paper, sub real",
+            ),
+            (
+                r#"{"ac":"lb","sub":"{\"account_channel\":\"lb_papertrading\"}"}"#,
+                false,
+                "ac real, sub paper",
+            ),
+            (
+                r#"{"sub":"{\"account_channel\":\"lb_papertrading\"}"}"#,
+                true,
+                "only sub, paper",
+            ),
+            (
+                r#"{"ac":"lb_papertrading","account_channel":"lb"}"#,
+                false,
+                "top-level account_channel real",
+            ),
+            (r#"{"sub":"access_token"}"#, false, "no channel claim"),
+        ];
+        for (payload, paper, why) in cases {
+            assert_eq!(
+                is_papertrading(&test_prefixed_token(payload)),
+                paper,
+                "{why}"
+            );
+        }
+        assert!(!is_papertrading("opaque-token"), "not a JWT");
     }
 
     #[test]

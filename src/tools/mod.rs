@@ -1197,10 +1197,11 @@ impl McpContext {
                 .any(|key| std::env::var(key).as_deref() == Ok("true"))
     }
 
-    /// Whether paper trading was asked for while the token belongs to a
-    /// real-money account (its `account_channel` is not a paper-trading one).
+    /// Whether paper trading was asked for while the token is not provably a
+    /// paper-trading one (see [`crate::auth::jwt::is_papertrading`]: every
+    /// channel claim present must name a paper-trading channel).
     pub fn papertrading_with_real_money_token(&self) -> bool {
-        self.papertrading_enabled() && !self.account_channel().contains("papertrading")
+        self.papertrading_enabled() && !crate::auth::jwt::is_papertrading(&self.token)
     }
 
     /// The DC region (`Us` or `Ap`) this session's credentials resolve to,
@@ -7579,6 +7580,50 @@ mod tests {
         assert!(
             ctx.papertrading_with_real_money_token(),
             "a token naming no channel counts as real money"
+        );
+    }
+
+    #[test]
+    fn papertrading_guard_rejects_conflicting_channel_claims() {
+        use crate::auth::jwt::test_prefixed_token;
+
+        let cases = [
+            (
+                r#"{"sub":"access_token","ac":"lb_papertrading"}"#,
+                false,
+                "ac paper, sub not JSON: paper token",
+            ),
+            (
+                r#"{"ac":"lb_papertrading","sub":"{\"account_channel\":\"lb\"}"}"#,
+                true,
+                "ac paper, sub real: rejected",
+            ),
+            (
+                r#"{"ac":"lb","sub":"{\"account_channel\":\"lb_papertrading\"}"}"#,
+                true,
+                "ac real, sub paper: rejected",
+            ),
+            (
+                r#"{"sub":"{\"account_channel\":\"lb_papertrading\"}"}"#,
+                false,
+                "only sub, paper: paper token",
+            ),
+            (r#"{"sub":"access_token"}"#, true, "no channel: rejected"),
+        ];
+        for (payload, rejected, why) in cases {
+            assert_eq!(
+                ctx_with_token(test_prefixed_token(payload)).papertrading_with_real_money_token(),
+                rejected,
+                "{why}"
+            );
+        }
+        let mixed = ctx_with_token(test_prefixed_token(
+            r#"{"ac":"lb_papertrading","sub":"{\"account_channel\":\"lb\"}"}"#,
+        ));
+        assert_eq!(
+            mixed.account_channel(),
+            "lb_papertrading",
+            "the channel sent upstream keeps ac precedence"
         );
     }
 
