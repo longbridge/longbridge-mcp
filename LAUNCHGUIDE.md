@@ -4,7 +4,7 @@
 Trade US & HK stocks, manage positions, and analyse markets through your Longbridge brokerage.
 
 ## Description
-Longbridge MCP is the official Model Context Protocol server from [Longbridge](https://longbridge.com), a licensed brokerage operating across Hong Kong, the United States, Singapore, Japan and New Zealand. It exposes the Longbridge OpenAPI as **110 composable tools** so any MCP-capable AI assistant (Claude Desktop, Claude Code, Cursor, Cline, Windsurf) can read markets, route orders and analyse portfolios on the user's behalf.
+Longbridge MCP is the official Model Context Protocol server from [Longbridge](https://longbridge.com), a licensed brokerage operating across Hong Kong, the United States, Singapore, Japan and New Zealand. It exposes the Longbridge OpenAPI as **204 composable tools** so any MCP-capable AI assistant (Claude Desktop, Claude Code, Cursor, Cline, Windsurf) can read markets, route orders and analyse portfolios on the user's behalf.
 
 The server is hosted at `https://mcp.longbridge.com` (streamable-http), stateless, and uses OAuth 2.1 with RFC 9728 protected-resource-metadata — clients auto-discover the Longbridge authorization server, so end users don't configure API keys. Self-hosting is also supported via the `ghcr.io/longbridge/longbridge-mcp` Docker image.
 
@@ -20,17 +20,20 @@ Finance
 Real-time quotes, options chain analysis, order routing, portfolio analytics, DCA plan management, earnings calendar tracking, price alerts, fundamental research, analyst rating lookups, multi-currency P&L, account statement export, community sharelists, market temperature, capital flow, broker queue analysis, A/H premium, index constituents, dividend tracking, EPS forecasts, valuation metrics
 
 ## Features
-- 110 MCP tools spanning the full broker workflow
+- 204 MCP tools spanning the full broker workflow
 - Real-time and historical quotes for US & HK equities (32 tools)
-- Order submission, cancellation and replacement; positions, balance, executions, cash flow, margin (14 tools)
-- Fundamentals: financial reports, analyst ratings, dividends, EPS forecasts, valuations, shareholder structure, corporate actions (18 tools)
-- Market extensions: market status, A/H premium, broker holdings, index constituents, anomalies, trade statistics (9 tools)
+- Order submission, cancellation and replacement; positions, balance, executions, cash flow, margin, risk assessment (16 tools)
+- Fundamentals: financial reports, analyst ratings, dividends, EPS forecasts, valuations, shareholder structure, corporate actions (33 tools)
+- Market extensions: market status, A/H premium, broker holdings, index constituents, anomalies, trade statistics (15 tools)
 - DCA plan lifecycle: create, update, pause, resume, stop, execution history, statistics (9 tools)
-- Content: news, discussion topics, filing details (8 tools)
+- Content: news, discussion topics and search (9 tools)
 - Community sharelists: CRUD, member management, popular lists (8 tools)
 - Price alerts: add, delete, enable, disable, list (5 tools)
-- Portfolio analytics: multi-currency FX, P&L analysis (3 tools)
+- Portfolio analytics: multi-currency FX, P&L analysis (5 tools)
 - Account statements: list & export (2 tools)
+- Mutual funds: catalogue, NAV, performance, holdings, positions and fund orders (28 tools)
+- Grid trading strategies: submit, replace, suspend, restart, cancel, trigger history (10 tools)
+- Deposits, withdrawals, bank cards, eDDA and stock transfers (7 tools)
 - Earnings, dividend, IPO, macro and market-closure calendars
 - OAuth 2.1 via RFC 9728 — no API keys for the hosted endpoint
 - Stateless architecture; no server-side sessions or database
