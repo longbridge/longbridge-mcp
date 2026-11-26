@@ -1208,7 +1208,7 @@
     },
     "edda_authorizations": {
       "title": "eDDA 承認",
-      "description": "現在のアカウントの登録銀行口座ごとの eDDA（電子口座振替）承認を一覧表示します。authorizations[]{card_id, bank, bank_en, account（下 4 桁のみ）, card_binding（binding/bound/failed）, flow（hk_edda：銀行で承認、hk_sdda：アプリで承認）, name, currency, authorization（unauthorized/authorized/authorizing/failed。ラベルのないコードは代わりに status で生の数値を返す）, failure_reason（銀行からのメッセージ）, max_amount（入金上限）, max_amount_unlimited, daily_max_count, daily_max_count_unlimited, expiry_date, long_term_valid, is_support（1：銀行がこの方式に対応）, doc_reviewing（書類審査中）, no_prior_deposit_reviewing（入金実績がないため審査中）} を返します。空のリストは eDDA 承認済みの口座がないことを意味します。これは現在の状態で、edda_status は 1 口座で提出された申請のみを一覧表示します。時刻は香港時間（+08:00）です"
+      "description": "現在のアカウントの登録銀行口座ごとの eDDA（電子口座振替）承認を一覧表示します。authorizations[]{card_id, bank, bank_en, account（下 4 桁のみ）, card_binding（binding/bound/failed。ラベルのないコードは代わりに bind_state で生の数値を返す）, flow（hk_edda：銀行で承認、hk_sdda：アプリで承認）, name, currency, authorization（unauthorized/authorized/authorizing/failed。ラベルのないコードは代わりに status で生の数値を返す）, failure_reason（銀行からのメッセージ）, max_amount（入金上限）, max_amount_unlimited, daily_max_count, daily_max_count_unlimited, expiry_date, long_term_valid, is_support（1：銀行がこの方式に対応）, doc_reviewing（書類審査中）, no_prior_deposit_reviewing（入金実績がないため審査中）} を返します。空のリストは eDDA 承認済みの口座がないことを意味します。これは現在の状態で、edda_status は 1 口座で提出された申請のみを一覧表示します。時刻は香港時間（+08:00）です"
     },
     "edda_status": {
       "title": "eDDA 承認状況",

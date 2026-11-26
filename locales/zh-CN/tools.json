@@ -1208,7 +1208,7 @@
     },
     "edda_authorizations": {
       "title": "eDDA 授权",
-      "description": "列出当前账户各张绑定银行卡的 eDDA（电子直接扣款）授权，返回 authorizations[]{card_id, bank, bank_en, account（仅后 4 位）, card_binding（binding/bound/failed）, flow（hk_edda：在银行授权，hk_sdda：在 App 内授权）, name, currency, authorization（unauthorized/authorized/authorizing/failed；没有已知标签的代码改为以 status 返回原始数值）, failure_reason（银行返回信息）, max_amount（入金上限）, max_amount_unlimited, daily_max_count, daily_max_count_unlimited, expiry_date, long_term_valid, is_support（1：银行支持此方式）, doc_reviewing（资料审核中）, no_prior_deposit_reviewing（因该卡无入金记录而审核中）}。列表为空表示没有任何卡做过 eDDA 授权。这里是当前状态；edda_status 只列出某张卡提交过的申请。时间为香港时间（+08:00）"
+      "description": "列出当前账户各张绑定银行卡的 eDDA（电子直接扣款）授权，返回 authorizations[]{card_id, bank, bank_en, account（仅后 4 位）, card_binding（binding/bound/failed；没有已知标签的代码改为以 bind_state 返回原始数值）, flow（hk_edda：在银行授权，hk_sdda：在 App 内授权）, name, currency, authorization（unauthorized/authorized/authorizing/failed；没有已知标签的代码改为以 status 返回原始数值）, failure_reason（银行返回信息）, max_amount（入金上限）, max_amount_unlimited, daily_max_count, daily_max_count_unlimited, expiry_date, long_term_valid, is_support（1：银行支持此方式）, doc_reviewing（资料审核中）, no_prior_deposit_reviewing（因该卡无入金记录而审核中）}。列表为空表示没有任何卡做过 eDDA 授权。这里是当前状态；edda_status 只列出某张卡提交过的申请。时间为香港时间（+08:00）"
     },
     "edda_status": {
       "title": "eDDA 授权状态",

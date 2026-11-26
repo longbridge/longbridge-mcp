@@ -493,6 +493,7 @@ fn edda_row(card: &Value, auth: &Value) -> Value {
         "bank_en": card_field("bank_en"),
         "account": card_field("account"),
         "card_binding": card_field("binding"),
+        "bind_state": card_field("bind_state"),
         "flow": auth.get("flow_id"),
         "name": auth.get("name"),
         "currency": auth.get("currency"),
@@ -1001,6 +1002,11 @@ mod tests {
             row["authorization"].is_null(),
             "edda row has no label for it"
         );
+        assert_eq!(row["bind_state"], 7, "edda row carries the raw bind state");
+        assert!(
+            row["card_binding"].is_null(),
+            "edda row has no binding label for 7"
+        );
         let row = edda_row(&card, known);
         assert!(row["status"].is_null(), "edda row omits a labelled code");
     }
@@ -1031,6 +1037,11 @@ mod tests {
         shape_card(&mut card);
         let row = edda_row(&card, &card["auth_list"][0]);
         assert_eq!(row["card_id"], 7, "card id carried over");
+        assert_eq!(row["card_binding"], "bound", "binding label carried over");
+        assert!(
+            row["bind_state"].is_null(),
+            "a labelled bind state is dropped"
+        );
         assert_eq!(row["account"], "****6789", "masked account carried over");
         assert_eq!(
             row["authorization"], "authorized",
