@@ -1023,11 +1023,14 @@ impl McpContext {
     /// It is **not** a safety guard, though. Upstream is supposed to reject a
     /// paper-trading request made with a real-money token, but it does not do
     /// so for OAuth tokens — which is all this server uses — in any region:
-    /// the call succeeds against the real-money account. Reads are never
-    /// refused. The SDK will refuse order submission and replacement locally
-    /// on a `us_` (LBUS) token, whose data center has no paper-trading
-    /// accounts at all (longbridge/openapi#637), but the `longbridge` 5.5 this
-    /// server builds with predates that, so today nothing is refused.
+    /// the call succeeds against the real-money account. Measured on an AP
+    /// real-money account: with the header on, a positions read returns the
+    /// same real holdings as without it, and no error. Reads are never
+    /// refused. The SDK will refuse order submission, replacement and
+    /// multi-leg submission locally on a `us_` (LBUS) token, whose data center
+    /// has no paper-trading accounts at all (longbridge/openapi#637), but the
+    /// `longbridge` 5.5 this server builds with predates that, so today
+    /// nothing is refused.
     fn papertrading_requested(headers: &[(String, String)]) -> bool {
         headers.iter().any(|(key, value)| {
             let value = value.trim();
