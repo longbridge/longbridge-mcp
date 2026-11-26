@@ -26,7 +26,7 @@
 //! the only way to send the order is the user's own approval of this exact
 //! order.
 
-use super::dry_run::Scope;
+use super::dry_run::{Scope, current_window, live_windows};
 use rmcp::ErrorData as McpError;
 use rmcp::RoleServer;
 use rmcp::model::{
@@ -170,10 +170,12 @@ impl Confirmer {
     }
 
     fn input_required_round(&self, scope: &Scope, preview: &serde_json::Value) -> Decision {
-        let state = request_state(scope);
-        // The retry must be for the order the form described: a different
-        // order recomputes a different state.
-        if self.request_state.as_deref() == Some(state.as_str()) {
+        let window = current_window();
+        let state = request_state_in(scope, window);
+        // The retry must be for the order the form described, within the
+        // window: a different order or an expired approval recomputes a
+        // different state, and the user is asked again.
+        if is_live_state(scope, self.request_state.as_deref(), window) {
             let answer = self
                 .input_responses
                 .as_ref()
@@ -204,15 +206,27 @@ impl Confirmer {
     }
 }
 
-/// The opaque state echoed back on retry: a digest of the order, so a retry
-/// for a different order cannot reuse the user's approval.
-pub fn request_state(scope: &Scope) -> String {
+/// The opaque state echoed back on retry: a digest of the order and the
+/// confirmation window, so a retry for a different order cannot reuse the
+/// user's approval, and an approval cannot be replayed once it has expired.
+#[cfg(test)]
+fn request_state(scope: &Scope) -> String {
+    request_state_in(scope, current_window())
+}
+
+fn request_state_in(scope: &Scope, window: u64) -> String {
     let mut hasher = Sha256::new();
-    hasher.update(b"longbridge-mcp/elicit-confirmation/v1");
+    hasher.update(b"longbridge-mcp/elicit-confirmation/v2");
+    hasher.update(window.to_be_bytes());
     hasher.update(scope.to_string().as_bytes());
     let digest = hasher.finalize();
     let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
-    format!("confirm-v1:{hex}")
+    format!("confirm-v2:{hex}")
+}
+
+/// Whether `state` is this order's state in a window that has not expired.
+fn is_live_state(scope: &Scope, state: Option<&str>, window: u64) -> bool {
+    state.is_some_and(|state| live_windows(window).any(|w| request_state_in(scope, w) == state))
 }
 
 fn accepted(answer: &ElicitResult) -> bool {
@@ -398,6 +412,16 @@ mod tests {
             ir.request_state.as_deref(),
             Some(request_state(&other).as_str())
         );
+    }
+
+    #[test]
+    fn an_approval_expires_after_the_next_window() {
+        let scope = order();
+        let issued = request_state_in(&scope, 1000);
+        assert!(is_live_state(&scope, Some(&issued), 1000));
+        assert!(is_live_state(&scope, Some(&issued), 1001));
+        assert!(!is_live_state(&scope, Some(&issued), 1002));
+        assert!(!is_live_state(&scope, None, 1000));
     }
 
     #[test]

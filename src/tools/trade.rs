@@ -176,7 +176,8 @@ pub struct SubmitOrderParam {
     /// preview to the user, and call again quoting the code only after the user
     /// has explicitly confirmed that exact order. The code is derived
     /// from the order itself, so it applies only to this exact order — change
-    /// any field and it stops working. Never quote it back on your own initiative,
+    /// any field and it stops working. It expires 10 to 20 minutes after the
+    /// dry run. Never quote it back on your own initiative,
     /// and never in the same turn the user first asks.
     pub execute: Option<String>,
 }
@@ -223,8 +224,9 @@ pub struct SubmitMultiLegOrderParam {
     /// echoed back with a three-digit `confirmation_code`, and nothing reaches
     /// the exchange. Call once without `execute`, show the returned preview to
     /// the user, and call again quoting the code only after the user has
-    /// explicitly confirmed that exact order. Never quote it back on your own
-    /// initiative, and never in the same turn the user first asks.
+    /// explicitly confirmed that exact order. The code expires 10 to 20 minutes
+    /// after the dry run. Never quote it back on your own initiative, and never
+    /// in the same turn the user first asks.
     pub execute: Option<String>,
 }
 
@@ -306,7 +308,8 @@ pub struct ReplaceOrderParam {
     /// preview to the user, and call again quoting the code only after the user
     /// has explicitly confirmed that exact order. The code is derived
     /// from the order itself, so it applies only to this exact order — change
-    /// any field and it stops working. Never quote it back on your own initiative,
+    /// any field and it stops working. It expires 10 to 20 minutes after the
+    /// dry run. Never quote it back on your own initiative,
     /// and never in the same turn the user first asks.
     pub execute: Option<String>,
 }
@@ -357,7 +360,8 @@ pub struct CancelOrderParam {
     /// preview to the user, and call again quoting the code only after the user
     /// has explicitly confirmed that exact order. The code is derived
     /// from the order itself, so it applies only to this exact order — change
-    /// any field and it stops working. Never quote it back on your own initiative,
+    /// any field and it stops working. It expires 10 to 20 minutes after the
+    /// dry run. Never quote it back on your own initiative,
     /// and never in the same turn the user first asks.
     pub execute: Option<String>,
 }

@@ -227,7 +227,7 @@ pub struct GridSubmitParam {
     /// preview to the user, and call again quoting the code only after the user
     /// has explicitly confirmed it. The code is derived from the request
     /// itself, so it applies only to this exact request — change any field and
-    /// it stops working. A grid strategy keeps placing orders on its own once
+    /// it stops working. It expires 10 to 20 minutes after the dry run. A grid strategy keeps placing orders on its own once
     /// live, so never quote the code back on your own initiative.
     pub execute: Option<String>,
 }
@@ -249,7 +249,7 @@ pub struct GridReplaceParam {
     /// preview to the user, and call again quoting the code only after the user
     /// has explicitly confirmed it. The code is derived from the request
     /// itself, so it applies only to this exact request — change any field and
-    /// it stops working. A grid strategy keeps placing orders on its own once
+    /// it stops working. It expires 10 to 20 minutes after the dry run. A grid strategy keeps placing orders on its own once
     /// live, so never quote the code back on your own initiative.
     pub execute: Option<String>,
 }
@@ -269,7 +269,7 @@ pub struct GridOrderIdParam {
     /// preview to the user, and call again quoting the code only after the user
     /// has explicitly confirmed it. The code is derived from the request
     /// itself, so it applies only to this exact request — change any field and
-    /// it stops working. A grid strategy keeps placing orders on its own once
+    /// it stops working. It expires 10 to 20 minutes after the dry run. A grid strategy keeps placing orders on its own once
     /// live, so never quote the code back on your own initiative.
     pub execute: Option<String>,
 }

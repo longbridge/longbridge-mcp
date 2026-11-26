@@ -26,7 +26,8 @@ pub struct AlertAddParam {
     /// echoed back with a three-digit `confirmation_code`, and nothing changes.
     /// Call once without `execute`, show the returned preview to the user, and
     /// call again quoting the code only after the user has explicitly confirmed
-    /// that exact request. Never quote it back on your own initiative.
+    /// that exact request. The code expires 10 to 20 minutes after the dry
+    /// run. Never quote it back on your own initiative.
     pub execute: Option<String>,
 }
 
@@ -41,7 +42,8 @@ pub struct AlertIdParam {
     /// echoed back with a three-digit `confirmation_code`, and nothing changes.
     /// Call once without `execute`, show the returned preview to the user, and
     /// call again quoting the code only after the user has explicitly confirmed
-    /// that exact request. Never quote it back on your own initiative.
+    /// that exact request. The code expires 10 to 20 minutes after the dry
+    /// run. Never quote it back on your own initiative.
     pub execute: Option<String>,
 }
 
