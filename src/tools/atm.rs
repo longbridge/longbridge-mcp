@@ -32,6 +32,7 @@ const CARD_FIELDS: &[&str] = &[
     "support_witness",
     "bind_state",
     "bind_tip",
+    "bind_fail_reason",
     "created_at",
     "auth_list",
 ];
@@ -127,6 +128,7 @@ const DEPOSIT_FIELDS: &[&str] = &[
     "reference_no",
     "can_cancel",
     "voucher_count",
+    "status",
 ];
 
 /// Fields kept from a withdrawal record, after shaping (allowlist).
@@ -144,6 +146,9 @@ const WITHDRAWAL_FIELDS: &[&str] = &[
     "bank_account",
     "display_bank_account",
     "user_bank_swift_code",
+    "status",
+    "bank_name",
+    "account_number",
 ];
 
 /// Auth fields upstream fills with `"0"` / `0` when unset.
@@ -305,7 +310,7 @@ pub struct DepositParam {
     pub page: Option<u32>,
     /// Page size (default: 20, max 20)
     pub size: Option<u32>,
-    /// Filter by state codes, comma-separated (e.g. "0,2"): 0 processing, 1 credited, 2 failed, 3 cancelled, 4 invalidated, 5 rejected
+    /// Filter by state, comma-separated: state codes (e.g. "0,2": 0 processing, 1 credited, 2 failed, 3 cancelled, 4 invalidated, 5 rejected) or the `status` values Pending / Finished / Failed (Failed covers codes 2–5)
     pub states: Option<String>,
     /// Filter by currencies (comma-separated, e.g. "USD,HKD")
     pub currencies: Option<String>,
@@ -858,9 +863,117 @@ pub async fn withdrawals(
         page_size,
         WITHDRAWAL_FIELDS,
     );
+    add_status(&mut value, "list", "state", withdrawal_status);
+    let has_account = value["list"]
+        .as_array()
+        .is_some_and(|l| l.iter().any(|i| i.get("bank_account").is_some()));
+    if has_account {
+        // Best effort: a failed card lookup only leaves `bank_name` out.
+        let cards = fetch_cards(mctx).await.unwrap_or_default();
+        add_payee_bank(&mut value, &cards);
+    }
     strip_empty_strings(&mut value);
     strip_nulls(&mut value);
     value_result_hong_kong(value)
+}
+
+/// The coarse `status` the customer-service flows key on (PRD「AI 客服工具接入」
+/// 3.1.1, deposits D1–D3): Pending / Finished / Failed. Failed covers every
+/// code that ends without the money arriving.
+fn deposit_status(code: i64) -> Option<&'static str> {
+    match code {
+        0 => Some("Pending"),
+        1 => Some("Finished"),
+        2..=5 => Some("Failed"),
+        _ => None,
+    }
+}
+
+/// The coarse withdrawal `status` (PRD 3.1.1, W1–W3): Finished once remitted,
+/// Failed for every code that ends without a payout, Pending for the
+/// submitted, processing and pending-approval codes.
+fn withdrawal_status(code: i64) -> Option<&'static str> {
+    match code {
+        4 => Some("Finished"),
+        2 | 3 | 5 | 6 | 11 => Some("Failed"),
+        0 | 1 | 7..=10 | 12 | 15 => Some("Pending"),
+        _ => None,
+    }
+}
+
+/// Add `status` to every record from its state code.
+fn add_status(
+    value: &mut Value,
+    list_key: &str,
+    code_key: &str,
+    status: fn(i64) -> Option<&'static str>,
+) {
+    let Some(items) = value.get_mut(list_key).and_then(Value::as_array_mut) else {
+        return;
+    };
+    for item in items.iter_mut().filter_map(Value::as_object_mut) {
+        if let Some(s) = item.get(code_key).and_then(Value::as_i64).and_then(status) {
+            item.insert("status".into(), Value::String(s.into()));
+        }
+    }
+}
+
+/// The deposit `states` filter for upstream, which takes numeric codes only
+/// (`states=Finished` makes it fail). Codes pass through; the `status` values
+/// Pending / Finished / Failed map to their codes.
+fn deposit_state_filter(states: &str) -> Result<String, McpError> {
+    let mut codes: Vec<String> = Vec::new();
+    for token in states.split(',').map(str::trim).filter(|t| !t.is_empty()) {
+        let mapped: Vec<String> = match token.to_ascii_lowercase().as_str() {
+            "pending" => vec!["0".into()],
+            "finished" => vec!["1".into()],
+            "failed" => ["2", "3", "4", "5"].map(String::from).to_vec(),
+            _ if token.parse::<u32>().is_ok() => vec![token.to_string()],
+            _ => {
+                return Err(McpError::invalid_params(
+                    format!(
+                        "invalid states value `{token}`: use state codes (0-5) or Pending / \
+                         Finished / Failed"
+                    ),
+                    None,
+                ));
+            }
+        };
+        for code in mapped {
+            if !codes.contains(&code) {
+                codes.push(code);
+            }
+        }
+    }
+    Ok(codes.join(","))
+}
+
+/// Give each withdrawal the `account_number` and `bank_name` the
+/// customer-service flows quote (PRD 3.1.1, W1–W2: 收款银行、尾号). Upstream
+/// has only the masked account; the bank comes from the linked card with the
+/// same last four digits, and is left out when no single card matches.
+fn add_payee_bank(value: &mut Value, cards: &[Value]) {
+    let Some(items) = value.get_mut("list").and_then(Value::as_array_mut) else {
+        return;
+    };
+    for item in items.iter_mut().filter_map(Value::as_object_mut) {
+        let Some(account) = item
+            .get("bank_account")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+        else {
+            continue;
+        };
+        let banks: Vec<&str> = cards
+            .iter()
+            .filter(|c| c.get("account").and_then(Value::as_str) == Some(account.as_str()))
+            .filter_map(|c| c.get("bank").and_then(Value::as_str))
+            .collect();
+        if let [bank] = banks.as_slice() {
+            item.insert("bank_name".into(), Value::String((*bank).to_string()));
+        }
+        item.insert("account_number".into(), Value::String(account));
+    }
 }
 
 /// Largest deposit page size upstream honours. Above it the deposit list
@@ -889,7 +1002,10 @@ pub async fn deposits(
         ("size", size_str.as_str()),
         ("account_channel", channel.as_str()),
     ];
-    if let Some(ref s) = p.states {
+    let states = p.states.as_deref().map(deposit_state_filter).transpose()?;
+    if let Some(ref s) = states
+        && !s.is_empty()
+    {
         params.push(("states", s.as_str()));
     }
     if let Some(ref c) = p.currencies {
@@ -911,6 +1027,7 @@ pub async fn deposits(
         page_size,
         DEPOSIT_FIELDS,
     );
+    add_status(&mut value, "items", "state_code", deposit_status);
     // Upstream `total` is capped at the page size, so it reads as a wrong
     // record count; `has_more` replaces it.
     if let Some(obj) = value.as_object_mut() {
@@ -1296,6 +1413,100 @@ mod tests {
             deposit_page_size(Some(50)),
             20,
             "above 20 upstream falls back to 10 rows, so cap at 20"
+        );
+    }
+}
+
+#[cfg(test)]
+mod cs_prd_tests {
+    //! Fields the customer-service flows and skills read (PRD「AI 客服工具接入」
+    //! V1.5, 3.1.1 and 3.10): `status` Pending / Finished / Failed on deposits
+    //! and withdrawals, `bank_name` and `account_number` on withdrawals.
+
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn deposit_status_covers_every_state() {
+        let statuses: Vec<_> = (0..=5).map(deposit_status).collect();
+        assert_eq!(
+            statuses,
+            [
+                Some("Pending"),
+                Some("Finished"),
+                Some("Failed"),
+                Some("Failed"),
+                Some("Failed"),
+                Some("Failed")
+            ]
+        );
+        assert_eq!(deposit_status(9), None, "an unknown code gets no status");
+    }
+
+    #[test]
+    fn every_withdrawal_state_has_a_status() {
+        for (code, label) in WITHDRAWAL_STATE {
+            assert!(
+                withdrawal_status(*code).is_some(),
+                "{code} {label} needs a status"
+            );
+        }
+        assert_eq!(withdrawal_status(4), Some("Finished"));
+        assert_eq!(withdrawal_status(2), Some("Failed"), "rejected");
+        assert_eq!(withdrawal_status(8), Some("Pending"), "large-amount review");
+    }
+
+    #[test]
+    fn states_filter_accepts_codes_and_status_values() {
+        assert_eq!(deposit_state_filter("1").unwrap(), "1");
+        assert_eq!(deposit_state_filter("Pending").unwrap(), "0");
+        assert_eq!(
+            deposit_state_filter("finished, Failed").unwrap(),
+            "1,2,3,4,5"
+        );
+        assert_eq!(
+            deposit_state_filter("2,Failed").unwrap(),
+            "2,3,4,5",
+            "no duplicates"
+        );
+        assert!(deposit_state_filter("Done").is_err());
+    }
+
+    #[test]
+    fn withdrawals_get_status_and_payee_bank() {
+        let mut value = json!({"list": [
+            {"id": 1, "state": 4, "bank_account": "****8901"},
+            {"id": 2, "state": 1, "bank_account": "****0000"},
+            {"id": 3, "state": 5}
+        ]});
+        add_status(&mut value, "list", "state", withdrawal_status);
+        let cards = [
+            json!({"bank": "HSBC", "account": "****8901"}),
+            json!({"bank": "BOC", "account": "****1111"}),
+        ];
+        add_payee_bank(&mut value, &cards);
+        let list = value["list"].as_array().unwrap();
+        assert_eq!(list[0]["status"], "Finished");
+        assert_eq!(list[0]["bank_name"], "HSBC");
+        assert_eq!(list[0]["account_number"], "****8901");
+        assert_eq!(list[1]["status"], "Pending");
+        assert!(
+            list[1].get("bank_name").is_none(),
+            "no matching card: no bank"
+        );
+        assert_eq!(list[1]["account_number"], "****0000");
+        assert_eq!(list[2]["status"], "Failed");
+        assert!(list[2].get("account_number").is_none());
+    }
+
+    #[test]
+    fn deposits_get_status() {
+        let mut value = json!({"items": [{"id": 1, "state_code": 0}, {"id": 2, "state_code": 3}]});
+        add_status(&mut value, "items", "state_code", deposit_status);
+        assert_eq!(value["items"][0]["status"], "Pending");
+        assert_eq!(
+            value["items"][1]["status"], "Failed",
+            "cancelled is not Finished"
         );
     }
 }
