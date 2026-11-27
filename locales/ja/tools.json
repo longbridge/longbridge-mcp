@@ -44,7 +44,7 @@
     },
     "account_balance": {
       "title": "口座残高",
-      "description": "口座の現金残高と資産概要を照会し、トップレベル配列 {currency, total_cash, net_assets, buy_power, max_finance_amount, remaining_finance_amount, risk_level, margin_call, init_margin, maintenance_margin, cash_infos[]{currency, available_cash, withdraw_cash, frozen_cash, settling_cash}} を返します。米国株口座も同じ配列を返しますが、口座通貨の 1 件のみです：currency、total_cash、net_assets、buy_power、maintenance_margin と cash_infos[]（settling_cash の代わりに settled_cash）を含み、max_finance_amount、remaining_finance_amount、risk_level、margin_call、init_margin はありません。米国株の買付余力と証拠金の明細は us{buy_limit_info, margin_status, cash_list[]} の下にあります",
+      "description": "口座の現金残高と資産概要を照会し、トップレベル配列 {currency, total_cash, net_assets, buy_power, max_finance_amount, remaining_finance_amount, risk_level, margin_call, init_margin, maintenance_margin, cash_infos[]{currency, available_cash, withdraw_cash, frozen_cash, settling_cash}} を返します。米国株口座も同じ配列を返しますが、口座通貨の 1 件のみです：currency、total_cash、net_assets、buy_power、maintenance_margin と cash_infos[]（settling_cash の代わりに settled_cash）を含み、max_finance_amount、remaining_finance_amount、risk_level、margin_call、init_margin はありません。米国株の買付余力と証拠金の明細は us{buy_limit_info, margin_status, cash_list[]} の下にあります。frozen_transaction_fees[]{currency, frozen_transaction_fee}（拘束現金のうち通貨別に拘束された取引手数料）も返します。",
       "properties": {
         "currency": "通貨コードで絞り込み（例：`\"USD\"`、`\"HKD\"`）。省略するとすべての通貨を返します"
       }
@@ -1182,11 +1182,11 @@
     },
     "bank_cards": {
       "title": "登録銀行口座",
-      "description": "現在のアカウントに登録された銀行口座と審査状況を一覧表示します。cards[]{id, bank, bank_en, bank_code, account（下 4 桁のみ）, account_type, region, region_name, country, verification（出金用口座の認証：unverified = 未認証。「未認証」と「審査済み・入金待ち」を含み、この口座から任意の金額を入金するか eDDA / 銀行・証券振替の承認で認証されます。under_review = 登録後の手動審査中で、その間は利用不可。verified = 認証済み）, witness（not_required/pending/witnessed：この口座からの入金確認）, binding（binding/bound/failed）, review_days（口座追加からの日数。under_review の間のみ）, bind_tip（ユーザーに表示される審査メッセージ）, remark, created_at, auth_list[]{flow_id（hk_edda/hk_sdda：eDDA、hk_bank_sec：銀行・証券振替、hk_fps：FPS）, name, currency, authorization（unauthorized/authorized/authorizing/failed）, failure_reason（失敗理由）, max_amount, max_amount_unlimited, daily_max_count, daily_max_count_unlimited, expiry_date, long_term_valid, is_support, doc_reviewing, no_prior_deposit_reviewing}} を返します。既知のラベルがないコードは代わりに元のキーで生の数値を返します（status、witness_state、bind_state、auth_list[].status）。under_review は登録後の手動審査中を意味します。eDDA だけなら代わりに edda_authorizations を使用（同じ上流を呼ぶため、同じターンで両方を呼ばない）。時刻は香港時間（+08:00）です"
+      "description": "現在のアカウントに登録された銀行口座と審査状況を一覧表示します。cards[]{id, bank, bank_en, bank_code, account（下 4 桁のみ）, account_type, region, region_name, country, verification（出金用口座の認証：unverified = 未認証。「未認証」と「審査済み・入金待ち」を含み、この口座から任意の金額を入金するか eDDA / 銀行・証券振替の承認で認証されます。under_review = 登録後の手動審査中で、その間は利用不可。verified = 認証済み）, witness（not_required/pending/witnessed：この口座からの入金確認）, binding（binding/bound/failed）, review_days（口座追加からの日数。under_review の間のみ）, bind_tip（ユーザーに表示される審査メッセージ）, remark, created_at, auth_list[]{flow_id（hk_edda/hk_sdda：eDDA、hk_bank_sec：銀行・証券振替、hk_fps：FPS）, name, currency, authorization（unauthorized/authorized/authorizing/failed）, failure_reason（失敗理由）, max_amount, max_amount_unlimited, daily_max_count, daily_max_count_unlimited, expiry_date, long_term_valid, is_support, doc_reviewing, no_prior_deposit_reviewing}} を返します。既知のラベルがないコードは代わりに元のキーで生の数値を返します（status、witness_state、bind_state、auth_list[].status）。under_review は登録後の手動審査中を意味します。eDDA だけなら代わりに edda_authorizations を使用（同じ上流を呼ぶため、同じターンで両方を呼ばない）。時刻は香港時間（+08:00）です。bind_fail_reason（カード登録失敗の理由）も返します。"
     },
     "withdrawals": {
       "title": "出金履歴",
-      "description": "現在のアカウントの出金履歴を新しい順に取得します。{list[]{id, order_id, created_at, currency, amount（申請金額）, fee（出金手数料。古い記録では空）, settlement_amount（実際の出金額）, state, state_label（submitted/processing/rejected/cancelled/remitted/failed/refunded/approved_awaiting_payout/large_amount_review/awaiting_confirmation/…）, state_description（アプリに表示される状態テキスト。あれば優先）, bank_account（下 4 桁のみ。bank_cards の cards[].account に対応）, display_bank_account, user_bank_swift_code}, total, has_more（満ページが返った。次ページを取得可能）} を返します。start/end：yyyy-mm-dd（香港の日付）または RFC3339（申請日時で絞り込み）。処理予定時刻とバックオフィスの備考は含みません。時刻は香港時間（+08:00）です",
+      "description": "現在のアカウントの出金履歴を新しい順に取得します。{list[]{id, order_id, created_at, currency, amount（申請金額）, fee（出金手数料。古い記録では空）, settlement_amount（実際の出金額）, state, state_label（submitted/processing/rejected/cancelled/remitted/failed/refunded/approved_awaiting_payout/large_amount_review/awaiting_confirmation/…）, state_description（アプリに表示される状態テキスト。あれば優先）, bank_account（下 4 桁のみ。bank_cards の cards[].account に対応）, display_bank_account, user_bank_swift_code}, total, has_more（満ページが返った。次ページを取得可能）} を返します。start/end：yyyy-mm-dd（香港の日付）または RFC3339（申請日時で絞り込み）。処理予定時刻とバックオフィスの備考は含みません。時刻は香港時間（+08:00）です。status（Pending / Finished / Failed：送金済みは Finished、出金されずに終わった状態はすべて Failed、それ以外は Pending）、account_number（bank_account と同じマスク済み口座番号）、bank_name（下4桁が一致する登録済み銀行カードの銀行名。一致なし・複数一致の場合は返さない）を追加。",
       "properties": {
         "page": "ページ番号（デフォルト 1）",
         "size": "1 ページあたりの件数（デフォルト 20）",
@@ -1196,11 +1196,11 @@
     },
     "deposits": {
       "title": "入金履歴",
-      "description": "現在のアカウントの入金履歴を新しい順に取得します。{items[]{id, created_at, updated_at, currency, amount（ユーザーが通知・申請した金額）, receivable_amount（Longbridge の銀行で実際に受領した金額。0 は未着金）, state（状態テキスト）, state_code, state_label（processing/credited/failed/cancelled/invalidated/rejected）, sub_state_code, bank_operation_type_name（入金方法：eDDA、FPS、銀行振込など）, reference_no, can_cancel, voucher_count（アップロードされた証憑の枚数）}, has_more（満ページが返った。次ページを取得可能）} を返します。信頼できる総件数はありません。states：カンマ区切りの状態コード（0 処理中、1 入金済み、2 失敗、3 取消、4 無効、5 却下）。currencies：カンマ区切りの通貨コード。start/end：yyyy-mm-dd（香港の日付）または RFC3339（申請日時で絞り込み）。バックオフィスの備考は含みません。時刻は香港時間（+08:00）です",
+      "description": "現在のアカウントの入金履歴を新しい順に取得します。{items[]{id, created_at, updated_at, currency, amount（ユーザーが通知・申請した金額）, receivable_amount（Longbridge の銀行で実際に受領した金額。0 は未着金）, state（状態テキスト）, state_code, state_label（processing/credited/failed/cancelled/invalidated/rejected）, sub_state_code, bank_operation_type_name（入金方法：eDDA、FPS、銀行振込など）, reference_no, can_cancel, voucher_count（アップロードされた証憑の枚数）}, has_more（満ページが返った。次ページを取得可能）} を返します。信頼できる総件数はありません。states：カンマ区切りの状態コード（0 処理中、1 入金済み、2 失敗、3 取消、4 無効、5 却下）。currencies：カンマ区切りの通貨コード。start/end：yyyy-mm-dd（香港の日付）または RFC3339（申請日時で絞り込み）。バックオフィスの備考は含みません。時刻は香港時間（+08:00）です。status（Pending / Finished / Failed：入金完了は Finished、入金されずに終わった状態はすべて Failed）を追加。states には Pending / Finished / Failed も指定可能（Failed はコード 2–5）。",
       "properties": {
         "page": "ページ番号（デフォルト 1）",
         "size": "1 ページあたりの件数（デフォルト 20、最大 20）",
-        "states": "状態コードフィルター（カンマ区切り、例 \"0,2\"）：0 処理中、1 入金済み、2 失敗、3 取消、4 無効、5 却下",
+        "states": "ステータスで絞り込み（カンマ区切り）：ステータスコード（0 処理中、1 入金完了、2 失敗、3 取消、4 無効、5 却下）または status 値 Pending / Finished / Failed（Failed はコード 2–5）",
         "currencies": "通貨コードによるフィルター（カンマ区切り）。例：`\"USD,HKD\"`",
         "start": "申請日時の開始（yyyy-mm-dd または RFC3339）",
         "end": "申請日時の終了（yyyy-mm-dd または RFC3339）"

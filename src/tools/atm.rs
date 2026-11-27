@@ -32,6 +32,7 @@ const CARD_FIELDS: &[&str] = &[
     "support_witness",
     "bind_state",
     "bind_tip",
+    "bind_fail_reason",
     "created_at",
     "auth_list",
 ];

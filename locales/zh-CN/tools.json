@@ -44,7 +44,7 @@
     },
     "account_balance": {
       "title": "账户余额",
-      "description": "查询账户现金余额与资产概览，返回顶层数组 {currency, total_cash, net_assets, buy_power, max_finance_amount, remaining_finance_amount, risk_level, margin_call, init_margin, maintenance_margin, cash_infos[]{currency, available_cash, withdraw_cash, frozen_cash, settling_cash}}。美股账户返回同样的数组，只有账户币种一条：含 currency、total_cash、net_assets、buy_power、maintenance_margin 与 cash_infos[]（以 settled_cash 代替 settling_cash）；无 max_finance_amount、remaining_finance_amount、risk_level、margin_call、init_margin；美股购买力与保证金明细在 us{buy_limit_info, margin_status, cash_list[]} 下",
+      "description": "查询账户现金余额与资产概览，返回顶层数组 {currency, total_cash, net_assets, buy_power, max_finance_amount, remaining_finance_amount, risk_level, margin_call, init_margin, maintenance_margin, cash_infos[]{currency, available_cash, withdraw_cash, frozen_cash, settling_cash}}。美股账户返回同样的数组，只有账户币种一条：含 currency、total_cash、net_assets、buy_power、maintenance_margin 与 cash_infos[]（以 settled_cash 代替 settling_cash）；无 max_finance_amount、remaining_finance_amount、risk_level、margin_call、init_margin；美股购买力与保证金明细在 us{buy_limit_info, margin_status, cash_list[]} 下。另返回 frozen_transaction_fees[]{currency, frozen_transaction_fee}（冻结现金中按币种冻结的交易费用）。",
       "properties": {
         "currency": "按币种代码筛选（如 `\"USD\"`、`\"HKD\"`），省略则返回所有币种"
       }
@@ -1182,11 +1182,11 @@
     },
     "bank_cards": {
       "title": "绑定银行卡",
-      "description": "列出当前账户绑定的银行卡及审核状态，返回 cards[]{id, bank, bank_en, bank_code, account（仅后 4 位）, account_type, region, region_name, country, verification（银行卡出金认证：unverified = 尚未认证，含「未认证」与「已审核-待入金」，用这张卡入金任意金额，或完成 eDDA / 银证转账授权即可认证；under_review = 绑卡后人工审核中，期间不能使用；verified = 已认证）, witness（not_required/pending/witnessed：是否已有该卡入金见证）, binding（binding/bound/failed）, review_days（卡片添加至今的天数，仅 under_review 时返回）, bind_tip（展示给用户的审核提示）, remark, created_at, auth_list[]{flow_id（hk_edda/hk_sdda：eDDA，hk_bank_sec：银证转账，hk_fps：FPS）, name, currency, authorization（unauthorized/authorized/authorizing/failed）, failure_reason（失败原因）, max_amount, max_amount_unlimited, daily_max_count, daily_max_count_unlimited, expiry_date, long_term_valid, is_support, doc_reviewing, no_prior_deposit_reviewing}}。没有已知标签的代码改为在原字段返回原始数值（status、witness_state、bind_state、auth_list[].status）。under_review 表示绑卡后正在人工审核；只查 eDDA 改用 edda_authorizations（两者调用同一上游接口，同一轮不要都调）。时间为香港时间（+08:00）"
+      "description": "列出当前账户绑定的银行卡及审核状态，返回 cards[]{id, bank, bank_en, bank_code, account（仅后 4 位）, account_type, region, region_name, country, verification（银行卡出金认证：unverified = 尚未认证，含「未认证」与「已审核-待入金」，用这张卡入金任意金额，或完成 eDDA / 银证转账授权即可认证；under_review = 绑卡后人工审核中，期间不能使用；verified = 已认证）, witness（not_required/pending/witnessed：是否已有该卡入金见证）, binding（binding/bound/failed）, review_days（卡片添加至今的天数，仅 under_review 时返回）, bind_tip（展示给用户的审核提示）, remark, created_at, auth_list[]{flow_id（hk_edda/hk_sdda：eDDA，hk_bank_sec：银证转账，hk_fps：FPS）, name, currency, authorization（unauthorized/authorized/authorizing/failed）, failure_reason（失败原因）, max_amount, max_amount_unlimited, daily_max_count, daily_max_count_unlimited, expiry_date, long_term_valid, is_support, doc_reviewing, no_prior_deposit_reviewing}}。没有已知标签的代码改为在原字段返回原始数值（status、witness_state、bind_state、auth_list[].status）。under_review 表示绑卡后正在人工审核；只查 eDDA 改用 edda_authorizations（两者调用同一上游接口，同一轮不要都调）。时间为香港时间（+08:00）。另返回 bind_fail_reason（绑卡失败原因）。"
     },
     "withdrawals": {
       "title": "提款记录",
-      "description": "获取当前账户提款历史，按时间倒序。返回 {list[]{id, order_id, created_at, currency, amount（申请金额）, fee（手续费，旧记录为空）, settlement_amount（实际出账金额）, state, state_label（submitted/processing/rejected/cancelled/remitted/failed/refunded/approved_awaiting_payout/large_amount_review/awaiting_confirmation/…）, state_description（App 展示的状态文案，有值时优先使用）, bank_account（仅后 4 位，与 bank_cards 的 cards[].account 对应）, display_bank_account, user_bank_swift_code}, total, has_more（返回了满页，可取下一页）}。start/end：yyyy-mm-dd（香港日期）或 RFC3339，按申请时间筛选。不含预计处理时间和后台备注。时间为香港时间（+08:00）",
+      "description": "获取当前账户提款历史，按时间倒序。返回 {list[]{id, order_id, created_at, currency, amount（申请金额）, fee（手续费，旧记录为空）, settlement_amount（实际出账金额）, state, state_label（submitted/processing/rejected/cancelled/remitted/failed/refunded/approved_awaiting_payout/large_amount_review/awaiting_confirmation/…）, state_description（App 展示的状态文案，有值时优先使用）, bank_account（仅后 4 位，与 bank_cards 的 cards[].account 对应）, display_bank_account, user_bank_swift_code}, total, has_more（返回了满页，可取下一页）}。start/end：yyyy-mm-dd（香港日期）或 RFC3339，按申请时间筛选。不含预计处理时间和后台备注。时间为香港时间（+08:00）。新增 status（Pending / Finished / Failed：已汇出为 Finished，未能出账的状态均为 Failed，其余为 Pending）、account_number（同 bank_account 的脱敏账号）、bank_name（按尾号匹配已绑定银行卡得到的收款银行；无匹配或多张匹配时不返回）。",
       "properties": {
         "page": "页码（默认 1）",
         "size": "每页条数（默认 20）",
@@ -1196,11 +1196,11 @@
     },
     "deposits": {
       "title": "入款记录",
-      "description": "获取当前账户入款历史，按时间倒序。返回 {items[]{id, created_at, updated_at, currency, amount（用户通知/申请的金额）, receivable_amount（长桥银行实际到账金额，0 表示尚未收到）, state（状态文案）, state_code, state_label（processing/credited/failed/cancelled/invalidated/rejected）, sub_state_code, bank_operation_type_name（入金方式，如 eDDA、FPS、银行转账）, reference_no, can_cancel, voucher_count（已上传凭证张数）}, has_more（返回了满页，可取下一页）}。没有可靠的总条数。states：逗号分隔的状态码（0 处理中，1 已入账，2 失败，3 已撤销，4 已失效，5 已驳回）；currencies：逗号分隔的货币代码；start/end：yyyy-mm-dd（香港日期）或 RFC3339，按申请时间筛选。不含后台备注。时间为香港时间（+08:00）",
+      "description": "获取当前账户入款历史，按时间倒序。返回 {items[]{id, created_at, updated_at, currency, amount（用户通知/申请的金额）, receivable_amount（长桥银行实际到账金额，0 表示尚未收到）, state（状态文案）, state_code, state_label（processing/credited/failed/cancelled/invalidated/rejected）, sub_state_code, bank_operation_type_name（入金方式，如 eDDA、FPS、银行转账）, reference_no, can_cancel, voucher_count（已上传凭证张数）}, has_more（返回了满页，可取下一页）}。没有可靠的总条数。states：逗号分隔的状态码（0 处理中，1 已入账，2 失败，3 已撤销，4 已失效，5 已驳回）；currencies：逗号分隔的货币代码；start/end：yyyy-mm-dd（香港日期）或 RFC3339，按申请时间筛选。不含后台备注。时间为香港时间（+08:00）。新增 status（Pending / Finished / Failed：已到账为 Finished，未能到账的状态均为 Failed）；states 也可传 Pending / Finished / Failed（Failed 对应代码 2–5）。",
       "properties": {
         "page": "页码（默认 1）",
         "size": "每页条数（默认 20，最多 20）",
-        "states": "状态码过滤（逗号分隔，如 \"0,2\"）：0 处理中，1 已入账，2 失败，3 已撤销，4 已失效，5 已驳回",
+        "states": "按状态筛选，逗号分隔：状态代码（0 处理中、1 已到账、2 失败、3 已撤销、4 已作废、5 已驳回）或 status 值 Pending / Finished / Failed（Failed 对应代码 2–5）",
         "currencies": "货币代码过滤（逗号分隔），例如 `\"USD,HKD\"`",
         "start": "申请时间起（yyyy-mm-dd 或 RFC3339）",
         "end": "申请时间止（yyyy-mm-dd 或 RFC3339）"
