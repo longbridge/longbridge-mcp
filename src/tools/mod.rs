@@ -1180,8 +1180,9 @@ impl McpContext {
     /// evict.
     pub fn evict_quote_context(&self) {}
 
-    /// Extracts `account_channel` from the JWT bearer token's `sub` claim.
-    /// Falls back to `"lb"` when the token cannot be decoded.
+    /// The account channel of the bearer token (see
+    /// [`crate::auth::jwt::account_channel`]). Falls back to `"lb"` when the
+    /// token cannot be decoded or names none.
     pub fn account_channel(&self) -> String {
         crate::auth::jwt::account_channel(&self.token).unwrap_or_else(|| "lb".to_string())
     }
@@ -1196,10 +1197,11 @@ impl McpContext {
                 .any(|key| std::env::var(key).as_deref() == Ok("true"))
     }
 
-    /// Whether paper trading was asked for while the token belongs to a
-    /// real-money account (its `account_channel` is not a paper-trading one).
+    /// Whether paper trading was asked for while the token is not provably a
+    /// paper-trading one (see [`crate::auth::jwt::is_papertrading`]: every
+    /// channel claim present must name a paper-trading channel).
     pub fn papertrading_with_real_money_token(&self) -> bool {
-        self.papertrading_enabled() && !self.account_channel().contains("papertrading")
+        self.papertrading_enabled() && !crate::auth::jwt::is_papertrading(&self.token)
     }
 
     /// The DC region (`Us` or `Ap`) this session's credentials resolve to,
@@ -6222,7 +6224,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "List the current account's linked bank cards and their review state. Returns cards[]{id, bank, bank_en, bank_code, account (last 4 digits), account_type, region, region_name, country, verification (unverified: not verified yet, covering \"not verified\" and \"reviewed, awaiting a deposit\" — a deposit from this card or an eDDA / bank-securities authorization verifies it; under_review: manual review after binding, card unusable meanwhile; verified), witness (not_required/pending/witnessed), binding (binding/bound/failed), review_days (days since the card was added, only while under_review), bind_tip, remark, created_at, auth_list[]{flow_id (hk_edda/hk_sdda: eDDA, hk_bank_sec: bank-securities transfer, hk_fps: FPS), name, currency, authorization (unauthorized/authorized/authorizing/failed), failure_reason, max_amount, max_amount_unlimited, daily_max_count, daily_max_count_unlimited, expiry_date, long_term_valid, is_support, doc_reviewing, no_prior_deposit_reviewing}}. For eDDA alone use edda_authorizations instead (same upstream call; do not call both in one turn). Times are Hong Kong time (+08:00)."
+        description = "List the current account's linked bank cards and their review state. Returns cards[]{id, bank, bank_en, bank_code, account (last 4 digits), account_type, region, region_name, country, verification (unverified: not verified yet, covering \"not verified\" and \"reviewed, awaiting a deposit\" — a deposit from this card or an eDDA / bank-securities authorization verifies it; under_review: manual review after binding, card unusable meanwhile; verified), witness (not_required/pending/witnessed), binding (binding/bound/failed), review_days (days since the card was added, only while under_review), bind_tip, remark, created_at, auth_list[]{flow_id (hk_edda/hk_sdda: eDDA, hk_bank_sec: bank-securities transfer, hk_fps: FPS), name, currency, authorization (unauthorized/authorized/authorizing/failed), failure_reason, max_amount, max_amount_unlimited, daily_max_count, daily_max_count_unlimited, expiry_date, long_term_valid, is_support, doc_reviewing, no_prior_deposit_reviewing}}. Unlabelled codes stay raw instead: status, witness_state, bind_state, auth_list[].status. For eDDA alone use edda_authorizations instead (same upstream call; do not call both in one turn). Times are Hong Kong time (+08:00)."
     )]
     async fn bank_cards(
         &self,
@@ -6284,7 +6286,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "List the current account's eDDA (electronic direct debit) authorizations across its linked bank cards. Returns authorizations[]{card_id, bank, bank_en, account (last 4 digits only), card_binding (binding/bound/failed), flow (hk_edda: authorized at the bank, hk_sdda: authorized in the app), name, currency, authorization (unauthorized/authorized/authorizing/failed), failure_reason (the bank's message), max_amount (deposit limit), max_amount_unlimited, daily_max_count, daily_max_count_unlimited, expiry_date, long_term_valid, is_support (1: the bank supports this flow), doc_reviewing (documents under review), no_prior_deposit_reviewing (under review because the card has no prior deposit)}. An empty list means no card has an eDDA authorization. This is the current state; edda_status only lists the applications filed for one card. Times are Hong Kong time (+08:00)."
+        description = "List the current account's eDDA (electronic direct debit) authorizations across its linked bank cards. Returns authorizations[]{card_id, bank, bank_en, account (last 4 digits only), card_binding (binding/bound/failed; an unlabelled code comes back raw as bind_state instead), flow (hk_edda: authorized at the bank, hk_sdda: authorized in the app), name, currency, authorization (unauthorized/authorized/authorizing/failed; an unlabelled code comes back raw as status instead), failure_reason (the bank's message), max_amount (deposit limit), max_amount_unlimited, daily_max_count, daily_max_count_unlimited, expiry_date, long_term_valid, is_support (1: the bank supports this flow), doc_reviewing (documents under review), no_prior_deposit_reviewing (under review because the card has no prior deposit)}. An empty list means no card has an eDDA authorization. This is the current state; edda_status only lists the applications filed for one card. Times are Hong Kong time (+08:00)."
     )]
     async fn edda_authorizations(
         &self,
@@ -6306,7 +6308,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "List the eDDA authorization applications filed for one linked bank card in one currency. Most eDDA authorizations (e.g. pushed by the bank) have no application, so this is usually empty: answer eDDA questions from edda_authorizations first and use this only to look up an application. card_id: cards[].id from bank_cards (or authorizations[].card_id from edda_authorizations). Returns {applications[]{id, flow_id, name, currency, authorization (unauthorized/authorized/authorizing/failed), failure_reason, created_at, updated_at}}: the eDDA authorization applications filed for that card. An empty list means no application was filed (an eDDA pushed by the bank, or one never applied for); the card's current eDDA state is then in edda_authorizations. Times are Hong Kong time (+08:00)."
+        description = "List the eDDA authorization applications filed for one linked bank card in one currency. Most eDDA authorizations (e.g. pushed by the bank) have no application, so this is usually empty: answer eDDA questions from edda_authorizations first and use this only to look up an application. card_id: cards[].id from bank_cards (or authorizations[].card_id from edda_authorizations). Returns {applications[]{id, flow_id, name, currency, authorization (unauthorized/authorized/authorizing/failed; an unlabelled code comes back raw as status instead), failure_reason, created_at, updated_at}}: the eDDA authorization applications filed for that card. An empty list means no application was filed (an eDDA pushed by the bank, or one never applied for); the card's current eDDA state is then in edda_authorizations. Times are Hong Kong time (+08:00)."
     )]
     async fn edda_status(
         &self,
@@ -7542,6 +7544,87 @@ mod tests {
                 "no paper trading requested: nothing to refuse"
             );
         }
+    }
+
+    fn ctx_with_token(token: String) -> super::McpContext {
+        super::McpContext {
+            token,
+            language: None,
+            client_user_agent: None,
+            extra_headers: vec![("x-papertrading".to_string(), "true".to_string())],
+        }
+    }
+
+    #[test]
+    fn papertrading_detection_reads_the_ac_claim() {
+        use crate::auth::jwt::{test_prefixed_token, test_token};
+
+        let paper =
+            r#"{"iss":"longbridge","sub":"access_token","ak":"example","ac":"lb_papertrading"}"#;
+        for token in [test_token(paper), test_prefixed_token(paper)] {
+            let ctx = ctx_with_token(token);
+            assert_eq!(ctx.account_channel(), "lb_papertrading", "ac-only token");
+            assert!(
+                !ctx.papertrading_with_real_money_token(),
+                "a paper-trading channel in ac is not a real-money token"
+            );
+        }
+        let real = r#"{"iss":"longbridge","sub":"access_token","ac":"lb"}"#;
+        assert!(
+            ctx_with_token(test_prefixed_token(real)).papertrading_with_real_money_token(),
+            "a real-money channel in ac is detected"
+        );
+        let none = r#"{"iss":"longbridge","sub":"access_token"}"#;
+        let ctx = ctx_with_token(test_prefixed_token(none));
+        assert_eq!(ctx.account_channel(), "lb", "no channel falls back to lb");
+        assert!(
+            ctx.papertrading_with_real_money_token(),
+            "a token naming no channel counts as real money"
+        );
+    }
+
+    #[test]
+    fn papertrading_guard_rejects_conflicting_channel_claims() {
+        use crate::auth::jwt::test_prefixed_token;
+
+        let cases = [
+            (
+                r#"{"sub":"access_token","ac":"lb_papertrading"}"#,
+                false,
+                "ac paper, sub not JSON: paper token",
+            ),
+            (
+                r#"{"ac":"lb_papertrading","sub":"{\"account_channel\":\"lb\"}"}"#,
+                true,
+                "ac paper, sub real: rejected",
+            ),
+            (
+                r#"{"ac":"lb","sub":"{\"account_channel\":\"lb_papertrading\"}"}"#,
+                true,
+                "ac real, sub paper: rejected",
+            ),
+            (
+                r#"{"sub":"{\"account_channel\":\"lb_papertrading\"}"}"#,
+                false,
+                "only sub, paper: paper token",
+            ),
+            (r#"{"sub":"access_token"}"#, true, "no channel: rejected"),
+        ];
+        for (payload, rejected, why) in cases {
+            assert_eq!(
+                ctx_with_token(test_prefixed_token(payload)).papertrading_with_real_money_token(),
+                rejected,
+                "{why}"
+            );
+        }
+        let mixed = ctx_with_token(test_prefixed_token(
+            r#"{"ac":"lb_papertrading","sub":"{\"account_channel\":\"lb\"}"}"#,
+        ));
+        assert_eq!(
+            mixed.account_channel(),
+            "lb_papertrading",
+            "the channel sent upstream keeps ac precedence"
+        );
     }
 
     #[test]

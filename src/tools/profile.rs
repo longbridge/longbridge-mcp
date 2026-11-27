@@ -66,7 +66,8 @@ pub async fn get_me(mctx: &McpContext) -> Result<CallToolResult, McpError> {
 /// is not a Longbridge JWT or names no account.
 fn profile_from_token(token: &str) -> Option<Profile> {
     let sub = crate::auth::jwt::subject(token)?;
-    let account_channel = claim_str(&sub, "account_channel").unwrap_or_else(|| "lb".to_string());
+    let account_channel =
+        crate::auth::jwt::account_channel(token).unwrap_or_else(|| "lb".to_string());
     let aaid = claim_str(&sub, "target_aaid");
     let member_id = claim_str(&sub, "member_id");
     let account_no = claim_str(&sub, "account_no");
