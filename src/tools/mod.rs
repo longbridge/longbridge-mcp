@@ -4243,7 +4243,7 @@ impl Longbridge {
             destructive_hint = false,
             idempotent_hint = true
         ),
-        description = "List hot-selling funds in the Longbridge fund channel. Each row carries the fund counter_id (e.g. UT/FD/HK0000384492) used by every other fund_* tool. No parameters. Returns a top-level array of {counter_id, name, currency, asset_class_name, risk_level_name, earning_rate, time_interval, purchase_amount, recommendation_text, fund_performances: [{date, last_done}], …}."
+        description = "List hot-selling funds in the fund channel. Each row carries the fund counter_id (e.g. UT/FD/HK0000384492) used by every other fund_* tool. No parameters. Returns a top-level array of {counter_id, name, currency, asset_class_name, risk_level_name, earning_rate, time_interval, purchase_amount, recommendation_text, fund_performances: [{date, last_done}], …}."
     )]
     async fn fund_hot(&self, ctx: RequestContext<RoleServer>) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
@@ -4852,7 +4852,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get Longbridge's account-conversion exchange rates for all supported currencies (the rates used to value assets in an account's currency). Returns {exchanges[]{base_currency, other_currency, average_rate}}: average_rate is the value of 1 other_currency in base_currency (e.g. base USD, other HKD, 0.12743 = 1 HKD is 0.12743 USD). US accounts get a US-specific variant: the US account's rates in the same shape, one row per pair (the reference rate, else am) with spec_key naming the rate type. For public market reference rates or history, use fx_rate."
+        description = "Get the broker's account-conversion exchange rates for all supported currencies (the rates used to value assets in an account's currency). Returns {exchanges[]{base_currency, other_currency, average_rate}}: average_rate is the value of 1 other_currency in base_currency (e.g. base USD, other HKD, 0.12743 = 1 HKD is 0.12743 USD). US accounts get a US-specific variant: the US account's rates in the same shape, one row per pair (the reference rate, else am) with spec_key naming the rate type. For public market reference rates or history, use fx_rate."
     )]
     async fn exchange_rate(
         &self,
@@ -5161,7 +5161,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get latest news articles for a symbol, newest first (20 by default; set count for more). Returns a top-level array (no wrapper object) of {id, title, description, url, published_at, comments_count, likes_count, shares_count}. Citation fields content_via (0 = Longbridge original or licensed; non-zero = third-party repost), source, source_url (the original article) and source_logo are included when the upstream provides them."
+        description = "Get latest news articles for a symbol, newest first (20 by default; set count for more). Returns a top-level array (no wrapper object) of {id, title, description, url, published_at, comments_count, likes_count, shares_count}. Citation fields content_via (0 = original or licensed content; non-zero = third-party repost), source, source_url (the original article) and source_logo are included when the upstream provides them."
     )]
     async fn news(
         &self,
@@ -5182,7 +5182,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::social::NewsDetailResponse>(),
-        description = "Get one news article's full detail by id (from news/news_search). Returns {id, title, description, body (Markdown), url, author{member_id, name}, images[], comments_count, likes_count, shares_count, published_at, tickers[]}. Citation fields content_via (0 = Longbridge original or licensed; non-zero = third-party repost), source, source_url (the original article) and source_logo are included when the upstream provides them."
+        description = "Get one news article's full detail by id (from news/news_search). Returns {id, title, description, body (Markdown), url, author{member_id, name}, images[], comments_count, likes_count, shares_count, published_at, tickers[]}. Citation fields content_via (0 = original or licensed content; non-zero = third-party repost), source, source_url (the original article) and source_logo are included when the upstream provides them."
     )]
     async fn news_detail(
         &self,
@@ -6093,7 +6093,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Search news articles by keyword. Returns an array of {id, title, description (summary), source (outlet display name, localized by Accept-Language), published_at (RFC3339), url, content_via, source_url, source_logo}, most relevant first. content_via is 0 for Longbridge original or licensed content and non-zero for a third-party repost, whose original is at source_url."
+        description = "Search news articles by keyword. Returns an array of {id, title, description (summary), source (outlet display name, localized by Accept-Language), published_at (RFC3339), url, content_via, source_url, source_logo}, most relevant first. content_via is 0 for original or licensed content and non-zero for a third-party repost, whose original is at source_url."
     )]
     async fn news_search(
         &self,
@@ -8187,6 +8187,30 @@ mod tests {
         ] {
             assert!(!public.contains(tool), "/public must not contain `{tool}`");
         }
+    }
+
+    /// `/public` serves callers who never sign in to us, so the tool
+    /// definitions it lists (title, description, input and output schema)
+    /// must not name our own brand.
+    #[test]
+    fn public_tool_definitions_carry_no_brand_name() {
+        const BRANDS: [&str; 4] = ["longbridge", "longport", "长桥", "長橋"];
+        let mut hits = Vec::new();
+        for tool in super::tools_public_endpoint() {
+            let text = serde_json::to_string(tool)
+                .expect("a tool definition serializes to JSON")
+                .to_lowercase();
+            for brand in BRANDS {
+                if text.contains(brand) {
+                    hits.push(format!("{} mentions `{brand}`", tool.name));
+                }
+            }
+        }
+        assert!(
+            hits.is_empty(),
+            "/public tool definitions must not name the brand:\n{}",
+            hits.join("\n")
+        );
     }
 
     /// The public `/v2` allowlist must never expose trade execution, DCA

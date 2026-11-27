@@ -120,7 +120,7 @@ pub struct NewsDetailResponse {
     pub published_at: Option<String>,
     /// Related stock tickers, format `<CODE>.<MARKET>` (e.g. "AAPL.US").
     pub tickers: Option<Vec<String>>,
-    /// 0 for Longbridge-original or licensed content; non-zero for a
+    /// 0 for original or licensed content; non-zero for a
     /// third-party repost, whose original is at `source_url`.
     pub content_via: Option<i32>,
     /// Source outlet name, e.g. "MSN".
