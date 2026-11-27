@@ -528,7 +528,7 @@
     },
     "exchange_rate": {
       "title": "為替レート",
-      "description": "Longbridge アカウントの換算為替レート（資産をアカウント通貨に換算するために使用）を取得します。対応する全通貨をカバーし、{exchanges[]{base_currency, other_currency, average_rate}} を返します：average_rate は other_currency 1 単位あたりの base_currency の額です（例：base が USD、other が HKD で 0.12743 の場合、1 HKD = 0.12743 USD）。米国株アカウントでは米国株アカウント自身の為替レートを同じ構造で通貨ペアごとに 1 件返し（reference レートを優先、なければ am）、spec_key でレートの種類を示します。公開市場の参考レートや過去のレートが必要な場合は fx_rate を使用してください"
+      "description": "証券会社アカウントの換算為替レート（資産をアカウント通貨に換算するために使用）を取得します。対応する全通貨をカバーし、{exchanges[]{base_currency, other_currency, average_rate}} を返します：average_rate は other_currency 1 単位あたりの base_currency の額です（例：base が USD、other が HKD で 0.12743 の場合、1 HKD = 0.12743 USD）。米国株アカウントでは米国株アカウント自身の為替レートを同じ構造で通貨ペアごとに 1 件返し（reference レートを優先、なければ am）、spec_key でレートの種類を示します。公開市場の参考レートや過去のレートが必要な場合は fx_rate を使用してください"
     },
     "fx_rate": {
       "title": "外国為替参考レート",
@@ -841,7 +841,7 @@
     },
     "news": {
       "title": "ニュース",
-      "description": "銘柄の最新ニュースを新しい順に取得します（デフォルト 20 件、それ以上は count で指定）。トップレベル配列（ラッパーオブジェクトなし）{id, title, description, url, published_at, comments_count, likes_count, shares_count} を返します。引用フィールド（上流から提供される場合に返却）：content_via（0 = Longbridge のオリジナルまたは版権取得済みコンテンツ、0 以外 = 第三者からの転載）、source、source_url（原文の URL）、source_logo。",
+      "description": "銘柄の最新ニュースを新しい順に取得します（デフォルト 20 件、それ以上は count で指定）。トップレベル配列（ラッパーオブジェクトなし）{id, title, description, url, published_at, comments_count, likes_count, shares_count} を返します。引用フィールド（上流から提供される場合に返却）：content_via（0 = オリジナルまたは版権取得済みコンテンツ、0 以外 = 第三者からの転載）、source、source_url（原文の URL）、source_logo。",
       "properties": {
         "symbol": "銘柄コード（例：`\"700.HK\"`）。正規のコードを使用してください。ゼロ埋めしたコード（例：\"00700.HK\"）はエラーではなく空のレコードを返します",
         "count": "返す記事の件数（新しい順）。デフォルト 20（1件あたり約 700 バイト）、上流は約 50 件を返します"
@@ -849,7 +849,7 @@
     },
     "news_detail": {
       "title": "ニュース詳細",
-      "description": "id を指定して単一ニュース記事の全文を取得します（id は news / news_search から取得）。{id, title, description, body (Markdown), url, author{member_id, name}, images[], comments_count, likes_count, shares_count, published_at, tickers[]} を返します。引用フィールド（上流から提供される場合に返却）：content_via（0 = Longbridge のオリジナルまたは版権取得済みコンテンツ、0 以外 = 第三者からの転載）、source、source_url（原文の URL）、source_logo。",
+      "description": "id を指定して単一ニュース記事の全文を取得します（id は news / news_search から取得）。{id, title, description, body (Markdown), url, author{member_id, name}, images[], comments_count, likes_count, shares_count, published_at, tickers[]} を返します。引用フィールド（上流から提供される場合に返却）：content_via（0 = オリジナルまたは版権取得済みコンテンツ、0 以外 = 第三者からの転載）、source、source_url（原文の URL）、source_logo。",
       "properties": {
         "id": "ニュース記事 ID（数値）、例：\"7123456789012345678\"。news または news_search から取得できます"
       }
@@ -1120,7 +1120,7 @@
     },
     "news_search": {
       "title": "ニュース検索",
-      "description": "キーワードでニュース記事を検索し、関連度順に配列 [{id, title, description（要約）, source（配信元メディアの表示名、Accept-Language に応じてローカライズ）, published_at（RFC3339 時刻形式）, url, content_via, source_url, source_logo}] を返します。content_via が 0 の場合は Longbridge のオリジナルまたは版権取得済みコンテンツ、0 以外の場合は第三者からの転載で、原文は source_url を参照してください",
+      "description": "キーワードでニュース記事を検索し、関連度順に配列 [{id, title, description（要約）, source（配信元メディアの表示名、Accept-Language に応じてローカライズ）, published_at（RFC3339 時刻形式）, url, content_via, source_url, source_logo}] を返します。content_via が 0 の場合はオリジナルまたは版権取得済みコンテンツ、0 以外の場合は第三者からの転載で、原文は source_url を参照してください",
       "properties": {
         "keyword": "検索キーワード",
         "limit": "最大返却件数（デフォルト 20、上流は最大 40 件まで返します）"
@@ -1502,7 +1502,7 @@
     },
     "fund_hot": {
       "title": "ファンド人気ランキング",
-      "description": "Longbridge ファンドチャンネルの人気ファンド一覧を取得します。各行には他の fund_* ツールで使用するファンドの counter_id（例：UT/FD/HK0000384492）が含まれます。パラメータなし。トップレベル配列 {counter_id, name, currency, asset_class_name, risk_level_name, earning_rate, time_interval, purchase_amount, recommendation_text, fund_performances: [{date, last_done}], …} を返します"
+      "description": "ファンドチャンネルの人気ファンド一覧を取得します。各行には他の fund_* ツールで使用するファンドの counter_id（例：UT/FD/HK0000384492）が含まれます。パラメータなし。トップレベル配列 {counter_id, name, currency, asset_class_name, risk_level_name, earning_rate, time_interval, purchase_amount, recommendation_text, fund_performances: [{date, last_done}], …} を返します"
     },
     "fund_list": {
       "title": "ファンド一覧",

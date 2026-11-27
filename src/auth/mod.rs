@@ -236,11 +236,28 @@ fn build_tools_json(allow: Option<&std::collections::HashSet<&'static str>>) -> 
             out.entry(k).or_insert(v);
         }
     }
-    out.insert(
-        "locales".to_string(),
-        build_locales_node(&[TOOL_LOCALES, SCOPE_LOCALES]),
-    );
+    let mut locales = build_locales_node(&[TOOL_LOCALES, SCOPE_LOCALES]);
+    if let Some(allow) = allow {
+        prune_locale_tools(&mut locales, allow);
+    }
+    out.insert("locales".to_string(), locales);
     serde_json::Value::Object(out)
+}
+
+/// Keep only the allowlisted tools in each language's `tools` translations,
+/// so a restricted manifest carries no text for tools its endpoint blocks.
+fn prune_locale_tools(
+    locales: &mut serde_json::Value,
+    allow: &std::collections::HashSet<&'static str>,
+) {
+    let Some(languages) = locales.as_object_mut() else {
+        return;
+    };
+    for entry in languages.values_mut() {
+        if let Some(tools) = entry.get_mut("tools").and_then(|t| t.as_object_mut()) {
+            tools.retain(|name, _| allow.contains(name.as_str()));
+        }
+    }
 }
 
 async fn tools_json() -> axum::Json<&'static serde_json::Value> {
@@ -253,12 +270,26 @@ async fn tools_json() -> axum::Json<&'static serde_json::Value> {
 /// fundamentals, news and research only.
 async fn public_tools_json() -> axum::Json<&'static serde_json::Value> {
     static PUBLIC_TOOLS_JSON: std::sync::LazyLock<serde_json::Value> =
-        std::sync::LazyLock::new(|| {
-            let allow: std::collections::HashSet<&'static str> =
-                tools::public_tool_names().into_iter().collect();
-            build_tools_json(Some(&allow))
-        });
+        std::sync::LazyLock::new(build_public_tools_json);
     axum::Json(&*PUBLIC_TOOLS_JSON)
+}
+
+/// Build the `/public/tools.json` body: the allowlisted tools, their scopes and
+/// their translations only.
+fn build_public_tools_json() -> serde_json::Value {
+    let allow: std::collections::HashSet<&'static str> =
+        tools::public_tool_names().into_iter().collect();
+    let mut manifest = build_tools_json(Some(&allow));
+    // The translated server instructions describe the signed-in endpoints
+    // (order confirmation, the brand), not `/public`.
+    if let Some(languages) = manifest["locales"].as_object_mut() {
+        for entry in languages.values_mut() {
+            if let Some(entry) = entry.as_object_mut() {
+                entry.remove("server_instructions");
+            }
+        }
+    }
+    manifest
 }
 
 /// Restricted tool manifest for the public `/v2` endpoint: the broader
@@ -533,7 +564,8 @@ mod tests {
     use axum::http::{Request, StatusCode, header};
     use tower::ServiceExt;
 
-    use super::{AppState, MAX_MCP_REQUEST_BYTES, create_router};
+    use super::{AppState, MAX_MCP_REQUEST_BYTES, build_public_tools_json, create_router};
+    use crate::tools;
 
     fn mcp_post(body: Body) -> Request<Body> {
         Request::post("/agent")
@@ -701,6 +733,47 @@ mod tests {
     /// other spelling would survive into a canary process and send users to the
     /// production page — whose code then fails the exchange with an opaque
     /// `invalid_grant`.
+    /// `/public/tools.json` serves callers who never sign in: it lists only
+    /// the allowlisted tools, and nothing in it — English definitions or the
+    /// zh-CN / zh-HK / ja translations — names our own brand.
+    #[test]
+    fn public_tools_json_carries_only_public_tools_and_no_brand_name() {
+        let manifest = build_public_tools_json();
+        let allow: std::collections::HashSet<&str> =
+            tools::public_tool_names().into_iter().collect();
+        let languages = manifest["locales"]
+            .as_object()
+            .expect("the manifest has a locales object");
+        assert_eq!(languages.len(), 3, "zh-CN, zh-HK and ja translations");
+        for (lang, entry) in languages {
+            let translated = entry["tools"]
+                .as_object()
+                .expect("each language translates tools");
+            assert_eq!(
+                translated.len(),
+                allow.len(),
+                "{lang}: one entry per /public tool"
+            );
+            for name in translated.keys() {
+                assert!(
+                    allow.contains(name.as_str()),
+                    "{lang}: `{name}` is not a /public tool"
+                );
+            }
+            assert!(
+                entry.get("server_instructions").is_none(),
+                "{lang}: the signed-in endpoints' instructions must not ship on /public"
+            );
+        }
+        let text = manifest.to_string().to_lowercase();
+        for brand in ["longbridge", "longport", "长桥", "長橋", "ロングブリッジ"] {
+            assert!(
+                !text.contains(brand),
+                "/public/tools.json mentions `{brand}`"
+            );
+        }
+    }
+
     #[test]
     fn static_connect_page_urls_all_start_with_the_placeholder() {
         let placeholder = crate::endpoints::STATIC_CONNECT_PAGE;
