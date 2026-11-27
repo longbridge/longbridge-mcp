@@ -1199,7 +1199,7 @@
       "description": "現在のアカウントの入金履歴を新しい順に取得します。{items[]{id, created_at, updated_at, currency, amount（ユーザーが通知・申請した金額）, receivable_amount（Longbridge の銀行で実際に受領した金額。0 は未着金）, state（状態テキスト）, state_code, state_label（processing/credited/failed/cancelled/invalidated/rejected）, sub_state_code, bank_operation_type_name（入金方法：eDDA、FPS、銀行振込など）, reference_no, can_cancel, voucher_count（アップロードされた証憑の枚数）}, has_more（満ページが返った。次ページを取得可能）} を返します。信頼できる総件数はありません。states：カンマ区切りの状態コード（0 処理中、1 入金済み、2 失敗、3 取消、4 無効、5 却下）。currencies：カンマ区切りの通貨コード。start/end：yyyy-mm-dd（香港の日付）または RFC3339（申請日時で絞り込み）。バックオフィスの備考は含みません。時刻は香港時間（+08:00）です",
       "properties": {
         "page": "ページ番号（デフォルト 1）",
-        "size": "1 ページあたりの件数（デフォルト 20）",
+        "size": "1 ページあたりの件数（デフォルト 20、最大 20）",
         "states": "状態コードフィルター（カンマ区切り、例 \"0,2\"）：0 処理中、1 入金済み、2 失敗、3 取消、4 無効、5 却下",
         "currencies": "通貨コードによるフィルター（カンマ区切り）。例：`\"USD,HKD\"`",
         "start": "申請日時の開始（yyyy-mm-dd または RFC3339）",
