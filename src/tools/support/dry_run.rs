@@ -54,18 +54,33 @@ use rmcp::ErrorData as McpError;
 use rmcp::model::CallToolResult;
 use sha2::{Digest, Sha256};
 use std::str::FromStr;
+#[cfg(not(test))]
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Length of one confirmation window. A code or an approval is accepted in
 /// the window it was issued in and the next, so it lives 10 to 20 minutes.
+#[cfg_attr(test, allow(dead_code))]
 pub const WINDOW_SECS: u64 = 600;
 
 /// The current confirmation window.
+#[cfg(not(test))]
 pub fn current_window() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_secs() / WINDOW_SECS)
 }
+
+/// Tests use one fixed window. A three-digit code collides with another
+/// order's one time in a thousand, so with the real clock every assertion that
+/// two orders get different codes would fail for a few ten-minute windows a
+/// week. Expiry is tested with explicit windows (`code_in` / `verify_at`).
+#[cfg(test)]
+pub fn current_window() -> u64 {
+    TEST_WINDOW
+}
+
+#[cfg(test)]
+const TEST_WINDOW: u64 = 2_970_000;
 
 /// The windows a confirmation issued at or after `window - 1` is still valid
 /// in: the current one first, then the one before.
