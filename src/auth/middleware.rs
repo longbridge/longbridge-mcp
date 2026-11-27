@@ -1,3 +1,5 @@
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::extract::Request;
@@ -34,9 +36,9 @@ pub enum RestrictedVersion {
     /// community) but still no trade execution, DCA, IPO orders, or money
     /// movement.
     V2,
-    /// `/public` — login-free market data. Callers send no credential; the
-    /// server calls upstream with the operator-configured service credential
-    /// (see [`crate::public`]). Only the `PUBLIC` allowlist: market data,
+    /// `/public` — login-free market data for an upstream gateway. The
+    /// gateway's Bearer token is forwarded to OpenAPI as-is (see
+    /// [`public_auth_layer`]). Only the `PUBLIC` allowlist: market data,
     /// fundamentals, news and research, never anything account-bound or a
     /// write.
     Public,
@@ -49,8 +51,9 @@ impl RestrictedVersion {
     pub fn metadata_path(self) -> &'static str {
         match self {
             RestrictedVersion::V2 => "/.well-known/oauth-protected-resource/v2",
-            // `/public` never answers 401, so this is never advertised; it
-            // falls back to the server-wide metadata to stay well-formed.
+            // `/public` answers 401 without `resource_metadata`, so this is
+            // never advertised; it falls back to the server-wide metadata to
+            // stay well-formed.
             RestrictedVersion::Public => "/.well-known/oauth-protected-resource",
         }
     }
@@ -70,35 +73,73 @@ impl RestrictedVersion {
 #[derive(Clone, Copy, Debug)]
 pub struct RestrictedEndpoint(pub RestrictedVersion);
 
+/// Set by `call_tool` on `/public` when OpenAPI rejects the forwarded token
+/// (an upstream `401`), so [`public_auth_layer`] can answer with HTTP `401`
+/// instead of a `200` carrying a tool error.
+#[derive(Clone, Debug, Default)]
+pub struct UpstreamUnauthorized(Arc<AtomicBool>);
+
+impl UpstreamUnauthorized {
+    /// Record that upstream rejected this request's token.
+    pub fn set(&self) {
+        self.0.store(true, Ordering::Relaxed);
+    }
+
+    fn is_set(&self) -> bool {
+        self.0.load(Ordering::Relaxed)
+    }
+}
+
+/// `401` for `/public`: an RFC 6750 `invalid_token` challenge with no
+/// `resource_metadata`, since this endpoint has no OAuth flow of its own; the
+/// gateway in front of it obtains a fresh token and retries.
+fn public_unauthorized(description: &str) -> Response {
+    let challenge = format!("Bearer error=\"invalid_token\", error_description=\"{description}\"");
+    (
+        StatusCode::UNAUTHORIZED,
+        [("WWW-Authenticate", challenge.as_str())],
+        description.to_string(),
+    )
+        .into_response()
+}
+
 /// Auth middleware for the login-free `/public` endpoint.
 ///
-/// Whatever `Authorization` header the caller sends is discarded: the request
-/// always proceeds with the operator's service credential as its
-/// [`BearerToken`], tagged [`RestrictedEndpoint`]`(Public)` so handlers expose
-/// and accept only the public allowlist, and carrying the shared
-/// [`crate::public::PublicAccess`] so `call_tool` can apply the rate and
-/// concurrency limits. Without a configured credential the endpoint does not
-/// exist: every request gets `404`.
-pub async fn public_auth_layer(
-    mut req: Request,
-    next: Next,
-    access: Option<std::sync::Arc<crate::public::PublicAccess>>,
-) -> Response {
-    let Some(access) = access else {
-        return (
-            StatusCode::NOT_FOUND,
-            "the public endpoint is not enabled on this server",
-        )
-            .into_response();
+/// The caller (an upstream gateway) sends its own `Authorization: Bearer`
+/// token on every request; it is passed upstream as-is, never parsed, stored
+/// or logged, and may differ from one request to the next. A request without
+/// one gets `401 invalid_token`. The request is tagged
+/// [`RestrictedEndpoint`]`(Public)` so handlers expose and accept only the
+/// public allowlist, and carries an [`UpstreamUnauthorized`] flag: when a tool
+/// call's token is rejected upstream, the response is replaced with `401
+/// invalid_token` too. That works because `/public` serves plain JSON
+/// responses, so the call has finished by the time `next` returns.
+pub async fn public_auth_layer(mut req: Request, next: Next) -> Response {
+    let token = req
+        .headers()
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|h| h.strip_prefix("Bearer "))
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+        .map(str::to_string);
+    let Some(token) = token else {
+        tracing::info!(
+            path = req.uri().path(),
+            "public endpoint: rejected request without a bearer token"
+        );
+        return public_unauthorized("missing bearer token");
     };
-    // Never let a caller-supplied credential reach upstream (or a log) via
-    // this endpoint; a user with their own account should use `/mcp`.
-    req.headers_mut().remove(axum::http::header::AUTHORIZATION);
+    let unauthorized = UpstreamUnauthorized::default();
     let extensions = req.extensions_mut();
-    extensions.insert(BearerToken(access.token().to_string()));
+    extensions.insert(BearerToken(token));
     extensions.insert(RestrictedEndpoint(RestrictedVersion::Public));
-    extensions.insert(access);
-    next.run(req).await
+    extensions.insert(unauthorized.clone());
+    let response = next.run(req).await;
+    if unauthorized.is_set() {
+        return public_unauthorized("the access token was rejected upstream");
+    }
+    response
 }
 
 /// Which endpoint a request arrived on, which decides how token-less requests
@@ -325,27 +366,27 @@ mod tests {
     }
 
     async fn call_public(
-        access: Option<std::sync::Arc<crate::public::PublicAccess>>,
         authorization: Option<&str>,
-    ) -> (StatusCode, String) {
+        reject_upstream: bool,
+    ) -> (StatusCode, String, String) {
         let app = Router::new().route(
             "/public",
-            get(|req: Request| async move {
+            get(move |req: Request| async move {
                 let token = req
                     .extensions()
                     .get::<BearerToken>()
                     .map(|t| t.0.clone())
                     .unwrap_or_default();
                 let restricted = req.extensions().get::<RestrictedEndpoint>().map(|r| r.0);
-                let header = req.headers().get("authorization").is_some();
-                format!("{token}|{restricted:?}|{header}")
+                if reject_upstream {
+                    req.extensions()
+                        .get::<UpstreamUnauthorized>()
+                        .expect("public requests carry the upstream-401 flag")
+                        .set();
+                }
+                format!("{token}|{restricted:?}")
             })
-            .layer(axum::middleware::from_fn(
-                move |req: Request, next: Next| {
-                    let access = access.clone();
-                    async move { public_auth_layer(req, next, access).await }
-                },
-            )),
+            .layer(axum::middleware::from_fn(public_auth_layer)),
         );
         let mut builder = axum::http::Request::builder().uri("/public");
         if let Some(value) = authorization {
@@ -356,33 +397,50 @@ mod tests {
             .await
             .unwrap();
         let status = response.status();
+        let challenge = response
+            .headers()
+            .get("www-authenticate")
+            .map(|v| v.to_str().unwrap().to_string())
+            .unwrap_or_default();
         let body = axum::body::to_bytes(response.into_body(), 1024)
             .await
             .unwrap();
-        (status, String::from_utf8(body.to_vec()).unwrap())
+        (status, challenge, String::from_utf8(body.to_vec()).unwrap())
     }
 
     #[tokio::test]
-    async fn public_endpoint_is_404_when_not_configured() {
-        let (status, _) = call_public(None, None).await;
-        assert_eq!(status, StatusCode::NOT_FOUND);
-    }
-
-    #[tokio::test]
-    async fn public_endpoint_uses_the_service_token_and_drops_the_callers() {
-        let access = std::sync::Arc::new(crate::public::PublicAccess::new(
-            "service-token".into(),
-            10,
-            2,
-        ));
-        for authorization in [None, Some("Bearer caller-token")] {
-            let (status, body) = call_public(Some(access.clone()), authorization).await;
+    async fn public_endpoint_forwards_the_callers_token() {
+        for (token, expected) in [("gw-token-1", "gw-token-1"), ("gw-token-2", "gw-token-2")] {
+            let (status, challenge, body) =
+                call_public(Some(&format!("Bearer {token}")), false).await;
             assert_eq!(status, StatusCode::OK);
-            assert_eq!(
-                body, "service-token|Some(Public)|false",
-                "{authorization:?}"
-            );
+            assert!(challenge.is_empty(), "{challenge}");
+            assert_eq!(body, format!("{expected}|Some(Public)"));
         }
+    }
+
+    #[tokio::test]
+    async fn public_endpoint_without_a_token_is_401_without_resource_metadata() {
+        for authorization in [None, Some("Bearer "), Some("Basic abc")] {
+            let (status, challenge, _) = call_public(authorization, false).await;
+            assert_eq!(status, StatusCode::UNAUTHORIZED, "{authorization:?}");
+            assert!(
+                challenge.starts_with(r#"Bearer error="invalid_token""#),
+                "{challenge}"
+            );
+            assert!(!challenge.contains("resource_metadata"), "{challenge}");
+        }
+    }
+
+    #[tokio::test]
+    async fn public_endpoint_turns_an_upstream_401_into_http_401() {
+        let (status, challenge, _) = call_public(Some("Bearer gw-token"), true).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        assert!(
+            challenge.starts_with(r#"Bearer error="invalid_token""#),
+            "{challenge}"
+        );
+        assert!(!challenge.contains("resource_metadata"), "{challenge}");
     }
 
     #[tokio::test]

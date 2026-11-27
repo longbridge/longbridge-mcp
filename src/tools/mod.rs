@@ -16,7 +16,9 @@ use rmcp::tool;
 use rmcp::tool_handler;
 use rmcp::tool_router;
 
-use crate::auth::middleware::{AgentEndpoint, BearerToken, RestrictedEndpoint, RestrictedVersion};
+use crate::auth::middleware::{
+    AgentEndpoint, BearerToken, RestrictedEndpoint, RestrictedVersion, UpstreamUnauthorized,
+};
 use crate::error::Error;
 use crate::serialize::to_tool_json;
 use crate::tools::support::text::truncate_chars;
@@ -1245,15 +1247,35 @@ const SKIP_FORWARD_HEADERS: &[&str] = &[
     "user-agent",
 ];
 
+/// The only request headers `/public` forwards upstream. Its caller is a
+/// gateway whose own headers (auth, MCP transport, internal routing) mean
+/// nothing to OpenAPI, so this endpoint allowlists instead of using the
+/// [`SKIP_FORWARD_HEADERS`] blocklist: language, client address and tracing.
+const PUBLIC_FORWARD_HEADERS: &[&str] = &[
+    "accept-language",
+    "x-forwarded-for",
+    "x-real-ip",
+    "x-request-id",
+    "traceparent",
+    "tracestate",
+];
+
 const MAX_FORWARDED_FOR_ADDRESSES: usize = 10;
 
-fn collect_headers(headers: &axum::http::HeaderMap) -> Vec<(String, String)> {
+/// Request headers to forward upstream: everything but [`SKIP_FORWARD_HEADERS`],
+/// or on `/public` (`public`) only [`PUBLIC_FORWARD_HEADERS`].
+fn collect_headers(headers: &axum::http::HeaderMap, public: bool) -> Vec<(String, String)> {
     let mut forwarded = Vec::new();
     let mut forwarded_for = Vec::new();
 
     for (name, value) in headers {
         let key = name.as_str().to_lowercase();
-        if SKIP_FORWARD_HEADERS.contains(&key.as_str()) {
+        let skip = if public {
+            !PUBLIC_FORWARD_HEADERS.contains(&key.as_str())
+        } else {
+            SKIP_FORWARD_HEADERS.contains(&key.as_str())
+        };
+        if skip {
             continue;
         }
         let Ok(value) = value.to_str() else {
@@ -1318,68 +1340,57 @@ fn restricted_version(ctx: &RequestContext<RoleServer>) -> Option<RestrictedVers
         .map(|marker| marker.0)
 }
 
-/// The shared `/public` state and this caller's rate-limit key, when the
-/// request arrived on `/public` (the middleware attaches the state there only).
-fn public_access(
+/// Adapt a tool result to `/public`, whose caller is a gateway with no OAuth
+/// flow to rerun:
+///
+/// - An upstream `401` (the forwarded token was rejected) flags the request so
+///   the middleware answers with HTTP `401` instead of this tool error.
+/// - A `403308` (the token lacks the scope this API needs, also classed
+///   `reauth`) stays an `isError` result, but says the API is not enabled for
+///   this caller instead of asking the user to re-authorize.
+fn public_result(
     ctx: &RequestContext<RoleServer>,
-) -> Option<(std::sync::Arc<crate::public::PublicAccess>, String)> {
-    let parts = ctx.extensions.get::<axum::http::request::Parts>()?;
-    let access = parts
-        .extensions
-        .get::<std::sync::Arc<crate::public::PublicAccess>>()?
-        .clone();
-    Some((access, crate::public::client_key(&parts.headers)))
-}
-
-/// Tool-result message and data for a `/public` call turned away by the rate
-/// or concurrency limit.
-fn public_refusal(refusal: &crate::public::Refusal) -> (String, serde_json::Value) {
-    match refusal {
-        crate::public::Refusal::RateLimited { retry_after_secs } => (
-            format!(
-                "Rate limited: the public endpoint allows a limited number of tool calls per \
-                 minute per client. Retry in {retry_after_secs} seconds, or connect to the main \
-                 endpoint with Longbridge credentials for higher limits."
-            ),
-            serde_json::json!({
-                "error_code": "public_rate_limited",
-                "retry_after_secs": retry_after_secs,
-            }),
-        ),
-        crate::public::Refusal::Busy => (
-            "The public endpoint is busy. Retry in a few seconds.".to_string(),
-            serde_json::json!({ "error_code": "public_busy" }),
-        ),
-    }
-}
-
-/// On `/public` the caller has no credential to renew: an upstream auth
-/// failure means the operator's service credential is missing, expired or
-/// lacks access. Replace the usual "reconnect" envelope with one that says so,
-/// and log it as an error so the operator notices.
-fn public_credential_error(name: &str, result: CallToolResult) -> CallToolResult {
-    let reauth = (result.is_error == Some(true))
+    name: &str,
+    result: CallToolResult,
+) -> CallToolResult {
+    let Some(envelope) = (result.is_error == Some(true))
         .then_some(&result)
         .and_then(|result| result.content.first())
         .and_then(|block| block.as_text())
         .and_then(|text| serde_json::from_str::<serde_json::Value>(&text.text).ok())
         .filter(|v| v["recoverable"] == "reauth")
-        .map(|v| v["error_code"].clone());
-    let Some(error_code) = reauth else {
+    else {
         return result;
     };
-    tracing::error!(
-        tool = name,
-        error_code = %error_code,
-        "public endpoint: service credential rejected upstream"
-    );
-    let envelope = serde_json::json!({
-        "error_code": error_code,
-        "message": "The public endpoint is temporarily unavailable. Retry later, or connect \
-                    to the main endpoint with Longbridge credentials.",
-        "recoverable": "none",
-    });
-    CallToolResult::error(vec![ContentBlock::text(envelope.to_string())])
+    if is_scope_error(&envelope) {
+        let envelope = serde_json::json!({
+            "error_code": envelope["error_code"],
+            "message": envelope["message"],
+            "recoverable": "none",
+            "hint": "The API behind this tool is not enabled for this caller. Do not retry; \
+                     tell the user this data is not available here.",
+            "data": serde_json::Value::Null,
+        });
+        return CallToolResult::error(vec![ContentBlock::text(envelope.to_string())]);
+    }
+    if let Some(flag) = ctx
+        .extensions
+        .get::<axum::http::request::Parts>()
+        .and_then(|parts| parts.extensions.get::<UpstreamUnauthorized>())
+    {
+        tracing::info!(tool = name, "public endpoint: token rejected upstream");
+        flag.set();
+    }
+    result
+}
+
+/// Whether a `reauth` envelope is a missing-scope `403308` rather than a
+/// rejected token.
+fn is_scope_error(envelope: &serde_json::Value) -> bool {
+    envelope["error_code"].as_i64() == Some(403_308)
+        || envelope["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("403308") || m.contains("not in authorized scopes"))
 }
 
 /// Whether `name` is on the active restricted endpoint's allowlist.
@@ -1832,7 +1843,13 @@ fn extract_context(ctx: &RequestContext<RoleServer>) -> Result<McpContext, McpEr
         client_user_agent,
         // NOTE: This is very important for passing headers to upstream Longbridge services.
         // Do not remove this unless you have a good reason and know exactly which headers to forward instead.
-        extra_headers: collect_headers(&parts.headers),
+        extra_headers: collect_headers(
+            &parts.headers,
+            matches!(
+                parts.extensions.get::<RestrictedEndpoint>(),
+                Some(RestrictedEndpoint(RestrictedVersion::Public))
+            ),
+        ),
     })
 }
 
@@ -1967,9 +1984,11 @@ fn tools_agent_endpoint() -> &'static [rmcp::model::Tool] {
 
 /// Endpoint version bit flags used by [`TOOL_ENDPOINTS`].
 const V2: u8 = 1 << 0;
-/// The login-free `/public` endpoint (see [`crate::public`]). Always a subset
-/// of [`V2`]: market data, fundamentals, news and research only — nothing that
-/// reads the (shared) service account or writes anything.
+/// The login-free `/public` endpoint (see
+/// [`crate::auth::middleware::public_auth_layer`]). Always a subset of [`V2`]:
+/// read-only market data, fundamentals, news and research served by OpenAPI
+/// over HTTP — nothing account-bound, no writes, and no tool that calls a
+/// third-party service directly.
 const PUBLIC: u8 = 1 << 1;
 
 /// Single source of truth for restricted-endpoint membership of every
@@ -2053,7 +2072,8 @@ const TOOL_ENDPOINTS: &[(&str, u8)] = &[
     ("estimate_max_purchase_quantity", V2),
     ("etf_docs", V2 | PUBLIC),
     ("exchange_rate", V2 | PUBLIC),
-    ("fx_rate", V2 | PUBLIC),
+    // Not on `/public`: it calls Frankfurter directly, not OpenAPI.
+    ("fx_rate", V2),
     ("get_me", V2),
     ("executive", V2 | PUBLIC),
     ("financial_report", V2 | PUBLIC),
@@ -7200,9 +7220,8 @@ impl ServerHandler for Longbridge {
                     "Longbridge MCP public endpoint — login-free market data for US, HK, A-share, \
                      and SG markets: quotes, charts, order-book depth, fundamentals, valuations, \
                      analyst research, news, filings, screeners and fund data. No account, \
-                     portfolio, order or watchlist access; tool calls are rate limited per \
-                     client. For account tools, connect to the main endpoint with Longbridge \
-                     credentials."
+                     portfolio, order or watchlist access. On a rate-limit error, wait before \
+                     retrying."
                         .to_string()
                 }
             });
@@ -7286,35 +7305,6 @@ impl ServerHandler for Longbridge {
                 serde_json::json!({ "error_code": "tool_not_on_endpoint" }),
             )));
         }
-        // `/public` runs every caller on one shared service credential: limit
-        // calls per client and hold one of the upstream slots for the whole
-        // call (the permit is dropped when `call_tool` returns).
-        let _public_slot = match public_access(&context) {
-            Some((access, client_key)) => {
-                if let Err(refusal) = access.check_rate(&client_key) {
-                    let (message, data) = public_refusal(&refusal);
-                    return Ok(CallToolResponse::from(rejected_call(
-                        &request.name,
-                        client,
-                        message,
-                        data,
-                    )));
-                }
-                match access.acquire_slot().await {
-                    Ok(permit) => Some(permit),
-                    Err(refusal) => {
-                        let (message, data) = public_refusal(&refusal);
-                        return Ok(CallToolResponse::from(rejected_call(
-                            &request.name,
-                            client,
-                            message,
-                            data,
-                        )));
-                    }
-                }
-            }
-            None => None,
-        };
         // DC-region execution gate, independent of the /v1/v2 restricted-endpoint
         // check above: on every authenticated endpoint — main (`/mcp`), `/agent`,
         // and the restricted `/v2` directory endpoint — a tool hidden from
@@ -7360,8 +7350,9 @@ impl ServerHandler for Longbridge {
         // The scope wraps `jq::call` too, so a failed `_jq` filter is labelled
         // with the same client as the tool call it belongs to.
         let tool_name = request.name.to_string();
-        let on_public = _public_slot.is_some();
+        let on_public = restricted_version(&context) == Some(RestrictedVersion::Public);
         let retryable = is_read_only_tool(request.name.as_ref());
+        let public_context = on_public.then(|| context.clone());
         // A write gated on the user's confirmation ends with `input_required`
         // instead of a tool result (see `support::confirm`). It bypasses `_jq`
         // and the result post-processing, which only apply to tool results.
@@ -7382,6 +7373,14 @@ impl ServerHandler for Longbridge {
                         }
                         other => wrap_argument_error(&name, complete_result(other)),
                     });
+            }
+            // `/public` never retries: its caller (a gateway) owns the rate
+            // budget, so a 429 goes straight back as a tool error.
+            if on_public {
+                return cached_router()
+                    .call(ToolCallContext::new(self, request, context))
+                    .await
+                    .map(|result| wrap_argument_error(&name, complete_result(result)));
             }
             // Read-only tools get one server-side retry on an upstream rate
             // limit (429002/429003), which otherwise surfaces to the model as
@@ -7414,10 +7413,9 @@ impl ServerHandler for Longbridge {
                     return Ok(response);
                 }
                 let result = finish_result(&tool_name, result);
-                let result = if on_public {
-                    public_credential_error(&tool_name, result)
-                } else {
-                    result
+                let result = match &public_context {
+                    Some(context) => public_result(context, &tool_name, result),
+                    None => result,
                 };
                 Ok(CallToolResponse::from(result))
             })
@@ -7430,6 +7428,16 @@ impl ServerHandler for Longbridge {
         request: rmcp::model::GetTaskParams,
         context: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> Result<rmcp::model::GetTaskResult, rmcp::ErrorData> {
+        // `/public` offers no order tools, but `tasks/get` skips the tool
+        // allowlist: without this, a token that can read orders could read
+        // them here by order ID.
+        if restricted_version(&context) == Some(RestrictedVersion::Public) {
+            crate::metrics::record_task_request("get", "refused");
+            return Err(rmcp::ErrorData::invalid_request(
+                "order tasks are not available on the public endpoint",
+                None,
+            ));
+        }
         let order_id = support::order_task::order_id(&request.task_id)
             .ok_or_else(|| rmcp::ErrorData::invalid_params("unknown task", None))?;
         let mctx = extract_context(&context)?;
@@ -7574,7 +7582,7 @@ mod tests {
             HeaderName::from_static("accept-language"),
             HeaderValue::from_static("zh-CN"),
         );
-        let headers = collect_headers(&map);
+        let headers = collect_headers(&map, false);
         assert!(headers.iter().any(|(k, v)| k == "x-custom" && v == "hello"));
         assert!(
             headers
@@ -7591,7 +7599,11 @@ mod tests {
             HeaderValue::from_static("claude-code/2.1.89 (cli)"),
         );
         // The client UA is folded into the synthesized upstream UA, not forwarded raw.
-        assert!(!collect_headers(&map).iter().any(|(k, _)| k == "user-agent"));
+        assert!(
+            !collect_headers(&map, false)
+                .iter()
+                .any(|(k, _)| k == "user-agent")
+        );
     }
 
     #[test]
@@ -7603,7 +7615,7 @@ mod tests {
         );
 
         assert!(
-            !collect_headers(&map)
+            !collect_headers(&map, false)
                 .iter()
                 .any(|(key, _)| key == "alicloud-alb-trace")
         );
@@ -7617,7 +7629,7 @@ mod tests {
             HeaderValue::from_static("192.0.2.1, 192.0.2.2"),
         );
 
-        let headers = collect_headers(&map);
+        let headers = collect_headers(&map, false);
         assert!(
             headers.iter().any(|(key, value)| {
                 key == "x-forwarded-for" && value == "192.0.2.1, 192.0.2.2"
@@ -7633,7 +7645,7 @@ mod tests {
             HeaderValue::from_static("192.0.2.1,192.0.2.2,192.0.2.3"),
         );
 
-        let headers = collect_headers(&map);
+        let headers = collect_headers(&map, false);
         assert!(headers.iter().any(|(key, value)| {
             key == "x-forwarded-for" && value == "192.0.2.1, 192.0.2.2, 192.0.2.3"
         }));
@@ -7649,7 +7661,7 @@ mod tests {
             ),
         );
 
-        let headers = collect_headers(&map);
+        let headers = collect_headers(&map, false);
         assert!(headers.iter().any(|(key, value)| {
             key == "x-forwarded-for"
                 && value
@@ -8022,14 +8034,50 @@ mod tests {
             HeaderName::from_static("x-binary"),
             HeaderValue::from_bytes(&[0x80, 0x81]).unwrap(),
         );
-        let headers = collect_headers(&map);
+        let headers = collect_headers(&map, false);
         assert!(headers.iter().any(|(k, v)| k == "x-valid" && v == "ok"));
         assert!(!headers.iter().any(|(k, _)| k == "x-binary"));
     }
 
     #[test]
+    fn public_forwards_only_the_allowlisted_headers() {
+        let mut map = HeaderMap::new();
+        for (name, value) in [
+            ("authorization", "Bearer gw-token"),
+            ("x-api-key", "key"),
+            ("mcp-method", "tools/call"),
+            ("mcp-protocol-version", "2026-07-28"),
+            ("x-internal-route", "a"),
+            ("accept-language", "zh-CN"),
+            ("x-forwarded-for", "203.0.113.7"),
+            ("x-request-id", "req-1"),
+            ("traceparent", "00-abc-def-01"),
+        ] {
+            map.insert(
+                HeaderName::from_static(name),
+                HeaderValue::from_static(value),
+            );
+        }
+        let mut names: Vec<String> = collect_headers(&map, true)
+            .into_iter()
+            .map(|(k, _)| k)
+            .collect();
+        names.sort();
+        assert_eq!(
+            names,
+            [
+                "accept-language",
+                "traceparent",
+                "x-forwarded-for",
+                "x-request-id"
+            ],
+            "/public must forward only its allowlist"
+        );
+    }
+
+    #[test]
     fn empty_map_returns_empty() {
-        assert!(collect_headers(&HeaderMap::new()).is_empty());
+        assert!(collect_headers(&HeaderMap::new(), false).is_empty());
     }
 
     /// Read the `tools` array of one scope from `data/scopes.json`.
@@ -8083,43 +8131,29 @@ mod tests {
         }
     }
 
+    /// On `/public` a rejected token becomes HTTP 401, but a missing scope
+    /// (`403308`, also classed `reauth`) stays a tool error like any 403.
     #[test]
-    fn public_credential_error_hides_the_reconnect_hint() {
-        let text_of = |result: &super::CallToolResult| {
-            result.content[0]
-                .as_text()
-                .expect("text content")
-                .text
-                .clone()
+    fn public_401_flag_skips_missing_scope_errors() {
+        let envelope = |message: &str| -> serde_json::Value {
+            let result = super::tool_error(
+                "quote",
+                &super::McpError::internal_error(message.to_string(), None),
+            );
+            serde_json::from_str(&result.content[0].as_text().expect("text content").text).unwrap()
         };
-        let err = super::McpError::internal_error(
-            "openapi error: code=401103: token is expired".to_string(),
-            None,
-        );
-        let result = super::public_credential_error("quote", super::tool_error("quote", &err));
-        assert_eq!(result.is_error, Some(true));
-        let v: serde_json::Value = serde_json::from_str(&text_of(&result)).unwrap();
-        assert_eq!(v["recoverable"], "none");
-        assert!(
-            v["message"]
-                .as_str()
-                .unwrap()
-                .contains("temporarily unavailable")
-        );
-        assert!(!text_of(&result).contains("reconnect"));
-
-        // Other failures pass through untouched.
-        let other = super::tool_error("quote", &super::McpError::internal_error("boom", None));
-        let before = text_of(&other);
-        assert_eq!(
-            text_of(&super::public_credential_error("quote", other)),
-            before
-        );
+        let expired = envelope("openapi error: code=401103: token is expired");
+        assert_eq!(expired["recoverable"], "reauth");
+        assert!(!super::is_scope_error(&expired));
+        let scope =
+            envelope("openapi error: code=403308: Target API's scope is not in authorized scopes");
+        assert_eq!(scope["recoverable"], "reauth");
+        assert!(super::is_scope_error(&scope));
     }
 
-    /// `/public` runs every caller on one shared service credential, so its
-    /// allowlist must stay within `/v2`, be read-only, and never include a tool
-    /// that reads or changes the account behind the credential.
+    /// `/public` serves login-free callers, so its allowlist must stay within
+    /// `/v2`, be read-only, never include a tool that reads or changes an
+    /// account, and only include tools served by OpenAPI.
     #[test]
     fn public_allowlist_is_read_only_market_data() {
         use std::collections::HashSet;
@@ -8184,6 +8218,8 @@ mod tests {
             "screener_user_strategies",
             "quant_run",
             "submit_order",
+            // Calls Frankfurter directly, not OpenAPI.
+            "fx_rate",
         ] {
             assert!(!public.contains(tool), "/public must not contain `{tool}`");
         }

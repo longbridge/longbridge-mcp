@@ -391,9 +391,6 @@ async fn openai_apps_challenge() -> &'static str {
 
 pub struct AppState {
     pub base_url: String,
-    /// Configuration of the login-free `/public` endpoint; `None` keeps it
-    /// disabled (every `/public` request gets 404).
-    pub public: Option<Arc<crate::public::PublicAccess>>,
 }
 
 pub fn create_router(state: Arc<AppState>) -> Router {
@@ -519,23 +516,20 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         Some(middleware::RestrictedVersion::V2),
     );
 
-    // Login-free endpoint — callers send no credential; the server calls
-    // upstream with the operator's service credential, exposes only the public
-    // market-data allowlist and rate-limits tool calls (see `crate::public`).
-    let public_access = state.public.clone();
+    // Login-free endpoint for an upstream gateway: the caller's Bearer token is
+    // forwarded to OpenAPI as-is, no OAuth metadata is advertised, and only the
+    // login-free market-data allowlist is listed and callable. Responses are
+    // plain JSON so an upstream `401` can be returned as an HTTP `401` (see
+    // `middleware::public_auth_layer`).
     let mcp_public = tower::ServiceBuilder::new()
         .layer(axum::middleware::from_fn(limit_request_body))
-        .layer(axum::middleware::from_fn(
-            move |req: axum::extract::Request, next: axum::middleware::Next| {
-                let access = public_access.clone();
-                async move { middleware::public_auth_layer(req, next, access).await }
-            },
-        ))
+        .layer(axum::middleware::from_fn(middleware::public_auth_layer))
         .service(StreamableHttpService::new(
             move || Ok(Longbridge),
             Arc::new(NeverSessionManager::default()),
             StreamableHttpServerConfig::default()
                 .with_legacy_session_mode(false)
+                .with_json_response(true)
                 .disable_allowed_hosts(),
         ));
 
@@ -579,7 +573,6 @@ mod tests {
     fn router() -> axum::Router {
         create_router(Arc::new(AppState {
             base_url: "http://127.0.0.1:8000".to_string(),
-            public: None,
         }))
     }
 
@@ -693,7 +686,6 @@ mod tests {
     async fn authorize_route_redirects_without_bearer_and_is_not_cacheable() {
         let router = create_router(Arc::new(AppState {
             base_url: "http://127.0.0.1:8000".to_string(),
-            public: None,
         }));
         let query = "response_type=code&client_id=abc&state=s%2B1&code_challenge=x";
         let response = router

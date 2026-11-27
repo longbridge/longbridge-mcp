@@ -111,14 +111,6 @@ codex mcp login longbridge
 
 **Cursor · Cline · Windsurf · Zed · other clients** — point them at `https://mcp.longbridge.com` with transport `streamable-http`.
 
-**No account?** A deployment that enables the login-free `/public` endpoint (see *HTTP endpoints* under Self-hosting) serves market data, fundamentals, news and research tools without OAuth or a token:
-
-```bash
-claude mcp add --transport http longbridge-public https://<your-host>/public
-```
-
-Account, order, watchlist and other personal tools stay on the main endpoint, and `/public` limits tool calls per client.
-
 <details>
 <summary>More Claude Code commands</summary>
 
@@ -224,9 +216,6 @@ Advanced environment variables — most deployments never touch these; they exis
 | `LONGBRIDGE_GLOBAL_OAUTH_URL` | *(none)* | Authorization-server URL advertised to requests arriving via an allowlisted `X-Host` (global single-domain entry). Unset = fall back to the mode's OpenAPI base URL |
 | `LONGBRIDGE_MCP_QUOTE_WS_IDLE_TTL_SECS` | `600` | Idle seconds before a cached quote WebSocket context is evicted |
 | `LONGBRIDGE_MCP_QUOTE_WS_MAX_CONTEXTS` | `1024` | Maximum cached quote WebSocket contexts per server process |
-| `LONGBRIDGE_PUBLIC_TOKEN` | *(none)* | Service credential for the login-free `/public` endpoint. Unset = `/public` returns 404. Use a dedicated account that holds the quote permissions you intend to serve, and nothing else |
-| `LONGBRIDGE_PUBLIC_RATE_PER_MINUTE` | `30` | `/public` tool calls allowed per client IP (first `X-Forwarded-For` hop, then `X-Real-IP`) per minute |
-| `LONGBRIDGE_PUBLIC_MAX_CONCURRENCY` | `8` | `/public` tool calls running upstream at the same time; a call waits up to 10 s for a slot |
 | `LONGBRIDGE_MCP_SKILLS_DIR` | *(unset; `/opt/longbridge/skills` in the Docker image)* | Directory of [Agent Skills](https://github.com/longbridge/skills) served over MCP (one folder per skill). Unset = no skills |
 | `LONGBRIDGE_MCP_SKILLS_CACHE_DIR` | system temp dir | Where the MCP-rewritten copies of the skills are written. Must be writable (e.g. an `emptyDir` on a read-only root filesystem) |
 | `LONGBRIDGE_MCP_SKILLS_RELOAD_SECS` | *(unset)* | Re-read the skills every N seconds, for a directory mounted from outside the image (e.g. a ConfigMap) |
@@ -266,7 +255,7 @@ Send `x-papertrading: true` (or `1`) on a request to run it against the paper-tr
 | POST | `/oauth2/revoke` | OAuth revocation proxy; derives `x-dc-region` from the token, defaulting to AP |
 | GET | `/metrics` | Prometheus metrics |
 | POST/GET/DELETE | `/mcp` | MCP Streamable HTTP endpoint (requires Bearer token) |
-| POST/GET/DELETE | `/public` | Login-free MCP endpoint, enabled by `LONGBRIDGE_PUBLIC_TOKEN`: market data, fundamentals, news and research tools only, called upstream with the service credential (any caller `Authorization` header is dropped), rate limited per client |
+| POST | `/public` | Login-free MCP endpoint for a gateway: read-only market data, fundamentals, news and research tools only, stateless JSON responses. The caller's `Authorization: Bearer` token is forwarded to OpenAPI as-is on every request; a missing or upstream-rejected token gets `401` with `WWW-Authenticate: Bearer error="invalid_token"` (no OAuth metadata). Upstream 403/429/5xx come back as `isError` tool results and are never retried. Only `Accept-Language`, `X-Forwarded-For`, `X-Real-IP`, `X-Request-Id`, `traceparent` and `tracestate` are forwarded |
 | GET | `/public/tools.json` | Tool manifest for `/public` |
 
 Prometheus metrics: `mcp_tool_calls_total` (counter), `mcp_tool_call_duration_seconds` (histogram), and `mcp_tool_call_errors_total` (counter) — each labelled by `tool_name`.

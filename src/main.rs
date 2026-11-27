@@ -9,7 +9,6 @@ mod endpoints;
 mod error;
 mod logging;
 mod metrics;
-mod public;
 mod serialize;
 #[cfg(test)]
 mod test_support;
@@ -296,23 +295,8 @@ async fn serve() -> anyhow::Result<()> {
     // log rather than on the first request, and keep them fresh if asked to.
     crate::tools::init_skills();
 
-    // The login-free `/public` endpoint exists only when the operator gives it
-    // a service credential (see `crate::public`).
-    let public = crate::public::PublicAccess::from_env().map(Arc::new);
-    match &public {
-        Some(access) => tracing::info!(
-            rate_per_minute = access.rate_per_minute(),
-            max_concurrency = access.max_concurrency(),
-            "public endpoint enabled"
-        ),
-        None => tracing::info!(
-            "public endpoint disabled ({} not set)",
-            crate::public::TOKEN_ENV
-        ),
-    }
     let app_state = Arc::new(crate::auth::AppState {
         base_url: config.base_url.clone(),
-        public,
     });
 
     let app =
