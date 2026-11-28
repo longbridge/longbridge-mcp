@@ -255,6 +255,8 @@ Send `x-papertrading: true` (or `1`) on a request to run it against the paper-tr
 | POST | `/oauth2/revoke` | OAuth revocation proxy; derives `x-dc-region` from the token, defaulting to AP |
 | GET | `/metrics` | Prometheus metrics |
 | POST/GET/DELETE | `/mcp` | MCP Streamable HTTP endpoint (requires Bearer token) |
+| POST | `/public` | Login-free MCP endpoint for a gateway: read-only market data, fundamentals, news and research tools only, stateless JSON responses. The caller's `Authorization: Bearer` token is forwarded to OpenAPI as-is on every request; a missing or upstream-rejected token gets `401` with `WWW-Authenticate: Bearer error="invalid_token"` (no OAuth metadata). Upstream 403/429/5xx come back as `isError` tool results and are never retried. Only `Accept-Language`, `X-Forwarded-For`, `X-Real-IP`, `X-Request-Id`, `traceparent` and `tracestate` are forwarded |
+| GET | `/public/tools.json` | Tool manifest for `/public` |
 
 Prometheus metrics: `mcp_tool_calls_total` (counter), `mcp_tool_call_duration_seconds` (histogram), and `mcp_tool_call_errors_total` (counter) — each labelled by `tool_name`.
 

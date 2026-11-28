@@ -16,7 +16,9 @@ use rmcp::tool;
 use rmcp::tool_handler;
 use rmcp::tool_router;
 
-use crate::auth::middleware::{AgentEndpoint, BearerToken, RestrictedEndpoint, RestrictedVersion};
+use crate::auth::middleware::{
+    AgentEndpoint, BearerToken, RestrictedEndpoint, RestrictedVersion, UpstreamUnauthorized,
+};
 use crate::error::Error;
 use crate::serialize::to_tool_json;
 use crate::tools::support::text::truncate_chars;
@@ -1245,15 +1247,35 @@ const SKIP_FORWARD_HEADERS: &[&str] = &[
     "user-agent",
 ];
 
+/// The only request headers `/public` forwards upstream. Its caller is a
+/// gateway whose own headers (auth, MCP transport, internal routing) mean
+/// nothing to OpenAPI, so this endpoint allowlists instead of using the
+/// [`SKIP_FORWARD_HEADERS`] blocklist: language, client address and tracing.
+const PUBLIC_FORWARD_HEADERS: &[&str] = &[
+    "accept-language",
+    "x-forwarded-for",
+    "x-real-ip",
+    "x-request-id",
+    "traceparent",
+    "tracestate",
+];
+
 const MAX_FORWARDED_FOR_ADDRESSES: usize = 10;
 
-fn collect_headers(headers: &axum::http::HeaderMap) -> Vec<(String, String)> {
+/// Request headers to forward upstream: everything but [`SKIP_FORWARD_HEADERS`],
+/// or on `/public` (`public`) only [`PUBLIC_FORWARD_HEADERS`].
+fn collect_headers(headers: &axum::http::HeaderMap, public: bool) -> Vec<(String, String)> {
     let mut forwarded = Vec::new();
     let mut forwarded_for = Vec::new();
 
     for (name, value) in headers {
         let key = name.as_str().to_lowercase();
-        if SKIP_FORWARD_HEADERS.contains(&key.as_str()) {
+        let skip = if public {
+            !PUBLIC_FORWARD_HEADERS.contains(&key.as_str())
+        } else {
+            SKIP_FORWARD_HEADERS.contains(&key.as_str())
+        };
+        if skip {
             continue;
         }
         let Ok(value) = value.to_str() else {
@@ -1318,10 +1340,64 @@ fn restricted_version(ctx: &RequestContext<RoleServer>) -> Option<RestrictedVers
         .map(|marker| marker.0)
 }
 
+/// Adapt a tool result to `/public`, whose caller is a gateway with no OAuth
+/// flow to rerun:
+///
+/// - An upstream `401` (the forwarded token was rejected) flags the request so
+///   the middleware answers with HTTP `401` instead of this tool error.
+/// - A `403308` (the token lacks the scope this API needs, also classed
+///   `reauth`) stays an `isError` result, but says the API is not enabled for
+///   this caller instead of asking the user to re-authorize.
+fn public_result(
+    ctx: &RequestContext<RoleServer>,
+    name: &str,
+    result: CallToolResult,
+) -> CallToolResult {
+    let Some(envelope) = (result.is_error == Some(true))
+        .then_some(&result)
+        .and_then(|result| result.content.first())
+        .and_then(|block| block.as_text())
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text.text).ok())
+        .filter(|v| v["recoverable"] == "reauth")
+    else {
+        return result;
+    };
+    if is_scope_error(&envelope) {
+        let envelope = serde_json::json!({
+            "error_code": envelope["error_code"],
+            "message": envelope["message"],
+            "recoverable": "none",
+            "hint": "The API behind this tool is not enabled for this caller. Do not retry; \
+                     tell the user this data is not available here.",
+            "data": serde_json::Value::Null,
+        });
+        return CallToolResult::error(vec![ContentBlock::text(envelope.to_string())]);
+    }
+    if let Some(flag) = ctx
+        .extensions
+        .get::<axum::http::request::Parts>()
+        .and_then(|parts| parts.extensions.get::<UpstreamUnauthorized>())
+    {
+        tracing::info!(tool = name, "public endpoint: token rejected upstream");
+        flag.set();
+    }
+    result
+}
+
+/// Whether a `reauth` envelope is a missing-scope `403308` rather than a
+/// rejected token.
+fn is_scope_error(envelope: &serde_json::Value) -> bool {
+    envelope["error_code"].as_i64() == Some(403_308)
+        || envelope["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("403308") || m.contains("not in authorized scopes"))
+}
+
 /// Whether `name` is on the active restricted endpoint's allowlist.
 fn is_restricted_tool_allowed(version: RestrictedVersion, name: &str) -> bool {
     match version {
         RestrictedVersion::V2 => is_v2_public_tool(name),
+        RestrictedVersion::Public => is_login_free_tool(name),
     }
 }
 
@@ -1767,7 +1843,13 @@ fn extract_context(ctx: &RequestContext<RoleServer>) -> Result<McpContext, McpEr
         client_user_agent,
         // NOTE: This is very important for passing headers to upstream Longbridge services.
         // Do not remove this unless you have a good reason and know exactly which headers to forward instead.
-        extra_headers: collect_headers(&parts.headers),
+        extra_headers: collect_headers(
+            &parts.headers,
+            matches!(
+                parts.extensions.get::<RestrictedEndpoint>(),
+                Some(RestrictedEndpoint(RestrictedVersion::Public))
+            ),
+        ),
     })
 }
 
@@ -1902,6 +1984,12 @@ fn tools_agent_endpoint() -> &'static [rmcp::model::Tool] {
 
 /// Endpoint version bit flags used by [`TOOL_ENDPOINTS`].
 const V2: u8 = 1 << 0;
+/// The login-free `/public` endpoint (see
+/// [`crate::auth::middleware::public_auth_layer`]). Always a subset of [`V2`]:
+/// read-only market data, fundamentals, news and research served by OpenAPI
+/// over HTTP — nothing account-bound, no writes, and no tool that calls a
+/// third-party service directly.
+const PUBLIC: u8 = 1 << 1;
 
 /// Single source of truth for restricted-endpoint membership of every
 /// registered tool — the per-tool version annotation.
@@ -1919,90 +2007,97 @@ const V2: u8 = 1 << 0;
 ///   `ipo_profit_loss`), or money movement (`deposits`/`withdrawals`/
 ///   `bank_cards`).
 ///
+/// - `/public` — the `PUBLIC` bit, a strict subset of `/v2`: market data,
+///   fundamentals, news and research. Every `/public` call runs on one shared
+///   service credential, so it never includes account, order, watchlist,
+///   alert or any other personal or write tool.
+///
 /// Invariants enforced by unit tests: every name is live, every live tool is
-/// listed exactly once, and the v2 set is disjoint from the trade-write / DCA /
-/// IPO-order / money-movement tools.
+/// listed exactly once, the v2 set is disjoint from the trade-write / DCA /
+/// IPO-order / money-movement tools, and the public set is read-only and
+/// within v2.
 const TOOL_ENDPOINTS: &[(&str, u8)] = &[
     // v2 — read-only market / fundamental / research analysis.
-    ("business_segments", V2),
-    ("calc_indexes", V2),
-    ("candlesticks", V2),
-    ("company", V2),
-    ("consensus", V2),
-    ("depth", V2),
-    ("dividend", V2),
-    ("filings", V2),
-    ("finance_calendar", V2),
-    ("financial_report_latest", V2),
-    ("financial_statement", V2),
-    ("forecast_eps", V2),
-    ("institution_rating", V2),
-    ("intraday", V2),
-    ("market_status", V2),
-    ("news", V2),
-    ("news_detail", V2),
-    ("news_search", V2),
-    ("quote", V2),
-    ("rank_list", V2),
-    ("screener_search", V2),
-    ("shareholder_top", V2),
-    ("short_positions", V2),
-    ("top_movers", V2),
-    ("trades", V2),
-    ("valuation", V2),
+    ("business_segments", V2 | PUBLIC),
+    ("calc_indexes", V2 | PUBLIC),
+    ("candlesticks", V2 | PUBLIC),
+    ("company", V2 | PUBLIC),
+    ("consensus", V2 | PUBLIC),
+    ("depth", V2 | PUBLIC),
+    ("dividend", V2 | PUBLIC),
+    ("filings", V2 | PUBLIC),
+    ("finance_calendar", V2 | PUBLIC),
+    ("financial_report_latest", V2 | PUBLIC),
+    ("financial_statement", V2 | PUBLIC),
+    ("forecast_eps", V2 | PUBLIC),
+    ("institution_rating", V2 | PUBLIC),
+    ("intraday", V2 | PUBLIC),
+    ("market_status", V2 | PUBLIC),
+    ("news", V2 | PUBLIC),
+    ("news_detail", V2 | PUBLIC),
+    ("news_search", V2 | PUBLIC),
+    ("quote", V2 | PUBLIC),
+    ("rank_list", V2 | PUBLIC),
+    ("screener_search", V2 | PUBLIC),
+    ("shareholder_top", V2 | PUBLIC),
+    ("short_positions", V2 | PUBLIC),
+    ("top_movers", V2 | PUBLIC),
+    ("trades", V2 | PUBLIC),
+    ("valuation", V2 | PUBLIC),
     ("watchlist", V2),
     // v2 — broader read surface plus non-trade write tools (watchlist,
     // alert, sharelist, community).
     ("account_balance", V2),
-    ("ah_premium", V2),
-    ("ah_premium_intraday", V2),
+    ("ah_premium", V2 | PUBLIC),
+    ("ah_premium_intraday", V2 | PUBLIC),
     ("alert_add", V2),
     ("alert_delete", V2),
     ("alert_disable", V2),
     ("alert_enable", V2),
     ("alert_list", V2),
-    ("anomaly", V2),
-    ("broker_holding", V2),
-    ("broker_holding_daily", V2),
-    ("broker_holding_detail", V2),
-    ("brokers", V2),
-    ("business_segments_history", V2),
-    ("capital_distribution", V2),
-    ("capital_flow", V2),
+    ("anomaly", V2 | PUBLIC),
+    ("broker_holding", V2 | PUBLIC),
+    ("broker_holding_daily", V2 | PUBLIC),
+    ("broker_holding_detail", V2 | PUBLIC),
+    ("brokers", V2 | PUBLIC),
+    ("business_segments_history", V2 | PUBLIC),
+    ("capital_distribution", V2 | PUBLIC),
+    ("capital_flow", V2 | PUBLIC),
     ("cash_flow", V2),
-    ("constituent", V2),
-    ("corp_action", V2),
+    ("constituent", V2 | PUBLIC),
+    ("corp_action", V2 | PUBLIC),
     ("create_watchlist_group", V2),
     ("delete_watchlist_group", V2),
-    ("dividend_detail", V2),
+    ("dividend_detail", V2 | PUBLIC),
     ("estimate_max_purchase_quantity", V2),
-    ("etf_docs", V2),
-    ("exchange_rate", V2),
+    ("etf_docs", V2 | PUBLIC),
+    ("exchange_rate", V2 | PUBLIC),
+    // Not on `/public`: it calls Frankfurter directly, not OpenAPI.
     ("fx_rate", V2),
     ("get_me", V2),
-    ("executive", V2),
-    ("financial_report", V2),
-    ("financial_report_key_metrics", V2),
-    ("financial_report_snapshot", V2),
-    ("fund_holder", V2),
+    ("executive", V2 | PUBLIC),
+    ("financial_report", V2 | PUBLIC),
+    ("financial_report_key_metrics", V2 | PUBLIC),
+    ("financial_report_snapshot", V2 | PUBLIC),
+    ("fund_holder", V2 | PUBLIC),
     ("fund_positions", V2),
     // fund (mutual fund) channel — read-only.
-    ("fund_hot", V2),
-    ("fund_list", V2),
-    ("fund_filters", V2),
-    ("fund_detail", V2),
-    ("fund_analysis", V2),
-    ("fund_analysis_detail", V2),
-    ("fund_trend", V2),
-    ("fund_annual_returns", V2),
-    ("fund_quarterly_returns", V2),
-    ("fund_performance", V2),
-    ("fund_performance_comparison", V2),
-    ("fund_nav", V2),
-    ("fund_nav_history", V2),
-    ("fund_nav_range", V2),
-    ("fund_holdings", V2),
-    ("fund_stock_holdings", V2),
+    ("fund_hot", V2 | PUBLIC),
+    ("fund_list", V2 | PUBLIC),
+    ("fund_filters", V2 | PUBLIC),
+    ("fund_detail", V2 | PUBLIC),
+    ("fund_analysis", V2 | PUBLIC),
+    ("fund_analysis_detail", V2 | PUBLIC),
+    ("fund_trend", V2 | PUBLIC),
+    ("fund_annual_returns", V2 | PUBLIC),
+    ("fund_quarterly_returns", V2 | PUBLIC),
+    ("fund_performance", V2 | PUBLIC),
+    ("fund_performance_comparison", V2 | PUBLIC),
+    ("fund_nav", V2 | PUBLIC),
+    ("fund_nav_history", V2 | PUBLIC),
+    ("fund_nav_range", V2 | PUBLIC),
+    ("fund_holdings", V2 | PUBLIC),
+    ("fund_stock_holdings", V2 | PUBLIC),
     ("fund_position_overview", V2),
     ("fund_position", V2),
     ("fund_position_performance", V2),
@@ -2015,85 +2110,87 @@ const TOOL_ENDPOINTS: &[(&str, u8)] = &[
     // fund order pre-trade validation places nothing, so it stays on /v2
     // alongside estimate_max_purchase_quantity; the fund writes below do not.
     ("fund_validate_order", V2),
-    ("history_candlesticks_by_date", V2),
-    ("history_candlesticks_by_offset", V2),
+    ("history_candlesticks_by_date", V2 | PUBLIC),
+    ("history_candlesticks_by_offset", V2 | PUBLIC),
     ("history_executions", V2),
-    ("history_market_temperature", V2),
+    ("history_market_temperature", V2 | PUBLIC),
     ("history_orders", V2),
-    ("industry_peers", V2),
-    ("industry_rank", V2),
-    ("industry_valuation", V2),
-    ("industry_valuation_dist", V2),
-    ("institution_rating_detail", V2),
-    ("institution_rating_history", V2),
-    ("institution_rating_industry_rank", V2),
-    ("institutional_views", V2),
-    ("invest_relation", V2),
-    ("ipo_calendar", V2),
-    ("ipo_detail", V2),
-    ("ipo_listed", V2),
+    ("industry_peers", V2 | PUBLIC),
+    ("industry_rank", V2 | PUBLIC),
+    ("industry_valuation", V2 | PUBLIC),
+    ("industry_valuation_dist", V2 | PUBLIC),
+    ("institution_rating_detail", V2 | PUBLIC),
+    ("institution_rating_history", V2 | PUBLIC),
+    ("institution_rating_industry_rank", V2 | PUBLIC),
+    ("institutional_views", V2 | PUBLIC),
+    ("invest_relation", V2 | PUBLIC),
+    ("ipo_calendar", V2 | PUBLIC),
+    ("ipo_detail", V2 | PUBLIC),
+    ("ipo_listed", V2 | PUBLIC),
     ("ipo_subscriptions", V2),
-    ("macrodata", V2),
-    ("macrodata_indicators", V2),
+    ("macrodata", V2 | PUBLIC),
+    ("macrodata_indicators", V2 | PUBLIC),
     ("margin_ratio", V2),
-    ("market_temperature", V2),
-    ("now", V2),
-    ("operating", V2),
-    ("option_chain_expiry_date_list", V2),
-    ("option_chain_info_by_date", V2),
-    ("option_quote", V2),
-    ("option_volume", V2),
-    ("option_volume_daily", V2),
+    ("market_temperature", V2 | PUBLIC),
+    ("now", V2 | PUBLIC),
+    ("operating", V2 | PUBLIC),
+    ("option_chain_expiry_date_list", V2 | PUBLIC),
+    ("option_chain_info_by_date", V2 | PUBLIC),
+    ("option_quote", V2 | PUBLIC),
+    ("option_volume", V2 | PUBLIC),
+    ("option_volume_daily", V2 | PUBLIC),
     ("order_detail", V2),
-    ("participants", V2),
+    ("participants", V2 | PUBLIC),
     ("profit_analysis", V2),
     ("profit_analysis_detail", V2),
     ("profit_analysis_realized", V2),
     ("quant_run", V2),
-    ("rank_categories", V2),
+    ("rank_categories", V2 | PUBLIC),
     ("risk_assessment", V2),
-    ("screener_indicators", V2),
-    ("screener_recommend_strategies", V2),
-    ("screener_strategy", V2),
+    ("screener_indicators", V2 | PUBLIC),
+    ("screener_recommend_strategies", V2 | PUBLIC),
+    ("screener_strategy", V2 | PUBLIC),
     ("screener_user_strategies", V2),
-    ("security_facts", V2),
+    ("security_facts", V2 | PUBLIC),
+    // Not on `/public`: it sits under the Watchlist scope upstream, and
+    // `/public` serves General-scope tools only.
     ("security_list", V2),
-    ("shareholder", V2),
-    ("shareholder_detail", V2),
+    ("shareholder", V2 | PUBLIC),
+    ("shareholder_detail", V2 | PUBLIC),
     ("sharelist_add", V2),
     ("sharelist_create", V2),
     ("sharelist_delete", V2),
     ("sharelist_detail", V2),
     ("sharelist_list", V2),
-    ("sharelist_popular", V2),
+    ("sharelist_popular", V2 | PUBLIC),
     ("sharelist_remove", V2),
     ("sharelist_sort", V2),
     ("short_margin", V2),
-    ("short_trades", V2),
-    ("signal_detail", V2),
-    ("signals", V2),
+    ("short_trades", V2 | PUBLIC),
+    ("signal_detail", V2 | PUBLIC),
+    ("signals", V2 | PUBLIC),
     ("statement_export", V2),
     ("statement_list", V2),
-    ("static_info", V2),
+    ("static_info", V2 | PUBLIC),
     ("stock_positions", V2),
     ("today_executions", V2),
     ("today_orders", V2),
-    ("topic", V2),
+    ("topic", V2 | PUBLIC),
     ("topic_create", V2),
     ("topic_create_reply", V2),
-    ("topic_detail", V2),
-    ("topic_replies", V2),
-    ("topic_search", V2),
-    ("trade_stats", V2),
-    ("trading_days", V2),
-    ("trading_session", V2),
+    ("topic_detail", V2 | PUBLIC),
+    ("topic_replies", V2 | PUBLIC),
+    ("topic_search", V2 | PUBLIC),
+    ("trade_stats", V2 | PUBLIC),
+    ("trading_days", V2 | PUBLIC),
+    ("trading_session", V2 | PUBLIC),
     ("update_watchlist_group", V2),
-    ("valuation_comparison", V2),
-    ("valuation_history", V2),
-    ("valuation_rank", V2),
-    ("warrant_issuers", V2),
-    ("warrant_list", V2),
-    ("warrant_quote", V2),
+    ("valuation_comparison", V2 | PUBLIC),
+    ("valuation_history", V2 | PUBLIC),
+    ("valuation_rank", V2 | PUBLIC),
+    ("warrant_issuers", V2 | PUBLIC),
+    ("warrant_list", V2 | PUBLIC),
+    ("warrant_quote", V2 | PUBLIC),
     // Excluded from every restricted endpoint — DCA automation, order-write,
     // IPO order management, money movement / PCI.
     ("bank_cards", 0),
@@ -2152,6 +2249,32 @@ fn endpoint_flags(name: &str) -> u8 {
 /// Whether `name` is exposed on the restricted public `/v2` endpoint.
 fn is_v2_public_tool(name: &str) -> bool {
     endpoint_flags(name) & V2 != 0
+}
+
+/// Whether `name` is exposed on the login-free `/public` endpoint.
+fn is_login_free_tool(name: &str) -> bool {
+    endpoint_flags(name) & PUBLIC != 0
+}
+
+/// Tool names exposed on the `/public` endpoint, for `/public/tools.json`.
+pub fn public_tool_names() -> Vec<&'static str> {
+    TOOL_ENDPOINTS
+        .iter()
+        .filter(|(_, f)| f & PUBLIC != 0)
+        .map(|(n, _)| *n)
+        .collect()
+}
+
+/// Tools for the login-free `/public` endpoint. Computed once.
+fn tools_public_endpoint() -> &'static [rmcp::model::Tool] {
+    static PUBLIC_TOOLS: std::sync::OnceLock<Vec<rmcp::model::Tool>> = std::sync::OnceLock::new();
+    PUBLIC_TOOLS.get_or_init(|| {
+        all_tools_cached()
+            .iter()
+            .filter(|t| is_login_free_tool(t.name.as_ref()))
+            .cloned()
+            .collect()
+    })
 }
 
 /// Tool names exposed on the `/v2` endpoint. Used by the `/v2/tools.json`
@@ -4142,7 +4265,7 @@ impl Longbridge {
             destructive_hint = false,
             idempotent_hint = true
         ),
-        description = "List hot-selling funds in the Longbridge fund channel. Each row carries the fund counter_id (e.g. UT/FD/HK0000384492) used by every other fund_* tool. No parameters. Returns a top-level array of {counter_id, name, currency, asset_class_name, risk_level_name, earning_rate, time_interval, purchase_amount, recommendation_text, fund_performances: [{date, last_done}], …}."
+        description = "List hot-selling funds in the fund channel. Each row carries the fund counter_id (e.g. UT/FD/HK0000384492) used by every other fund_* tool. No parameters. Returns a top-level array of {counter_id, name, currency, asset_class_name, risk_level_name, earning_rate, time_interval, purchase_amount, recommendation_text, fund_performances: [{date, last_done}], …}."
     )]
     async fn fund_hot(&self, ctx: RequestContext<RoleServer>) -> Result<CallToolResult, McpError> {
         let mctx = extract_context(&ctx)?;
@@ -4751,7 +4874,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get Longbridge's account-conversion exchange rates for all supported currencies (the rates used to value assets in an account's currency). Returns {exchanges[]{base_currency, other_currency, average_rate}}: average_rate is the value of 1 other_currency in base_currency (e.g. base USD, other HKD, 0.12743 = 1 HKD is 0.12743 USD). US accounts get a US-specific variant: the US account's rates in the same shape, one row per pair (the reference rate, else am) with spec_key naming the rate type. For public market reference rates or history, use fx_rate."
+        description = "Get the broker's account-conversion exchange rates for all supported currencies (the rates used to value assets in an account's currency). Returns {exchanges[]{base_currency, other_currency, average_rate}}: average_rate is the value of 1 other_currency in base_currency (e.g. base USD, other HKD, 0.12743 = 1 HKD is 0.12743 USD). US accounts get a US-specific variant: the US account's rates in the same shape, one row per pair (the reference rate, else am) with spec_key naming the rate type. For public market reference rates or history, use fx_rate."
     )]
     async fn exchange_rate(
         &self,
@@ -5060,7 +5183,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Get latest news articles for a symbol, newest first (20 by default; set count for more). Returns a top-level array (no wrapper object) of {id, title, description, url, published_at, comments_count, likes_count, shares_count}. Citation fields content_via (0 = Longbridge original or licensed; non-zero = third-party repost), source, source_url (the original article) and source_logo are included when the upstream provides them."
+        description = "Get latest news articles for a symbol, newest first (20 by default; set count for more). Returns a top-level array (no wrapper object) of {id, title, description, url, published_at, comments_count, likes_count, shares_count}. Citation fields content_via (0 = original or licensed content; non-zero = third-party repost), source, source_url (the original article) and source_logo are included when the upstream provides them."
     )]
     async fn news(
         &self,
@@ -5081,7 +5204,7 @@ impl Longbridge {
             open_world_hint = true
         ),
         output_schema = schema_for::<output::social::NewsDetailResponse>(),
-        description = "Get one news article's full detail by id (from news/news_search). Returns {id, title, description, body (Markdown), url, author{member_id, name}, images[], comments_count, likes_count, shares_count, published_at, tickers[]}. Citation fields content_via (0 = Longbridge original or licensed; non-zero = third-party repost), source, source_url (the original article) and source_logo are included when the upstream provides them."
+        description = "Get one news article's full detail by id (from news/news_search). Returns {id, title, description, body (Markdown), url, author{member_id, name}, images[], comments_count, likes_count, shares_count, published_at, tickers[]}. Citation fields content_via (0 = original or licensed content; non-zero = third-party repost), source, source_url (the original article) and source_logo are included when the upstream provides them."
     )]
     async fn news_detail(
         &self,
@@ -5992,7 +6115,7 @@ impl Longbridge {
             idempotent_hint = true,
             open_world_hint = true
         ),
-        description = "Search news articles by keyword. Returns an array of {id, title, description (summary), source (outlet display name, localized by Accept-Language), published_at (RFC3339), url, content_via, source_url, source_logo}, most relevant first. content_via is 0 for Longbridge original or licensed content and non-zero for a third-party repost, whose original is at source_url."
+        description = "Search news articles by keyword. Returns an array of {id, title, description (summary), source (outlet display name, localized by Accept-Language), published_at (RFC3339), url, content_via, source_url, source_logo}, most relevant first. content_via is 0 for original or licensed content and non-zero for a third-party repost, whose original is at source_url."
     )]
     async fn news_search(
         &self,
@@ -7095,6 +7218,14 @@ impl ServerHandler for Longbridge {
                      cancel orders."
                         .to_string()
                 }
+                RestrictedVersion::Public => {
+                    "Longbridge MCP public endpoint — login-free market data for US, HK, A-share, \
+                     and SG markets: quotes, charts, order-book depth, fundamentals, valuations, \
+                     analyst research, news, filings, screeners and fund data. No account, \
+                     portfolio, order or watchlist access. On a rate-limit error, wait before \
+                     retrying."
+                        .to_string()
+                }
             });
         }
         // Several tools return a different shape for US accounts. The model
@@ -7159,12 +7290,20 @@ impl ServerHandler for Longbridge {
             return Ok(CallToolResponse::from(rejected_call(
                 &request.name,
                 client,
-                format!(
-                    "Tool `{}` is not available on this endpoint. \
-                     This endpoint does not expose trade execution, recurring-investment, \
-                     IPO order, or money-movement tools.",
-                    request.name
-                ),
+                match version {
+                    RestrictedVersion::Public => format!(
+                        "Tool `{}` is not available on the public endpoint, which serves \
+                         login-free market data only. Account, order, watchlist and other \
+                         personal tools need Longbridge credentials on the main endpoint.",
+                        request.name
+                    ),
+                    RestrictedVersion::V2 => format!(
+                        "Tool `{}` is not available on this endpoint. \
+                         This endpoint does not expose trade execution, recurring-investment, \
+                         IPO order, or money-movement tools.",
+                        request.name
+                    ),
+                },
                 serde_json::json!({ "error_code": "tool_not_on_endpoint" }),
             )));
         }
@@ -7213,7 +7352,9 @@ impl ServerHandler for Longbridge {
         // The scope wraps `jq::call` too, so a failed `_jq` filter is labelled
         // with the same client as the tool call it belongs to.
         let tool_name = request.name.to_string();
+        let on_public = restricted_version(&context) == Some(RestrictedVersion::Public);
         let retryable = is_read_only_tool(request.name.as_ref());
+        let public_context = on_public.then(|| context.clone());
         // A write gated on the user's confirmation ends with `input_required`
         // instead of a tool result (see `support::confirm`). It bypasses `_jq`
         // and the result post-processing, which only apply to tool results.
@@ -7234,6 +7375,14 @@ impl ServerHandler for Longbridge {
                         }
                         other => wrap_argument_error(&name, complete_result(other)),
                     });
+            }
+            // `/public` never retries: its caller (a gateway) owns the rate
+            // budget, so a 429 goes straight back as a tool error.
+            if on_public {
+                return cached_router()
+                    .call(ToolCallContext::new(self, request, context))
+                    .await
+                    .map(|result| wrap_argument_error(&name, complete_result(result)));
             }
             // Read-only tools get one server-side retry on an upstream rate
             // limit (429002/429003), which otherwise surfaces to the model as
@@ -7265,7 +7414,12 @@ impl ServerHandler for Longbridge {
                 {
                     return Ok(response);
                 }
-                Ok(CallToolResponse::from(finish_result(&tool_name, result)))
+                let result = finish_result(&tool_name, result);
+                let result = match &public_context {
+                    Some(context) => public_result(context, &tool_name, result),
+                    None => result,
+                };
+                Ok(CallToolResponse::from(result))
             })
             .await
     }
@@ -7276,6 +7430,16 @@ impl ServerHandler for Longbridge {
         request: rmcp::model::GetTaskParams,
         context: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> Result<rmcp::model::GetTaskResult, rmcp::ErrorData> {
+        // `/public` offers no order tools, but `tasks/get` skips the tool
+        // allowlist: without this, a token that can read orders could read
+        // them here by order ID.
+        if restricted_version(&context) == Some(RestrictedVersion::Public) {
+            crate::metrics::record_task_request("get", "refused");
+            return Err(rmcp::ErrorData::invalid_request(
+                "order tasks are not available on the public endpoint",
+                None,
+            ));
+        }
         let order_id = support::order_task::order_id(&request.task_id)
             .ok_or_else(|| rmcp::ErrorData::invalid_params("unknown task", None))?;
         let mctx = extract_context(&context)?;
@@ -7330,6 +7494,7 @@ impl ServerHandler for Longbridge {
             // directory endpoint, or it is offered only to fail upstream.
             let mut tools = match restricted_version(&context) {
                 Some(RestrictedVersion::V2) => tools_v2_endpoint().to_vec(),
+                Some(RestrictedVersion::Public) => tools_public_endpoint().to_vec(),
                 None => tools_main_endpoint().to_vec(),
             };
             if let Ok(mctx) = extract_context(&context) {
@@ -7419,7 +7584,7 @@ mod tests {
             HeaderName::from_static("accept-language"),
             HeaderValue::from_static("zh-CN"),
         );
-        let headers = collect_headers(&map);
+        let headers = collect_headers(&map, false);
         assert!(headers.iter().any(|(k, v)| k == "x-custom" && v == "hello"));
         assert!(
             headers
@@ -7436,7 +7601,11 @@ mod tests {
             HeaderValue::from_static("claude-code/2.1.89 (cli)"),
         );
         // The client UA is folded into the synthesized upstream UA, not forwarded raw.
-        assert!(!collect_headers(&map).iter().any(|(k, _)| k == "user-agent"));
+        assert!(
+            !collect_headers(&map, false)
+                .iter()
+                .any(|(k, _)| k == "user-agent")
+        );
     }
 
     #[test]
@@ -7448,7 +7617,7 @@ mod tests {
         );
 
         assert!(
-            !collect_headers(&map)
+            !collect_headers(&map, false)
                 .iter()
                 .any(|(key, _)| key == "alicloud-alb-trace")
         );
@@ -7462,7 +7631,7 @@ mod tests {
             HeaderValue::from_static("192.0.2.1, 192.0.2.2"),
         );
 
-        let headers = collect_headers(&map);
+        let headers = collect_headers(&map, false);
         assert!(
             headers.iter().any(|(key, value)| {
                 key == "x-forwarded-for" && value == "192.0.2.1, 192.0.2.2"
@@ -7478,7 +7647,7 @@ mod tests {
             HeaderValue::from_static("192.0.2.1,192.0.2.2,192.0.2.3"),
         );
 
-        let headers = collect_headers(&map);
+        let headers = collect_headers(&map, false);
         assert!(headers.iter().any(|(key, value)| {
             key == "x-forwarded-for" && value == "192.0.2.1, 192.0.2.2, 192.0.2.3"
         }));
@@ -7494,7 +7663,7 @@ mod tests {
             ),
         );
 
-        let headers = collect_headers(&map);
+        let headers = collect_headers(&map, false);
         assert!(headers.iter().any(|(key, value)| {
             key == "x-forwarded-for"
                 && value
@@ -7867,14 +8036,50 @@ mod tests {
             HeaderName::from_static("x-binary"),
             HeaderValue::from_bytes(&[0x80, 0x81]).unwrap(),
         );
-        let headers = collect_headers(&map);
+        let headers = collect_headers(&map, false);
         assert!(headers.iter().any(|(k, v)| k == "x-valid" && v == "ok"));
         assert!(!headers.iter().any(|(k, _)| k == "x-binary"));
     }
 
     #[test]
+    fn public_forwards_only_the_allowlisted_headers() {
+        let mut map = HeaderMap::new();
+        for (name, value) in [
+            ("authorization", "Bearer gw-token"),
+            ("x-api-key", "key"),
+            ("mcp-method", "tools/call"),
+            ("mcp-protocol-version", "2026-07-28"),
+            ("x-internal-route", "a"),
+            ("accept-language", "zh-CN"),
+            ("x-forwarded-for", "203.0.113.7"),
+            ("x-request-id", "req-1"),
+            ("traceparent", "00-abc-def-01"),
+        ] {
+            map.insert(
+                HeaderName::from_static(name),
+                HeaderValue::from_static(value),
+            );
+        }
+        let mut names: Vec<String> = collect_headers(&map, true)
+            .into_iter()
+            .map(|(k, _)| k)
+            .collect();
+        names.sort();
+        assert_eq!(
+            names,
+            [
+                "accept-language",
+                "traceparent",
+                "x-forwarded-for",
+                "x-request-id"
+            ],
+            "/public must forward only its allowlist"
+        );
+    }
+
+    #[test]
     fn empty_map_returns_empty() {
-        assert!(collect_headers(&HeaderMap::new()).is_empty());
+        assert!(collect_headers(&HeaderMap::new(), false).is_empty());
     }
 
     /// Read the `tools` array of one scope from `data/scopes.json`.
@@ -7926,6 +8131,127 @@ mod tests {
                  (add it with V2 or 0)"
             );
         }
+    }
+
+    /// On `/public` a rejected token becomes HTTP 401, but a missing scope
+    /// (`403308`, also classed `reauth`) stays a tool error like any 403.
+    #[test]
+    fn public_401_flag_skips_missing_scope_errors() {
+        let envelope = |message: &str| -> serde_json::Value {
+            let result = super::tool_error(
+                "quote",
+                &super::McpError::internal_error(message.to_string(), None),
+            );
+            serde_json::from_str(&result.content[0].as_text().expect("text content").text).unwrap()
+        };
+        let expired = envelope("openapi error: code=401103: token is expired");
+        assert_eq!(expired["recoverable"], "reauth");
+        assert!(!super::is_scope_error(&expired));
+        let scope =
+            envelope("openapi error: code=403308: Target API's scope is not in authorized scopes");
+        assert_eq!(scope["recoverable"], "reauth");
+        assert!(super::is_scope_error(&scope));
+    }
+
+    /// `/public` serves login-free callers, so its allowlist must stay within
+    /// `/v2`, be read-only, never include a tool that reads or changes an
+    /// account, and only include tools served by OpenAPI.
+    #[test]
+    fn public_allowlist_is_read_only_market_data() {
+        use std::collections::HashSet;
+
+        let public: Vec<&str> = super::public_tool_names();
+        assert!(!public.is_empty());
+        let v2: HashSet<&str> = super::v2_tool_names().into_iter().collect();
+        for name in &public {
+            assert!(
+                v2.contains(name),
+                "/public tool `{name}` must also be on /v2"
+            );
+            assert!(
+                super::is_read_only_tool(name),
+                "/public tool `{name}` must be annotated read-only"
+            );
+        }
+        let public: HashSet<&str> = public.into_iter().collect();
+        // Only General-scope tools: every other scope needs a signed-in user.
+        let general: HashSet<String> = scope_tools("").into_iter().collect();
+        for name in &public {
+            assert!(
+                general.contains(*name),
+                "/public tool `{name}` must be in the General scope"
+            );
+        }
+        // No tool tied to an account scope (watchlist, account.read,
+        // trade.read, trade.write).
+        for scope in ["watchlist", "account.read", "trade.read", "trade.write"] {
+            for tool in scope_tools(scope) {
+                assert!(
+                    !public.contains(tool.as_str()),
+                    "/public must not contain `{tool}` from scope `{scope}`"
+                );
+            }
+        }
+        // Account-bound or writing tools, independent of scope grouping.
+        for tool in [
+            "authenticate",
+            "account_balance",
+            "stock_positions",
+            "fund_positions",
+            "cash_flow",
+            "margin_ratio",
+            "short_margin",
+            "estimate_max_purchase_quantity",
+            "get_me",
+            "risk_assessment",
+            "today_orders",
+            "history_orders",
+            "order_detail",
+            "today_executions",
+            "history_executions",
+            "statement_list",
+            "statement_export",
+            "profit_analysis",
+            "ipo_subscriptions",
+            "watchlist",
+            "alert_list",
+            "alert_add",
+            "sharelist_list",
+            "sharelist_create",
+            "topic_create",
+            "topic_create_reply",
+            "screener_user_strategies",
+            "quant_run",
+            "submit_order",
+            // Calls Frankfurter directly, not OpenAPI.
+            "fx_rate",
+        ] {
+            assert!(!public.contains(tool), "/public must not contain `{tool}`");
+        }
+    }
+
+    /// `/public` serves callers who never sign in to us, so the tool
+    /// definitions it lists (title, description, input and output schema)
+    /// must not name our own brand.
+    #[test]
+    fn public_tool_definitions_carry_no_brand_name() {
+        const BRANDS: [&str; 4] = ["longbridge", "longport", "长桥", "長橋"];
+        let mut hits = Vec::new();
+        for tool in super::tools_public_endpoint() {
+            let text = serde_json::to_string(tool)
+                .expect("a tool definition serializes to JSON")
+                .to_lowercase();
+            for brand in BRANDS {
+                if text.contains(brand) {
+                    hits.push(format!("{} mentions `{brand}`", tool.name));
+                }
+            }
+        }
+        assert!(
+            hits.is_empty(),
+            "/public tool definitions must not name the brand:\n{}",
+            hits.join("\n")
+        );
     }
 
     /// The public `/v2` allowlist must never expose trade execution, DCA
