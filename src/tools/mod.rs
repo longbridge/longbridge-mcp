@@ -2152,7 +2152,9 @@ const TOOL_ENDPOINTS: &[(&str, u8)] = &[
     ("screener_strategy", V2 | PUBLIC),
     ("screener_user_strategies", V2),
     ("security_facts", V2 | PUBLIC),
-    ("security_list", V2 | PUBLIC),
+    // Not on `/public`: it sits under the Watchlist scope upstream, and
+    // `/public` serves General-scope tools only.
+    ("security_list", V2),
     ("shareholder", V2 | PUBLIC),
     ("shareholder_detail", V2 | PUBLIC),
     ("sharelist_add", V2),
@@ -8172,15 +8174,18 @@ mod tests {
             );
         }
         let public: HashSet<&str> = public.into_iter().collect();
+        // Only General-scope tools: every other scope needs a signed-in user.
+        let general: HashSet<String> = scope_tools("").into_iter().collect();
+        for name in &public {
+            assert!(
+                general.contains(*name),
+                "/public tool `{name}` must be in the General scope"
+            );
+        }
         // No tool tied to an account scope (watchlist, account.read,
         // trade.read, trade.write).
         for scope in ["watchlist", "account.read", "trade.read", "trade.write"] {
             for tool in scope_tools(scope) {
-                // `security_list` sits under the watchlist scope upstream but
-                // returns a market's security list, nothing account-bound.
-                if tool == "security_list" {
-                    continue;
-                }
                 assert!(
                     !public.contains(tool.as_str()),
                     "/public must not contain `{tool}` from scope `{scope}`"

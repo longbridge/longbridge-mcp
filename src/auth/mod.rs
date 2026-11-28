@@ -219,6 +219,9 @@ fn build_tools_json(allow: Option<&std::collections::HashSet<&'static str>>) -> 
 
     let scopes: serde_json::Value = serde_json::from_str(include_str!("../../data/scopes.json"))
         .expect("scopes.json must be valid JSON");
+    // English names of the scopes left after pruning, which key the scope
+    // translations under `locales`.
+    let mut kept_scopes = std::collections::HashSet::new();
     if let serde_json::Value::Object(scopes_map) = scopes {
         for (k, mut v) in scopes_map {
             if let (Some(allow), Some(arr)) = (allow, v.as_array_mut()) {
@@ -231,6 +234,13 @@ fn build_tools_json(allow: Option<&std::collections::HashSet<&'static str>>) -> 
                     !tools_arr.is_empty()
                 });
             }
+            if let Some(arr) = v.as_array() {
+                kept_scopes.extend(
+                    arr.iter()
+                        .filter_map(|scope| scope["name"].as_str())
+                        .map(str::to_string),
+                );
+            }
             retarget_scope_ids(&mut v);
             // Live tool list always wins over any `tools` in scopes.json.
             out.entry(k).or_insert(v);
@@ -238,17 +248,19 @@ fn build_tools_json(allow: Option<&std::collections::HashSet<&'static str>>) -> 
     }
     let mut locales = build_locales_node(&[TOOL_LOCALES, SCOPE_LOCALES]);
     if let Some(allow) = allow {
-        prune_locale_tools(&mut locales, allow);
+        prune_locales(&mut locales, allow, &kept_scopes);
     }
     out.insert("locales".to_string(), locales);
     serde_json::Value::Object(out)
 }
 
-/// Keep only the allowlisted tools in each language's `tools` translations,
-/// so a restricted manifest carries no text for tools its endpoint blocks.
-fn prune_locale_tools(
+/// Keep only the allowlisted tools and the scopes still listed (`scopes`, by
+/// English name) in each language's translations, so a restricted manifest
+/// carries no text for tools or scopes its endpoint does not serve.
+fn prune_locales(
     locales: &mut serde_json::Value,
     allow: &std::collections::HashSet<&'static str>,
+    scopes: &std::collections::HashSet<String>,
 ) {
     let Some(languages) = locales.as_object_mut() else {
         return;
@@ -256,6 +268,9 @@ fn prune_locale_tools(
     for entry in languages.values_mut() {
         if let Some(tools) = entry.get_mut("tools").and_then(|t| t.as_object_mut()) {
             tools.retain(|name, _| allow.contains(name.as_str()));
+        }
+        if let Some(names) = entry.get_mut("scopes").and_then(|t| t.as_object_mut()) {
+            names.retain(|name, _| scopes.contains(name));
         }
     }
 }
@@ -737,7 +752,24 @@ mod tests {
             .as_object()
             .expect("the manifest has a locales object");
         assert_eq!(languages.len(), 3, "zh-CN, zh-HK and ja translations");
+        let scope_names: Vec<&str> = manifest["scopes"]
+            .as_array()
+            .expect("the manifest has a scopes array")
+            .iter()
+            .filter_map(|scope| scope["name"].as_str())
+            .collect();
+        assert_eq!(
+            scope_names,
+            ["General"],
+            "/public serves the General scope only"
+        );
         for (lang, entry) in languages {
+            let scopes: Vec<&String> = entry["scopes"]
+                .as_object()
+                .expect("each language translates scopes")
+                .keys()
+                .collect();
+            assert_eq!(scopes, ["General"], "{lang}: only the General scope");
             let translated = entry["tools"]
                 .as_object()
                 .expect("each language translates tools");
